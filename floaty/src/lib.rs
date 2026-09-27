@@ -3,14 +3,38 @@
 //! `floaty` emulates binary, decimal, and double-double floating-point formats
 //! in software. Every operation gives the same bits on every host.
 //!
-//! The crate is in its design phase and has no public API yet. The private
-//! modules below hold the layers that `DESIGN.md` at the repository root
-//! describes. Each layer arrives in the build order that `DESIGN.md` states.
+//! A value has the type [`Float<S, W>`](Float): a standard `S` at a width of
+//! `W` bits. Type aliases name the common formats, for example [`F32`],
+//! [`BF16`], [`F8E4M3`], and [`F80`].
+//!
+//! ```
+//! use floaty::{Class, F8E4M3};
+//!
+//! // OCP FP8 E4M3 has no infinity: 0x7F is its NaN.
+//! assert_eq!(F8E4M3::from_bits(0x7F).classify(), Class::QuietNan);
+//! assert_eq!(F8E4M3::from_bits(0x7E).classify(), Class::Normal);
+//! ```
+//!
+//! The crate follows the build order in `DESIGN.md` at the repository root.
+//! It has encoding and classification now. Arithmetic comes in later steps.
 
 #![no_std]
+
+pub mod format;
 
 mod binary;
 mod env;
 mod exact;
-mod format;
+mod float;
 mod limbs;
+
+pub use float::{
+    BF16, Class, Decoded, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F160,
+    F192, F224, F256, F288, F320, F352, F384, F416, F448, F480, F512, Float, TF32,
+};
+pub use format::{Binary, Fnuz, Ieee, NoInf, X87};
+
+mod sealed {
+    /// Prevents implementations of a trait outside the crate.
+    pub trait Sealed {}
+}

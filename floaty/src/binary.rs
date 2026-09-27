@@ -1,1 +1,439 @@
-//! Unpacking, packing, and every operation on the binary formats.
+//! Unpacking, packing, and classification of the binary formats.
+
+use core::marker::PhantomData;
+
+use crate::float::Class;
+use crate::format::internal::LimbConversion;
+use crate::format::{Binary, Encoding, Standard, Storage, Width};
+use crate::limbs::Limbs;
+
+/// The encoding rules of a binary format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EncodingKind {
+    /// IEEE 754 infinities and NaNs.
+    Ieee,
+    /// No infinity; the NaN has exponent and fraction all ones.
+    NoInf,
+    /// No infinity and no negative zero; the NaN is the sign bit alone.
+    Fnuz,
+    /// x87 extended precision, with an explicit integer bit.
+    X87,
+}
+
+/// A decoded binary value.
+///
+/// A finite value is `significand * 2^exponent`. `exponent` is the weight of
+/// the lowest significand bit. A normal significand has its bit
+/// `PRECISION - 1` set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Unpacked<L> {
+    /// A zero.
+    Zero {
+        /// The sign.
+        negative: bool,
+    },
+    /// A nonzero finite value.
+    Finite {
+        /// The sign.
+        negative: bool,
+        /// The weight of the lowest significand bit.
+        exponent: i32,
+        /// The significand, below `2^PRECISION`.
+        significand: L,
+    },
+    /// An infinity.
+    Infinity {
+        /// The sign.
+        negative: bool,
+    },
+    /// A NaN.
+    Nan {
+        /// The sign.
+        negative: bool,
+        /// `true` for a signaling NaN.
+        signaling: bool,
+        /// The fraction bits below the quiet bit.
+        payload: L,
+    },
+    /// An encoding that the format does not define, such as an x87 unnormal.
+    Unsupported,
+}
+
+/// The layout constants and codec of `Binary<E, Enc>` at width `W`.
+pub struct Layout<const E: u32, Enc, const W: usize> {
+    encoding: PhantomData<Enc>,
+}
+
+impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
+where
+    Width<W>: Storage,
+{
+    /// The width in bits.
+    const WIDTH: u32 = <Width<W> as Storage>::WIDTH;
+
+    /// Rejects a layout that has no valid format at compile time.
+    const VALID: () = {
+        assert!(
+            E >= 2 && E <= 28,
+            "a binary format has 2 to 28 exponent bits"
+        );
+        assert!(
+            Self::WIDTH >= E + 2,
+            "a binary format has at least one fraction bit"
+        );
+        assert!(
+            !matches!(Enc::KIND, EncodingKind::X87) || (E == 15 && Self::WIDTH == 80),
+            "the X87 encoding exists only as Binary<15, X87> at width 80"
+        );
+    };
+
+    const IS_X87: bool = matches!(Enc::KIND, EncodingKind::X87);
+
+    /// The fraction field width. For `X87` it includes the integer bit.
+    const FRACTION_BITS: u32 = Self::WIDTH.saturating_sub(E + 1);
+
+    /// The largest exponent field value.
+    const FIELD_MAX: u64 = (1 << E) - 1;
+
+    const BIAS: i32 = match Enc::KIND {
+        EncodingKind::Fnuz => 1 << (E - 1),
+        EncodingKind::Ieee | EncodingKind::NoInf | EncodingKind::X87 => (1 << (E - 1)) - 1,
+    };
+
+    const PRECISION: u32 = {
+        let () = Self::VALID;
+        if Self::IS_X87 {
+            Self::FRACTION_BITS
+        } else {
+            Self::FRACTION_BITS + 1
+        }
+    };
+
+    const EMAX: i32 = {
+        let () = Self::VALID;
+        match Enc::KIND {
+            EncodingKind::Ieee | EncodingKind::X87 => (1 << E) - 2 - Self::BIAS,
+            EncodingKind::NoInf | EncodingKind::Fnuz => (1 << E) - 1 - Self::BIAS,
+        }
+    };
+
+    const EMIN: i32 = {
+        let () = Self::VALID;
+        1 - Self::BIAS
+    };
+
+    /// The number of significand bits below the leading bit.
+    const SHIFT: i32 = signed(Self::PRECISION - 1);
+
+    /// Decodes an encoding.
+    pub fn decode<L: Limbs>(bits: L) -> Unpacked<L> {
+        let () = Self::VALID;
+        let negative = bits.bit(Self::WIDTH - 1);
+        let field = bits.field(Self::FRACTION_BITS, E);
+        let fraction = bits.low_bits(Self::FRACTION_BITS);
+        match Enc::KIND {
+            EncodingKind::Ieee if field == Self::FIELD_MAX => {
+                if fraction.is_zero() {
+                    Unpacked::Infinity { negative }
+                } else {
+                    Unpacked::Nan {
+                        negative,
+                        signaling: !fraction.bit(Self::FRACTION_BITS - 1),
+                        payload: fraction.low_bits(Self::FRACTION_BITS - 1),
+                    }
+                }
+            }
+            EncodingKind::NoInf
+                if field == Self::FIELD_MAX && fraction == L::ones(Self::FRACTION_BITS) =>
+            {
+                Unpacked::Nan {
+                    negative,
+                    signaling: false,
+                    payload: L::ZERO,
+                }
+            }
+            EncodingKind::Fnuz if field == 0 && fraction.is_zero() => {
+                if negative {
+                    Unpacked::Nan {
+                        negative,
+                        signaling: false,
+                        payload: L::ZERO,
+                    }
+                } else {
+                    Unpacked::Zero { negative }
+                }
+            }
+            EncodingKind::X87 => Self::decode_x87(negative, field, fraction),
+            EncodingKind::Ieee | EncodingKind::NoInf | EncodingKind::Fnuz => {
+                Self::decode_finite(negative, field, fraction)
+            }
+        }
+    }
+
+    /// Decodes a number of a format with an implicit integer bit.
+    fn decode_finite<L: Limbs>(negative: bool, field: u64, fraction: L) -> Unpacked<L> {
+        if field != 0 {
+            Unpacked::Finite {
+                negative,
+                exponent: Self::unbiased(field) - Self::SHIFT,
+                significand: fraction.with_bit(Self::FRACTION_BITS),
+            }
+        } else if fraction.is_zero() {
+            Unpacked::Zero { negative }
+        } else {
+            Unpacked::Finite {
+                negative,
+                exponent: Self::EMIN - Self::SHIFT,
+                significand: fraction,
+            }
+        }
+    }
+
+    /// Decodes an x87 encoding. `fraction` holds the integer bit as bit 63.
+    fn decode_x87<L: Limbs>(negative: bool, field: u64, fraction: L) -> Unpacked<L> {
+        let integer = fraction.bit(63);
+        let tail = fraction.low_bits(63);
+        if field == Self::FIELD_MAX {
+            if !integer {
+                Unpacked::Unsupported
+            } else if tail.is_zero() {
+                Unpacked::Infinity { negative }
+            } else {
+                Unpacked::Nan {
+                    negative,
+                    signaling: !tail.bit(62),
+                    payload: tail.low_bits(62),
+                }
+            }
+        } else if field == 0 {
+            // A pseudo-denormal has the integer bit set. Its value equals the
+            // normal value with exponent field 1, so both share one exponent.
+            if fraction.is_zero() {
+                Unpacked::Zero { negative }
+            } else {
+                Unpacked::Finite {
+                    negative,
+                    exponent: Self::EMIN - Self::SHIFT,
+                    significand: fraction,
+                }
+            }
+        } else if integer {
+            Unpacked::Finite {
+                negative,
+                exponent: Self::unbiased(field) - Self::SHIFT,
+                significand: fraction,
+            }
+        } else {
+            Unpacked::Unsupported
+        }
+    }
+
+    /// Returns the class of an encoding.
+    pub fn classify<L: Limbs>(bits: L) -> Class {
+        match Self::decode(bits) {
+            Unpacked::Zero { .. } => Class::Zero,
+            Unpacked::Finite { .. } if bits.field(Self::FRACTION_BITS, E) == 0 => Class::Subnormal,
+            Unpacked::Finite { .. } => Class::Normal,
+            Unpacked::Infinity { .. } => Class::Infinite,
+            Unpacked::Nan {
+                signaling: true, ..
+            } => Class::SignalingNan,
+            Unpacked::Nan {
+                signaling: false, ..
+            } => Class::QuietNan,
+            Unpacked::Unsupported => Class::Unsupported,
+        }
+    }
+
+    /// Returns `true` when the encoding is the canonical encoding of its value:
+    /// encoding the decoded value gives the same bits.
+    pub fn is_canonical<L: Limbs>(bits: L) -> bool {
+        match Self::decode(bits) {
+            Unpacked::Unsupported => false,
+            value => Self::encode(value) == bits,
+        }
+    }
+
+    fn unbiased(field: u64) -> i32 {
+        i32::try_from(field).expect("an exponent field has at most 28 bits") - Self::BIAS
+    }
+}
+
+impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
+where
+    Width<W>: Storage,
+{
+    /// The largest exponent field value of a finite number.
+    const FINITE_FIELD_MAX: u64 = match Enc::KIND {
+        EncodingKind::Ieee | EncodingKind::X87 => Self::FIELD_MAX - 1,
+        EncodingKind::NoInf | EncodingKind::Fnuz => Self::FIELD_MAX,
+    };
+
+    /// Encodes a value in its canonical encoding.
+    ///
+    /// The value must be representable in the format. A negative zero in
+    /// [`Fnuz`](crate::Fnuz) encodes as positive zero, because the format has
+    /// no negative zero.
+    pub fn encode<L: Limbs>(value: Unpacked<L>) -> L {
+        let () = Self::VALID;
+        match value {
+            Unpacked::Zero { negative } => {
+                let negative = negative && !matches!(Enc::KIND, EncodingKind::Fnuz);
+                Self::assemble(negative, 0, L::ZERO)
+            }
+            Unpacked::Finite {
+                negative,
+                exponent,
+                significand,
+            } => Self::encode_finite(negative, exponent, significand),
+            Unpacked::Infinity { negative } => match Enc::KIND {
+                EncodingKind::Ieee => Self::assemble(negative, Self::FIELD_MAX, L::ZERO),
+                EncodingKind::X87 => {
+                    Self::assemble(negative, Self::FIELD_MAX, L::ZERO.with_bit(63))
+                }
+                EncodingKind::NoInf | EncodingKind::Fnuz => {
+                    unreachable!("no caller gives an infinity to a format without one")
+                }
+            },
+            Unpacked::Nan {
+                negative,
+                signaling,
+                payload,
+            } => Self::encode_nan(negative, signaling, payload),
+            Unpacked::Unsupported => unreachable!("an unsupported encoding has no canonical form"),
+        }
+    }
+
+    fn encode_finite<L: Limbs>(negative: bool, exponent: i32, significand: L) -> L {
+        debug_assert!(
+            significand.low_bits(Self::PRECISION) == significand && !significand.is_zero(),
+            "the significand is nonzero and below 2^PRECISION"
+        );
+        if significand.bit(Self::PRECISION - 1) {
+            let field = u64::try_from(exponent + Self::SHIFT + Self::BIAS)
+                .expect("a normal value has a positive exponent field");
+            debug_assert!(
+                (1..=Self::FINITE_FIELD_MAX).contains(&field),
+                "a normal value has an exponent in range"
+            );
+            let fraction = if Self::IS_X87 {
+                significand
+            } else {
+                significand.low_bits(Self::FRACTION_BITS)
+            };
+            debug_assert!(
+                !matches!(Enc::KIND, EncodingKind::NoInf)
+                    || field != Self::FIELD_MAX
+                    || fraction != L::ones(Self::FRACTION_BITS),
+                "a NoInf number is not the NaN encoding"
+            );
+            Self::assemble(negative, field, fraction)
+        } else {
+            debug_assert!(
+                exponent == Self::EMIN - Self::SHIFT,
+                "a subnormal value has the minimum exponent"
+            );
+            Self::assemble(negative, 0, significand)
+        }
+    }
+
+    fn encode_nan<L: Limbs>(negative: bool, signaling: bool, payload: L) -> L {
+        match Enc::KIND {
+            EncodingKind::Ieee => {
+                let quiet_bit = Self::FRACTION_BITS - 1;
+                debug_assert!(
+                    payload.low_bits(quiet_bit) == payload,
+                    "the payload fits below the quiet bit"
+                );
+                debug_assert!(
+                    !signaling || !payload.is_zero(),
+                    "a signaling NaN has a payload"
+                );
+                let fraction = if signaling {
+                    payload
+                } else {
+                    payload.with_bit(quiet_bit)
+                };
+                Self::assemble(negative, Self::FIELD_MAX, fraction)
+            }
+            EncodingKind::X87 => {
+                debug_assert!(
+                    payload.low_bits(62) == payload,
+                    "the payload fits below the quiet bit"
+                );
+                debug_assert!(
+                    !signaling || !payload.is_zero(),
+                    "a signaling NaN has a payload"
+                );
+                let fraction = payload.with_bit(63);
+                let fraction = if signaling {
+                    fraction
+                } else {
+                    fraction.with_bit(62)
+                };
+                Self::assemble(negative, Self::FIELD_MAX, fraction)
+            }
+            EncodingKind::NoInf => {
+                debug_assert!(!signaling, "the format has no signaling NaN");
+                Self::assemble(negative, Self::FIELD_MAX, L::ones(Self::FRACTION_BITS))
+            }
+            EncodingKind::Fnuz => {
+                debug_assert!(!signaling, "the format has no signaling NaN");
+                Self::assemble(true, 0, L::ZERO)
+            }
+        }
+    }
+
+    /// Places the sign, the exponent field, and the fraction in an encoding.
+    fn assemble<L: Limbs>(negative: bool, field: u64, fraction: L) -> L {
+        let bits = fraction.with_field(Self::FRACTION_BITS, E, field);
+        if negative {
+            bits.with_bit(Self::WIDTH - 1)
+        } else {
+            bits
+        }
+    }
+}
+
+impl<const E: u32, Enc: Encoding, const W: usize> Standard<W> for Binary<E, Enc>
+where
+    Width<W>: Storage,
+{
+    type Bits = <Width<W> as Storage>::Bits;
+
+    const PRECISION: u32 = Layout::<E, Enc, W>::PRECISION;
+    const EMAX: i32 = Layout::<E, Enc, W>::EMAX;
+    const EMIN: i32 = Layout::<E, Enc, W>::EMIN;
+
+    fn mask(bits: Self::Bits) -> Self::Bits {
+        let () = Layout::<E, Enc, W>::VALID;
+        Self::Bits::from_limbs(bits.to_limbs().low_bits(Layout::<E, Enc, W>::WIDTH))
+    }
+
+    fn unpack(bits: Self::Bits) -> Unpacked<<Self::Bits as LimbConversion>::Limbs> {
+        Layout::<E, Enc, W>::decode(bits.to_limbs())
+    }
+
+    fn classify(bits: Self::Bits) -> Class {
+        Layout::<E, Enc, W>::classify(bits.to_limbs())
+    }
+
+    fn is_canonical(bits: Self::Bits) -> bool {
+        Layout::<E, Enc, W>::is_canonical(bits.to_limbs())
+    }
+
+    fn is_sign_negative(bits: Self::Bits) -> bool {
+        bits.to_limbs().bit(Layout::<E, Enc, W>::WIDTH - 1)
+    }
+}
+
+/// Converts a `u32` to an `i32` in a constant.
+const fn signed(value: u32) -> i32 {
+    match 0_i32.checked_add_unsigned(value) {
+        Some(result) => result,
+        None => panic!("the value exceeds i32::MAX"),
+    }
+}
+
+#[cfg(test)]
+mod tests;

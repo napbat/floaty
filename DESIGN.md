@@ -1,6 +1,6 @@
 # floaty Design
 
-Status: design approved on 2026-09-27. The crate has no arithmetic yet.
+Status: design approved on 2026-09-27. Build step 1, encoding, is complete.
 
 This file is the source of truth for every design decision in floaty. Update
 it in the same change that alters a decision.
@@ -61,7 +61,7 @@ These items are out of scope now. Some can return later.
 ## The Value Type
 
 ```rust
-pub struct Float<S: Standard<W>, const W: usize, M: Mode = Ieee> { /* private */ }
+pub struct Float<S: Standard<W>, const W: usize, M: Mode = mode::Ieee> { /* private */ }
 ```
 
 | Parameter | Meaning |
@@ -75,11 +75,27 @@ a default for operations. It does not change the value.
 
 - An invalid combination does not compile. `Float<Binary<8>, 600>` fails,
   because no storage exists for width 600. An exponent too wide for its width
-  fails a compile-time assertion.
+  fails a compile-time assertion when the compiler generates code for the
+  format. `cargo check` does not report that assertion.
 - Each standard and width pair selects its storage and its engine through its
   trait implementation. This gives static dispatch without specialization.
 - The storage layout is private. Step 6 of the build order chooses packed bits
   or pre-split fields for each format, by benchmark.
+- `from_bits` ignores the storage bits above `W`. For example, TF32 in a
+  `u32` ignores bits 19 to 31. `to_bits` returns those bits as zero.
+- `Float::PRECISION`, `Float::EMAX`, and `Float::EMIN` give the precision and
+  the IEEE 754 exponent range of the format.
+- `classify` returns a `Class`: `Zero`, `Subnormal`, `Normal`, `Infinite`,
+  `QuietNan`, `SignalingNan`, or `Unsupported`. The class does not include
+  the sign. `is_canonical` implements IEEE 754 `isCanonical`: an encoding is
+  canonical when encoding its decoded value gives the same bits.
+- `decode::<N>()` returns the exact value as `Decoded<N>`: a zero, a finite
+  value `significand * 2^exponent`, an infinity, a NaN with its sign and
+  payload, or an unsupported encoding. `N` is the limb count of the
+  significand. A consumer reads its operands with `decode` and rounds its
+  result with `round`.
+- A trait item marked `#[doc(hidden)]` is internal to the crate. It is not
+  part of the API.
 - Generic conversion is a method, `convert` or `cast`. A blanket
   `From<Float<A, _>> for Float<B, _>` overlaps `impl<T> From<T> for T`. A
   lossless pair can add a concrete `From` implementation.
@@ -106,6 +122,20 @@ stable Rust has no enum const parameters.
 of precision. The engine follows the 387 and later processors: an unnormal, a
 pseudo-NaN, or a pseudo-infinity input is an invalid operand, and a
 pseudo-denormal input is accepted.
+
+Step 1 fixed these encoding details:
+
+- A binary format has 2 to 28 exponent bits and at least one fraction bit.
+  The limit of 28 keeps every exponent sum inside `i32`. `X87` exists only as
+  `Binary<15, X87>` at width 80. Another layout fails at compile time.
+- The NaN of `NoInf` and `Fnuz` is quiet, because those formats have no
+  signaling NaN.
+- An x87 unnormal, pseudo-NaN, or pseudo-infinity has the class
+  `Unsupported`. An x87 pseudo-denormal has the class `Subnormal`, as the
+  `FXAM` instruction reports it. Its value equals the normal value with
+  exponent field 1, and it is not canonical.
+- `Fnuz` has no negative zero, so the encoder writes a negative zero as
+  positive zero.
 
 The crate names common formats with type aliases. The alias names are
 provisional.
@@ -229,13 +259,15 @@ pub trait Mode: Sealed {
 ```
 
 A mode names one constant `Env`, so a type can carry a default behavior.
-`Ieee` is the default mode. It rounds to nearest even, does not flush, and
-detects tininess after rounding. Its NaN rule is an open question.
+The modes live in the module `floaty::mode`, because the encoding markers
+`Ieee` and `X87` already use those names at the crate root. `mode::Ieee` is
+the default mode. It rounds to nearest even, does not flush, and detects
+tininess after rounding. Its NaN rule is an open question.
 
 ### Operations and Overrides
 
 ```rust
-type F32 = Float<Binary<8>, 32>; // default mode: Ieee
+type F32 = Float<Binary<8>, 32>; // default mode: mode::Ieee
 
 a + b                                // the type's mode; flags dropped
 a.add_with(b, Rounding::TowardZero)  // override the rounding only; returns (value, Flags)
@@ -292,9 +324,9 @@ MXCSR.
 | Denormal-input flag | MXCSR DE | Status word DE |
 
 Every preset field is a claim about hardware. Cite the vendor manual beside
-the field: the NaN rules are in the Intel SDM Volume 1, Table 4-7, and
-tininess is in the Intel SDM Volume 1, section 4.9.1.5. Step 5 confirms every
-row on hardware.
+the field. In the Intel SDM Volume 1, revision 253665-093US, the NaN rules are
+in Table 4-8 on page 4-17, and tininess is in section 4.9.1.5 on page 4-23.
+Step 5 confirms every row on hardware.
 
 #### What Presets Do Not Cover
 
@@ -430,16 +462,29 @@ payload. A canonical `NanRule` ignores payloads, as RISC-V does.
 ## Verification
 
 A bit-exact claim needs an independent reference. floaty tests against
-established implementations, not a reference written for floaty.
+established implementations. Where no implementation exists, the test
+evaluates the published definition, from IEEE 754 or a vendor manual, with an
+established library such as MPFR. A reference written only for floaty is not
+an oracle.
 
 | Scope | Oracle | Coverage |
 | --- | --- | --- |
+| Decoding of binary16, bfloat16, TF32, binary32, binary64, binary128, OCP FP8, canonical x87 encodings, and custom layouts whose exponent field crosses a limb boundary | `rustc_apfloat`, the Rust port of LLVM APFloat | Class, sign, and exact value of every 8-, 16-, and 19-bit encoding, and of boundary and random wider encodings. Precision, `emax`, and `emin`. Every decoding test also checks the documented form of `Decoded` and the NaN payload that the format definition gives. |
+| FP8, including the FNUZ variants | A table that `ml_dtypes` generates, in `floaty-verify/data` | Class, sign, and value of every encoding. Precision, `emax`, and `emin`. |
+| x87 classification | The host processor, on x86-64: `FXAM`, and a multiply by 1.0 | Class and sign, including unsupported encodings and pseudo-denormals. The value of a pseudo-denormal. |
+| x87 canonical encodings | The rule of the Intel SDM Volume 1 Table 8-3: the integer bit is set exactly when the exponent field is not zero | `is_canonical` for boundary and random encodings |
+| binary160 to binary512, and a 200-bit layout whose exponent field crosses a limb boundary | The definition in IEEE 754-2019 section 3.4, evaluated exactly with MPFR. No established library decodes these widths. | Class, sign, and exact value of boundary and random encodings |
+| binary32 and binary64 classification | The host `f32` and `f64` types | Random encodings, and every binary32 encoding in an ignored sweep |
+| IEEE interchange parameters | The formulas of IEEE 754-2019 table 3.5 | Precision, `emax`, and `emin` of every IEEE width |
 | binary16, binary32, binary64, x87 extended, binary128 | Berkeley TestFloat | Every rounding direction including round to odd, tininess before and after rounding, x87 precision control at 32, 64, and 80 bits, integer conversions, and flags |
 | bfloat16, TF32, FP8, binary160 to binary512, and a second check of the formats above | MPFR, through the `rug` crate | Correct rounding at any precision and exponent range, with subnormals |
 | x86 SSE and x87 presets | The host processor, through inline assembly on x86-64 | NaN selection, the denormal-input flag, FTZ, DAZ, x87 C1, and precision control |
 | Decimal | The decTest vectors (DPD) and the Intel decimal library tests (BID) | Arithmetic, rounding, flags, and result exponents |
 | Double-double | libgcc on PowerPC under QEMU, and QD | Bit-exact match to each reference |
 
+- `rustc_apfloat` follows LLVM, not the processor, for non-canonical x87
+  encodings. The processor is the reference for those encodings. See
+  `docs/anomalies/x87-noncanonical-rustc-apfloat.md`.
 - MPFR has no round to odd. The harness rounds toward zero and sets the lowest
   bit when the result is inexact. For ties away from zero the harness uses
   `mpfr_round_nearest_away`. FTZ and the FP8 overflow encodings are small
@@ -457,6 +502,7 @@ established implementations, not a reference written for floaty.
 floaty/                  the workspace
 ├── floaty/              the crate: no_std, no dependencies
 │   └── src/
+│       ├── float.rs     Float, Class, and the format aliases
 │       ├── format.rs    Standard, Binary<E, Enc>, the width-to-storage table
 │       ├── env.rs       Env, Rounding, NanRule, Flags, modes, presets
 │       ├── limbs.rs     [u64; N] arithmetic, Int<BITS>, UInt<BITS>

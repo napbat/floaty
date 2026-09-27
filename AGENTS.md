@@ -35,9 +35,11 @@ floaty is bit-exact, platform-independent software floating point.
   rounding path.
 - Handle special values in the operation. NaNs, infinities, and zeros never
   reach the rounding routine.
-- Test every behavior against an established oracle: TestFloat, MPFR, the
-  host processor, decTest, the Intel decimal library tests, QD, or libgcc. A
-  behavior without an oracle test is not finished.
+- Test every behavior against an established oracle: TestFloat, MPFR,
+  `rustc_apfloat`, `ml_dtypes`, the host processor, decTest, the Intel decimal
+  library tests, QD, or libgcc. Where no implementation exists, evaluate the
+  published definition from IEEE 754 or a vendor manual with MPFR. A behavior
+  without an oracle test is not finished.
 - A preset field is a claim about hardware. Cite the vendor manual, volume,
   and section beside the field. Confirm the field on hardware in
   `floaty-verify`.
@@ -181,6 +183,14 @@ error messages, commit messages, and handoff notes.
   with a `Status:` line. Use the sections `Affected rule`, `Conflicting
   reference evidence`, `Resolution`, and `Regression evidence`. Cite the
   manual, revision, volume, and page.
+
+## Generated Files
+
+Never hand-edit a generated file. Change its generator and run it again.
+
+| Generated file | Command |
+| --- | --- |
+| `floaty-verify/data/fp8-reference.txt` | `floaty-verify/scripts/generate_fp8_reference.py`, as its docstring states |
 
 ## Tests
 

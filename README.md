@@ -6,9 +6,9 @@ floaty emulates floating-point formats and the behavior of the hardware that
 uses them. Every operation gives the same bits on every host. It is a base
 layer for binary lifters, constant folders, and software FPU emulators.
 
-> **Status:** design phase. The workspace builds, but the crate has no public
-> API yet. [DESIGN.md](DESIGN.md) holds the approved design and the build
-> order.
+> **Status:** build step 1 of 8 is complete: every binary format decodes to
+> its exact value and classifies. Arithmetic comes in later steps.
+> [DESIGN.md](DESIGN.md) holds the approved design and the build order.
 
 ## Planned Scope
 
@@ -31,7 +31,7 @@ Each type carries a default mode. A single operation can override it and get
 the flags back.
 
 ```rust
-type F32 = Float<Binary<8>, 32>; // default mode: Ieee
+type F32 = Float<Binary<8>, 32>; // default mode: mode::Ieee
 
 let sum = a + b;                                        // default mode, flags dropped
 let (sum, flags) = a.add_with(b, Rounding::TowardZero); // one-operation override

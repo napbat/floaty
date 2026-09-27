@@ -9,6 +9,8 @@ repository.workspace = true
 
 [dependencies]
 floaty.workspace = true
+rug.workspace = true
+rustc_apfloat.workspace = true
 
 [lints]
 workspace = true
