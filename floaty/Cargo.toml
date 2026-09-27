@@ -1,0 +1,12 @@
+[package]
+name = "floaty"
+description = "Bit-exact, platform-independent software floating point."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+readme = "../README.md"
+
+[lints]
+workspace = true

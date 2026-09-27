@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["floaty", "floaty-verify"]
+# `floaty-verify` links C reference libraries once the oracles land. Build it
+# only on request, so a plain `cargo build` never needs a C toolchain.
+default-members = ["floaty"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+repository = "https://github.com/napbat/floaty"
+
+[workspace.dependencies]
+floaty = { version = "0.1.0", path = "floaty" }
+
+[workspace.lints.rust]
+warnings = { level = "deny", priority = -2 }
+unused = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+future_incompatible = { level = "deny", priority = -1 }
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+
+[workspace.lints.rustdoc]
+all = { level = "deny", priority = -1 }

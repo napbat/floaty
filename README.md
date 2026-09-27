@@ -1,0 +1,61 @@
+# floaty
+
+Bit-exact, platform-independent software floating point for Rust.
+
+floaty emulates floating-point formats and the behavior of the hardware that
+uses them. Every operation gives the same bits on every host. It is a base
+layer for binary lifters, constant folders, and software FPU emulators.
+
+> **Status:** design phase. The workspace builds, but the crate has no public
+> API yet. [DESIGN.md](DESIGN.md) holds the approved design and the build
+> order.
+
+## Planned Scope
+
+- **Binary formats** described by parameters: every IEEE 754 binary width up
+  to 512 bits, bfloat16, TF32, the FP8 variants (OCP E4M3 and E5M2, and the
+  FNUZ variants), and x87 80-bit extended precision.
+- **Decimal formats**: decimal32, decimal64, and decimal128, in both the BID
+  and the DPD encodings.
+- **Double-double**: bit-compatible with GCC's PowerPC `long double`, or with
+  the QD library.
+- **Correct rounding** for add, subtract, multiply, divide, square root,
+  fused multiply-add, and conversions.
+- **Platform behavior as data**: rounding direction, flush-to-zero,
+  denormals-are-zero, tininess detection, NaN rules, and x87 precision
+  control, with presets for x86 SSE and x87.
+
+## Planned API
+
+Each type carries a default mode. A single operation can override it and get
+the flags back.
+
+```rust
+type F32 = Float<Binary<8>, 32>; // default mode: Ieee
+
+let sum = a + b;                                        // default mode, flags dropped
+let (sum, flags) = a.add_with(b, Rounding::TowardZero); // one-operation override
+let (sum, flags) = a.add_with(b, Env::X86_SSE);         // full platform behavior
+```
+
+## Workspace
+
+| Package | Purpose |
+| --- | --- |
+| `floaty` | The library. `no_std`, no dependencies. |
+| `floaty-verify` | The verification harness against TestFloat, MPFR, the host processor, and other references. Not a default member. |
+
+## Development
+
+Rust 1.85 or later, edition 2024. Run the quality gates from the workspace
+root:
+
+```text
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
+cargo test --workspace --no-fail-fast
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
+```
+
+[AGENTS.md](AGENTS.md) holds the full contributor rules.

@@ -1,0 +1,14 @@
+[package]
+name = "floaty-verify"
+description = "Verification harness that compares floaty against reference implementations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+floaty.workspace = true
+
+[lints]
+workspace = true
