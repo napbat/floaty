@@ -4,11 +4,21 @@
 //! instruction under the requested control value, reads the flags, and
 //! restores the saved value. The x87 functions leave the x87 stack empty, as
 //! the ABI requires.
+//!
+//! This module holds the control values and the mappings between floaty flags
+//! and processor flags. The submodule `sse` runs the SSE instructions, and the
+//! submodule `x87` runs the x87 instructions. This module re-exports both.
 
-use core::arch::asm;
+mod sse;
+mod x87;
+
+use core::cmp::Ordering;
 
 use floaty::env::{InvalidProduct, NanPropagation, NanRule, Tininess};
 use floaty::{Env, Flags, Rounding};
+
+pub use sse::*;
+pub use x87::*;
 
 /// The MXCSR value with every exception masked and no flag set.
 pub const MXCSR_MASKED: u32 = 0x1F80;
@@ -117,258 +127,45 @@ pub fn x87_status(flags: Flags) -> u16 {
     bits
 }
 
-/// Defines a function that runs a two-operand SSE instruction on 32-bit or
-/// 64-bit values under an MXCSR value, and returns the result and the flags.
-macro_rules! sse_binary {
-    ($(#[$doc:meta])* $name:ident, $bits:ty, $load_a:literal, $load_b:literal, $operation:literal, $store:literal) => {
-        $(#[$doc])*
-        #[must_use]
-        pub fn $name(a: $bits, b: $bits, control: u32) -> ($bits, u32) {
-            let (mut saved, mut after) = (0_u32, 0_u32);
-            let result: $bits;
-            // SAFETY: the code saves MXCSR, runs one instruction under
-            // `control`, reads the flags, and restores MXCSR. It reads and
-            // writes only the local variables.
-            unsafe {
-                asm!(
-                    "stmxcsr [{saved}]",
-                    "ldmxcsr [{control}]",
-                    $load_a,
-                    $load_b,
-                    $operation,
-                    $store,
-                    "stmxcsr [{after}]",
-                    "ldmxcsr [{saved}]",
-                    saved = in(reg) &raw mut saved,
-                    control = in(reg) &raw const control,
-                    after = in(reg) &raw mut after,
-                    a = in(reg) a,
-                    b = in(reg) b,
-                    x = out(xmm_reg) _,
-                    y = out(xmm_reg) _,
-                    result = out(reg) result,
-                    options(nostack),
-                );
-            }
-            (result, after & MXCSR_FLAGS)
-        }
-    };
+/// The three flags in which a floating-point compare reports the order: ZF,
+/// PF, and CF in EFLAGS, or C3, C2, and C0 in the x87 status word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CompareFlags {
+    zero: bool,
+    parity: bool,
+    carry: bool,
 }
 
-sse_binary!(
-    /// `ADDSS`.
-    addss, u32, "movd {x}, {a:e}", "movd {y}, {b:e}", "addss {x}, {y}", "movd {result:e}, {x}"
-);
-sse_binary!(
-    /// `SUBSS`.
-    subss, u32, "movd {x}, {a:e}", "movd {y}, {b:e}", "subss {x}, {y}", "movd {result:e}, {x}"
-);
-sse_binary!(
-    /// `MULSS`.
-    mulss, u32, "movd {x}, {a:e}", "movd {y}, {b:e}", "mulss {x}, {y}", "movd {result:e}, {x}"
-);
-sse_binary!(
-    /// `DIVSS`.
-    divss, u32, "movd {x}, {a:e}", "movd {y}, {b:e}", "divss {x}, {y}", "movd {result:e}, {x}"
-);
-sse_binary!(
-    /// `SQRTSS` of `a`; `b` is unused.
-    sqrtss, u32, "movd {x}, {a:e}", "movd {y}, {b:e}", "sqrtss {x}, {x}", "movd {result:e}, {x}"
-);
-sse_binary!(
-    /// `CVTSD2SS` of `a`; `b` is unused. The result is in the low 32 bits.
-    cvtsd2ss, u64, "movq {x}, {a}", "movq {y}, {b}", "cvtsd2ss {x}, {x}", "movq {result}, {x}"
-);
-sse_binary!(
-    /// `CVTSS2SD` of the low 32 bits of `a`; `b` is unused.
-    cvtss2sd, u64, "movq {x}, {a}", "movq {y}, {b}", "cvtss2sd {x}, {x}", "movq {result}, {x}"
-);
-sse_binary!(
-    /// `ADDSD`.
-    addsd, u64, "movq {x}, {a}", "movq {y}, {b}", "addsd {x}, {y}", "movq {result}, {x}"
-);
-sse_binary!(
-    /// `SUBSD`.
-    subsd, u64, "movq {x}, {a}", "movq {y}, {b}", "subsd {x}, {y}", "movq {result}, {x}"
-);
-sse_binary!(
-    /// `MULSD`.
-    mulsd, u64, "movq {x}, {a}", "movq {y}, {b}", "mulsd {x}, {y}", "movq {result}, {x}"
-);
-sse_binary!(
-    /// `DIVSD`.
-    divsd, u64, "movq {x}, {a}", "movq {y}, {b}", "divsd {x}, {y}", "movq {result}, {x}"
-);
-sse_binary!(
-    /// `SQRTSD` of `a`; `b` is unused.
-    sqrtsd, u64, "movq {x}, {a}", "movq {y}, {b}", "sqrtsd {x}, {x}", "movq {result}, {x}"
-);
-
-/// Defines a function that runs a three-operand FMA instruction.
-macro_rules! fma {
-    ($(#[$doc:meta])* $name:ident, $bits:ty, $load:literal, $operation:literal, $store:literal) => {
-        $(#[$doc])*
-        #[must_use]
-        pub fn $name(a: $bits, b: $bits, c: $bits, control: u32) -> ($bits, u32) {
-            let (mut saved, mut after) = (0_u32, 0_u32);
-            let result: $bits;
-            let operands = [a, b, c];
-            // SAFETY: as in the two-operand functions. The code also reads the
-            // three operands from `operands`.
-            unsafe {
-                asm!(
-                    "stmxcsr [{saved}]",
-                    "ldmxcsr [{control}]",
-                    $load,
-                    $operation,
-                    $store,
-                    "stmxcsr [{after}]",
-                    "ldmxcsr [{saved}]",
-                    saved = in(reg) &raw mut saved,
-                    control = in(reg) &raw const control,
-                    after = in(reg) &raw mut after,
-                    operands = in(reg) operands.as_ptr(),
-                    x = out(xmm_reg) _,
-                    y = out(xmm_reg) _,
-                    z = out(xmm_reg) _,
-                    result = out(reg) result,
-                    options(nostack),
-                );
-            }
-            (result, after & MXCSR_FLAGS)
+impl CompareFlags {
+    /// Reads C3, C2, and C0 from an x87 status word, in the EFLAGS positions
+    /// that `FSTSW AX` and `SAHF` copy them to: C3 to ZF, C2 to PF, and C0 to
+    /// CF (Intel SDM Volume 1, Figure 8-5 on page 8-6).
+    fn from_status(status: u16) -> Self {
+        let bit = |index: u16| (status >> index) & 1 == 1;
+        Self {
+            zero: bit(14),
+            parity: bit(10),
+            carry: bit(8),
         }
-    };
-}
-
-fma!(
-    /// `VFMADD213SS x, y, z` with `x = a`, `y = b`, and `z = c`: `b * a + c`.
-    vfmadd213ss,
-    u32,
-    "vmovss {x}, dword ptr [{operands}]\n vmovss {y}, dword ptr [{operands} + 4]\n vmovss {z}, dword ptr [{operands} + 8]",
-    "vfmadd213ss {x}, {y}, {z}",
-    "vmovd {result:e}, {x}"
-);
-fma!(
-    /// `VFMADD213SD x, y, z` with `x = a`, `y = b`, and `z = c`: `b * a + c`.
-    vfmadd213sd,
-    u64,
-    "vmovsd {x}, qword ptr [{operands}]\n vmovsd {y}, qword ptr [{operands} + 8]\n vmovsd {z}, qword ptr [{operands} + 16]",
-    "vfmadd213sd {x}, {y}, {z}",
-    "vmovq {result}, {x}"
-);
-
-/// Runs `FXAM` on an 80-bit encoding. Returns the status word.
-#[must_use]
-pub fn fxam(bits: u128) -> u16 {
-    let bytes = bits.to_le_bytes();
-    let status: u16;
-    // SAFETY: the code reads 10 bytes from `bytes`, which holds 16. It pushes
-    // one value onto the x87 stack and pops it, so the stack is empty on exit.
-    // `FLD` of an 80-bit operand raises no exception.
-    unsafe {
-        asm!(
-            "fld tbyte ptr [{source}]",
-            "fxam",
-            "fnstsw ax",
-            "fstp st(0)",
-            source = in(reg) bytes.as_ptr(),
-            out("ax") status,
-            out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
-            out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
-            options(nostack, readonly),
-        );
     }
-    status
-}
 
-/// Reads the x87 control word.
-#[must_use]
-pub fn control_word() -> u16 {
-    let mut word = 0_u16;
-    // SAFETY: `FNSTCW` writes two bytes to `word` and changes no other state.
-    unsafe {
-        asm!("fnstcw word ptr [{word}]", word = in(reg) &raw mut word, options(nostack));
-    }
-    word
-}
-
-/// Defines a function that loads x87 operands, runs an operation under a
-/// control word, and stores the result. Returns the result bits and the status
-/// word that the operation leaves.
-///
-/// The status word is read before the store: an exact `FSTP` clears C1, the
-/// round-up bit that the operation sets.
-macro_rules! x87 {
-    ($(#[$doc:meta])* $name:ident, ($($operand:ident),+), $load:literal, $operation:literal, $store:literal, $result:ty) => {
-        $(#[$doc])*
-        #[must_use]
-        pub fn $name($($operand: u128,)+ control: u16) -> ($result, u16) {
-            let operands = [$($operand.to_le_bytes()),+];
-            let mut output = [0_u8; 16];
-            let mut saved = 0_u16;
-            let status: u16;
-            // SAFETY: the code saves the control word, loads `control`,
-            // clears the flags, loads each operand from its 16-byte slot, runs
-            // the operation, reads the status word, stores and pops the
-            // result, clears the flags again, and restores the control word.
-            // The x87 stack is empty on exit.
-            unsafe {
-                asm!(
-                    "fnstcw word ptr [{saved}]",
-                    "fldcw word ptr [{control}]",
-                    "fnclex",
-                    $load,
-                    $operation,
-                    "fnstsw ax",
-                    $store,
-                    "fnclex",
-                    "fldcw word ptr [{saved}]",
-                    saved = in(reg) &raw mut saved,
-                    control = in(reg) &raw const control,
-                    operands = in(reg) operands.as_ptr(),
-                    target = in(reg) output.as_mut_ptr(),
-                    out("ax") status,
-                    out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
-                    out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
-                    options(nostack),
-                );
-            }
-            let result = <$result>::from_le_bytes(output[..core::mem::size_of::<$result>()].try_into().expect("the output holds the result"));
-            (result, status)
+    /// Returns the order of the first operand to the second, or `None` when
+    /// the operands are unordered.
+    ///
+    /// The Intel SDM Volume 1, Tables 8-6 and 8-7 on page 8-19, give the
+    /// encodings for the x87 compares. The SSE compares `UCOMISS`, `COMISS`,
+    /// `UCOMISD`, and `COMISD` use the same encodings in EFLAGS.
+    ///
+    /// # Panics
+    ///
+    /// Panics for a combination that no compare instruction sets.
+    fn order(self) -> Option<Ordering> {
+        match (self.zero, self.parity, self.carry) {
+            (false, false, false) => Some(Ordering::Greater),
+            (false, false, true) => Some(Ordering::Less),
+            (true, false, false) => Some(Ordering::Equal),
+            (true, true, true) => None,
+            _ => panic!("a compare reports one of four flag combinations, not {self:?}"),
         }
-    };
+    }
 }
-
-x87!(
-    /// `FLD` of an 80-bit value and `FSTP` to 64 bits.
-    store_double, (a), "fld tbyte ptr [{operands}]", "fstp qword ptr [{target}]", "", u64
-);
-x87!(
-    /// `FLD` of an 80-bit value and `FSTP` to 32 bits.
-    store_single, (a), "fld tbyte ptr [{operands}]", "fstp dword ptr [{target}]", "", u32
-);
-x87!(
-    /// `a + b` with `FADDP`.
-    fadd, (a, b), "fld tbyte ptr [{operands}]\n fld tbyte ptr [{operands} + 16]", "faddp st(1), st", "fstp tbyte ptr [{target}]", u128
-);
-x87!(
-    /// `a - b` with `FSUBP`.
-    fsub, (a, b), "fld tbyte ptr [{operands}]\n fld tbyte ptr [{operands} + 16]", "fsubp st(1), st", "fstp tbyte ptr [{target}]", u128
-);
-x87!(
-    /// `a * b` with `FMULP`.
-    fmul, (a, b), "fld tbyte ptr [{operands}]\n fld tbyte ptr [{operands} + 16]", "fmulp st(1), st", "fstp tbyte ptr [{target}]", u128
-);
-x87!(
-    /// `a / b` with `FDIVP`.
-    fdiv, (a, b), "fld tbyte ptr [{operands}]\n fld tbyte ptr [{operands} + 16]", "fdivp st(1), st", "fstp tbyte ptr [{target}]", u128
-);
-x87!(
-    /// The square root of `a` with `FSQRT`.
-    fsqrt, (a), "fld tbyte ptr [{operands}]", "fsqrt", "fstp tbyte ptr [{target}]", u128
-);
-x87!(
-    /// `a * 1.0` with `FMULP`, which stores a pseudo-denormal as a normal
-    /// encoding.
-    times_one, (a), "fld tbyte ptr [{operands}]\n fld1", "fmulp st(1), st", "fstp tbyte ptr [{target}]", u128
-);

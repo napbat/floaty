@@ -1,15 +1,21 @@
 //! Unpacking, packing, and classification of the binary formats.
 
+use core::cmp::Ordering;
 use core::marker::PhantomData;
 
 mod arithmetic;
+mod compare;
+mod integral;
 mod nan;
+mod remainder;
+mod scale;
 
 use crate::env::{Env, Flags, NanPropagation};
 use crate::exact::{self, Target, Unrounded};
 use crate::float::Class;
-use crate::format::internal::LimbConversion;
+use crate::format::internal::{LimbConversion, MinMax, Step};
 use crate::format::{Binary, Encoding, Standard, Storage, Width};
+use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 
 /// The encoding rules of a binary format.
@@ -272,6 +278,19 @@ where
         match Self::decode(bits) {
             Unpacked::Unsupported => false,
             value => Self::encode(value) == bits,
+        }
+    }
+
+    /// Returns the encoding with its sign set to `negative`. The zero and the
+    /// NaN of [`Fnuz`](crate::Fnuz) each have one encoding, so they keep it.
+    pub fn with_sign<L: Limbs>(bits: L, negative: bool) -> L {
+        let magnitude = bits.low_bits(Self::WIDTH - 1);
+        if matches!(Enc::KIND, EncodingKind::Fnuz) && magnitude.is_zero() {
+            bits
+        } else if negative {
+            magnitude.with_bit(Self::WIDTH - 1)
+        } else {
+            magnitude
         }
     }
 
@@ -573,6 +592,53 @@ where
     ) -> (Self::Bits, Flags) {
         let (bits, flags) =
             Layout::<E, Enc, W>::mul_add(left.to_limbs(), right.to_limbs(), addend.to_limbs(), env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn with_sign(bits: Self::Bits, negative: bool) -> Self::Bits {
+        Self::Bits::from_limbs(Layout::<E, Enc, W>::with_sign(bits.to_limbs(), negative))
+    }
+
+    fn compare(left: Self::Bits, right: Self::Bits, env: &Env) -> (Option<Ordering>, Flags) {
+        Layout::<E, Enc, W>::compare(left.to_limbs(), right.to_limbs(), env)
+    }
+
+    fn total_cmp(left: Self::Bits, right: Self::Bits) -> Ordering {
+        Layout::<E, Enc, W>::total_cmp(left.to_limbs(), right.to_limbs())
+    }
+
+    fn min_max(
+        left: Self::Bits,
+        right: Self::Bits,
+        operation: MinMax,
+        env: &Env,
+    ) -> (Self::Bits, Flags) {
+        let (bits, flags) =
+            Layout::<E, Enc, W>::min_max(left.to_limbs(), right.to_limbs(), operation, env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn round_to_integral(value: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::round_to_integral(value.to_limbs(), env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn to_int<I: Integer>(value: Self::Bits, env: &Env) -> (ToInt<I>, Flags) {
+        Layout::<E, Enc, W>::to_int(value.to_limbs(), env)
+    }
+
+    fn remainder(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::remainder(left.to_limbs(), right.to_limbs(), env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn scale_b(value: Self::Bits, scale: i32, env: &Env) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::scale_b(value.to_limbs(), scale, env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn next(value: Self::Bits, step: Step, env: &Env) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::next(value.to_limbs(), step, env);
         (Self::Bits::from_limbs(bits), flags)
     }
 }

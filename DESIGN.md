@@ -1,7 +1,7 @@
 # floaty Design
 
 Status: design approved on 2026-09-27. Build steps 1, encoding, 2, rounding,
-and 3, arithmetic, are complete.
+3, arithmetic, and 4, the other binary operations, are complete.
 
 This file is the source of truth for every design decision in floaty. Update
 it in the same change that alters a decision.
@@ -516,10 +516,10 @@ step 6 decides faster algorithms.
 
 | Group | Operations | Decisions at the operation level |
 | --- | --- | --- |
-| Rounded | `add`, `sub`, `mul`, `div`, `sqrt`, `fma`, `scalb`, float-to-float conversion, round to integer | The NaN to return. The sign of an exact zero. Whether round to integer signals inexact: IEEE 754 has both variants. |
-| Exact | IEEE `rem`, `neg`, `abs`, `copysign`, classification, `next_up`, `next_down` | Never rounds. The sign operations never signal. |
-| Compare | Quiet and signaling predicates, `total_order` | Which comparisons signal invalid for a NaN. |
-| Minimum and maximum | IEEE 754-2019 `minimum`, `maximum`, `minimumNumber`, `maximumNumber`, and IEEE 754-2008 `minNum`, `maxNum` | floaty ships all three families. ARM `FMINNM` uses the 2008 rule. |
+| Rounded | `add`, `sub`, `mul`, `div`, `sqrt`, `mul_add`, `scale_b`, float-to-float conversion, `round_to_integral` | The NaN to return. The sign of an exact zero. Whether round to integer signals inexact: IEEE 754 has both variants, and floaty reports the flag for the consumer to keep or drop. |
+| Exact | IEEE `remainder`, negation, `abs`, `copy_sign`, classification, `next_up`, `next_down` | Never rounds. The sign operations never signal. |
+| Compare | `compare_quiet_with`, `compare_signaling_with`, `total_cmp` | Which comparisons signal invalid for a NaN. |
+| Minimum and maximum | IEEE 754-2019 `minimum`, `maximum`, `minimum_number`, `maximum_number`, and IEEE 754-2008 `min_num`, `max_num` | floaty ships all three families. ARM `FMINNM` uses the 2008 rule. |
 | Float to integer | Rounds with the `Env` | Out-of-range and NaN results. See below. |
 | Integer to float | Rounds with the `Env` | None. |
 
@@ -545,6 +545,79 @@ pub enum ToInt<I> {
 | x86 | 0x8000_0000, the integer indefinite | 0x8000_0000 |
 | ARM | Saturate | 0 |
 | RISC-V | Saturate | The largest value |
+
+- `Int<BITS>` and `UInt<BITS>` live in `integer.rs`. Each stores its bits in
+  the storage type of the width table, with the bits above `BITS` clear.
+  `Int` uses two's complement. `from_bits` masks, and `to_bits` returns the
+  bits. The sealed `Integer` trait covers these types and the primitives
+  `i8` to `i128` and `u8` to `u128`. `isize` and `usize` are not integer
+  types here, because their width depends on the host.
+- `from_int` and `from_int_with` round like every other result, so the
+  precision limit applies. A zero converts to `+0`.
+- `to_int` and `to_int_with` round in the direction of the behavior.
+  `mode::Ieee` rounds to nearest even, not toward zero as Rust `as` does. An
+  infinity or a rounded value out of range gives `OutOfRange` with the sign
+  of the float. A NaN or an unsupported encoding gives `Nan`. Both signal
+  `INVALID` and not `INEXACT`.
+- `to_int_with` rounds to an integer, not to the format, so the precision
+  limit does not apply. SoftFloat's `extF80_to_*` conversions also ignore
+  precision control.
+- `ToInt` is not `#[non_exhaustive]`: its three cases are complete.
+
+### Decisions for the Other Operations
+
+Step 4 fixed these rules. Each keeps the neutral form: a consumer builds the
+instruction-level behavior from the result and the flags.
+
+- Every operation that takes a behavior applies DAZ to its inputs and reports
+  `DENORMAL_INPUT` for a subnormal input. The sign operations and
+  `total_cmp` take no behavior.
+- `round_to_integral_with` and `to_int_with` report `INEXACT` whenever the
+  result differs from the operand, as `roundToIntegralExact` and
+  `convertToIntegerExact` do. The IEEE 754 operations that do not signal
+  inexact are the same operations with `INEXACT` ignored, so floaty has no
+  second method for them. They also report `ROUNDED_UP`.
+- `round_to_integral_with` and `remainder_with` give results that the format
+  holds exactly at its full precision, so the precision limit and
+  flush-to-zero do not apply. One exception: in a format whose largest finite
+  value is below `2^(p - 1)`, such as `Binary<3>` at width 8, a rounded
+  integer can exceed that value, and it overflows by the usual rules.
+  SoftFloat and the x87 `FRNDINT` and `FPREM1` instructions also ignore
+  precision control. `scale_b_with` rounds, so every rounding field applies.
+- `remainder_with` is the IEEE 754 `remainder`: the quotient rounds to
+  nearest even, whatever the rounding direction. It is not the Rust `%`
+  operator, which truncates, so `Float` does not implement `Rem`. A
+  subnormal remainder reports `TINY`, as a subnormal result of a rounded
+  operation does. The operations that return an operand or a neighbor of an
+  operand, such as `minimum` and `next_up`, do not report `TINY`.
+- `scale_b_with` takes an `i32` scale. A scale beyond `2^30` in magnitude
+  acts as `2^30`, which overflows or underflows every format.
+- `next_up_with` and `next_down_with` signal invalid only for a signaling
+  NaN or an unsupported encoding. The step does not round, so the precision
+  limit and flush-to-zero do not apply. In a format without an infinity, the
+  value past the largest finite value is the NaN, or the largest finite
+  value of the full precision when `saturate` is set.
+- With DAZ, a minimum or maximum operation that selects a subnormal operand
+  returns the zero that DAZ reads, because DAZ replaces the input before the
+  operation.
+- `compare_quiet_with` and `compare_signaling_with` return
+  `Option<Ordering>`: `None` means unordered. The quiet form signals invalid
+  for a signaling NaN, and the signaling form for every NaN. Every IEEE 754
+  comparison predicate follows from the order and one of the two forms.
+  `PartialEq` and `PartialOrd` on `Float` are the quiet predicates with the
+  default mode; compare `to_bits` for equal encodings.
+- `total_cmp` is IEEE 754 `totalOrder`. It orders by the sign bit and then
+  the magnitude bits. The NaN of `Fnuz` orders first, as a negative NaN
+  does. An x87 encoding that is not canonical orders by its bits.
+- The minimum and maximum families return an operand in its canonical
+  encoding, or a NaN that the NaN rule selects, and never round. Every
+  family orders `-0` below `+0`, including `minNum` and `maxNum`, where IEEE
+  754-2008 lets an implementation choose. `minNum` returns a NaN for a
+  signaling NaN operand, and `minimumNumber` returns the number and signals
+  invalid.
+- `abs`, `copy_sign`, and negation change only the sign bit and signal
+  nothing. The zero and the NaN of `Fnuz` each have one encoding, so they do
+  not change.
 
 ### NaN Payloads in Conversions
 
@@ -588,7 +661,7 @@ an oracle.
 | binary160 to binary512, and a 200-bit layout whose exponent field crosses a limb boundary | The definition in IEEE 754-2019 section 3.4, evaluated exactly with MPFR. No established library decodes these widths. | Class, sign, and exact value of boundary and random encodings |
 | binary32 and binary64 classification | The host `f32` and `f64` types | Random encodings, and every binary32 encoding in an ignored sweep |
 | IEEE interchange parameters | The formulas of IEEE 754-2019 table 3.5 | Precision, `emax`, and `emin` of every IEEE width |
-| binary16, binary32, binary64, x87 extended, binary128 | Berkeley TestFloat and SoftFloat Release 3e, as git submodules. The ARM-VFPv2 NaN specialization matches the default mode. | Every conversion between these formats at TestFloat level 2, in every rounding direction including round to odd, with both tininess rules: result bits and the five IEEE flags. Later steps add arithmetic, integer conversions, and x87 precision control at 32, 64, and 80 bits. |
+| binary16, binary32, binary64, x87 extended, binary128 | Berkeley TestFloat and SoftFloat Release 3e, as git submodules. The ARM-VFPv2 NaN specialization matches the default mode. | Every conversion between these formats at TestFloat level 2, in every rounding direction including round to odd, with both tininess rules: result bits and the five IEEE flags. |
 | Rounding of every binary format: binary16 to binary512, bfloat16, TF32, the FP8 formats, and x87 with precision control at 24, 53, and 64 bits | MPFR, through the `rug` crate | Exact inputs of up to 500 bits near every boundary of the precision in use, in every direction, with both tininess rules, flush-to-zero, saturation, and precision limits: the value, the canonical form, and every flag. An ignored sweep rounds every significand below 2^8 at every exponent to each FP8 format. |
 | Conversions from bfloat16, TF32, the FP8 formats, binary256, and binary512 | MPFR for the finite values, and the conversion rules of this design for the special values | Every encoding of the 8- and 16-bit sources, and boundary and random wider ones, in six behaviors |
 | The `DefaultNan` rule | TestFloat with SoftFloat's ARM-VFPv2-defaultNaN specialization | Every TestFloat conversion and arithmetic case with that rule |
@@ -600,6 +673,12 @@ an oracle.
 | x87 arithmetic | The host processor: `FADD`, `FSUB`, `FMUL`, `FDIV`, and `FSQRT` | Every rounding control at precision control 24, 53, and 64, including unsupported operands and pseudo-denormals: result bits, IE, DE, ZE, OE, UE, PE, and C1 |
 | SSE conversions | The host processor: `CVTSD2SS` and `CVTSS2SD` under MXCSR | Every MXCSR rounding direction with FTZ and DAZ on and off, including exact, halfway, and near-halfway results at every binary32 boundary: result bits and the IE, DE, OE, UE, and PE flags |
 | x87 stores | The host processor: `FLD` and `FSTP` to 64 and 32 bits | Every rounding control, including unsupported encodings, pseudo-denormals, and exact, halfway, and near-halfway results at every binary32 and binary64 boundary: result bits, IE, OE, UE, PE, and the C1 round-up bit. `FSTP` never reports DE. |
+| Comparison, remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, x87 extended, and binary128 | TestFloat | The six comparison predicates once, `rem` at level 1 in every direction, and `roundToInt` and the conversions to and from 32- and 64-bit integers at level 2 in every direction: result and the five IEEE flags. `rem` and `roundToInt` also run with the default-NaN, 8086, and 8086-SSE NaN rules, and for x87 at precision control 32 and 64, which both ignore. `-notexact` runs show that the non-exact IEEE operations are the same results with `INEXACT` ignored. The conversions to integers map `ToInt` to the ARM-VFPv2 values and to the x86 integer indefinite; the x86 runs cannot tell `Nan` from `OutOfRange`, and the ARM runs can. |
+| The step 4 operations of the FP8 formats, bfloat16, TF32, x87 extended, binary256, binary512, and a layout whose exponent field crosses a limb boundary | MPFR, and the definitions of IEEE 754-2019 and this design for the special values and NaN selection | Every FP8 operand pair for the comparisons, `total_cmp`, the six minimum and maximum operations, and `remainder`, and every FP8 operand for `round_to_integral`, `to_int` into five integer types, `scale_b`, `next_up`, and `next_down`, in eight behaviors that use every direction, DAZ, FTZ, saturation, a precision limit, and every NaN rule. Boundary, special, and random operands of the wider formats, `to_int` into integers of 24 to 512 bits, and `from_int` from integers of 24 to 512 bits. |
+| `next_up`, `next_down`, `remainder`, rounding to an integral value, integer conversions of 7 to 128 bits, and scaling | `rustc_apfloat` | Every FP8 operand and pair of E4M3 and E5M2, every binary16 and bfloat16 operand, and boundary and random operands of TF32, binary32, binary64, x87 extended, and binary128, in five directions. The differences of `rustc_apfloat` from IEEE 754 are in `docs/anomalies/` and in the module documentation of the test. |
+| `next_up`, `next_down`, negation, `abs`, and `copy_sign` of the FP8 formats | A table that `ml_dtypes` generates, in `floaty-verify/data` | Every operand, and every pair for `copy_sign`. The FNUZ `copysign` of `ml_dtypes` makes a NaN from the zero; see `docs/anomalies/ml-dtypes-fnuz-copysign.md`. |
+| SSE comparisons, integer conversions, and rounding | The host processor: `UCOMISS`, `COMISS`, their `SD` forms, `CVTSS2SI`, `CVTTSS2SI`, `CVTSD2SI`, `CVTTSD2SI`, `CVTSI2SS`, `CVTSI2SD`, `ROUNDSS`, and `ROUNDSD` | Every MXCSR setting: order, result bits, the integer indefinite for `ToInt::OutOfRange` and `ToInt::Nan`, and the IE, DE, and PE flags. The test maps DE and the suppressed precision exception of `ROUNDSS` as the Intel SDM states. |
+| x87 comparisons, integer conversions, rounding, remainder, scaling, and sign operations | The host processor: `FUCOMIP`, `FCOMIP`, `FUCOMPP`, `FCOMPP`, `FRNDINT`, `FISTP`, `FISTTP`, `FILD`, `FPREM1`, `FSCALE`, `FCHS`, and `FABS` | Every rounding control, and precision control for `FRNDINT` and `FSCALE`, including unsupported operands and pseudo-denormals: result bits, IE, DE, OE, UE, PE, and C1. `FSCALE` and `FILD` ignore precision control, so the test passes no precision limit for them. |
 | Conversion of every binary16 encoding to the FP8 formats, rounding to nearest even | A table that `ml_dtypes` generates, in `floaty-verify/data` | Result bits, and NaN and sign for a NaN result |
 | x86 SSE and x87 presets | The host processor, through inline assembly on x86-64 | NaN selection, the denormal-input flag, FTZ, DAZ, x87 C1, and precision control |
 | Decimal | The decTest vectors (DPD) and the Intel decimal library tests (BID) | Arithmetic, rounding, flags, and result exponents |
@@ -621,7 +700,7 @@ an oracle.
   `docs/anomalies/softfloat-arm-extf80-nan-quieting.md`.
 - The workspace manifest optimizes `floaty-verify` in test builds, because
   the normal run makes tens of millions of oracle comparisons. The whole run
-  takes about 40 seconds.
+  takes about one minute.
 - `ml_dtypes` gives every NaN a canonical payload, so its conversion table
   checks only NaN and sign for a NaN result.
 - Test every FP8 input pair for every operation and rounding direction in the
@@ -640,7 +719,8 @@ floaty/                  the workspace
 │       ├── float.rs     Float, Class, and the format aliases
 │       ├── format.rs    Standard, Binary<E, Enc>, the width-to-storage table
 │       ├── env.rs       Env, Rounding, NanRule, Flags, modes, presets
-│       ├── limbs.rs     [u64; N] arithmetic, Int<BITS>, UInt<BITS>
+│       ├── limbs.rs     [u64; N] arithmetic
+│       ├── integer.rs   Int<BITS>, UInt<BITS>, Integer, ToInt
 │       ├── exact.rs     Exact<N> and the rounding routine
 │       ├── binary.rs    unpack, pack, and every binary operation
 │       ├── decimal.rs   step 7

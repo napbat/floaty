@@ -1,0 +1,560 @@
+//! An oracle for the operations of build step 4: comparison, total order,
+//! minimum and maximum, rounding to an integral value, conversion to and from
+//! an integer, the remainder, scaling by a power of two, the next value up or
+//! down, and the sign operations.
+//!
+//! MPFR computes each finite result. The operations that do not round get the
+//! exact MPFR value, and the others round with the oracle in [`crate::mpfr`].
+//! IEEE 754-2019 and the rules in `DESIGN.md` give the special values, the
+//! flags, and the NaN that each rule selects.
+//!
+//! The oracle reads its operands with floaty's own `decode` and `classify`,
+//! which the step 1 oracles check, as [`crate::arithmetic`] does.
+
+use core::cmp::Ordering;
+use core::num::NonZeroU32;
+
+use floaty::env::{Mode, NanPropagation, NanRule, Tininess};
+use floaty::format::Standard;
+use floaty::{Class, Decoded, Env, Flags, Float, Rounding};
+use rug::float::{Round, Special};
+use rug::integer::Order;
+use rug::{Float as BigFloat, Integer};
+
+use crate::arithmetic::Operand;
+use crate::mpfr::{self, Format, Input, Specials, Value};
+
+pub mod check;
+pub mod compare;
+pub mod integral;
+
+/// The behaviors of the step 4 tests. Together they use every rounding
+/// direction, every NaN rule, both tininess rules, flush-to-zero,
+/// denormals-are-zero, saturation, and a precision limit. Each operation
+/// ignores the fields that `DESIGN.md` says do not apply to it, so every
+/// behavior also checks that those fields change nothing.
+pub const BEHAVIORS: [Env; 8] = [
+    Env::IEEE,
+    Env::IEEE
+        .with_rounding(Rounding::NearestAway)
+        .with_denormals_are_zero(true)
+        .with_nan(NanRule::new(NanPropagation::FirstOperand).with_default_negative(true)),
+    Env::IEEE
+        .with_rounding(Rounding::TowardPositive)
+        .with_saturate(true)
+        .with_nan(NanRule::new(NanPropagation::LargerSignificand)),
+    Env::IEEE
+        .with_rounding(Rounding::TowardNegative)
+        .with_flush_to_zero(true)
+        .with_tininess(Tininess::BeforeRounding),
+    Env::IEEE
+        .with_rounding(Rounding::TowardZero)
+        .with_nan(NanRule::new(NanPropagation::DefaultNan).with_default_negative(true)),
+    Env::IEEE
+        .with_rounding(Rounding::ToOdd)
+        .with_precision(NonZeroU32::new(2))
+        .with_saturate(true),
+    Env::IEEE
+        .with_denormals_are_zero(true)
+        .with_flush_to_zero(true),
+    Env::IEEE
+        .with_precision(NonZeroU32::new(2))
+        .with_tininess(Tininess::BeforeRounding),
+];
+
+/// The expected result of an operation that returns a float.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outcome {
+    /// A zero.
+    Zero {
+        /// The sign.
+        negative: bool,
+    },
+    /// A nonzero finite value.
+    Finite(BigFloat),
+    /// An infinity.
+    Infinity {
+        /// The sign.
+        negative: bool,
+    },
+    /// A NaN.
+    Nan {
+        /// The sign.
+        negative: bool,
+        /// `true` for a signaling NaN. No expected result is signaling.
+        signaling: bool,
+        /// The payload, below the quiet bit.
+        payload: Integer,
+    },
+}
+
+impl Outcome {
+    /// Converts a decoded floaty result.
+    ///
+    /// # Panics
+    ///
+    /// Panics for an unsupported encoding, which no operation returns.
+    #[must_use]
+    pub fn from_decoded<const N: usize>(decoded: Decoded<N>) -> Self {
+        match decoded {
+            Decoded::Zero { negative } => Self::Zero { negative },
+            Decoded::Finite {
+                negative,
+                exponent,
+                significand,
+            } => Self::Finite(exact(negative, exponent, &significand)),
+            Decoded::Infinity { negative } => Self::Infinity { negative },
+            Decoded::Nan {
+                negative,
+                signaling,
+                payload,
+            } => Self::Nan {
+                negative,
+                signaling,
+                payload: Integer::from_digits(&payload, Order::Lsf),
+            },
+            Decoded::Unsupported => panic!("no operation returns an unsupported encoding"),
+        }
+    }
+
+    /// Converts a result of the rounding oracle. Its NaN is quiet and has no
+    /// payload.
+    fn from_value(value: Value) -> Self {
+        match value {
+            Value::Zero { negative } => Self::Zero { negative },
+            Value::Finite(value) => Self::Finite(value),
+            Value::Infinity { negative } => Self::Infinity { negative },
+            Value::Nan { negative } => Self::Nan {
+                negative,
+                signaling: false,
+                payload: Integer::ZERO,
+            },
+        }
+    }
+}
+
+/// Returns the outcome of a floaty result, for comparison with the oracle.
+#[must_use]
+pub fn outcome<S: Standard<W>, const W: usize, M: Mode>(value: Float<S, W, M>) -> Outcome {
+    Outcome::from_decoded(value.decode::<8>())
+}
+
+/// Returns a floaty value as an operand of the oracle.
+#[must_use]
+pub fn operand<S: Standard<W>, const W: usize, M: Mode>(value: Float<S, W, M>) -> Operand<8> {
+    Operand {
+        decoded: value.decode::<8>(),
+        subnormal: value.classify() == Class::Subnormal,
+    }
+}
+
+/// An encoding with its decoded operand, for the operations that read the
+/// bits: the total order and the sign operations.
+#[derive(Clone, Debug)]
+pub struct Sample<const N: usize> {
+    /// The encoding.
+    pub bits: Integer,
+    /// The width of the encoding in bits.
+    pub width: u32,
+    /// `true` when the encoding is canonical.
+    pub canonical: bool,
+    /// The decoded operand.
+    pub operand: Operand<N>,
+}
+
+impl Sample<8> {
+    /// Makes a sample from an encoding and the floaty value of that encoding.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the width does not fit a `u32`.
+    #[must_use]
+    pub fn new<S: Standard<W>, const W: usize, M: Mode>(
+        bits: Integer,
+        value: Float<S, W, M>,
+    ) -> Self {
+        Self {
+            bits,
+            width: u32::try_from(W).expect("a width fits a u32"),
+            canonical: value.is_canonical(),
+            operand: operand(value),
+        }
+    }
+}
+
+/// An operand as an operation reads it, after denormals-are-zero.
+#[derive(Clone, Debug)]
+enum Read {
+    /// A zero, a finite value, or an infinity, with its sign.
+    Number(BigFloat),
+    /// A NaN.
+    Nan {
+        negative: bool,
+        signaling: bool,
+        payload: Integer,
+    },
+    /// An unsupported x87 encoding.
+    Unsupported,
+}
+
+impl Read {
+    fn is_signaling(&self) -> bool {
+        matches!(
+            self,
+            Self::Nan {
+                signaling: true,
+                ..
+            }
+        )
+    }
+}
+
+/// Returns `significand * 2^exponent` exactly.
+fn exact(negative: bool, exponent: i32, significand: &[u64]) -> BigFloat {
+    let integer = Integer::from_digits(significand, Order::Lsf);
+    let bits = integer.significant_bits().max(1);
+    let value = BigFloat::with_val(bits, integer) << exponent;
+    if negative { -value } else { value }
+}
+
+/// Returns a zero or an infinity with a sign, as an MPFR value.
+fn special(value: Special) -> BigFloat {
+    BigFloat::with_val(2, value)
+}
+
+/// Reads an operand. A subnormal operand reports `DENORMAL_INPUT`, and reads
+/// as a zero with its sign when the behavior has denormals-are-zero set.
+fn read<const N: usize>(operand: &Operand<N>, env: &Env, flags: &mut Flags) -> Read {
+    if operand.subnormal {
+        *flags |= Flags::DENORMAL_INPUT;
+    }
+    match operand.decoded {
+        Decoded::Zero { negative } => Read::Number(zero(negative)),
+        Decoded::Finite { negative, .. } if operand.subnormal && env.denormals_are_zero => {
+            Read::Number(zero(negative))
+        }
+        Decoded::Finite {
+            negative,
+            exponent,
+            significand,
+        } => Read::Number(exact(negative, exponent, &significand)),
+        Decoded::Infinity { negative } => Read::Number(special(if negative {
+            Special::NegInfinity
+        } else {
+            Special::Infinity
+        })),
+        Decoded::Nan {
+            negative,
+            signaling,
+            payload,
+        } => Read::Nan {
+            negative,
+            signaling,
+            payload: Integer::from_digits(&payload, Order::Lsf),
+        },
+        Decoded::Unsupported => Read::Unsupported,
+    }
+}
+
+/// Returns a zero with a sign.
+fn zero(negative: bool) -> BigFloat {
+    special(if negative {
+        Special::NegZero
+    } else {
+        Special::Zero
+    })
+}
+
+/// Returns the outcome of a number: a zero, a finite value, or an infinity.
+/// A format without a negative zero gives `+0`.
+fn number(value: &BigFloat, format: &Format) -> Outcome {
+    if value.is_zero() {
+        Outcome::Zero {
+            negative: value.is_sign_negative() && format.specials != Specials::Fnuz,
+        }
+    } else if value.is_infinite() {
+        Outcome::Infinity {
+            negative: value.is_sign_negative(),
+        }
+    } else {
+        Outcome::Finite(value.clone())
+    }
+}
+
+/// Returns the default NaN of the NaN rule. The one NaN of `Fnuz` is
+/// negative.
+fn default_nan(format: &Format, env: &Env) -> Outcome {
+    Outcome::Nan {
+        negative: env.nan.default_negative || format.specials == Specials::Fnuz,
+        signaling: false,
+        payload: Integer::ZERO,
+    }
+}
+
+/// Returns the NaN that the NaN rule of `env` selects among the operands,
+/// made quiet, and `INVALID` when an operand is a signaling NaN. At least one
+/// operand is a NaN.
+///
+/// The rules are those of `DESIGN.md` and the documentation of
+/// `NanPropagation`: `SignalingFirst` takes the first signaling NaN, or else
+/// the first NaN. `FirstOperand` takes the first NaN. `LargerSignificand`
+/// takes a quiet NaN before a signaling NaN, then the larger payload, then
+/// the positive sign. `DefaultNan` gives the default NaN.
+fn propagate(operands: &[Read], format: &Format, env: &Env) -> (Outcome, Flags) {
+    let nans: Vec<(bool, bool, &Integer)> = operands
+        .iter()
+        .filter_map(|operand| match operand {
+            Read::Nan {
+                negative,
+                signaling,
+                payload,
+            } => Some((*negative, *signaling, payload)),
+            _ => None,
+        })
+        .collect();
+    let flags = if nans.iter().any(|&(_, signaling, _)| signaling) {
+        Flags::INVALID
+    } else {
+        Flags::NONE
+    };
+    let first = nans.first().expect("an operand is a NaN");
+    let (negative, _, payload) = match env.nan.propagation {
+        NanPropagation::DefaultNan => return (default_nan(format, env), flags),
+        NanPropagation::SignalingFirst => nans
+            .iter()
+            .find(|&&(_, signaling, _)| signaling)
+            .unwrap_or(first),
+        NanPropagation::FirstOperand => first,
+        NanPropagation::LargerSignificand => nans
+            .iter()
+            .max_by(|a, b| (!a.1, a.2, !a.0).cmp(&(!b.1, b.2, !b.0)))
+            .expect("an operand is a NaN"),
+        _ => panic!("the oracle knows every NaN rule"),
+    };
+    let nan = Outcome::Nan {
+        negative: *negative || format.specials == Specials::Fnuz,
+        signaling: false,
+        payload: (*payload).clone(),
+    };
+    (nan, flags)
+}
+
+/// Returns the result of an operation with an unsupported or a NaN operand,
+/// or `None` when every operand is a number. An unsupported operand signals
+/// invalid and gives the default NaN, before any NaN operand.
+fn special_operands(operands: &[Read], format: &Format, env: &Env) -> Option<(Outcome, Flags)> {
+    if operands
+        .iter()
+        .any(|operand| matches!(operand, Read::Unsupported))
+    {
+        return Some((default_nan(format, env), Flags::INVALID));
+    }
+    if operands
+        .iter()
+        .any(|operand| matches!(operand, Read::Nan { .. }))
+    {
+        return Some(propagate(operands, format, env));
+    }
+    None
+}
+
+/// Returns `TINY` for a nonzero finite value below the smallest normal
+/// magnitude. `DESIGN.md` reports `TINY` for a subnormal remainder.
+fn tiny(value: &BigFloat, format: &Format) -> Flags {
+    let smallest_normal = BigFloat::with_val(2, 1) << format.emin;
+    if value.is_normal() && *value.as_abs() < smallest_normal {
+        Flags::TINY
+    } else {
+        Flags::NONE
+    }
+}
+
+/// Returns the expected result and flags of `remainder_with`.
+///
+/// IEEE 754-2019 section 5.3.1: the remainder is `x - n * y` with `n` the
+/// integer nearest `x / y`, and the even one at a tie. MPFR computes it
+/// exactly. The remainder of a finite `x` by an infinity is `x`, and a zero
+/// remainder has the sign of `x`. Section 7.2 makes an infinite `x` or a zero
+/// `y` invalid. `DESIGN.md` reports `TINY` for a subnormal result; the
+/// rounding direction, the precision limit, and flush-to-zero do not apply.
+///
+/// # Panics
+///
+/// Panics when MPFR does not give an exact remainder at the format precision.
+#[must_use]
+pub fn remainder<const N: usize>(
+    first: &Operand<N>,
+    second: &Operand<N>,
+    format: &Format,
+    env: &Env,
+) -> (Outcome, Flags) {
+    let mut flags = Flags::NONE;
+    let operands = [read(first, env, &mut flags), read(second, env, &mut flags)];
+    if let Some((nan, special)) = special_operands(&operands, format, env) {
+        return (nan, flags | special);
+    }
+    let [Read::Number(x), Read::Number(y)] = &operands else {
+        unreachable!("every special operand has a result");
+    };
+    if x.is_infinite() || y.is_zero() {
+        return (default_nan(format, env), flags | Flags::INVALID);
+    }
+    if x.is_zero() || y.is_infinite() {
+        return (number(x, format), flags | tiny(x, format));
+    }
+    let (result, ordering) =
+        BigFloat::with_val_round(format.precision, x.remainder_ref(y), Round::Nearest);
+    assert_eq!(ordering, Ordering::Equal, "the remainder is exact");
+    let result = if result.is_zero() {
+        zero(x.is_sign_negative())
+    } else {
+        result
+    };
+    (number(&result, format), flags | tiny(&result, format))
+}
+
+/// The largest scale magnitude that the oracle applies. The exponent range
+/// of every format spans less than `2^23`, so a larger scale overflows or
+/// underflows past every rounding boundary, and gives the same result as the
+/// clamp of `DESIGN.md` at `2^30`. The smaller limit keeps the MPFR exponent
+/// inside its default range.
+const SCALE_LIMIT: i32 = 1 << 24;
+
+/// Returns the expected result and flags of `scale_b_with`.
+///
+/// IEEE 754-2019 section 5.3.3 `scaleB`: the exact value `x * 2^n` rounds
+/// once, with every rounding field of the behavior. A zero or an infinity
+/// does not change.
+///
+/// # Panics
+///
+/// Panics when MPFR gives no significand for a finite value, which does not
+/// happen.
+#[must_use]
+pub fn scale_b<const N: usize>(
+    operand: &Operand<N>,
+    scale: i32,
+    format: &Format,
+    env: &Env,
+) -> (Outcome, Flags) {
+    let mut flags = Flags::NONE;
+    let operands = [read(operand, env, &mut flags)];
+    if let Some((nan, special)) = special_operands(&operands, format, env) {
+        return (nan, flags | special);
+    }
+    let [Read::Number(value)] = &operands else {
+        unreachable!("every special operand has a result");
+    };
+    if !value.is_normal() {
+        return (number(value, format), flags);
+    }
+    let (significand, exponent) = value.to_integer_exp().expect("the value is finite");
+    let input = Input {
+        negative: value.is_sign_negative(),
+        exponent: exponent + scale.clamp(-SCALE_LIMIT, SCALE_LIMIT),
+        significand: significand.abs(),
+        sticky: false,
+    };
+    let (result, round_flags) = mpfr::round(&input, format, env);
+    (Outcome::from_value(result), flags | round_flags)
+}
+
+/// The direction of `next_up` and `next_down`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    /// `nextUp`: toward positive infinity.
+    Up,
+    /// `nextDown`: toward negative infinity.
+    Down,
+}
+
+/// Returns the expected result and flags of `next_up_with` or
+/// `next_down_with`.
+///
+/// IEEE 754-2019 section 5.3.1: `nextUp(x)` is the least value above `x`,
+/// and `nextDown(x)` the greatest value below `x`. The oracle rounds `x`
+/// plus or minus a tiny amount toward the direction, with the rounding
+/// oracle. The amount is far below the spacing of the values near `x`, so
+/// the rounded value is the neighbor. An infinity reads as a value past the
+/// largest finite value. In a format without an infinity, the value past the
+/// largest finite value is the NaN, or with `saturate` set the largest
+/// finite value itself, as `DESIGN.md` says. Only a signaling NaN or an
+/// unsupported encoding signals.
+///
+/// # Panics
+///
+/// Panics when the precision of the format does not fit an `i32`.
+#[must_use]
+pub fn next<const N: usize>(
+    operand: &Operand<N>,
+    direction: Direction,
+    format: &Format,
+    env: &Env,
+) -> (Outcome, Flags) {
+    let mut flags = Flags::NONE;
+    let operands = [read(operand, env, &mut flags)];
+    if let Some((nan, special)) = special_operands(&operands, format, env) {
+        return (nan, flags | special);
+    }
+    let [Read::Number(value)] = &operands else {
+        unreachable!("every special operand has a result");
+    };
+    let up = direction == Direction::Up;
+    let lowest = format.emin
+        - i32::try_from(format.precision - 1).expect("a precision of at most 512 bits fits an i32");
+    if value.is_zero() {
+        // The neighbors of a zero are the smallest subnormal values.
+        let smallest = BigFloat::with_val(2, 1) << lowest;
+        return (
+            Outcome::Finite(if up { smallest } else { -smallest }),
+            flags,
+        );
+    }
+    let (significand, exponent) = if value.is_infinite() {
+        (Integer::from(1), format.emax + 2)
+    } else {
+        let (significand, exponent) = value.to_integer_exp().expect("the value is finite");
+        (significand.abs(), exponent)
+    };
+    // The significand with `precision + 2` more bits, and the sticky bit,
+    // lies strictly between the value and its neighbors. Its magnitude grows
+    // for a step away from zero, and shrinks for a step toward zero.
+    let shift = format.precision + 2;
+    let wider = significand << shift;
+    let away_from_zero = up != value.is_sign_negative();
+    let input = Input {
+        negative: value.is_sign_negative(),
+        exponent: exponent
+            - i32::try_from(shift).expect("a precision of at most 512 bits fits an i32"),
+        significand: if away_from_zero { wider } else { wider - 1u32 },
+        sticky: true,
+    };
+    let rounding = if up {
+        Rounding::TowardPositive
+    } else {
+        Rounding::TowardNegative
+    };
+    // The step does not round, so the precision limit does not apply. A
+    // neighbor has the full precision of the format, and so does the largest
+    // finite value that a saturated step past it gives.
+    let neighbor = Env::IEEE
+        .with_rounding(rounding)
+        .with_saturate(env.saturate);
+    let (result, _) = mpfr::round(&input, format, &neighbor);
+    (Outcome::from_value(result), flags)
+}
+
+/// Returns the expected encoding of a sign operation: the encoding with its
+/// sign bit set to `negative`. `DESIGN.md`: a zero and the NaN of `Fnuz` have
+/// one encoding each, so they do not change.
+#[must_use]
+pub fn with_sign(sample: &Sample<8>, specials: Specials, negative: bool) -> Integer {
+    let sign = sample.width - 1;
+    let mut bits = sample.bits.clone();
+    let magnitude_zero = bits.clone().keep_bits(sign).is_zero();
+    if specials == Specials::Fnuz && magnitude_zero {
+        return bits;
+    }
+    bits.set_bit(sign, negative);
+    bits
+}

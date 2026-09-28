@@ -12,6 +12,7 @@ pub mod apfloat;
 pub mod arithmetic;
 pub mod encodings;
 pub mod mpfr;
+pub mod operations;
 pub mod random;
 pub mod shape;
 pub mod testfloat;

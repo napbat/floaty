@@ -89,7 +89,7 @@ where
     Width<W>: Storage,
 {
     /// Decodes an operand, reports a subnormal operand, and applies DAZ.
-    fn operand<L: Limbs>(bits: L, env: &Env, flags: &mut Flags) -> Unpacked<L> {
+    pub(super) fn operand<L: Limbs>(bits: L, env: &Env, flags: &mut Flags) -> Unpacked<L> {
         let value = Self::decode(bits);
         let subnormal =
             matches!(value, Unpacked::Finite { .. }) && bits.field(Self::FRACTION_BITS, E) == 0;
@@ -113,13 +113,13 @@ where
     }
 
     /// Encodes a result that needs no rounding.
-    fn exact<L: Limbs>(value: Unpacked<L>, flags: Flags) -> (L, Flags) {
+    pub(super) fn exact<L: Limbs>(value: Unpacked<L>, flags: Flags) -> (L, Flags) {
         (Self::encode(value), flags)
     }
 
     /// Returns an infinity, or for a format without one the NaN or, when the
     /// behavior saturates, the largest finite value.
-    fn infinity<L: Limbs>(negative: bool, env: &Env) -> Unpacked<L> {
+    pub(super) fn infinity<L: Limbs>(negative: bool, env: &Env) -> Unpacked<L> {
         if Self::TARGET.has_infinity {
             Unpacked::Infinity { negative }
         } else if env.saturate {

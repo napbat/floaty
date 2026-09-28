@@ -193,7 +193,7 @@ Never hand-edit a generated file. Change its generator and run it again.
 
 | Generated file | Command |
 | --- | --- |
-| `floaty-verify/data/fp8-reference.txt`, `fp8-from-f16.bin`, and `fp8-arithmetic.bin` | `floaty-verify/scripts/generate_fp8_reference.py floaty-verify/data`, as its docstring states |
+| `floaty-verify/data/fp8-reference.txt`, `fp8-from-f16.bin`, `fp8-arithmetic.bin`, and `fp8-operations.bin` | `floaty-verify/scripts/generate_fp8_reference.py floaty-verify/data`, as its docstring states |
 
 ## Tests
 

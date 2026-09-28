@@ -226,6 +226,38 @@ pub fn round<In: Limbs, Out: Limbs>(
     (normalize(negative, kept, lowest, target), flags)
 }
 
+/// The integer that a value rounds to.
+#[derive(Clone, Copy, Debug)]
+pub struct Integral<L> {
+    /// The magnitude of the integer.
+    pub magnitude: L,
+    /// `true` when the integer differs from the value.
+    pub inexact: bool,
+    /// `true` when the magnitude of the integer is above the magnitude of the
+    /// value.
+    pub rounded_up: bool,
+}
+
+/// Rounds a value to an integer in the direction of `rounding`, with the same
+/// rounding step as [`round`]. The sticky bit of `value` must be clear.
+///
+/// `Out` must hold the integer part of the value plus one bit, for the carry
+/// of the rounding.
+pub fn round_to_integer<In: Limbs, Out: Limbs>(
+    value: &Unrounded<In>,
+    rounding: Rounding,
+) -> Integral<Out> {
+    debug_assert!(!value.sticky, "the value is exact");
+    let first = cut::<In, Out>(value, 0);
+    let inexact = first.round || first.rest;
+    let (magnitude, rounded_up) = apply(first, value.negative, rounding);
+    Integral {
+        magnitude,
+        inexact,
+        rounded_up,
+    }
+}
+
 /// Returns the canonical form of `kept * 2^lowest`.
 fn normalize<L: Limbs>(negative: bool, kept: L, lowest: i64, target: &Target) -> Unpacked<L> {
     let length = kept.bit_length();

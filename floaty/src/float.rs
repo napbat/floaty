@@ -11,6 +11,10 @@ use crate::format::{Binary, Fnuz, NoInf, Standard, X87};
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 
+mod arithmetic;
+mod compare;
+mod integer;
+
 /// A floating-point value of standard `S` at width `W`, with default mode `M`.
 ///
 /// A value is a format and its bits. `S` and `W` select the storage type and
@@ -41,79 +45,6 @@ impl<S: Standard<W>, const W: usize, M: Mode> Copy for Float<S, W, M> {}
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// The behavior of the default mode.
     pub const ENV: Env = M::ENV;
-
-    /// Adds `other`. Returns the sum and the flags.
-    ///
-    /// `behavior` is a [`Rounding`](crate::Rounding) that overrides only the
-    /// rounding direction, or an [`Env`] that replaces the whole behavior.
-    #[must_use]
-    pub fn add_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) = S::add(self.bits, other.bits, false, &behavior.apply(M::ENV));
-        (Self::from_masked(bits), flags)
-    }
-
-    /// Subtracts `other`. Returns the difference and the flags.
-    #[must_use]
-    pub fn sub_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) = S::add(self.bits, other.bits, true, &behavior.apply(M::ENV));
-        (Self::from_masked(bits), flags)
-    }
-
-    /// Multiplies by `other`. Returns the product and the flags.
-    #[must_use]
-    pub fn mul_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) = S::mul(self.bits, other.bits, &behavior.apply(M::ENV));
-        (Self::from_masked(bits), flags)
-    }
-
-    /// Divides by `other`. Returns the quotient and the flags.
-    #[must_use]
-    pub fn div_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) = S::div(self.bits, other.bits, &behavior.apply(M::ENV));
-        (Self::from_masked(bits), flags)
-    }
-
-    /// Returns the square root, with the default mode.
-    #[must_use]
-    pub fn sqrt(self) -> Self {
-        self.sqrt_with(M::ENV).0
-    }
-
-    /// Returns the square root and the flags.
-    #[must_use]
-    pub fn sqrt_with(self, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) = S::sqrt(self.bits, &behavior.apply(M::ENV));
-        (Self::from_masked(bits), flags)
-    }
-
-    /// Returns `self * multiplier + addend`, rounded once, with the default
-    /// mode.
-    #[must_use]
-    pub fn mul_add(self, multiplier: Self, addend: Self) -> Self {
-        self.mul_add_with(multiplier, addend, M::ENV).0
-    }
-
-    /// Returns `self * multiplier + addend`, rounded once, and the flags.
-    ///
-    /// A NaN comes from `self` and `multiplier` first, and then from that
-    /// result and `addend`, as in SoftFloat. The
-    /// [`invalid_product`](crate::env::NanRule::invalid_product) field of the
-    /// NaN rule decides `0 * inf + NaN`.
-    #[must_use]
-    pub fn mul_add_with(
-        self,
-        multiplier: Self,
-        addend: Self,
-        behavior: impl Override,
-    ) -> (Self, Flags) {
-        let (bits, flags) = S::mul_add(
-            self.bits,
-            multiplier.bits,
-            addend.bits,
-            &behavior.apply(M::ENV),
-        );
-        (Self::from_masked(bits), flags)
-    }
 
     /// The precision in bits, including the leading bit.
     pub const PRECISION: u32 = S::PRECISION;
@@ -333,26 +264,34 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     pub fn is_canonical(self) -> bool {
         S::is_canonical(self.bits)
     }
+
+    /// Returns the value with a clear sign bit, as IEEE 754 `abs` does.
+    ///
+    /// The sign operations change only the sign bit, for every class of
+    /// value, and signal nothing. The zero and the NaN of [`Fnuz`] each have
+    /// one encoding, so they do not change.
+    #[must_use]
+    pub fn abs(self) -> Self {
+        Self::from_masked(S::with_sign(self.bits, false))
+    }
+
+    /// Returns the value with the sign of `sign`, as IEEE 754 `copySign`
+    /// does.
+    #[must_use]
+    pub fn copy_sign(self, sign: Self) -> Self {
+        Self::from_masked(S::with_sign(self.bits, sign.is_sign_negative()))
+    }
 }
 
-/// Implements an operator with the default mode of the type. The operator
-/// drops the flags; the `_with` method returns them.
-macro_rules! operator {
-    ($trait:ident, $method:ident, $with:ident) => {
-        impl<S: Standard<W>, const W: usize, M: Mode> core::ops::$trait for Float<S, W, M> {
-            type Output = Self;
+/// Negation as IEEE 754 `negate`: the sign bit flips, for every class of
+/// value, and nothing signals.
+impl<S: Standard<W>, const W: usize, M: Mode> core::ops::Neg for Float<S, W, M> {
+    type Output = Self;
 
-            fn $method(self, other: Self) -> Self {
-                self.$with(other, M::ENV).0
-            }
-        }
-    };
+    fn neg(self) -> Self {
+        Self::from_masked(S::with_sign(self.bits, !self.is_sign_negative()))
+    }
 }
-
-operator!(Add, add, add_with);
-operator!(Sub, sub, sub_with);
-operator!(Mul, mul, mul_with);
-operator!(Div, div, div_with);
 
 impl<S: Standard<W>, const W: usize, M: Mode> Debug for Float<S, W, M> {
     /// Writes the encoding in hexadecimal, for example `Float(0x3f800000)`.
@@ -507,163 +446,4 @@ pub type F8E5M2Fnuz = Float<Binary<5, Fnuz>, 8>;
 pub type F80 = Float<Binary<15, X87>, 80>;
 
 #[cfg(test)]
-mod tests {
-    extern crate std;
-
-    use std::format;
-
-    use super::{
-        BF16, Class, Decoded, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128,
-        F256, F512, TF32,
-    };
-    use crate::env::{Env, Flags, NanPropagation, NanRule, Rounding, mode};
-    use crate::exact::Exact;
-
-    #[test]
-    fn from_bits_ignores_bits_above_the_width() {
-        assert_eq!(TF32::from_bits(u32::MAX).to_bits(), 0x7_FFFF);
-        assert_eq!(F32::from_bits(u32::MAX).to_bits(), u32::MAX);
-    }
-
-    #[test]
-    fn debug_writes_every_digit_of_the_width() {
-        assert_eq!(
-            format!("{:?}", F32::from_bits(0x3F80_0000)),
-            "Float(0x3f800000)"
-        );
-        assert_eq!(format!("{:?}", TF32::from_bits(0x1)), "Float(0x00001)");
-        let text = format!("{:?}", F512::from_bits([1, 0, 0, 0, 0, 0, 0, 1 << 63]));
-        assert_eq!(text.len(), "Float(0x)".len() + 128);
-        assert!(text.starts_with("Float(0x8000") && text.ends_with("0001)"));
-    }
-
-    #[test]
-    fn predicates_follow_the_class() {
-        let quiet = F32::from_bits(0x7FC0_0000);
-        assert!(quiet.is_nan() && !quiet.is_signaling_nan() && !quiet.is_finite());
-        let signaling = F32::from_bits(0xFF80_0001);
-        assert_eq!(signaling.classify(), Class::SignalingNan);
-        assert!(signaling.is_signaling_nan() && signaling.is_sign_negative());
-        let infinity = F32::from_bits(0x7F80_0000);
-        assert!(infinity.is_infinite() && infinity.is_sign_positive());
-        assert!(F32::from_bits(0x8000_0000).is_zero());
-        assert!(F32::from_bits(0x0000_0001).is_subnormal());
-        assert!(F32::from_bits(0x0080_0000).is_normal());
-    }
-
-    #[test]
-    fn decode_resizes_to_the_requested_limbs() {
-        let value = F80::from_bits(0xBFFF_C000_0000_0000_0001);
-        let expected = Decoded::Finite {
-            negative: true,
-            exponent: -63,
-            significand: [0xC000_0000_0000_0001, 0, 0],
-        };
-        assert_eq!(value.decode::<3>(), expected);
-        let nan = F32::from_bits(0x7FA0_0001).decode::<1>();
-        assert_eq!(
-            nan,
-            Decoded::Nan {
-                negative: false,
-                signaling: true,
-                payload: [0x20_0001]
-            }
-        );
-    }
-
-    #[test]
-    fn a_subnormal_input_reports_denormal_input_and_honors_daz() {
-        let tiny = F32::from_bits(0x8000_0001);
-        let (wide, flags): (F64, _) = tiny.convert_with(Env::IEEE);
-        assert_eq!(wide.to_bits(), 0xB6A0_0000_0000_0000);
-        assert_eq!(flags, Flags::DENORMAL_INPUT);
-        let (zero, flags): (F64, _) = tiny.convert_with(Env::IEEE.with_denormals_are_zero(true));
-        assert_eq!(
-            (zero.to_bits(), flags),
-            (0x8000_0000_0000_0000, Flags::DENORMAL_INPUT)
-        );
-    }
-
-    #[test]
-    fn nan_inputs_follow_the_nan_rule() {
-        let signaling = F64::from_bits(0xFFF4_0000_0000_0001);
-        let (kept, flags): (F32, _) = signaling.convert_with(Env::IEEE);
-        assert_eq!((kept.to_bits(), flags), (0xFFE0_0000, Flags::INVALID));
-        let default = Env::IEEE
-            .with_nan(NanRule::new(NanPropagation::DefaultNan).with_default_negative(true));
-        let (replaced, flags): (F32, _) = signaling.convert_with(default);
-        assert_eq!((replaced.to_bits(), flags), (0xFFC0_0000, Flags::INVALID));
-        let quiet = F64::from_bits(0x7FF8_0000_0000_0000);
-        let (fp8, flags): (F8E4M3, _) = quiet.convert_with(Env::IEEE);
-        assert_eq!((fp8.to_bits(), flags), (0x7F, Flags::NONE));
-    }
-
-    #[test]
-    fn an_unsupported_x87_input_gives_the_default_nan() {
-        let unnormal = F80::from_bits(0x3FFF_0000_0000_0000_0001);
-        let (nan, flags): (F32, _) = unnormal.convert_with(Env::IEEE);
-        assert_eq!((nan.to_bits(), flags), (0x7FC0_0000, Flags::INVALID));
-    }
-
-    #[test]
-    fn an_infinity_without_a_destination_infinity_is_invalid() {
-        let infinity = F32::from_bits(0xFF80_0000);
-        let (nan, flags): (F8E4M3, _) = infinity.convert_with(Env::IEEE);
-        assert_eq!((nan.to_bits(), flags), (0xFF, Flags::INVALID));
-        let (largest, flags): (F8E4M3, _) = infinity.convert_with(Env::IEEE.with_saturate(true));
-        assert_eq!((largest.to_bits(), flags), (0xFE, Flags::INVALID));
-        let (nan, _): (F8E4M3Fnuz, _) = infinity.convert_with(Env::IEEE);
-        assert_eq!(nan.to_bits(), 0x80);
-    }
-
-    #[test]
-    fn a_rounding_override_keeps_the_other_fields() {
-        let tiny = Exact {
-            negative: false,
-            exponent: -151,
-            significand: [1],
-            sticky: false,
-        };
-        let flush = Env::IEEE.with_flush_to_zero(true);
-        let (value, _) = F32::round(tiny, flush.with_rounding(Rounding::TowardPositive));
-        assert_eq!(value.to_bits(), 0, "flush-to-zero stays on");
-        let (value, _) = F32::round(tiny, Rounding::TowardPositive);
-        assert_eq!(value.to_bits(), 1, "the default mode does not flush");
-        assert_eq!(F32::from_bits(1).with_mode::<mode::Ieee>().to_bits(), 1);
-    }
-
-    #[test]
-    fn aliases_have_the_published_parameters() {
-        assert_eq!((F16::PRECISION, F16::EMAX, F16::EMIN), (11, 15, -14));
-        assert_eq!((F32::PRECISION, F32::EMAX, F32::EMIN), (24, 127, -126));
-        assert_eq!((F64::PRECISION, F64::EMAX, F64::EMIN), (53, 1023, -1022));
-        assert_eq!(
-            (F128::PRECISION, F128::EMAX, F128::EMIN),
-            (113, 16383, -16382)
-        );
-        assert_eq!(
-            (F256::PRECISION, F256::EMAX, F256::EMIN),
-            (237, 262_143, -262_142)
-        );
-        assert_eq!(
-            (F512::PRECISION, F512::EMAX, F512::EMIN),
-            (489, 4_194_303, -4_194_302)
-        );
-        assert_eq!((BF16::PRECISION, BF16::EMAX, BF16::EMIN), (8, 127, -126));
-        assert_eq!((TF32::PRECISION, TF32::EMAX, TF32::EMIN), (11, 127, -126));
-        assert_eq!((F8E4M3::PRECISION, F8E4M3::EMAX, F8E4M3::EMIN), (4, 8, -6));
-        assert_eq!(
-            (F8E5M2::PRECISION, F8E5M2::EMAX, F8E5M2::EMIN),
-            (3, 15, -14)
-        );
-        assert_eq!(
-            (F8E4M3Fnuz::PRECISION, F8E4M3Fnuz::EMAX, F8E4M3Fnuz::EMIN),
-            (4, 7, -7)
-        );
-        assert_eq!(
-            (F8E5M2Fnuz::PRECISION, F8E5M2Fnuz::EMAX, F8E5M2Fnuz::EMIN),
-            (3, 15, -15)
-        );
-        assert_eq!((F80::PRECISION, F80::EMAX, F80::EMIN), (64, 16383, -16382));
-    }
-}
+mod tests;

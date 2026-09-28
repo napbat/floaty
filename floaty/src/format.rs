@@ -1,6 +1,7 @@
 //! Format descriptions: the `Standard` trait, the `Binary<E, Enc>` family, the
 //! encodings, and the table that maps each width to its storage type.
 
+use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::hash::Hash;
 use core::marker::PhantomData;
@@ -9,10 +10,11 @@ use crate::binary::{EncodingKind, Unpacked};
 use crate::env::{Env, Flags};
 use crate::exact::Unrounded;
 use crate::float::Class;
+use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 
-use self::internal::LimbConversion;
+use self::internal::{LimbConversion, MinMax, Step};
 
 /// A floating-point format family at a width of `W` bits.
 ///
@@ -94,6 +96,48 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
         addend: Self::Bits,
         env: &Env,
     ) -> (Self::Bits, Flags);
+
+    /// Returns the encoding with its sign set to `negative`, where the format
+    /// has a value of that sign.
+    #[doc(hidden)]
+    fn with_sign(bits: Self::Bits, negative: bool) -> Self::Bits;
+
+    /// Compares two values as the quiet predicates do. `None` means unordered.
+    #[doc(hidden)]
+    fn compare(left: Self::Bits, right: Self::Bits, env: &Env) -> (Option<Ordering>, Flags);
+
+    /// Orders two encodings as IEEE 754 `totalOrder` does.
+    #[doc(hidden)]
+    fn total_cmp(left: Self::Bits, right: Self::Bits) -> Ordering;
+
+    /// Returns the minimum or the maximum of one family.
+    #[doc(hidden)]
+    fn min_max(
+        left: Self::Bits,
+        right: Self::Bits,
+        operation: MinMax,
+        env: &Env,
+    ) -> (Self::Bits, Flags);
+
+    /// Rounds to an integral value in the format.
+    #[doc(hidden)]
+    fn round_to_integral(value: Self::Bits, env: &Env) -> (Self::Bits, Flags);
+
+    /// Rounds to an integer of type `I`.
+    #[doc(hidden)]
+    fn to_int<I: Integer>(value: Self::Bits, env: &Env) -> (ToInt<I>, Flags);
+
+    /// Returns the IEEE 754 remainder.
+    #[doc(hidden)]
+    fn remainder(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags);
+
+    /// Returns `value * 2^scale`, rounded.
+    #[doc(hidden)]
+    fn scale_b(value: Self::Bits, scale: i32, env: &Env) -> (Self::Bits, Flags);
+
+    /// Returns the next value up or down.
+    #[doc(hidden)]
+    fn next(value: Self::Bits, step: Step, env: &Env) -> (Self::Bits, Flags);
 }
 
 /// An integer type that stores the encoding of a format.
@@ -104,9 +148,42 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
 pub trait Bits: Sealed + LimbConversion + Copy + Eq + Hash + Debug {}
 
 pub(crate) mod internal {
-    //! Conversions that only the engine uses.
+    //! Conversions and operation selectors that only the engine uses.
 
     use crate::limbs::Widen;
+
+    /// A minimum or maximum operation.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum MinMax {
+        /// IEEE 754-2019 `minimum`: a NaN operand gives a NaN.
+        Minimum,
+        /// IEEE 754-2019 `maximum`: a NaN operand gives a NaN.
+        Maximum,
+        /// IEEE 754-2019 `minimumNumber`: a NaN operand gives the number.
+        MinimumNumber,
+        /// IEEE 754-2019 `maximumNumber`: a NaN operand gives the number.
+        MaximumNumber,
+        /// IEEE 754-2008 `minNum`: a quiet NaN operand gives the number.
+        MinNum,
+        /// IEEE 754-2008 `maxNum`: a quiet NaN operand gives the number.
+        MaxNum,
+    }
+
+    impl MinMax {
+        /// Returns `true` for a minimum operation.
+        pub fn is_minimum(self) -> bool {
+            matches!(self, Self::Minimum | Self::MinimumNumber | Self::MinNum)
+        }
+    }
+
+    /// The direction of `next_up` and `next_down`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Step {
+        /// Toward positive infinity.
+        Up,
+        /// Toward negative infinity.
+        Down,
+    }
 
     /// Converts a storage type to and from the limbs that the engine uses.
     pub trait LimbConversion: Sized {

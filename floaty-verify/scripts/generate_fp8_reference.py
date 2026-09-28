@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write the FP8 reference data from ml_dtypes.
 
-The script writes two files into the directory that its argument names:
+The script writes four files into the directory that its argument names:
 
 - fp8-reference.txt lists every encoding of the four FP8 formats with the
   class, the sign, and the value that ml_dtypes gives.
@@ -14,6 +14,13 @@ The script writes two files into the directory that its argument names:
   every operand, 256 bytes. ml_dtypes computes in binary32 and rounds to
   nearest even once more. Binary32 has more than twice the FP8 precision plus
   two bits, so the second rounding gives the correctly rounded result.
+- fp8-operations.bin holds, for each format in the order of FORMATS, the
+  result that ml_dtypes gives for every operand: np.nextafter toward the
+  largest value above it, then toward the smallest value below it, then
+  np.negative, then np.abs, 256 bytes each; then np.copysign of every operand
+  pair, 65536 bytes at index `a * 256 + b`. The targets of np.nextafter are
+  the infinities, or the largest finite values of a format without an
+  infinity.
 
 Run the script from the repository root:
 
@@ -93,11 +100,39 @@ def write_arithmetic(path: Path) -> None:
     path.write_bytes(b"".join(parts))
 
 
+def targets(dtype) -> tuple:
+    """Return the values above and below every finite value of a format."""
+    infinity = np.array([np.inf], dtype=np.float32).astype(dtype)
+    if np.isinf(infinity[0]):
+        largest = infinity
+    else:
+        largest = np.array([ml_dtypes.finfo(dtype).max], dtype=dtype)
+    return np.repeat(largest, 256), np.repeat(-largest, 256)
+
+
+def write_operations(path: Path) -> None:
+    parts = []
+    with warnings.catch_warnings():
+        # NaN operands are part of the table.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for _, dtype in FORMATS:
+            values = np.arange(256, dtype=np.uint8).view(dtype)
+            above, below = targets(dtype)
+            parts.append(np.nextafter(values, above).view(np.uint8).tobytes())
+            parts.append(np.nextafter(values, below).view(np.uint8).tobytes())
+            parts.append(np.negative(values).view(np.uint8).tobytes())
+            parts.append(np.abs(values).view(np.uint8).tobytes())
+            first, second = np.meshgrid(values, values, indexing="ij")
+            parts.append(np.copysign(first, second).view(np.uint8).tobytes())
+    path.write_bytes(b"".join(parts))
+
+
 def main() -> None:
     directory = Path(sys.argv[1])
     write_table(directory / "fp8-reference.txt")
     write_conversions(directory / "fp8-from-f16.bin")
     write_arithmetic(directory / "fp8-arithmetic.bin")
+    write_operations(directory / "fp8-operations.bin")
 
 
 if __name__ == "__main__":

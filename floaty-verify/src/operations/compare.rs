@@ -1,0 +1,220 @@
+//! The oracle of comparison, total order, and the minimum and maximum
+//! operations.
+
+use core::cmp::Ordering;
+
+use floaty::{Decoded, Env, Flags};
+use rug::Integer;
+use rug::integer::Order;
+
+use super::{Outcome, Read, Sample, default_nan, number, propagate, read};
+use crate::arithmetic::Operand;
+use crate::mpfr::Format;
+
+/// Returns the expected order and flags of `compare_quiet_with`.
+///
+/// IEEE 754-2019 section 5.11: zeros of either sign are equal, a NaN is
+/// unordered, and a quiet predicate signals invalid only for a signaling
+/// NaN. `DESIGN.md` adds that an unsupported encoding is unordered and
+/// signals invalid.
+#[must_use]
+pub fn compare_quiet<const N: usize>(
+    first: &Operand<N>,
+    second: &Operand<N>,
+    env: &Env,
+) -> (Option<Ordering>, Flags) {
+    let mut flags = Flags::NONE;
+    let operands = [read(first, env, &mut flags), read(second, env, &mut flags)];
+    if operands
+        .iter()
+        .any(|operand| matches!(operand, Read::Unsupported) || operand.is_signaling())
+    {
+        return (None, flags | Flags::INVALID);
+    }
+    match &operands {
+        [Read::Number(a), Read::Number(b)] => (a.partial_cmp(b), flags),
+        _ => (None, flags),
+    }
+}
+
+/// Returns the expected order and flags of `compare_signaling_with`.
+///
+/// IEEE 754-2019 section 5.11: a signaling predicate signals invalid for
+/// every unordered pair.
+#[must_use]
+pub fn compare_signaling<const N: usize>(
+    first: &Operand<N>,
+    second: &Operand<N>,
+    env: &Env,
+) -> (Option<Ordering>, Flags) {
+    let (order, flags) = compare_quiet(first, second, env);
+    match order {
+        Some(_) => (order, flags),
+        None => (None, flags | Flags::INVALID),
+    }
+}
+
+/// Returns the expected order of `total_cmp`.
+///
+/// Two canonical encodings order by IEEE 754-2019 section 5.10: a negative
+/// NaN below every number, and every number below a positive NaN. Numbers
+/// order by value, with `-0` below `+0`, as MPFR's `mpfr_total_order_p`
+/// orders them. Among positive NaNs a signaling NaN
+/// orders below a quiet NaN, and a smaller payload below a larger one; the
+/// negative NaNs order in reverse. The NaN of `Fnuz` is negative. An
+/// encoding that is not canonical orders by the rule in `DESIGN.md`: by the
+/// sign bit, and then by the magnitude bits.
+///
+/// # Panics
+///
+/// Panics for an unsupported encoding that `canonical` does not exclude.
+#[must_use]
+pub fn total_order<const N: usize>(first: &Sample<N>, second: &Sample<N>) -> Ordering {
+    if !first.canonical || !second.canonical {
+        return by_bits(first, second);
+    }
+    let rank = |sample: &Sample<N>| match sample.operand.decoded {
+        Decoded::Nan {
+            negative: true,
+            signaling,
+            ref payload,
+        } => (
+            0,
+            Some((!signaling, Integer::from_digits(payload, Order::Lsf))),
+        ),
+        Decoded::Nan {
+            negative: false,
+            signaling,
+            ref payload,
+        } => (
+            2,
+            Some((!signaling, Integer::from_digits(payload, Order::Lsf))),
+        ),
+        Decoded::Unsupported => panic!("an unsupported encoding is not canonical"),
+        _ => (1, None),
+    };
+    let ((first_rank, first_nan), (second_rank, second_nan)) = (rank(first), rank(second));
+    first_rank.cmp(&second_rank).then_with(|| match first_rank {
+        0 => second_nan.cmp(&first_nan),
+        2 => first_nan.cmp(&second_nan),
+        _ => {
+            let mut flags = Flags::NONE;
+            let operands = [
+                read(&first.operand, &Env::IEEE, &mut flags),
+                read(&second.operand, &Env::IEEE, &mut flags),
+            ];
+            let [Read::Number(a), Read::Number(b)] = &operands else {
+                unreachable!("the rank holds numbers");
+            };
+            a.total_cmp(b)
+        }
+    })
+}
+
+/// Orders two encodings by the sign bit and then the magnitude bits.
+fn by_bits<const N: usize>(first: &Sample<N>, second: &Sample<N>) -> Ordering {
+    let key = |sample: &Sample<N>| {
+        let sign = sample.width - 1;
+        let mut magnitude = sample.bits.clone();
+        magnitude.set_bit(sign, false);
+        (sample.bits.get_bit(sign), magnitude)
+    };
+    let ((first_negative, first_magnitude), (second_negative, second_magnitude)) =
+        (key(first), key(second));
+    match (first_negative, second_negative) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        (false, false) => first_magnitude.cmp(&second_magnitude),
+        (true, true) => second_magnitude.cmp(&first_magnitude),
+    }
+}
+
+/// A minimum or maximum operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MinMax {
+    /// IEEE 754-2019 `minimum`.
+    Minimum,
+    /// IEEE 754-2019 `maximum`.
+    Maximum,
+    /// IEEE 754-2019 `minimumNumber`.
+    MinimumNumber,
+    /// IEEE 754-2019 `maximumNumber`.
+    MaximumNumber,
+    /// IEEE 754-2008 `minNum`.
+    MinNum,
+    /// IEEE 754-2008 `maxNum`.
+    MaxNum,
+}
+
+impl MinMax {
+    /// Every operation.
+    pub const ALL: [Self; 6] = [
+        Self::Minimum,
+        Self::Maximum,
+        Self::MinimumNumber,
+        Self::MaximumNumber,
+        Self::MinNum,
+        Self::MaxNum,
+    ];
+}
+
+/// Returns the expected result and flags of a minimum or maximum operation.
+///
+/// IEEE 754-2019 section 9.6: `minimum` gives a NaN for a NaN operand, and
+/// `minimumNumber` gives the number and signals invalid for a signaling NaN.
+/// IEEE 754-2008 section 5.3.1: `minNum` gives the number for a quiet NaN and
+/// a NaN for a signaling NaN. `DESIGN.md` orders `-0` below `+0` in every
+/// family, and returns the operand in its canonical encoding.
+#[must_use]
+pub fn min_max<const N: usize>(
+    operation: MinMax,
+    first: &Operand<N>,
+    second: &Operand<N>,
+    format: &Format,
+    env: &Env,
+) -> (Outcome, Flags) {
+    let mut flags = Flags::NONE;
+    let operands = [read(first, env, &mut flags), read(second, env, &mut flags)];
+    if operands
+        .iter()
+        .any(|operand| matches!(operand, Read::Unsupported))
+    {
+        return (default_nan(format, env), flags | Flags::INVALID);
+    }
+    let signaling = operands.iter().any(Read::is_signaling);
+    let (a, b) = match &operands {
+        [Read::Number(a), Read::Number(b)] => (a, b),
+        [Read::Number(value), _] | [_, Read::Number(value)] => {
+            let gives_nan = match operation {
+                MinMax::Minimum | MinMax::Maximum => true,
+                MinMax::MinNum | MinMax::MaxNum => signaling,
+                MinMax::MinimumNumber | MinMax::MaximumNumber => false,
+            };
+            if !gives_nan {
+                let invalid = if signaling {
+                    Flags::INVALID
+                } else {
+                    Flags::NONE
+                };
+                return (number(value, format), flags | invalid);
+            }
+            let (nan, special) = propagate(&operands, format, env);
+            return (nan, flags | special);
+        }
+        _ => {
+            let (nan, special) = propagate(&operands, format, env);
+            return (nan, flags | special);
+        }
+    };
+    // MPFR's total order orders numbers by value, with -0 below +0.
+    let order = a.total_cmp(b);
+    let minimum = matches!(
+        operation,
+        MinMax::Minimum | MinMax::MinimumNumber | MinMax::MinNum
+    );
+    let chosen = match (minimum, order) {
+        (true, Ordering::Greater) | (false, Ordering::Less) => b,
+        _ => a,
+    };
+    (number(chosen, format), flags)
+}

@@ -42,6 +42,7 @@ pub mod format;
 mod binary;
 mod exact;
 mod float;
+mod integer;
 mod limbs;
 
 pub use env::{Env, Flags, Rounding, mode};
@@ -51,6 +52,7 @@ pub use float::{
     F192, F224, F256, F288, F320, F352, F384, F416, F448, F480, F512, Float, FloatType, TF32,
 };
 pub use format::{Binary, Fnuz, Ieee, NoInf, X87};
+pub use integer::{Int, Integer, ToInt, UInt};
 
 mod sealed {
     /// Prevents implementations of a trait outside the crate.
