@@ -13,11 +13,33 @@ pub trait Limbs: Copy + Eq + Hash + Debug {
     /// The value zero.
     const ZERO: Self;
 
+    /// The width in bits.
+    const BITS: u32;
+
     /// Returns `true` when every bit is zero.
     fn is_zero(&self) -> bool;
 
-    /// Returns the bit at `position`.
+    /// Returns the bit at `position`, or `false` at or above [`BITS`](Self::BITS).
     fn bit(&self, position: u32) -> bool;
+
+    /// Returns the number of bits up to and including the highest set bit,
+    /// or zero for the value zero.
+    fn bit_length(&self) -> u32;
+
+    /// Returns `true` when a bit below `count` is set.
+    fn any_below(&self, count: u32) -> bool;
+
+    /// Shifts right by `count` bits. A count at or above the width gives zero.
+    #[must_use]
+    fn shr(self, count: u32) -> Self;
+
+    /// Shifts left by `count` bits. The bits shifted out of the width are lost.
+    #[must_use]
+    fn shl(self, count: u32) -> Self;
+
+    /// Adds one, and wraps to zero above the largest value.
+    #[must_use]
+    fn increment(self) -> Self;
 
     /// Returns a copy with the bit at `position` set.
     #[must_use]
@@ -53,13 +75,78 @@ pub trait Limbs: Copy + Eq + Hash + Debug {
 impl<const N: usize> Limbs for [u64; N] {
     const ZERO: Self = [0; N];
 
+    const BITS: u32 = {
+        let mut bits = 0;
+        let mut index = 0;
+        while index < N {
+            bits += 64;
+            index += 1;
+        }
+        bits
+    };
+
     fn is_zero(&self) -> bool {
         self.iter().all(|&limb| limb == 0)
     }
 
     fn bit(&self, position: u32) -> bool {
         let (index, offset) = split(position);
-        (self[index] >> offset) & 1 == 1
+        self.get(index)
+            .is_some_and(|limb| (limb >> offset) & 1 == 1)
+    }
+
+    fn bit_length(&self) -> u32 {
+        self.iter().rposition(|&limb| limb != 0).map_or(0, |index| {
+            let above = u32::try_from(index).expect("a limb index fits a u32") * 64;
+            above + 64 - self[index].leading_zeros()
+        })
+    }
+
+    fn any_below(&self, count: u32) -> bool {
+        !self.low_bits(count).is_zero()
+    }
+
+    fn shr(self, count: u32) -> Self {
+        let (limbs, offset) = split(count);
+        let mut result = Self::ZERO;
+        for (index, slot) in result.iter_mut().enumerate() {
+            let low = self.get(index + limbs).copied().unwrap_or(0);
+            let high = self.get(index + limbs + 1).copied().unwrap_or(0);
+            *slot = if offset == 0 {
+                low
+            } else {
+                (low >> offset) | (high << (64 - offset))
+            };
+        }
+        result
+    }
+
+    fn shl(self, count: u32) -> Self {
+        let (limbs, offset) = split(count);
+        let mut result = Self::ZERO;
+        for (index, slot) in result.iter_mut().enumerate() {
+            let Some(source) = index.checked_sub(limbs) else {
+                continue;
+            };
+            let low = source.checked_sub(1).map_or(0, |below| self[below]);
+            *slot = if offset == 0 {
+                self[source]
+            } else {
+                (self[source] << offset) | (low >> (64 - offset))
+            };
+        }
+        result
+    }
+
+    fn increment(mut self) -> Self {
+        for limb in &mut self {
+            let (sum, carry) = limb.overflowing_add(1);
+            *limb = sum;
+            if !carry {
+                break;
+            }
+        }
+        self
     }
 
     fn with_bit(mut self, position: u32) -> Self {
@@ -187,6 +274,38 @@ mod tests {
         let wide: [u64; 4] = narrow.resize();
         assert_eq!(wide, [7, 9, 0, 0]);
         assert_eq!(wide.resize::<[u64; 2]>(), narrow);
+    }
+
+    #[test]
+    fn shifts_move_bits_across_limbs() {
+        let value: [u64; 3] = [0x8000_0000_0000_0001, 0x1, 0];
+        assert_eq!(value.shl(1), [0x2, 0x3, 0]);
+        assert_eq!(value.shl(64), [0, 0x8000_0000_0000_0001, 0x1]);
+        assert_eq!(value.shl(127), [0, 1 << 63, 0xC000_0000_0000_0000]);
+        assert_eq!(value.shr(1), [0xC000_0000_0000_0000, 0, 0]);
+        assert_eq!(value.shr(63), [0x3, 0, 0]);
+        assert_eq!(value.shr(64), [0x1, 0, 0]);
+        assert_eq!(value.shr(192), [0; 3]);
+        assert_eq!(value.shr(1000), [0; 3]);
+        assert_eq!(value.shl(192), [0; 3]);
+    }
+
+    #[test]
+    fn bit_length_and_any_below() {
+        assert_eq!([0_u64; 2].bit_length(), 0);
+        assert_eq!([1_u64, 0].bit_length(), 1);
+        assert_eq!([0, 1_u64 << 63].bit_length(), 128);
+        let value: [u64; 2] = [0x10, 0];
+        assert!(!value.any_below(4) && value.any_below(5) && value.any_below(500));
+        assert!(!value.bit(128) && !value.bit(4000));
+        assert_eq!(<[u64; 5]>::BITS, 320);
+    }
+
+    #[test]
+    fn increment_carries() {
+        assert_eq!([u64::MAX, 0].increment(), [0, 1]);
+        assert_eq!([u64::MAX, u64::MAX].increment(), [0, 0]);
+        assert_eq!([5_u64].increment(), [6]);
     }
 
     #[test]

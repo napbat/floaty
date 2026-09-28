@@ -6,7 +6,10 @@ use core::hash::Hash;
 use core::marker::PhantomData;
 
 use crate::binary::{EncodingKind, Unpacked};
+use crate::env::{Env, Flags};
+use crate::exact::Unrounded;
 use crate::float::Class;
+use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 
 use self::internal::LimbConversion;
@@ -29,6 +32,10 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     /// The exponent of the smallest normal value, `emin` in IEEE 754.
     const EMIN: i32;
 
+    /// The number of NaN payload bits, below the quiet bit.
+    #[doc(hidden)]
+    const PAYLOAD_BITS: u32;
+
     /// Clears the storage bits above `W`.
     #[doc(hidden)]
     fn mask(bits: Self::Bits) -> Self::Bits;
@@ -49,6 +56,19 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     /// Returns the sign bit of an encoding.
     #[doc(hidden)]
     fn is_sign_negative(bits: Self::Bits) -> bool;
+
+    /// Rounds an exact value to the format.
+    #[doc(hidden)]
+    fn round<L: Limbs>(value: &Unrounded<L>, env: &Env) -> (Self::Bits, Flags);
+
+    /// Converts a decoded value of another format, whose NaN payloads have
+    /// `payload_bits` bits.
+    #[doc(hidden)]
+    fn convert_from<L: Limbs>(
+        value: Unpacked<L>,
+        payload_bits: u32,
+        env: &Env,
+    ) -> (Self::Bits, Flags);
 }
 
 /// An integer type that stores the encoding of a format.

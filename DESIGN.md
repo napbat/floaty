@@ -1,6 +1,7 @@
 # floaty Design
 
-Status: design approved on 2026-09-27. Build step 1, encoding, is complete.
+Status: design approved on 2026-09-27. Build steps 1, encoding, and 2,
+rounding, are complete.
 
 This file is the source of truth for every design decision in floaty. Update
 it in the same change that alters a decision.
@@ -232,28 +233,53 @@ pub struct Env {
     pub denormals_are_zero: bool, // DAZ: a subnormal input reads as zero
     pub tininess: Tininess,       // BeforeRounding or AfterRounding
     pub nan: NanRule,             // which NaN an operation returns
-    pub precision: Option<u32>,   // x87 precision control
+    pub precision: Option<NonZeroU32>, // x87 precision control
     pub saturate: bool,           // FP8 saturating overflow
+}
+
+pub struct NanRule {
+    pub propagation: NanPropagation, // SignalingFirst, FirstOperand, X87, or DefaultNan
+    pub default_negative: bool,      // the sign of the default NaN
 }
 ```
 
-- `Env` is `#[non_exhaustive]`. Build a new value from a preset with builder
-  methods such as `with_rounding`. A new field then does not break callers.
+`Env`, `NanRule`, `Tininess`, `Override`, and `Mode` live in the module
+`floaty::env`. The crate root re-exports `Env`, `Flags`, `Rounding`, and the
+module `mode`.
+
+- `Env` is `#[non_exhaustive]`. Build a new value from `Env::IEEE` or a
+  preset with builder methods such as `with_rounding`. A new field then does
+  not break callers.
+- `Flags` is a bit set. It has `contains`, `is_empty`, `union`, and
+  `difference`, and it combines with `|`.
 - `Rounding` has six directions: `NearestEven`, `NearestAway`,
   `TowardPositive`, `TowardNegative`, `TowardZero`, and `ToOdd`. Decimal
   needs `NearestAway`. IBM POWER binary128 instructions and internal
   algorithms use `ToOdd`. The names are provisional.
-- `NanRule` selects the NaN that an operation returns when an input is a NaN.
-  It also sets the default NaN of an invalid operation: its sign and payload.
+- `NanRule` selects the NaN that an operation returns when an input is a NaN,
+  made quiet. It also sets the sign of the default NaN of an invalid
+  operation. The default NaN is quiet and has a zero payload.
 - `precision` rounds the significand to fewer bits and keeps the exponent
-  range of the format, as x87 precision control does.
+  range of the format, as x87 precision control does. The format then acts
+  as a `p`-bit format with the same exponent range: a tiny result rounds at
+  the quantum `2^(emin - p + 1)`. SoftFloat rounds x87 results with
+  precision control the same way. `NonZeroU32` makes a zero precision
+  impossible to write.
+- FTZ flushes a result that is tiny by the tininess rule to a zero with its
+  sign, and reports `UNDERFLOW`, `INEXACT`, and `TINY`. The SSE unit reports
+  the same flags, and the SSE hardware test checks them.
+- An overflow of `NoInf` to its all-ones significand, the NaN pattern, gives
+  the largest finite value when the direction does not round to infinity. So
+  `ToOdd` gives an even result there, for example 448 for 452 in OCP E4M3,
+  with `OVERFLOW` and `INEXACT`. The format has no odd value between 448 and
+  the NaN.
 - `saturate` makes an overflow in an encoding without infinity give the
   largest finite value instead of a NaN.
 
 ### Modes
 
 ```rust
-pub trait Mode: Sealed {
+pub trait Mode: Sealed + 'static {
     const ENV: Env;
 }
 ```
@@ -262,7 +288,11 @@ A mode names one constant `Env`, so a type can carry a default behavior.
 The modes live in the module `floaty::mode`, because the encoding markers
 `Ieee` and `X87` already use those names at the crate root. `mode::Ieee` is
 the default mode. It rounds to nearest even, does not flush, and detects
-tininess after rounding. Its NaN rule is an open question.
+tininess after rounding. Its NaN rule is `NanRule::ARM`, chosen
+in step 2: a signaling NaN before a quiet NaN, then the earlier operand, and
+a positive default NaN. A conversion keeps the high-order payload bits.
+SoftFloat's ARM-VFPv2 specialization follows the same rule, so TestFloat
+checks the default mode directly.
 
 ### Operations and Overrides
 
@@ -366,26 +396,53 @@ round its result.
 ```rust
 pub struct Exact<const N: usize> {
     pub negative: bool,
-    pub exp: i32,      // value = sig * 2^exp; exp is the weight of the lowest bit
-    pub sig: [u64; N], // any width; the rounding routine finds the top bit
-    pub sticky: bool,  // the true magnitude is above sig * 2^exp by less than one lowest bit
+    pub exponent: i32,         // value = significand * 2^exponent: the weight of the lowest bit
+    pub significand: [u64; N], // any width; the rounding routine finds the top bit
+    pub sticky: bool,          // the true magnitude is above the value by less than one lowest bit
 }
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
-    pub fn round<const N: usize>(x: Exact<N>, o: impl Override) -> (Self, Flags);
+    pub fn round<const N: usize>(exact: Exact<N>, behavior: impl Override) -> (Self, Flags);
+    pub fn convert<T: FloatType>(self) -> T;
+    pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (T, Flags);
 }
 ```
 
-- An integer `n` is `sig = n` and `exp = 0`. A product is the product of the
-  significands, with the sum of the exponents. The caller never normalizes.
+- The field names are `exponent` and `significand`, not `exp` and `sig`, to
+  match `Decoded` and the naming rules in `AGENTS.md`.
+- An integer `n` is `significand = n` and `exponent = 0`. A product is the
+  product of the significands, with the sum of the exponents. The caller
+  never normalizes.
 - `N` is generic. A 1,024-bit binary512 product and a 66-bit x87 constant use
   the same routine.
-- Contract: when `sticky` is set, `sig` must have at least `p + 2`
+- Contract: when `sticky` is set, `significand` must have at least `p + 2`
   significant bits, where `p` is the target precision. With fewer bits the
   true value is not known well enough to round correctly. The rule comes from
   the round-to-odd property. A debug assertion checks it.
-- `exp` is `i32`. The binary512 maximum exponent is 4,194,303. A product
+- `exponent` is `i32`. The binary512 maximum exponent is 4,194,303. A product
   doubles it, and the result still fits.
+
+### Conversions
+
+`convert` rounds with the mode of the destination type. `convert_with` takes
+an override of that behavior and returns the flags. `FloatType` is the sealed
+trait of every `Float` type.
+
+- A subnormal input sets `DENORMAL_INPUT`. The flag means that an input was
+  subnormal before DAZ: x86 reports DE when DAZ is off, and ARM reports IDC
+  when it flushes an input. With DAZ set, the input reads as a zero with its
+  sign.
+- A signaling NaN input signals invalid. A NaN converts by the NaN rule.
+  `DefaultNan` gives the default NaN. The other rules keep the sign and the
+  high-order payload bits and set the quiet bit. A format with one NaN
+  encoding gives that NaN.
+- An unsupported x87 input signals invalid and gives the default NaN.
+- An infinity converts to an infinity when the destination has one. Otherwise
+  it converts to the NaN, or to the largest finite value with the same sign
+  at the precision of the behavior when `saturate` is set, and signals
+  invalid, as a conversion of an infinity to an integer does. No external
+  reference gives flags for FP8 conversions, so these flags are a decision of
+  this design.
 
 ### Intermediate Sizes
 
@@ -476,8 +533,13 @@ an oracle.
 | binary160 to binary512, and a 200-bit layout whose exponent field crosses a limb boundary | The definition in IEEE 754-2019 section 3.4, evaluated exactly with MPFR. No established library decodes these widths. | Class, sign, and exact value of boundary and random encodings |
 | binary32 and binary64 classification | The host `f32` and `f64` types | Random encodings, and every binary32 encoding in an ignored sweep |
 | IEEE interchange parameters | The formulas of IEEE 754-2019 table 3.5 | Precision, `emax`, and `emin` of every IEEE width |
-| binary16, binary32, binary64, x87 extended, binary128 | Berkeley TestFloat | Every rounding direction including round to odd, tininess before and after rounding, x87 precision control at 32, 64, and 80 bits, integer conversions, and flags |
-| bfloat16, TF32, FP8, binary160 to binary512, and a second check of the formats above | MPFR, through the `rug` crate | Correct rounding at any precision and exponent range, with subnormals |
+| binary16, binary32, binary64, x87 extended, binary128 | Berkeley TestFloat and SoftFloat Release 3e, as git submodules. The ARM-VFPv2 NaN specialization matches the default mode. | Every conversion between these formats at TestFloat level 2, in every rounding direction including round to odd, with both tininess rules: result bits and the five IEEE flags. Later steps add arithmetic, integer conversions, and x87 precision control at 32, 64, and 80 bits. |
+| Rounding of every binary format: binary16 to binary512, bfloat16, TF32, the FP8 formats, and x87 with precision control at 24, 53, and 64 bits | MPFR, through the `rug` crate | Exact inputs of up to 500 bits near every boundary of the precision in use, in every direction, with both tininess rules, flush-to-zero, saturation, and precision limits: the value, the canonical form, and every flag. An ignored sweep rounds every significand below 2^8 at every exponent to each FP8 format. |
+| Conversions from bfloat16, TF32, the FP8 formats, binary256, and binary512 | MPFR for the finite values, and the conversion rules of this design for the special values | Every encoding of the 8- and 16-bit sources, and boundary and random wider ones, in six behaviors |
+| The `DefaultNan` rule | TestFloat with SoftFloat's ARM-VFPv2-defaultNaN specialization | Every TestFloat conversion case with that rule |
+| SSE conversions | The host processor: `CVTSD2SS` and `CVTSS2SD` under MXCSR | Every MXCSR rounding direction with FTZ and DAZ on and off, including exact, halfway, and near-halfway results at every binary32 boundary: result bits and the IE, DE, OE, UE, and PE flags |
+| x87 stores | The host processor: `FLD` and `FSTP` to 64 and 32 bits | Every rounding control, including unsupported encodings, pseudo-denormals, and exact, halfway, and near-halfway results at every binary32 and binary64 boundary: result bits, IE, OE, UE, PE, and the C1 round-up bit. `FSTP` never reports DE. |
+| Conversion of every binary16 encoding to the FP8 formats, rounding to nearest even | A table that `ml_dtypes` generates, in `floaty-verify/data` | Result bits, and NaN and sign for a NaN result |
 | x86 SSE and x87 presets | The host processor, through inline assembly on x86-64 | NaN selection, the denormal-input flag, FTZ, DAZ, x87 C1, and precision control |
 | Decimal | The decTest vectors (DPD) and the Intel decimal library tests (BID) | Arithmetic, rounding, flags, and result exponents |
 | Double-double | libgcc on PowerPC under QEMU, and QD | Bit-exact match to each reference |
@@ -485,10 +547,16 @@ an oracle.
 - `rustc_apfloat` follows LLVM, not the processor, for non-canonical x87
   encodings. The processor is the reference for those encodings. See
   `docs/anomalies/x87-noncanonical-rustc-apfloat.md`.
-- MPFR has no round to odd. The harness rounds toward zero and sets the lowest
-  bit when the result is inexact. For ties away from zero the harness uses
-  `mpfr_round_nearest_away`. FTZ and the FP8 overflow encodings are small
-  wrappers around the correctly rounded MPFR result.
+- MPFR has no round to odd, and `rug` does not expose MPFR's ties-away
+  wrapper, which is a C macro. The harness takes both from the
+  round-toward-zero and round-away-from-zero results: round to odd picks the
+  odd one, and ties away picks by the midpoint. MPFR's subnormal
+  emulation gives the subnormal quantum. FTZ, tininess, overflow, and the FP8
+  overflow encodings are small wrappers around the MPFR results.
+- TestFloat and SoftFloat after Release 3e add bfloat16 support that does not
+  build with the ARM specialization. The submodules stay at Release 3e.
+- `ml_dtypes` gives every NaN a canonical payload, so its conversion table
+  checks only NaN and sign for a NaN result.
 - Test every FP8 input pair for every operation and rounding direction in the
   normal test run.
 - Test every 16-bit input pair as an ignored test that runs on a schedule.
@@ -511,6 +579,10 @@ floaty/                  the workspace
 │       ├── decimal.rs   step 7
 │       └── double_double.rs  step 8
 └── floaty-verify/       TestFloat, MPFR, and hardware harness
+    ├── build.rs         builds testfloat_gen from the submodules with make
+    ├── reference/       Berkeley SoftFloat and TestFloat, git submodules
+    ├── data/            generated reference tables
+    └── scripts/         the generators of the reference tables
 ```
 
 ## Build Order
@@ -535,14 +607,15 @@ Each step passes its oracle tests before the next step starts.
 
 ## Open Questions
 
-- The NaN rule of the `Ieee` mode. IEEE 754 does not fix which NaN payload an
-  operation returns. Decide in step 2.
 - The final names of the aliases, the `Rounding` directions, and the
-  `NanRule` variants.
+  `NanPropagation` variants.
 - The extra IBM POWER decimal rounding modes, and decimal widths above 128.
 - The details of the `Unsigned` and `Finite` encodings.
 - Presets for ARM, RISC-V, and Direct3D.
 - An optional layer that carries flags on values through a computation.
+- `saturate` applies only to encodings without an infinity. OCP FP8
+  conversions and the x86 and ARM FP8 instructions also saturate E5M2, which
+  has an infinity. Decide when a consumer needs those semantics.
 
 ## Rust Notes
 

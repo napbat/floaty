@@ -6,8 +6,9 @@ floaty emulates floating-point formats and the behavior of the hardware that
 uses them. Every operation gives the same bits on every host. It is a base
 layer for binary lifters, constant folders, and software FPU emulators.
 
-> **Status:** build step 1 of 8 is complete: every binary format decodes to
-> its exact value and classifies. Arithmetic comes in later steps.
+> **Status:** build steps 1 and 2 of 8 are complete: every binary format
+> decodes, classifies, rounds exact values, and converts to every other
+> binary format in every rounding direction. Arithmetic comes in later steps.
 > [DESIGN.md](DESIGN.md) holds the approved design and the build order.
 
 ## Planned Scope
@@ -47,8 +48,14 @@ let (sum, flags) = a.add_with(b, Env::X86_SSE);         // full platform behavio
 
 ## Development
 
-Rust 1.85 or later, edition 2024. Run the quality gates from the workspace
-root:
+Rust 1.85 or later, edition 2024. The verification harness runs on Linux
+x86-64 hosts and also needs the reference sources, `make`, `gcc`, and `m4`:
+
+```text
+git submodule update --init
+```
+
+Run the quality gates from the workspace root:
 
 ```text
 cargo fmt --all -- --check

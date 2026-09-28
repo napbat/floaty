@@ -4,14 +4,19 @@ use core::fmt::{self, Debug, Formatter};
 use core::marker::PhantomData;
 
 use crate::binary::Unpacked;
+use crate::env::{Env, Flags, Mode, Override, mode};
+use crate::exact::{Exact, Unrounded};
 use crate::format::internal::LimbConversion;
 use crate::format::{Binary, Fnuz, NoInf, Standard, X87};
 use crate::limbs::Limbs;
+use crate::sealed::Sealed;
 
-/// A floating-point value of standard `S` at width `W`.
+/// A floating-point value of standard `S` at width `W`, with default mode `M`.
 ///
 /// A value is a format and its bits. `S` and `W` select the storage type and
-/// the engine at compile time. An unsupported pair does not compile.
+/// the engine at compile time. An unsupported pair does not compile. The mode
+/// is the behavior that an operation uses when the call does not override it.
+/// It does not change the value.
 ///
 /// ```
 /// use floaty::{Class, F32};
@@ -20,20 +25,23 @@ use crate::limbs::Limbs;
 /// assert_eq!(one.classify(), Class::Normal);
 /// assert_eq!(one.to_bits(), 0x3F80_0000);
 /// ```
-pub struct Float<S: Standard<W>, const W: usize> {
+pub struct Float<S: Standard<W>, const W: usize, M: Mode = mode::Ieee> {
     bits: S::Bits,
-    standard: PhantomData<S>,
+    marker: PhantomData<(S, M)>,
 }
 
-impl<S: Standard<W>, const W: usize> Clone for Float<S, W> {
+impl<S: Standard<W>, const W: usize, M: Mode> Clone for Float<S, W, M> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<S: Standard<W>, const W: usize> Copy for Float<S, W> {}
+impl<S: Standard<W>, const W: usize, M: Mode> Copy for Float<S, W, M> {}
 
-impl<S: Standard<W>, const W: usize> Float<S, W> {
+impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
+    /// The behavior of the default mode.
+    pub const ENV: Env = M::ENV;
+
     /// The precision in bits, including the leading bit.
     pub const PRECISION: u32 = S::PRECISION;
 
@@ -49,10 +57,80 @@ impl<S: Standard<W>, const W: usize> Float<S, W> {
     /// a `u32` ignores bits 19 to 31.
     #[must_use]
     pub fn from_bits(bits: S::Bits) -> Self {
+        Self::from_masked(S::mask(bits))
+    }
+
+    /// Makes a value from an encoding whose bits above `W` are zero.
+    fn from_masked(bits: S::Bits) -> Self {
         Self {
-            bits: S::mask(bits),
-            standard: PhantomData,
+            bits,
+            marker: PhantomData,
         }
+    }
+
+    /// Returns the same value with another default mode. The bits do not
+    /// change.
+    #[must_use]
+    pub fn with_mode<Other: Mode>(self) -> Float<S, W, Other> {
+        Float::from_masked(self.bits)
+    }
+
+    /// Rounds an exact value to this format.
+    ///
+    /// `behavior` is a [`Rounding`](crate::Rounding) that overrides only the
+    /// rounding direction, or an [`Env`] that replaces the whole behavior.
+    /// Pass [`Self::ENV`] to use the default mode.
+    #[must_use]
+    pub fn round<const N: usize>(exact: Exact<N>, behavior: impl Override) -> (Self, Flags) {
+        let env = behavior.apply(M::ENV);
+        let value = Unrounded {
+            negative: exact.negative,
+            exponent: exact.exponent,
+            significand: exact.significand,
+            sticky: exact.sticky,
+        };
+        let (bits, flags) = S::round(&value, &env);
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Converts the value to another format, rounding with the mode of the
+    /// destination type.
+    ///
+    /// ```
+    /// use floaty::{BF16, F32};
+    ///
+    /// let pi = F32::from_bits(0x4049_0FDB);
+    /// let rounded: BF16 = pi.convert();
+    /// assert_eq!(rounded.to_bits(), 0x4049);
+    /// ```
+    #[must_use]
+    pub fn convert<T: FloatType>(self) -> T {
+        self.convert_with(T::DEFAULT_ENV).0
+    }
+
+    /// Converts the value to another format, with an override of the
+    /// destination behavior. Returns the result and the flags.
+    ///
+    /// A subnormal input sets [`Flags::DENORMAL_INPUT`], and reads as a zero
+    /// when the behavior has denormals-are-zero set. A signaling NaN input
+    /// signals invalid. A destination without an infinity converts an infinity
+    /// to a NaN, or to the largest finite value when the behavior saturates,
+    /// and signals invalid.
+    #[must_use]
+    pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (T, Flags) {
+        let env = behavior.apply(T::DEFAULT_ENV);
+        let mut value = S::unpack(self.bits);
+        let mut input = Flags::NONE;
+        if S::classify(self.bits) == Class::Subnormal {
+            input = Flags::DENORMAL_INPUT;
+            if env.denormals_are_zero {
+                value = Unpacked::Zero {
+                    negative: self.is_sign_negative(),
+                };
+            }
+        }
+        let (result, flags) = T::convert_from(value, S::PAYLOAD_BITS, &env);
+        (result, flags | input)
     }
 
     /// Returns the encoding. The storage bits above `W` are zero.
@@ -184,7 +262,7 @@ impl<S: Standard<W>, const W: usize> Float<S, W> {
     }
 }
 
-impl<S: Standard<W>, const W: usize> Debug for Float<S, W> {
+impl<S: Standard<W>, const W: usize, M: Mode> Debug for Float<S, W, M> {
     /// Writes the encoding in hexadecimal, for example `Float(0x3f800000)`.
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         let limbs = self.bits.to_limbs();
@@ -194,6 +272,30 @@ impl<S: Standard<W>, const W: usize> Debug for Float<S, W> {
             write!(formatter, "{:x}", limbs.field(digit * 4, 4))?;
         }
         formatter.write_str(")")
+    }
+}
+
+/// A [`Float`] type of any standard, width, and mode, as a conversion
+/// destination. The trait is sealed.
+pub trait FloatType: Sealed + Copy {
+    /// The behavior of the default mode of the type.
+    #[doc(hidden)]
+    const DEFAULT_ENV: Env;
+
+    /// Converts a decoded value of another format, whose NaN payloads have
+    /// `payload_bits` bits.
+    #[doc(hidden)]
+    fn convert_from<L: Limbs>(value: Unpacked<L>, payload_bits: u32, env: &Env) -> (Self, Flags);
+}
+
+impl<S: Standard<W>, const W: usize, M: Mode> Sealed for Float<S, W, M> {}
+
+impl<S: Standard<W>, const W: usize, M: Mode> FloatType for Float<S, W, M> {
+    const DEFAULT_ENV: Env = M::ENV;
+
+    fn convert_from<L: Limbs>(value: Unpacked<L>, payload_bits: u32, env: &Env) -> (Self, Flags) {
+        let (bits, flags) = S::convert_from(value, payload_bits, env);
+        (Self::from_masked(bits), flags)
     }
 }
 
@@ -322,6 +424,8 @@ mod tests {
         BF16, Class, Decoded, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128,
         F256, F512, TF32,
     };
+    use crate::env::{Env, Flags, NanPropagation, NanRule, Rounding, mode};
+    use crate::exact::Exact;
 
     #[test]
     fn from_bits_ignores_bits_above_the_width() {
@@ -373,6 +477,69 @@ mod tests {
                 payload: [0x20_0001]
             }
         );
+    }
+
+    #[test]
+    fn a_subnormal_input_reports_denormal_input_and_honors_daz() {
+        let tiny = F32::from_bits(0x8000_0001);
+        let (wide, flags): (F64, _) = tiny.convert_with(Env::IEEE);
+        assert_eq!(wide.to_bits(), 0xB6A0_0000_0000_0000);
+        assert_eq!(flags, Flags::DENORMAL_INPUT);
+        let (zero, flags): (F64, _) = tiny.convert_with(Env::IEEE.with_denormals_are_zero(true));
+        assert_eq!(
+            (zero.to_bits(), flags),
+            (0x8000_0000_0000_0000, Flags::DENORMAL_INPUT)
+        );
+    }
+
+    #[test]
+    fn nan_inputs_follow_the_nan_rule() {
+        let signaling = F64::from_bits(0xFFF4_0000_0000_0001);
+        let (kept, flags): (F32, _) = signaling.convert_with(Env::IEEE);
+        assert_eq!((kept.to_bits(), flags), (0xFFE0_0000, Flags::INVALID));
+        let default = Env::IEEE.with_nan(NanRule {
+            propagation: NanPropagation::DefaultNan,
+            default_negative: true,
+        });
+        let (replaced, flags): (F32, _) = signaling.convert_with(default);
+        assert_eq!((replaced.to_bits(), flags), (0xFFC0_0000, Flags::INVALID));
+        let quiet = F64::from_bits(0x7FF8_0000_0000_0000);
+        let (fp8, flags): (F8E4M3, _) = quiet.convert_with(Env::IEEE);
+        assert_eq!((fp8.to_bits(), flags), (0x7F, Flags::NONE));
+    }
+
+    #[test]
+    fn an_unsupported_x87_input_gives_the_default_nan() {
+        let unnormal = F80::from_bits(0x3FFF_0000_0000_0000_0001);
+        let (nan, flags): (F32, _) = unnormal.convert_with(Env::IEEE);
+        assert_eq!((nan.to_bits(), flags), (0x7FC0_0000, Flags::INVALID));
+    }
+
+    #[test]
+    fn an_infinity_without_a_destination_infinity_is_invalid() {
+        let infinity = F32::from_bits(0xFF80_0000);
+        let (nan, flags): (F8E4M3, _) = infinity.convert_with(Env::IEEE);
+        assert_eq!((nan.to_bits(), flags), (0xFF, Flags::INVALID));
+        let (largest, flags): (F8E4M3, _) = infinity.convert_with(Env::IEEE.with_saturate(true));
+        assert_eq!((largest.to_bits(), flags), (0xFE, Flags::INVALID));
+        let (nan, _): (F8E4M3Fnuz, _) = infinity.convert_with(Env::IEEE);
+        assert_eq!(nan.to_bits(), 0x80);
+    }
+
+    #[test]
+    fn a_rounding_override_keeps_the_other_fields() {
+        let tiny = Exact {
+            negative: false,
+            exponent: -151,
+            significand: [1],
+            sticky: false,
+        };
+        let flush = Env::IEEE.with_flush_to_zero(true);
+        let (value, _) = F32::round(tiny, flush.with_rounding(Rounding::TowardPositive));
+        assert_eq!(value.to_bits(), 0, "flush-to-zero stays on");
+        let (value, _) = F32::round(tiny, Rounding::TowardPositive);
+        assert_eq!(value.to_bits(), 1, "the default mode does not flush");
+        assert_eq!(F32::from_bits(1).with_mode::<mode::Ieee>().to_bits(), 1);
     }
 
     #[test]

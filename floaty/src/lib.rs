@@ -15,22 +15,28 @@
 //! assert_eq!(F8E4M3::from_bits(0x7E).classify(), Class::Normal);
 //! ```
 //!
+//! [`Float::round`] rounds an exact value to a format, and
+//! [`Float::convert`] converts between formats. Each type has a default mode,
+//! and a call can override its [`Env`] and get the [`Flags`] back.
+//!
 //! The crate follows the build order in `DESIGN.md` at the repository root.
-//! It has encoding and classification now. Arithmetic comes in later steps.
+//! Arithmetic comes in later steps.
 
 #![no_std]
 
+pub mod env;
 pub mod format;
 
 mod binary;
-mod env;
 mod exact;
 mod float;
 mod limbs;
 
+pub use env::{Env, Flags, Rounding, mode};
+pub use exact::Exact;
 pub use float::{
     BF16, Class, Decoded, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F160,
-    F192, F224, F256, F288, F320, F352, F384, F416, F448, F480, F512, Float, TF32,
+    F192, F224, F256, F288, F320, F352, F384, F416, F448, F480, F512, Float, FloatType, TF32,
 };
 pub use format::{Binary, Fnuz, Ieee, NoInf, X87};
 

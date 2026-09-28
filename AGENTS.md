@@ -60,12 +60,15 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
 ```
 
-In PowerShell, set the variable first: `$env:RUSTDOCFLAGS = "-D warnings"`.
-
 - Install the minimum-version toolchain once:
   `rustup toolchain install 1.85 --profile minimal --component clippy`.
-- `--workspace` includes `floaty-verify`. When the harness links its C
-  references, the gates need a C toolchain.
+- `--workspace` includes `floaty-verify`. Its build runs on Linux x86-64
+  hosts only, and needs the submodules (`git submodule update --init`),
+  `make`, `gcc`, and `m4`. It builds TestFloat and MPFR from source. On
+  another host, run the gates with `-p floaty` instead of `--workspace`.
+- Keep the submodules under `floaty-verify/reference/` at their pinned
+  releases. A change of release is a design change: record it in
+  `DESIGN.md`.
 - Run the long exhaustive sweeps with
   `cargo test -p floaty-verify --release -- --ignored`.
 
@@ -190,7 +193,7 @@ Never hand-edit a generated file. Change its generator and run it again.
 
 | Generated file | Command |
 | --- | --- |
-| `floaty-verify/data/fp8-reference.txt` | `floaty-verify/scripts/generate_fp8_reference.py`, as its docstring states |
+| `floaty-verify/data/fp8-reference.txt` and `floaty-verify/data/fp8-from-f16.bin` | `floaty-verify/scripts/generate_fp8_reference.py floaty-verify/data`, as its docstring states |
 
 ## Tests
 

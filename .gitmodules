@@ -1,0 +1,6 @@
+[submodule "floaty-verify/reference/berkeley-softfloat-3"]
+	path = floaty-verify/reference/berkeley-softfloat-3
+	url = https://github.com/ucb-bar/berkeley-softfloat-3.git
+[submodule "floaty-verify/reference/berkeley-testfloat-3"]
+	path = floaty-verify/reference/berkeley-testfloat-3
+	url = https://github.com/ucb-bar/berkeley-testfloat-3.git

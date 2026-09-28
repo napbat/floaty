@@ -10,5 +10,6 @@
 
 pub mod apfloat;
 pub mod encodings;
+pub mod mpfr;
 pub mod random;
 pub mod shape;
