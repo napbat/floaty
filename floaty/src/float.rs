@@ -42,6 +42,79 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// The behavior of the default mode.
     pub const ENV: Env = M::ENV;
 
+    /// Adds `other`. Returns the sum and the flags.
+    ///
+    /// `behavior` is a [`Rounding`](crate::Rounding) that overrides only the
+    /// rounding direction, or an [`Env`] that replaces the whole behavior.
+    #[must_use]
+    pub fn add_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::add(self.bits, other.bits, false, &behavior.apply(M::ENV));
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Subtracts `other`. Returns the difference and the flags.
+    #[must_use]
+    pub fn sub_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::add(self.bits, other.bits, true, &behavior.apply(M::ENV));
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Multiplies by `other`. Returns the product and the flags.
+    #[must_use]
+    pub fn mul_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::mul(self.bits, other.bits, &behavior.apply(M::ENV));
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Divides by `other`. Returns the quotient and the flags.
+    #[must_use]
+    pub fn div_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::div(self.bits, other.bits, &behavior.apply(M::ENV));
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Returns the square root, with the default mode.
+    #[must_use]
+    pub fn sqrt(self) -> Self {
+        self.sqrt_with(M::ENV).0
+    }
+
+    /// Returns the square root and the flags.
+    #[must_use]
+    pub fn sqrt_with(self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::sqrt(self.bits, &behavior.apply(M::ENV));
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Returns `self * multiplier + addend`, rounded once, with the default
+    /// mode.
+    #[must_use]
+    pub fn mul_add(self, multiplier: Self, addend: Self) -> Self {
+        self.mul_add_with(multiplier, addend, M::ENV).0
+    }
+
+    /// Returns `self * multiplier + addend`, rounded once, and the flags.
+    ///
+    /// A NaN comes from `self` and `multiplier` first, and then from that
+    /// result and `addend`, as in SoftFloat. The
+    /// [`invalid_product`](crate::env::NanRule::invalid_product) field of the
+    /// NaN rule decides `0 * inf + NaN`.
+    #[must_use]
+    pub fn mul_add_with(
+        self,
+        multiplier: Self,
+        addend: Self,
+        behavior: impl Override,
+    ) -> (Self, Flags) {
+        let (bits, flags) = S::mul_add(
+            self.bits,
+            multiplier.bits,
+            addend.bits,
+            &behavior.apply(M::ENV),
+        );
+        (Self::from_masked(bits), flags)
+    }
+
     /// The precision in bits, including the leading bit.
     pub const PRECISION: u32 = S::PRECISION;
 
@@ -261,6 +334,25 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
         S::is_canonical(self.bits)
     }
 }
+
+/// Implements an operator with the default mode of the type. The operator
+/// drops the flags; the `_with` method returns them.
+macro_rules! operator {
+    ($trait:ident, $method:ident, $with:ident) => {
+        impl<S: Standard<W>, const W: usize, M: Mode> core::ops::$trait for Float<S, W, M> {
+            type Output = Self;
+
+            fn $method(self, other: Self) -> Self {
+                self.$with(other, M::ENV).0
+            }
+        }
+    };
+}
+
+operator!(Add, add, add_with);
+operator!(Sub, sub, sub_with);
+operator!(Mul, mul, mul_with);
+operator!(Div, div, div_with);
 
 impl<S: Standard<W>, const W: usize, M: Mode> Debug for Float<S, W, M> {
     /// Writes the encoding in hexadecimal, for example `Float(0x3f800000)`.
@@ -497,10 +589,8 @@ mod tests {
         let signaling = F64::from_bits(0xFFF4_0000_0000_0001);
         let (kept, flags): (F32, _) = signaling.convert_with(Env::IEEE);
         assert_eq!((kept.to_bits(), flags), (0xFFE0_0000, Flags::INVALID));
-        let default = Env::IEEE.with_nan(NanRule {
-            propagation: NanPropagation::DefaultNan,
-            default_negative: true,
-        });
+        let default = Env::IEEE
+            .with_nan(NanRule::new(NanPropagation::DefaultNan).with_default_negative(true));
         let (replaced, flags): (F32, _) = signaling.convert_with(default);
         assert_eq!((replaced.to_bits(), flags), (0xFFC0_0000, Flags::INVALID));
         let quiet = F64::from_bits(0x7FF8_0000_0000_0000);

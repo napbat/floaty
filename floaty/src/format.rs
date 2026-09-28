@@ -69,24 +69,49 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
         payload_bits: u32,
         env: &Env,
     ) -> (Self::Bits, Flags);
+
+    /// Adds, or subtracts when `subtract` is set.
+    #[doc(hidden)]
+    fn add(left: Self::Bits, right: Self::Bits, subtract: bool, env: &Env) -> (Self::Bits, Flags);
+
+    /// Multiplies.
+    #[doc(hidden)]
+    fn mul(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags);
+
+    /// Divides.
+    #[doc(hidden)]
+    fn div(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags);
+
+    /// Returns the square root.
+    #[doc(hidden)]
+    fn sqrt(value: Self::Bits, env: &Env) -> (Self::Bits, Flags);
+
+    /// Returns `left * right + addend`, rounded once.
+    #[doc(hidden)]
+    fn mul_add(
+        left: Self::Bits,
+        right: Self::Bits,
+        addend: Self::Bits,
+        env: &Env,
+    ) -> (Self::Bits, Flags);
 }
 
 /// An integer type that stores the encoding of a format.
 ///
-/// The storage types are `u8`, `u16`, `u32`, `u64`, `u128`, and `[u64; N]`.
-/// An array stores its least significant 64 bits in element 0. The trait is
-/// sealed.
+/// The storage types are `u8`, `u16`, `u32`, `u64`, `u128`, and `[u64; N]`
+/// for `N` from 3 to 8. An array stores its least significant 64 bits in
+/// element 0. The trait is sealed.
 pub trait Bits: Sealed + LimbConversion + Copy + Eq + Hash + Debug {}
 
 pub(crate) mod internal {
     //! Conversions that only the engine uses.
 
-    use crate::limbs::Limbs;
+    use crate::limbs::Widen;
 
     /// Converts a storage type to and from the limbs that the engine uses.
     pub trait LimbConversion: Sized {
         /// The limb array that the engine computes on.
-        type Limbs: Limbs;
+        type Limbs: Widen;
 
         /// Converts the storage value to limbs.
         fn to_limbs(self) -> Self::Limbs;
@@ -139,19 +164,28 @@ impl LimbConversion for u128 {
     }
 }
 
-impl<const N: usize> Sealed for [u64; N] {}
-impl<const N: usize> Bits for [u64; N] {}
-impl<const N: usize> LimbConversion for [u64; N] {
-    type Limbs = Self;
+/// Implements [`Bits`] for the limb arrays that the storage table uses.
+macro_rules! array_bits {
+    ($($limbs:literal),*) => {
+        $(
+            impl Sealed for [u64; $limbs] {}
+            impl Bits for [u64; $limbs] {}
+            impl LimbConversion for [u64; $limbs] {
+                type Limbs = Self;
 
-    fn to_limbs(self) -> Self {
-        self
-    }
+                fn to_limbs(self) -> Self {
+                    self
+                }
 
-    fn from_limbs(limbs: Self) -> Self {
-        limbs
-    }
+                fn from_limbs(limbs: Self) -> Self {
+                    limbs
+                }
+            }
+        )*
+    };
 }
+
+array_bits!(3, 4, 5, 6, 7, 8);
 
 /// The width `W` in bits, as a key of the storage table.
 ///

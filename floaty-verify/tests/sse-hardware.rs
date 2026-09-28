@@ -1,116 +1,30 @@
-//! Compares conversions with the SSE unit of the host processor: rounding,
-//! flush-to-zero (FTZ), denormals-are-zero (DAZ), and the MXCSR flags. The
-//! test runs only on x86-64 hosts.
+//! Compares conversions and arithmetic with the SSE unit of the host
+//! processor: rounding, flush-to-zero (FTZ), denormals-are-zero (DAZ), the
+//! first-operand NaN rule, and the MXCSR flags. The test runs only on x86-64
+//! hosts.
 
 #![cfg(target_arch = "x86_64")]
 
-use core::arch::asm;
-
-use floaty::env::{NanPropagation, NanRule};
-use floaty::{Env, F32, F64, Flags, Rounding};
+use floaty::{Env, F32, F64};
 use floaty_verify::random::SplitMix64;
+use floaty_verify::x86::{
+    self, MXCSR_DAZ, MXCSR_FTZ, MXCSR_MASKED, MXCSR_ROUNDINGS, mxcsr_flags, sse_env,
+};
 
-/// The MXCSR value with every exception masked and no flag set.
-const MASKED: u32 = 0x1F80;
-const FLAG_BITS: u32 = 0x3F;
-const DAZ: u32 = 1 << 6;
-const FTZ: u32 = 1 << 15;
-
-/// The rounding directions and their MXCSR rounding-control field.
-const ROUNDINGS: [(Rounding, u32); 4] = [
-    (Rounding::NearestEven, 0),
-    (Rounding::TowardNegative, 1 << 13),
-    (Rounding::TowardPositive, 2 << 13),
-    (Rounding::TowardZero, 3 << 13),
-];
-
-/// Runs `CVTSD2SS` under `control` and returns the result and the MXCSR
-/// flags.
-fn cvtsd2ss(input: u64, control: u32) -> (u32, u32) {
-    let (mut saved, mut after) = (0_u32, 0_u32);
-    let result: u32;
-    // SAFETY: the code saves MXCSR, runs one conversion under `control`,
-    // reads the flags, and restores MXCSR before it ends. It reads and writes
-    // only the three local variables.
-    unsafe {
-        asm!(
-            "stmxcsr [{saved}]",
-            "ldmxcsr [{control}]",
-            "movq {value}, {input}",
-            "cvtsd2ss {value}, {value}",
-            "movd {result:e}, {value}",
-            "stmxcsr [{after}]",
-            "ldmxcsr [{saved}]",
-            saved = in(reg) &raw mut saved,
-            control = in(reg) &raw const control,
-            after = in(reg) &raw mut after,
-            input = in(reg) input,
-            value = out(xmm_reg) _,
-            result = out(reg) result,
-            options(nostack),
-        );
-    }
-    (result, after & FLAG_BITS)
-}
-
-/// Runs `CVTSS2SD` under `control` and returns the result and the MXCSR
-/// flags.
-fn cvtss2sd(input: u32, control: u32) -> (u64, u32) {
-    let (mut saved, mut after) = (0_u32, 0_u32);
-    let result: u64;
-    // SAFETY: as in `cvtsd2ss`.
-    unsafe {
-        asm!(
-            "stmxcsr [{saved}]",
-            "ldmxcsr [{control}]",
-            "movd {value}, {input:e}",
-            "cvtss2sd {value}, {value}",
-            "movq {result}, {value}",
-            "stmxcsr [{after}]",
-            "ldmxcsr [{saved}]",
-            saved = in(reg) &raw mut saved,
-            control = in(reg) &raw const control,
-            after = in(reg) &raw mut after,
-            input = in(reg) input,
-            value = out(xmm_reg) _,
-            result = out(reg) result,
-            options(nostack),
-        );
-    }
-    (result, after & FLAG_BITS)
-}
-
-/// Returns the MXCSR flags that a floaty result reports. MXCSR sets DE only
-/// when DAZ is clear.
-fn mxcsr_flags(flags: Flags, daz: bool) -> u32 {
-    let mut bits = 0;
-    for (flag, bit) in [
-        (Flags::INVALID, 0),
-        (Flags::OVERFLOW, 3),
-        (Flags::UNDERFLOW, 4),
-        (Flags::INEXACT, 5),
-    ] {
-        if flags.contains(flag) {
-            bits |= 1 << bit;
+/// Every MXCSR setting of the tests: each rounding direction with FTZ and DAZ
+/// on and off. Returns the control value, the matching behavior, and DAZ.
+fn settings() -> Vec<(u32, Env, bool)> {
+    let mut settings = Vec::new();
+    for (rounding, field) in MXCSR_ROUNDINGS {
+        for (ftz, daz) in [(false, false), (true, false), (false, true), (true, true)] {
+            let control = MXCSR_MASKED
+                | field
+                | if ftz { MXCSR_FTZ } else { 0 }
+                | if daz { MXCSR_DAZ } else { 0 };
+            settings.push((control, sse_env(rounding, ftz, daz), daz));
         }
     }
-    if flags.contains(Flags::DENORMAL_INPUT) && !daz {
-        bits |= 1 << 1;
-    }
-    bits
-}
-
-/// The environment that matches an MXCSR setting. Conversions never make a
-/// default NaN, so the NaN rule only has to keep payloads, as SSE does.
-fn env(rounding: Rounding, ftz: bool, daz: bool) -> Env {
-    Env::IEEE
-        .with_rounding(rounding)
-        .with_flush_to_zero(ftz)
-        .with_denormals_are_zero(daz)
-        .with_nan(NanRule {
-            propagation: NanPropagation::FirstOperand,
-            default_negative: true,
-        })
+    settings
 }
 
 /// Returns the low-bit patterns of `dropped` discarded bits that decide a
@@ -122,7 +36,7 @@ fn edge_patterns(dropped: u32) -> [u64; 5] {
 }
 
 /// Returns binary64 encodings near every binary32 boundary, and random ones.
-fn binary64_inputs() -> Vec<u64> {
+fn binary64_to_binary32_inputs() -> Vec<u64> {
     let mut random = SplitMix64::new(0x5EE5);
     let mut inputs = vec![
         0,
@@ -134,8 +48,7 @@ fn binary64_inputs() -> Vec<u64> {
     ];
     // Every edge pattern at the exponents where binary32 changes from zero to
     // subnormal, from subnormal to normal, and from normal to overflow.
-    let edges = (-152..=-122).chain(125..=129);
-    for exponent in edges {
+    for exponent in (-152..=-122).chain(125..=129) {
         // A binary32 result keeps 24 bits, and fewer below 2^-126.
         let dropped = (29 + (-126 - exponent).max(0)).min(52);
         let biased = u64::try_from(1023 + exponent).expect("a normal binary64 exponent");
@@ -159,18 +72,22 @@ fn binary64_inputs() -> Vec<u64> {
 
 #[test]
 fn cvtsd2ss_matches_in_every_mode() {
-    let inputs = binary64_inputs();
-    for (rounding, rc) in ROUNDINGS {
-        for (ftz, daz) in [(false, false), (true, false), (false, true), (true, true)] {
-            let control = MASKED | rc | if ftz { FTZ } else { 0 } | if daz { DAZ } else { 0 };
-            let env = env(rounding, ftz, daz);
-            for &input in &inputs {
-                let (expected, expected_flags) = cvtsd2ss(input, control);
-                let (ours, flags): (F32, _) = F64::from_bits(input).convert_with(env);
-                let context = format!("{input:#018x} {rounding:?} ftz {ftz} daz {daz} {flags:?}");
-                assert_eq!(ours.to_bits(), expected, "{context}: result");
-                assert_eq!(mxcsr_flags(flags, daz), expected_flags, "{context}: flags");
-            }
+    let inputs = binary64_to_binary32_inputs();
+    for (control, env, daz) in settings() {
+        for &input in &inputs {
+            let (expected, expected_flags) = x86::cvtsd2ss(input, 0, control);
+            let (ours, flags): (F32, _) = F64::from_bits(input).convert_with(env);
+            let context = format!("{input:#018x} {env:?} {flags:?}");
+            assert_eq!(
+                u64::from(ours.to_bits()),
+                expected & 0xFFFF_FFFF,
+                "{context}: result"
+            );
+            assert_eq!(
+                mxcsr_flags(flags, daz, false),
+                expected_flags,
+                "{context}: flags"
+            );
         }
     }
 }
@@ -188,15 +105,248 @@ fn cvtss2sd_matches_with_and_without_daz() {
     ];
     let samples = (0..200_000).map(|_| u32::try_from(random.next_u64() >> 32).expect("32 bits"));
     let inputs: Vec<u32> = special.into_iter().chain(samples).collect();
-    for daz in [false, true] {
-        let control = MASKED | if daz { DAZ } else { 0 };
-        let env = env(Rounding::NearestEven, false, daz);
+    for (control, env, daz) in settings() {
         for &input in &inputs {
-            let (expected, expected_flags) = cvtss2sd(input, control);
+            let (expected, expected_flags) = x86::cvtss2sd(u64::from(input), 0, control);
             let (ours, flags): (F64, _) = F32::from_bits(input).convert_with(env);
-            let context = format!("{input:#010x} daz {daz} {flags:?}");
+            let context = format!("{input:#010x} {env:?} {flags:?}");
             assert_eq!(ours.to_bits(), expected, "{context}: result");
-            assert_eq!(mxcsr_flags(flags, daz), expected_flags, "{context}: flags");
+            assert_eq!(
+                mxcsr_flags(flags, daz, false),
+                expected_flags,
+                "{context}: flags"
+            );
         }
     }
+}
+
+/// The binary32 special operands: zeros, infinities, NaNs of both kinds and
+/// signs, subnormals, the normal boundaries, and ones.
+const SINGLE_SPECIALS: [u32; 18] = [
+    0x0000_0000,
+    0x8000_0000,
+    0x7F80_0000,
+    0xFF80_0000,
+    0x7FC0_0001,
+    0xFFC0_0002,
+    0x7F80_0003,
+    0xFFA0_0004,
+    0x0000_0001,
+    0x807F_FFFF,
+    0x0080_0000,
+    0x8080_0001,
+    0x7F7F_FFFF,
+    0xFF7F_FFFE,
+    0x3F80_0000,
+    0xBF80_0000,
+    0x4000_0000,
+    0x3F80_0001,
+];
+
+/// Returns binary32 operands: the specials, random values across the range,
+/// and values near the underflow and overflow boundaries.
+fn single_operands(random: &mut SplitMix64, count: usize) -> Vec<u32> {
+    let mut operands = SINGLE_SPECIALS.to_vec();
+    for index in 0..count {
+        let fraction = u32::try_from(random.next_u64() >> 41).expect("23 bits");
+        let exponent = match index % 3 {
+            0 => u32::try_from(random.next_u64() % 256).expect("8 bits"),
+            1 => u32::try_from(random.next_u64() % 40).expect("below 40"),
+            _ => 215 + u32::try_from(random.next_u64() % 40).expect("below 40"),
+        };
+        let sign = u32::try_from(random.next_u64() & 1).expect("one bit") << 31;
+        operands.push(sign | (exponent.min(255) << 23) | fraction);
+    }
+    operands
+}
+
+/// Returns binary64 operands in the same way as `single_operands`.
+fn double_operands(random: &mut SplitMix64, count: usize) -> Vec<u64> {
+    let mut operands: Vec<u64> = vec![
+        0,
+        1 << 63,
+        0x7FF0_0000_0000_0000,
+        0xFFF0_0000_0000_0000,
+        0x7FF8_0000_0000_0001,
+        0xFFF4_0000_0000_0002,
+        0x0000_0000_0000_0001,
+        0x0010_0000_0000_0000,
+        0x7FEF_FFFF_FFFF_FFFF,
+        0x3FF0_0000_0000_0000,
+    ];
+    for index in 0..count {
+        let fraction = random.next_u64() >> 12;
+        let exponent = match index % 3 {
+            0 => random.next_u64() % 2048,
+            1 => random.next_u64() % 80,
+            _ => 1970 + random.next_u64() % 78,
+        };
+        let sign = (random.next_u64() & 1) << 63;
+        operands.push(sign | (exponent << 52) | fraction);
+    }
+    operands
+}
+
+/// Compares one SSE arithmetic instruction with floaty in every setting.
+macro_rules! arithmetic {
+    ($pairs:expr, $alias:ty, $instruction:path, $method:ident) => {
+        for (control, env, daz) in settings() {
+            for &(a, b) in &$pairs {
+                let (expected, expected_flags) = $instruction(a, b, control);
+                let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
+                let nan_operand = x.is_nan() || y.is_nan();
+                let (ours, flags) = x.$method(y, env);
+                let context = format!(
+                    "{} {a:#x} {b:#x} {env:?} {flags:?}",
+                    stringify!($instruction)
+                );
+                assert_eq!(ours.to_bits(), expected, "{context}: result");
+                assert_eq!(
+                    mxcsr_flags(flags, daz, nan_operand),
+                    expected_flags,
+                    "{context}: flags"
+                );
+            }
+        }
+    };
+}
+
+/// Returns operand pairs: every pair of specials, random pairs, and pairs
+/// that cancel in a sum.
+fn pairs<T: Copy + core::ops::BitXor<Output = T>>(
+    operands: &[T],
+    specials: usize,
+    sign: T,
+    flip: T,
+) -> Vec<(T, T)> {
+    let mut pairs = Vec::new();
+    for &a in &operands[..specials] {
+        for &b in &operands[..specials] {
+            pairs.push((a, b));
+        }
+    }
+    for pair in operands[specials..].chunks_exact(2) {
+        pairs.push((pair[0], pair[1]));
+        // The same magnitude with the other sign and a changed low bit.
+        pairs.push((pair[0], pair[0] ^ sign ^ flip));
+    }
+    pairs
+}
+
+#[test]
+fn binary32_arithmetic_matches_in_every_mode() {
+    let mut random = SplitMix64::new(0x0055_0032);
+    let operands = single_operands(&mut random, 40_000);
+    let pairs = pairs(&operands, SINGLE_SPECIALS.len(), 1 << 31, 1);
+    arithmetic!(pairs, F32, x86::addss, add_with);
+    arithmetic!(pairs, F32, x86::subss, sub_with);
+    arithmetic!(pairs, F32, x86::mulss, mul_with);
+    arithmetic!(pairs, F32, x86::divss, div_with);
+    for (control, env, daz) in settings() {
+        for &a in &operands {
+            let (expected, expected_flags) = x86::sqrtss(a, 0, control);
+            let value = F32::from_bits(a);
+            let (ours, flags) = value.sqrt_with(env);
+            let context = format!("sqrtss {a:#x} {env:?} {flags:?}");
+            assert_eq!(ours.to_bits(), expected, "{context}: result");
+            assert_eq!(
+                mxcsr_flags(flags, daz, value.is_nan()),
+                expected_flags,
+                "{context}: flags"
+            );
+        }
+    }
+}
+
+#[test]
+fn binary64_arithmetic_matches_in_every_mode() {
+    let mut random = SplitMix64::new(0x0055_0064);
+    let operands = double_operands(&mut random, 40_000);
+    let pairs = pairs(&operands, 10, 1 << 63, 1);
+    arithmetic!(pairs, F64, x86::addsd, add_with);
+    arithmetic!(pairs, F64, x86::subsd, sub_with);
+    arithmetic!(pairs, F64, x86::mulsd, mul_with);
+    arithmetic!(pairs, F64, x86::divsd, div_with);
+    for (control, env, daz) in settings() {
+        for &a in &operands {
+            let (expected, expected_flags) = x86::sqrtsd(a, 0, control);
+            let value = F64::from_bits(a);
+            let (ours, flags) = value.sqrt_with(env);
+            let context = format!("sqrtsd {a:#x} {env:?} {flags:?}");
+            assert_eq!(ours.to_bits(), expected, "{context}: result");
+            assert_eq!(
+                mxcsr_flags(flags, daz, value.is_nan()),
+                expected_flags,
+                "{context}: flags"
+            );
+        }
+    }
+}
+
+/// `VFMADD213` computes `b * a + c` from its operands `a`, `b`, and `c`, and
+/// takes the first NaN in the order of that expression: `b`, `a`, `c`. So
+/// floaty computes `b * a + c` too. Mapping an instruction's operand order
+/// belongs to a consumer.
+#[test]
+fn fused_multiply_add_matches_in_every_mode() {
+    assert!(
+        std::arch::is_x86_feature_detected!("fma"),
+        "the FMA test needs a host with FMA3"
+    );
+    let mut random = SplitMix64::new(0x00F3_A000);
+    let single = single_operands(&mut random, 30_000);
+    let double = double_operands(&mut random, 30_000);
+    let specials = SINGLE_SPECIALS.len();
+    for (control, env, daz) in settings() {
+        for &a in &single[..specials] {
+            for &b in &single[..specials] {
+                for &c in &single[..specials] {
+                    check_single(a, b, c, control, env, daz);
+                }
+            }
+        }
+        for triple in single[specials..].chunks_exact(3) {
+            check_single(triple[0], triple[1], triple[2], control, env, daz);
+            // An addend that cancels the product.
+            let product = F32::from_bits(triple[0])
+                .mul_with(F32::from_bits(triple[1]), Env::IEEE)
+                .0;
+            check_single(
+                triple[0],
+                triple[1],
+                product.to_bits() ^ (1 << 31),
+                control,
+                env,
+                daz,
+            );
+        }
+        for triple in double.chunks_exact(3) {
+            let (expected, expected_flags) =
+                x86::vfmadd213sd(triple[0], triple[1], triple[2], control);
+            let [a, b, c] = [triple[0], triple[1], triple[2]].map(F64::from_bits);
+            let nan_operand = a.is_nan() || b.is_nan() || c.is_nan();
+            let (ours, flags) = b.mul_add_with(a, c, env);
+            let context = format!("vfmadd213sd {triple:x?} {env:?} {flags:?}");
+            assert_eq!(ours.to_bits(), expected, "{context}: result");
+            assert_eq!(
+                mxcsr_flags(flags, daz, nan_operand),
+                expected_flags,
+                "{context}: flags"
+            );
+        }
+    }
+}
+
+fn check_single(first: u32, second: u32, third: u32, control: u32, env: Env, daz: bool) {
+    let (expected, expected_flags) = x86::vfmadd213ss(first, second, third, control);
+    let [multiplicand, multiplier, addend] = [first, second, third].map(F32::from_bits);
+    let nan_operand = multiplicand.is_nan() || multiplier.is_nan() || addend.is_nan();
+    let (ours, flags) = multiplier.mul_add_with(multiplicand, addend, env);
+    let context = format!("vfmadd213ss {first:#x} {second:#x} {third:#x} {env:?} {flags:?}");
+    assert_eq!(ours.to_bits(), expected, "{context}: result");
+    assert_eq!(
+        mxcsr_flags(flags, daz, nan_operand),
+        expected_flags,
+        "{context}: flags"
+    );
 }

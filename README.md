@@ -6,9 +6,9 @@ floaty emulates floating-point formats and the behavior of the hardware that
 uses them. Every operation gives the same bits on every host. It is a base
 layer for binary lifters, constant folders, and software FPU emulators.
 
-> **Status:** build steps 1 and 2 of 8 are complete: every binary format
-> decodes, classifies, rounds exact values, and converts to every other
-> binary format in every rounding direction. Arithmetic comes in later steps.
+> **Status:** build steps 1 to 3 of 8 are complete: every binary format
+> decodes, classifies, rounds, converts, and computes `+ - * /`, square root,
+> and fused multiply-add, correctly rounded in every rounding direction.
 > [DESIGN.md](DESIGN.md) holds the approved design and the build order.
 
 ## Planned Scope

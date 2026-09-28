@@ -2,6 +2,9 @@
 
 use core::marker::PhantomData;
 
+mod arithmetic;
+mod nan;
+
 use crate::env::{Env, Flags, NanPropagation};
 use crate::exact::{self, Target, Unrounded};
 use crate::float::Class;
@@ -445,7 +448,7 @@ where
                     NanPropagation::DefaultNan => Self::default_nan(env),
                     NanPropagation::SignalingFirst
                     | NanPropagation::FirstOperand
-                    | NanPropagation::X87 => Self::encode(Unpacked::Nan {
+                    | NanPropagation::LargerSignificand => Self::encode(Unpacked::Nan {
                         negative,
                         signaling: false,
                         payload: align(payload, payload_bits, Self::PAYLOAD_BITS),
@@ -538,6 +541,38 @@ where
         env: &Env,
     ) -> (Self::Bits, Flags) {
         let (bits, flags) = Layout::<E, Enc, W>::convert_from(value, payload_bits, env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn add(left: Self::Bits, right: Self::Bits, subtract: bool, env: &Env) -> (Self::Bits, Flags) {
+        let (bits, flags) =
+            Layout::<E, Enc, W>::add(left.to_limbs(), right.to_limbs(), subtract, env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn mul(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::mul(left.to_limbs(), right.to_limbs(), env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn div(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::div(left.to_limbs(), right.to_limbs(), env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn sqrt(value: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::sqrt(value.to_limbs(), env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn mul_add(
+        left: Self::Bits,
+        right: Self::Bits,
+        addend: Self::Bits,
+        env: &Env,
+    ) -> (Self::Bits, Flags) {
+        let (bits, flags) =
+            Layout::<E, Enc, W>::mul_add(left.to_limbs(), right.to_limbs(), addend.to_limbs(), env);
         (Self::Bits::from_limbs(bits), flags)
     }
 }

@@ -15,12 +15,24 @@
 //! assert_eq!(F8E4M3::from_bits(0x7E).classify(), Class::Normal);
 //! ```
 //!
+//! The operators `+`, `-`, `*`, and `/` round with the default mode of the
+//! type. Each operation also has a `_with` form that takes a [`Rounding`] or
+//! an [`Env`] and returns the [`Flags`]:
+//!
+//! ```
+//! use floaty::{F32, Flags, Rounding};
+//!
+//! let (one, tiny) = (F32::from_bits(0x3F80_0000), F32::from_bits(0x3380_0000));
+//! assert_eq!((one + tiny).to_bits(), 0x3F80_0000);
+//! let (sum, flags) = one.add_with(tiny, Rounding::TowardPositive);
+//! assert_eq!(sum.to_bits(), 0x3F80_0001);
+//! assert!(flags.contains(Flags::INEXACT));
+//! ```
+//!
 //! [`Float::round`] rounds an exact value to a format, and
-//! [`Float::convert`] converts between formats. Each type has a default mode,
-//! and a call can override its [`Env`] and get the [`Flags`] back.
+//! [`Float::convert`] converts between formats.
 //!
 //! The crate follows the build order in `DESIGN.md` at the repository root.
-//! Arithmetic comes in later steps.
 
 #![no_std]
 

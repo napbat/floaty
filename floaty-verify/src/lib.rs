@@ -9,7 +9,11 @@
 //! need a C toolchain. Run it with `cargo test -p floaty-verify`.
 
 pub mod apfloat;
+pub mod arithmetic;
 pub mod encodings;
 pub mod mpfr;
 pub mod random;
 pub mod shape;
+pub mod testfloat;
+#[cfg(target_arch = "x86_64")]
+pub mod x86;

@@ -1,7 +1,7 @@
 # floaty Design
 
-Status: design approved on 2026-09-27. Build steps 1, encoding, and 2,
-rounding, are complete.
+Status: design approved on 2026-09-27. Build steps 1, encoding, 2, rounding,
+and 3, arithmetic, are complete.
 
 This file is the source of truth for every design decision in floaty. Update
 it in the same change that alters a decision.
@@ -237,13 +237,15 @@ pub struct Env {
     pub saturate: bool,           // FP8 saturating overflow
 }
 
+#[non_exhaustive]
 pub struct NanRule {
-    pub propagation: NanPropagation, // SignalingFirst, FirstOperand, X87, or DefaultNan
+    pub propagation: NanPropagation, // SignalingFirst, FirstOperand, LargerSignificand, or DefaultNan
     pub default_negative: bool,      // the sign of the default NaN
+    pub invalid_product: InvalidProduct, // Signals or YieldsToNan: fma 0 * inf + NaN
 }
 ```
 
-`Env`, `NanRule`, `Tininess`, `Override`, and `Mode` live in the module
+`Env`, `NanRule`, `InvalidProduct`, `Tininess`, `Override`, and `Mode` live in the module
 `floaty::env`. The crate root re-exports `Env`, `Flags`, `Rounding`, and the
 module `mode`.
 
@@ -258,7 +260,19 @@ module `mode`.
   algorithms use `ToOdd`. The names are provisional.
 - `NanRule` selects the NaN that an operation returns when an input is a NaN,
   made quiet. It also sets the sign of the default NaN of an invalid
-  operation. The default NaN is quiet and has a zero payload.
+  operation. The default NaN is quiet and has a zero payload. `NanRule` is
+  `#[non_exhaustive]`: build it with `NanRule::new(propagation)` and the
+  builder methods `with_default_negative` and `with_invalid_product`.
+- `invalid_product` decides a fused multiply-add whose product is the invalid
+  `0 * inf` and whose addend is a NaN. IEEE 754-2019, section 7.2 (c), lets
+  the implementation decide whether a quiet NaN addend signals invalid there.
+  `Signals`, the default, signals invalid and makes the product a default NaN
+  that meets the addend under the propagation rule, as SoftFloat does. With
+  `SignalingFirst` this gives the result of the Arm `FPMulAdd` pseudocode.
+  `YieldsToNan` gives the NaN addend precedence and signals invalid only for
+  a signaling addend, as x86 does. The rule is a field of its own, not a part
+  of a propagation rule, because implementations combine the two
+  independently.
 - `precision` rounds the significand to fewer bits and keeps the exponent
   range of the format, as x87 precision control does. The format then acts
   as a `p`-bit format with the same exponent range: a tiny result rounds at
@@ -288,9 +302,9 @@ A mode names one constant `Env`, so a type can carry a default behavior.
 The modes live in the module `floaty::mode`, because the encoding markers
 `Ieee` and `X87` already use those names at the crate root. `mode::Ieee` is
 the default mode. It rounds to nearest even, does not flush, and detects
-tininess after rounding. Its NaN rule is `NanRule::ARM`, chosen
-in step 2: a signaling NaN before a quiet NaN, then the earlier operand, and
-a positive default NaN. A conversion keeps the high-order payload bits.
+tininess after rounding. Its NaN rule, chosen in step 2, is
+`NanRule::new(NanPropagation::SignalingFirst)`: a signaling NaN before a
+quiet NaN, then the earlier operand, and a positive default NaN. A conversion keeps the high-order payload bits.
 SoftFloat's ARM-VFPv2 specialization follows the same rule, so TestFloat
 checks the default mode directly.
 
@@ -444,6 +458,36 @@ trait of every `Float` type.
   reference gives flags for FP8 conversions, so these flags are a decision of
   this design.
 
+### Arithmetic
+
+`add_with`, `sub_with`, `mul_with`, `div_with`, `sqrt_with`, and
+`mul_add_with` take an override and return the flags. The operators `+`,
+`-`, `*`, and `/`, and `sqrt` and `mul_add`, use the default mode and drop the
+flags. Each operation follows IEEE 754 for special values and rounds once.
+
+- A NaN operand gives the NaN that the rule selects, made quiet. An
+  unsupported x87 operand signals invalid and gives the default NaN, before
+  any NaN operand, as the Intel SDM Volume 1, section 4.9.2, orders them.
+- An exact zero sum of values with different signs is `+0`, or `-0` when
+  rounding toward negative.
+- A division by zero in a format without an infinity gives the NaN, or the
+  largest finite value when `saturate` is set, and signals divide-by-zero.
+- `mul_add` selects a NaN in SoftFloat's order: the NaN of the two factors
+  first, then the NaN of that result and the addend. With `FirstOperand` the
+  order gives the first NaN of the three operands, as x86 does. The
+  `invalid_product` field of the NaN rule decides `0 * inf + NaN`. TestFloat
+  checks `Signals` with every propagation rule. The processor checks
+  `YieldsToNan` with `FirstOperand`. Real ARM hardware takes the addend
+  first among NaN operands; an ARM preset needs that order.
+- x86 does not report DE for every subnormal operand. It reports DE only when
+  DAZ is off and no NaN operand, invalid operation, or divide-by-zero occurs,
+  by the precedence of the Intel SDM Volume 1, section 4.9.2. An x87 store
+  never reports DE. `DENORMAL_INPUT` stays a fact about the operands; a
+  consumer maps it to the DE flag of each instruction.
+- An instruction maps its operands to the operation. For example,
+  `VFMADD213SS x, y, z` computes `y * x + z` and takes NaNs in that order, so
+  it is `y.mul_add_with(x, z, env)`.
+
 ### Intermediate Sizes
 
 Each operation reduces its intermediate result before it rounds. Two
@@ -452,11 +496,21 @@ can need millions of bits.
 
 | Operation | Intermediate |
 | --- | --- |
-| Add and subtract | `p + 3` bits and a sticky bit |
+| Add and subtract | Both operands exact in twice the storage width, or the lower operand shifted right with its lost bits in the lowest bit |
 | Multiply | The exact `2p`-bit product |
 | Divide and square root | `p + 2` bits, with a nonzero remainder as the sticky bit |
 | Fused multiply-add | The exact product, and the addend aligned with a sticky bit |
 | Conversion | The exact source significand |
+
+The engine keeps these values in a limb array of twice the storage width.
+Stable Rust cannot name `[u64; 2 * N]` for a generic `N`, so a sealed table,
+`Widen`, names the double width of each limb count from 1 to 8. The design
+first proposed separate high and low halves; the table keeps one value type
+for the rounding routine. An aligned sum keeps both operands exact when the
+double width holds them. Otherwise the lower operand is at least four times
+smaller, and it shifts right with its lost bits in the lowest bit, which stays
+far below the rounding position. Division and square root compute bit by bit;
+step 6 decides faster algorithms.
 
 ## Operations
 
@@ -501,9 +555,10 @@ payload. A canonical `NanRule` ignores payloads, as RISC-V does.
 
 ## Engine and Performance
 
-- The engine computes on `[u64; N]` limbs. A widening multiply returns the
-  high and low halves as two `[u64; N]` values. This avoids a `[u64; 2 * N]`
-  type, which needs the unstable `generic_const_exprs` feature.
+- The engine computes on `[u64; N]` limbs. A widening multiply returns a
+  `[u64; 2 * N]` value that the sealed `Widen` table names for each `N` from 1
+  to 8. A generic `[u64; 2 * N]` type needs the unstable `generic_const_exprs`
+  feature, and the table avoids it.
 - Start with one generic path. For `N` of 1 or 2 the compiler unrolls the
   loops. Specialize a format only when a benchmark shows a gap.
 - Step 6 evaluates these fast paths:
@@ -536,7 +591,13 @@ an oracle.
 | binary16, binary32, binary64, x87 extended, binary128 | Berkeley TestFloat and SoftFloat Release 3e, as git submodules. The ARM-VFPv2 NaN specialization matches the default mode. | Every conversion between these formats at TestFloat level 2, in every rounding direction including round to odd, with both tininess rules: result bits and the five IEEE flags. Later steps add arithmetic, integer conversions, and x87 precision control at 32, 64, and 80 bits. |
 | Rounding of every binary format: binary16 to binary512, bfloat16, TF32, the FP8 formats, and x87 with precision control at 24, 53, and 64 bits | MPFR, through the `rug` crate | Exact inputs of up to 500 bits near every boundary of the precision in use, in every direction, with both tininess rules, flush-to-zero, saturation, and precision limits: the value, the canonical form, and every flag. An ignored sweep rounds every significand below 2^8 at every exponent to each FP8 format. |
 | Conversions from bfloat16, TF32, the FP8 formats, binary256, and binary512 | MPFR for the finite values, and the conversion rules of this design for the special values | Every encoding of the 8- and 16-bit sources, and boundary and random wider ones, in six behaviors |
-| The `DefaultNan` rule | TestFloat with SoftFloat's ARM-VFPv2-defaultNaN specialization | Every TestFloat conversion case with that rule |
+| The `DefaultNan` rule | TestFloat with SoftFloat's ARM-VFPv2-defaultNaN specialization | Every TestFloat conversion and arithmetic case with that rule |
+| Arithmetic of binary16, binary32, binary64, x87 extended, and binary128 | TestFloat | `add`, `sub`, `mul`, and `div` at level 1 and `sqrt` at level 2, in every direction with both tininess rules, and for x87 at precision control 32, 64, and 80. The first million level 1 `mulAdd` cases of each format in the normal run, and all 318 million in an ignored sweep. |
+| Arithmetic of the FP8 formats, bfloat16, TF32, binary256, binary512, x87 extended with precision control, and a layout whose exponent field crosses a limb boundary | MPFR computes each result at 64 extra bits with a sticky bit; the special values follow IEEE 754 and this design | Every FP8 operand pair and operand for `add`, `sub`, `mul`, `div`, and `sqrt`, random `mul_add` triples, triples whose addend cancels the product, and every pair and triple of special values, in twelve behaviors, one of them with the x86 NaN rule and `YieldsToNan`. A NaN result must be quiet and must be a NaN operand, with its sign and payload, or the default NaN of an invalid operation. x87 arithmetic and `mul_add` at precision 24, 53, and 64 in every direction. |
+| FP8 arithmetic, rounding to nearest even | A table that `ml_dtypes` generates: it computes in binary32 and rounds again, which gives the correctly rounded result at FP8 precision | Every operand pair for `add`, `sub`, `mul`, and `div`, and every operand for `sqrt`, with the `FirstOperand` rule: result bits, including the NaN of an overflow or a division by zero. `ml_dtypes` does not keep the sign of a NaN operand, so a result with a NaN operand only has to be a NaN. |
+| The `LargerSignificand` and `FirstOperand` NaN rules | TestFloat with SoftFloat's 8086 and 8086-SSE specializations | Every TestFloat arithmetic case at the default behavior. The 8086-SSE run skips x87 extended precision, whose code there is the 8086 code. SoftFloat follows `InvalidProduct::Signals` for every rule. |
+| SSE arithmetic | The host processor: `ADDSS`, `SUBSS`, `MULSS`, `DIVSS`, `SQRTSS`, their `SD` forms, and `VFMADD213SS` and `VFMADD213SD` | Every MXCSR setting: result bits and the IE, DE, ZE, OE, UE, and PE flags, with the `FirstOperand` rule, a negative default NaN, and `YieldsToNan` |
+| x87 arithmetic | The host processor: `FADD`, `FSUB`, `FMUL`, `FDIV`, and `FSQRT` | Every rounding control at precision control 24, 53, and 64, including unsupported operands and pseudo-denormals: result bits, IE, DE, ZE, OE, UE, PE, and C1 |
 | SSE conversions | The host processor: `CVTSD2SS` and `CVTSS2SD` under MXCSR | Every MXCSR rounding direction with FTZ and DAZ on and off, including exact, halfway, and near-halfway results at every binary32 boundary: result bits and the IE, DE, OE, UE, and PE flags |
 | x87 stores | The host processor: `FLD` and `FSTP` to 64 and 32 bits | Every rounding control, including unsupported encodings, pseudo-denormals, and exact, halfway, and near-halfway results at every binary32 and binary64 boundary: result bits, IE, OE, UE, PE, and the C1 round-up bit. `FSTP` never reports DE. |
 | Conversion of every binary16 encoding to the FP8 formats, rounding to nearest even | A table that `ml_dtypes` generates, in `floaty-verify/data` | Result bits, and NaN and sign for a NaN result |
@@ -555,6 +616,12 @@ an oracle.
   overflow encodings are small wrappers around the MPFR results.
 - TestFloat and SoftFloat after Release 3e add bfloat16 support that does not
   build with the ARM specialization. The submodules stay at Release 3e.
+- SoftFloat's ARM specialization does not quiet a signaling x87 NaN. The x87
+  tests correct the expected NaN; see
+  `docs/anomalies/softfloat-arm-extf80-nan-quieting.md`.
+- The workspace manifest optimizes `floaty-verify` in test builds, because
+  the normal run makes tens of millions of oracle comparisons. The whole run
+  takes about 40 seconds.
 - `ml_dtypes` gives every NaN a canonical payload, so its conversion table
   checks only NaN and sign for a NaN result.
 - Test every FP8 input pair for every operation and rounding direction in the
@@ -627,8 +694,8 @@ confirms them on Rust 1.85 through the minimum-version gate.
   width table, covers every width. An unsupported width or an exponent too
   wide for its width fails to compile.
 - `a + b` with operands of different modes fails to compile.
-- A widening multiply over `[u64; N]` that returns two halves needs no
-  unstable features.
+- A widening multiply over `[u64; N]` needs no unstable features when a
+  table of trait implementations names the double-width type for each `N`.
 - A `const fn` can read an associated constant of a generic type and do
   const-generic limb arithmetic, but cannot call a trait method. This is why
   the engine is not `const`.

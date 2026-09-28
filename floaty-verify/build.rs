@@ -12,12 +12,14 @@ use std::process::Command;
 
 /// The SoftFloat NaN specializations, and the environment variable that
 /// names the generator of each one.
-const SPECIALIZATIONS: [(&str, &str); 2] = [
+const SPECIALIZATIONS: [(&str, &str); 4] = [
     ("ARM-VFPv2", "FLOATY_TESTFLOAT_GEN_ARM"),
     (
         "ARM-VFPv2-defaultNaN",
         "FLOATY_TESTFLOAT_GEN_ARM_DEFAULT_NAN",
     ),
+    ("8086", "FLOATY_TESTFLOAT_GEN_X87"),
+    ("8086-SSE", "FLOATY_TESTFLOAT_GEN_SSE"),
 ];
 
 /// The SoftFloat and TestFloat build directory for this host.

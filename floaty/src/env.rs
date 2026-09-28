@@ -43,16 +43,41 @@ pub enum Tininess {
 #[non_exhaustive]
 pub enum NanPropagation {
     /// A signaling NaN before a quiet NaN, and the earlier operand among NaNs
-    /// of one kind. ARM uses this rule when its default-NaN mode is off.
+    /// of one kind. ARM uses this rule for two operands when its default-NaN
+    /// mode is off.
     SignalingFirst,
     /// The first NaN operand. x86 SSE uses this rule.
     FirstOperand,
     /// A quiet NaN before a signaling NaN, and the larger significand among
-    /// NaNs of one kind. The x87 unit uses this rule.
-    X87,
+    /// NaNs of one kind. Between equal significands the positive NaN wins.
+    /// The x87 unit uses this rule.
+    LargerSignificand,
     /// Always the default NaN. The rule drops the operand payloads. RISC-V
     /// uses this rule, and ARM uses it when its default-NaN mode is on.
     DefaultNan,
+}
+
+/// What a fused multiply-add does when its product is the invalid `0 * inf`
+/// and its addend is a NaN.
+///
+/// IEEE 754-2019, section 7.2 (c), lets the implementation decide whether a
+/// quiet NaN addend signals invalid here. A signaling NaN addend always
+/// signals invalid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum InvalidProduct {
+    /// The invalid product signals invalid and gives the default NaN. The
+    /// propagation rule then selects the result from that NaN, as the first
+    /// operand, and the addend. SoftFloat uses this rule. With
+    /// [`NanPropagation::SignalingFirst`] it gives the result of the
+    /// `FPMulAdd` pseudocode in the Arm Architecture Reference Manual.
+    Signals,
+    /// The NaN addend takes precedence over the invalid product. The
+    /// propagation rule selects the result from the addend alone, and only a
+    /// signaling addend signals invalid. x86 uses this rule: a NaN operand
+    /// comes before an invalid operation in the Intel SDM Volume 1, section
+    /// 4.9.2.
+    YieldsToNan,
 }
 
 /// The NaN that an operation returns.
@@ -61,21 +86,49 @@ pub enum NanPropagation {
 /// [`propagation`](Self::propagation) selects, made quiet. An invalid
 /// operation returns the default NaN: a quiet NaN with a zero payload and the
 /// sign that [`default_negative`](Self::default_negative) sets.
+///
+/// Build a `NanRule` with [`NanRule::new`] and the builder methods. The struct
+/// is `#[non_exhaustive]`, so a new field does not break callers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct NanRule {
     /// Which input NaN an operation returns.
     pub propagation: NanPropagation,
     /// The sign of the default NaN.
     pub default_negative: bool,
+    /// What a fused multiply-add does for `0 * inf + NaN`.
+    pub invalid_product: InvalidProduct,
 }
 
 impl NanRule {
-    /// The rule of ARM with its default-NaN mode off: a signaling NaN first,
-    /// then the earlier operand, and a positive default NaN.
-    pub const ARM: Self = Self {
-        propagation: NanPropagation::SignalingFirst,
-        default_negative: false,
-    };
+    /// Returns a rule with this propagation, a positive default NaN, and
+    /// [`InvalidProduct::Signals`].
+    #[must_use]
+    pub const fn new(propagation: NanPropagation) -> Self {
+        Self {
+            propagation,
+            default_negative: false,
+            invalid_product: InvalidProduct::Signals,
+        }
+    }
+
+    /// Returns a copy with another sign of the default NaN.
+    #[must_use]
+    pub const fn with_default_negative(self, default_negative: bool) -> Self {
+        Self {
+            default_negative,
+            ..self
+        }
+    }
+
+    /// Returns a copy with another rule for `0 * inf + NaN`.
+    #[must_use]
+    pub const fn with_invalid_product(self, invalid_product: InvalidProduct) -> Self {
+        Self {
+            invalid_product,
+            ..self
+        }
+    }
 }
 
 /// The behavior of an operation: everything that changes the bits of its
@@ -107,13 +160,15 @@ pub struct Env {
 
 impl Env {
     /// The IEEE 754 default behavior: round to nearest even, no flushing,
-    /// tininess after rounding, and the [`NanRule::ARM`] NaN rule.
+    /// tininess after rounding, and the
+    /// [`SignalingFirst`](NanPropagation::SignalingFirst) NaN rule with a
+    /// positive default NaN.
     pub const IEEE: Self = Self {
         rounding: Rounding::NearestEven,
         flush_to_zero: false,
         denormals_are_zero: false,
         tininess: Tininess::AfterRounding,
-        nan: NanRule::ARM,
+        nan: NanRule::new(NanPropagation::SignalingFirst),
         precision: None,
         saturate: false,
     };

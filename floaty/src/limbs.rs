@@ -3,6 +3,7 @@
 //! Limb 0 holds the least significant 64 bits. A bit position counts from the
 //! least significant bit of limb 0.
 
+use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::hash::Hash;
 
@@ -40,6 +41,22 @@ pub trait Limbs: Copy + Eq + Hash + Debug {
     /// Adds one, and wraps to zero above the largest value.
     #[must_use]
     fn increment(self) -> Self;
+
+    /// Adds `other`. The sum must fit.
+    #[must_use]
+    fn add(self, other: Self) -> Self;
+
+    /// Subtracts `other`, which must not be larger.
+    #[must_use]
+    fn sub(self, other: Self) -> Self;
+
+    /// Compares two values.
+    fn compare(&self, other: &Self) -> Ordering;
+
+    /// Shifts right by `count` bits and sets the lowest bit when a shifted-out
+    /// bit is set. The lowest bit then marks a value that is not exact.
+    #[must_use]
+    fn shr_jam(self, count: u32) -> Self;
 
     /// Returns a copy with the bit at `position` set.
     #[must_use]
@@ -149,6 +166,40 @@ impl<const N: usize> Limbs for [u64; N] {
         self
     }
 
+    fn add(mut self, other: Self) -> Self {
+        let mut carry = false;
+        for (limb, &addend) in self.iter_mut().zip(&other) {
+            let (sum, first) = limb.overflowing_add(addend);
+            let (sum, second) = sum.overflowing_add(u64::from(carry));
+            *limb = sum;
+            carry = first || second;
+        }
+        debug_assert!(!carry, "the sum fits");
+        self
+    }
+
+    fn sub(mut self, other: Self) -> Self {
+        let mut borrow = false;
+        for (limb, &subtrahend) in self.iter_mut().zip(&other) {
+            let (difference, first) = limb.overflowing_sub(subtrahend);
+            let (difference, second) = difference.overflowing_sub(u64::from(borrow));
+            *limb = difference;
+            borrow = first || second;
+        }
+        debug_assert!(!borrow, "the subtrahend is not larger");
+        self
+    }
+
+    fn compare(&self, other: &Self) -> Ordering {
+        self.iter().rev().cmp(other.iter().rev())
+    }
+
+    fn shr_jam(self, count: u32) -> Self {
+        let lost = self.any_below(count);
+        let shifted = self.shr(count);
+        if lost { shifted.with_bit(0) } else { shifted }
+    }
+
     fn with_bit(mut self, position: u32) -> Self {
         let (index, offset) = split(position);
         self[index] |= 1 << offset;
@@ -221,6 +272,106 @@ impl<const N: usize> Limbs for [u64; N] {
     }
 }
 
+/// A limb array with a double-width type for products.
+///
+/// Stable Rust cannot name `[u64; 2 * N]` for a generic `N`, so this table
+/// names the double width of each limb count that a format uses.
+pub trait Widen: Limbs {
+    /// The limb array of twice the width.
+    type Double: Limbs;
+
+    /// Returns the full product.
+    fn widening_mul(self, other: Self) -> Self::Double;
+}
+
+macro_rules! widen {
+    ($($limbs:literal => $double:literal),*) => {
+        $(
+            impl Widen for [u64; $limbs] {
+                type Double = [u64; $double];
+
+                fn widening_mul(self, other: Self) -> [u64; $double] {
+                    multiply(&self, &other)
+                }
+            }
+        )*
+    };
+}
+
+widen!(1 => 2, 2 => 4, 3 => 6, 4 => 8, 5 => 10, 6 => 12, 7 => 14, 8 => 16);
+
+/// Returns the full product of two limb arrays. `D` must be twice `N`.
+fn multiply<const N: usize, const D: usize>(left: &[u64; N], right: &[u64; N]) -> [u64; D] {
+    debug_assert!(D == 2 * N, "the product has twice the limbs");
+    let mut product = [0_u64; D];
+    // The schoolbook product adds each partial product into two limbs, so the
+    // loops index the result.
+    for (index, &multiplicand) in left.iter().enumerate() {
+        let mut carry = 0_u64;
+        for (offset, &multiplier) in right.iter().enumerate() {
+            let slot = &mut product[index + offset];
+            let wide = u128::from(multiplicand) * u128::from(multiplier)
+                + u128::from(*slot)
+                + u128::from(carry);
+            let [low, high] = split_u128(wide);
+            *slot = low;
+            carry = high;
+        }
+        product[index + N] = carry;
+    }
+    product
+}
+
+/// Splits a `u128` into its low and high 64 bits.
+#[inline]
+fn split_u128(value: u128) -> [u64; 2] {
+    let low = u64::try_from(value & u128::from(u64::MAX)).expect("the mask keeps 64 bits");
+    let high = u64::try_from(value >> 64).expect("the shift keeps 64 bits");
+    [low, high]
+}
+
+/// Divides `numerator` by a nonzero `divisor`. Returns the quotient and the
+/// remainder.
+pub fn divide<L: Limbs>(numerator: L, divisor: L) -> (L, L) {
+    debug_assert!(!divisor.is_zero(), "the divisor is not zero");
+    let mut quotient = L::ZERO;
+    let mut remainder = L::ZERO;
+    for position in (0..numerator.bit_length()).rev() {
+        remainder = remainder.shl(1);
+        if numerator.bit(position) {
+            remainder = remainder.with_bit(0);
+        }
+        if remainder.compare(&divisor) != Ordering::Less {
+            remainder = remainder.sub(divisor);
+            quotient = quotient.with_bit(position);
+        }
+    }
+    (quotient, remainder)
+}
+
+/// Returns the integer square root of `value`, rounded down, and `true` when
+/// the root is not exact.
+pub fn square_root<L: Limbs>(value: L) -> (L, bool) {
+    let mut remainder = value;
+    let mut root = L::ZERO;
+    let length = value.bit_length();
+    if length == 0 {
+        return (root, false);
+    }
+    // The highest power of four at or below the value.
+    let mut bit = L::ZERO.with_bit((length - 1) & !1);
+    while !bit.is_zero() {
+        let trial = root.add(bit);
+        root = root.shr(1);
+        if remainder.compare(&trial) != Ordering::Less {
+            remainder = remainder.sub(trial);
+            root = root.add(bit);
+        }
+        bit = bit.shr(2);
+    }
+    (root, !remainder.is_zero())
+}
+
 /// Splits a bit position into a limb index and a bit offset in that limb.
 #[inline]
 fn split(position: u32) -> (usize, u32) {
@@ -236,7 +387,7 @@ fn mask(width: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::Limbs;
+    use super::{Limbs, Widen};
 
     #[test]
     fn field_reads_across_a_limb_boundary() {
@@ -299,6 +450,38 @@ mod tests {
         assert!(!value.any_below(4) && value.any_below(5) && value.any_below(500));
         assert!(!value.bit(128) && !value.bit(4000));
         assert_eq!(<[u64; 5]>::BITS, 320);
+    }
+
+    #[test]
+    fn add_sub_and_compare_carry_across_limbs() {
+        let a: [u64; 2] = [u64::MAX, 1];
+        let b: [u64; 2] = [1, 0];
+        assert_eq!(a.add(b), [0, 2]);
+        assert_eq!([0, 2].sub(b), a);
+        assert_eq!(a.compare(&b), core::cmp::Ordering::Greater);
+        assert_eq!(b.compare(&a), core::cmp::Ordering::Less);
+        assert_eq!(a.compare(&a), core::cmp::Ordering::Equal);
+        assert_eq!([0b1011_u64].shr_jam(2), [0b11]);
+        assert_eq!([0b1000_u64].shr_jam(2), [0b10]);
+        assert_eq!([1_u64, 0].shr_jam(200), [1, 0]);
+    }
+
+    #[test]
+    fn widening_multiply_divide_and_square_root() {
+        let product = [u64::MAX, u64::MAX].widening_mul([u64::MAX, u64::MAX]);
+        // (2^128 - 1)^2 = 2^256 - 2^129 + 1.
+        assert_eq!(product, [1, 0, u64::MAX - 1, u64::MAX]);
+        let (quotient, remainder) = super::divide([100_u64, 0], [7, 0]);
+        assert_eq!((quotient, remainder), ([14, 0], [2, 0]));
+        let (quotient, remainder) = super::divide(product, [u64::MAX, u64::MAX, 0, 0]);
+        assert_eq!((quotient, remainder), ([u64::MAX, u64::MAX, 0, 0], [0; 4]));
+        assert_eq!(super::square_root([144_u64]), ([12], false));
+        assert_eq!(super::square_root([145_u64]), ([12], true));
+        assert_eq!(super::square_root([0_u64, 1]), ([1 << 32, 0], false));
+        assert_eq!(
+            super::square_root(product),
+            ([u64::MAX, u64::MAX, 0, 0], false)
+        );
     }
 
     #[test]

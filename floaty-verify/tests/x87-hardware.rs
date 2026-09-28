@@ -1,15 +1,14 @@
-//! Compares x87 classification with the `FXAM` instruction of the host
-//! processor, which the Intel SDM Volume 2A describes. The test runs only on
-//! x86-64 hosts.
+//! Compares x87 classification, stores, and arithmetic with the x87 unit of
+//! the host processor. The test runs only on x86-64 hosts.
 
 #![cfg(target_arch = "x86_64")]
 
-use core::arch::asm;
+use core::num::NonZeroU32;
 
-use floaty::env::{NanPropagation, NanRule};
-use floaty::{Class, Env, F32, F64, F80, Flags, Rounding};
+use floaty::{Class, Env, F32, F64, F80, Flags};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};
 use floaty_verify::random::SplitMix64;
+use floaty_verify::x86::{self, X87_MASKED, X87_PRECISIONS, X87_ROUNDINGS, x87_env, x87_status};
 
 /// The classes that `FXAM` reports in condition codes C3, C2, and C0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,27 +21,9 @@ enum Fxam {
     Denormal,
 }
 
-/// Loads an 80-bit encoding onto the x87 stack and examines it with `FXAM`.
 /// Returns the class and the sign, which `FXAM` reports in C1.
 fn fxam(bits: u128) -> (Fxam, bool) {
-    let bytes = bits.to_le_bytes();
-    let status: u16;
-    // SAFETY: the code reads 10 bytes from `bytes`, which holds 16. It pushes
-    // one value onto the x87 stack and pops it, so the stack is empty on exit,
-    // as the ABI requires. `FLD` of an 80-bit operand raises no exception.
-    unsafe {
-        asm!(
-            "fld tbyte ptr [{source}]",
-            "fxam",
-            "fnstsw ax",
-            "fstp st(0)",
-            source = in(reg) bytes.as_ptr(),
-            out("ax") status,
-            out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
-            out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
-            options(nostack, readonly),
-        );
-    }
+    let status = x86::fxam(bits);
     let flag = |bit: u16| (status >> bit) & 1 == 1;
     let class = match (flag(14), flag(10), flag(8)) {
         (false, false, false) => Fxam::Unsupported,
@@ -90,45 +71,6 @@ fn every_boundary_and_random_encoding_matches_fxam() {
     assert_eq!(seen.len(), 6, "the inputs reach every FXAM class: {seen:?}");
 }
 
-/// Reads the x87 control word.
-fn control_word() -> u16 {
-    let mut word = 0_u16;
-    // SAFETY: `FNSTCW` writes two bytes to `word` and changes no other state.
-    unsafe {
-        asm!(
-            "fnstcw word ptr [{word}]",
-            word = in(reg) &raw mut word,
-            options(nostack),
-        );
-    }
-    word
-}
-
-/// Multiplies an 80-bit encoding by 1.0 on the x87 unit and returns the
-/// 80-bit result that `FSTP` stores.
-fn times_one(bits: u128) -> u128 {
-    let input = bits.to_le_bytes();
-    let mut output = [0_u8; 16];
-    // SAFETY: the code reads 10 bytes from `input` and writes 10 bytes to
-    // `output`, and both hold 16. It pushes two values and pops both, so the
-    // x87 stack is empty on exit, as the ABI requires.
-    unsafe {
-        asm!(
-            "fld tbyte ptr [{source}]",
-            "fld1",
-            "fmulp",
-            "fstp tbyte ptr [{target}]",
-            "fnclex",
-            source = in(reg) input.as_ptr(),
-            target = in(reg) output.as_mut_ptr(),
-            out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
-            out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
-            options(nostack),
-        );
-    }
-    u128::from_le_bytes(output) & ((1 << 80) - 1)
-}
-
 /// A pseudo-denormal has the value of the normal encoding with exponent field
 /// 1 (Intel SDM Volume 1, section 8.2.2). Multiplying by 1.0 makes the
 /// processor store that normal encoding, which gives an independent value.
@@ -136,7 +78,7 @@ fn times_one(bits: u128) -> u128 {
 fn pseudo_denormals_have_the_value_that_the_processor_computes() {
     // Round to nearest with 64-bit precision, every exception masked.
     assert_eq!(
-        control_word(),
+        x86::control_word(),
         0x037F,
         "the thread has the default x87 control word"
     );
@@ -145,7 +87,7 @@ fn pseudo_denormals_have_the_value_that_the_processor_computes() {
         let fraction = random.next_u64() | (1 << 63);
         let sign = u128::from(random.next_u64() & 1) << 79;
         let pseudo = sign | u128::from(fraction);
-        let normal = times_one(pseudo);
+        let (normal, _) = x86::times_one(pseudo, 0x037F);
         let ours = F80::from_bits(pseudo);
         let theirs = F80::from_bits(normal);
         assert_eq!(theirs.classify(), Class::Normal, "{normal:#x} is normal");
@@ -154,104 +96,18 @@ fn pseudo_denormals_have_the_value_that_the_processor_computes() {
     }
 }
 
-/// The rounding directions and their x87 rounding-control field.
-const ROUNDINGS: [(Rounding, u16); 4] = [
-    (Rounding::NearestEven, 0),
-    (Rounding::TowardNegative, 1 << 10),
-    (Rounding::TowardPositive, 2 << 10),
-    (Rounding::TowardZero, 3 << 10),
-];
-
-/// Loads an 80-bit encoding with `FLD` and stores it with `FSTP` to 64 bits,
-/// or to 32 bits when `single` is set, under the control word `control`.
-/// Returns the stored bits and the status word.
-fn store(bits: u128, control: u16, single: bool) -> (u64, u16) {
-    let input = bits.to_le_bytes();
-    let mut output = 0_u64;
-    let mut saved = 0_u16;
-    let status: u16;
-    // SAFETY: the code saves the control word, loads `control`, clears the
-    // exception flags, pushes one value and pops it, clears the flags again,
-    // and restores the control word. It reads 10 bytes of `input`, which holds 16, and writes at most 8
-    // bytes to `output`. The x87 stack is empty on exit.
-    unsafe {
-        if single {
-            asm!(
-                "fnstcw word ptr [{saved}]",
-                "fldcw word ptr [{control}]",
-                "fnclex",
-                "fld tbyte ptr [{source}]",
-                "fstp dword ptr [{target}]",
-                "fnstsw ax",
-                "fnclex",
-                "fldcw word ptr [{saved}]",
-                saved = in(reg) &raw mut saved,
-                control = in(reg) &raw const control,
-                source = in(reg) input.as_ptr(),
-                target = in(reg) &raw mut output,
-                out("ax") status,
-                out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
-                out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
-                options(nostack),
-            );
-        } else {
-            asm!(
-                "fnstcw word ptr [{saved}]",
-                "fldcw word ptr [{control}]",
-                "fnclex",
-                "fld tbyte ptr [{source}]",
-                "fstp qword ptr [{target}]",
-                "fnstsw ax",
-                "fnclex",
-                "fldcw word ptr [{saved}]",
-                saved = in(reg) &raw mut saved,
-                control = in(reg) &raw const control,
-                source = in(reg) input.as_ptr(),
-                target = in(reg) &raw mut output,
-                out("ax") status,
-                out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
-                out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
-                options(nostack),
-            );
-        }
-    }
-    (output, status)
-}
-
-/// Returns the x87 status bits that a floaty result reports: IE, OE, UE, PE,
-/// and C1 for a rounding that grew the magnitude.
-fn status_bits(flags: Flags) -> u16 {
-    let mut bits = 0;
-    for (flag, bit) in [
-        (Flags::INVALID, 0),
-        (Flags::OVERFLOW, 3),
-        (Flags::UNDERFLOW, 4),
-        (Flags::INEXACT, 5),
-        (Flags::ROUNDED_UP, 9),
-    ] {
-        if flags.contains(flag) {
-            bits |= 1 << bit;
-        }
-    }
-    bits
-}
-
-/// The status bits that the comparison checks: IE, OE, UE, PE, and C1.
-///
-/// `FSTP` does not report DE for a denormal operand, so the test checks DE
-/// separately: the processor never sets it for a store. Mapping
-/// `DENORMAL_INPUT` to the DE flag of each instruction belongs to a consumer.
-const CHECKED: u16 = 0b10_0011_1001;
+/// The status bits that the comparisons check: IE, DE, ZE, OE, UE, PE, and C1.
+const CHECKED: u16 = 0b10_0011_1111;
 const DE: u16 = 1 << 1;
 
-/// The environment of an x87 store: the x87 NaN rule with its negative
-/// default NaN, tininess after rounding, and no precision control, which
-/// stores ignore.
-fn store_env(rounding: Rounding) -> Env {
-    Env::IEEE.with_rounding(rounding).with_nan(NanRule {
-        propagation: NanPropagation::X87,
-        default_negative: true,
-    })
+/// Returns the status bits that a floaty result reports for an arithmetic
+/// instruction. DE follows the precedence of the Intel SDM Volume 1, section
+/// 4.9.2: a NaN operand, an invalid operation, or a division by zero hides it.
+fn arithmetic_status(flags: Flags, nan_operand: bool) -> u16 {
+    let higher =
+        nan_operand || flags.contains(Flags::INVALID) || flags.contains(Flags::DIVIDE_BY_ZERO);
+    let bits = x87_status(flags);
+    if higher { bits & !DE } else { bits }
 }
 
 /// Returns the low-bit patterns of `dropped` discarded bits that decide a
@@ -290,42 +146,188 @@ fn store_inputs() -> Vec<u128> {
     for _ in 0..100_000 {
         let exponent = u128::from(16383 - 1100 + random.next_u64() % 2300);
         let sign = u128::from(random.next_u64() & 1) << 79;
-        let significand = u128::from(
-            random.next_u64()
-                | if random.next_u64() % 16 == 0 {
-                    0
-                } else {
-                    1 << 63
-                },
-        );
+        let integer = if random.next_u64() % 16 == 0 {
+            0
+        } else {
+            1 << 63
+        };
+        let significand = u128::from(random.next_u64() | integer);
         inputs.push(sign | (exponent << 64) | significand);
     }
     inputs
 }
 
+/// `FSTP` does not report DE for a denormal operand, so the store test checks
+/// that the processor never sets it for a store.
 #[test]
 fn stores_to_binary64_and_binary32_match_the_processor() {
     let inputs = store_inputs();
-    for (rounding, rc) in ROUNDINGS {
-        let control = 0x037F | rc;
-        let env = store_env(rounding);
+    for (rounding, field) in X87_ROUNDINGS {
+        let control = 0x037F | field;
+        let env = x87_env(rounding);
         for &input in &inputs {
             let value = F80::from_bits(input);
-            let (expected, status) = store(input, control, false);
+            let (expected, status) = x86::store_double(input, control);
             let (ours, flags): (F64, _) = value.convert_with(env);
             let context =
                 format!("F80 {input:#x} to F64 {rounding:?} {flags:?} status {status:#06x}");
             assert_eq!(ours.to_bits(), expected, "{context}: result");
-            assert_eq!(status_bits(flags), status & CHECKED, "{context}: flags");
+            assert_eq!(
+                x87_status(flags) & CHECKED & !DE,
+                status & CHECKED & !DE,
+                "{context}: flags"
+            );
             assert_eq!(status & DE, 0, "{context}: a store never reports DE");
 
-            let (expected, status) = store(input, control, true);
+            let (expected, status) = x86::store_single(input, control);
             let (ours, flags): (F32, _) = value.convert_with(env);
             let context =
                 format!("F80 {input:#x} to F32 {rounding:?} {flags:?} status {status:#06x}");
-            assert_eq!(u64::from(ours.to_bits()), expected, "{context}: result");
-            assert_eq!(status_bits(flags), status & CHECKED, "{context}: flags");
+            assert_eq!(ours.to_bits(), expected, "{context}: result");
+            assert_eq!(
+                x87_status(flags) & CHECKED & !DE,
+                status & CHECKED & !DE,
+                "{context}: flags"
+            );
             assert_eq!(status & DE, 0, "{context}: a store never reports DE");
+        }
+    }
+}
+
+/// The x87 special operands: zeros, infinities, NaNs of both kinds and signs,
+/// quiet and signaling pairs of NaNs with equal significands and different
+/// signs, the real
+/// indefinite, unsupported encodings, a pseudo-denormal, denormals, the normal
+/// boundaries, and ones.
+const SPECIALS: [u128; 24] = [
+    0x7FFF_C000_0000_0000_0005,
+    0xFFFF_C000_0000_0000_0005,
+    0x7FFF_A000_0000_0000_0007,
+    0xFFFF_A000_0000_0000_0007,
+    0x0000_0000_0000_0000_0000,
+    0x8000_0000_0000_0000_0000,
+    0x7FFF_8000_0000_0000_0000,
+    0xFFFF_8000_0000_0000_0000,
+    0x7FFF_C000_0000_0000_0001,
+    0xFFFF_C000_0000_0000_0009,
+    0x7FFF_8000_0000_0000_0002,
+    0xFFFF_A000_0000_0000_0000,
+    0xFFFF_C000_0000_0000_0000,
+    0x7FFF_4000_0000_0000_0000,
+    0x3FFF_0000_0000_0000_0001,
+    0x0000_8000_0000_0000_0003,
+    0x0000_0000_0000_0000_0001,
+    0x8000_7FFF_FFFF_FFFF_FFFF,
+    0x0001_8000_0000_0000_0000,
+    0x7FFE_FFFF_FFFF_FFFF_FFFF,
+    0x3FFF_8000_0000_0000_0000,
+    0xBFFF_8000_0000_0000_0000,
+    0x4000_8000_0000_0000_0000,
+    0x3FFF_8000_0000_0000_0001,
+];
+
+/// Returns x87 operands: the specials, and random values across the range,
+/// near the smallest normal value, and near the largest value.
+fn operands(random: &mut SplitMix64, count: usize) -> Vec<u128> {
+    let mut operands = SPECIALS.to_vec();
+    for index in 0..count {
+        let exponent = u128::from(match index % 3 {
+            0 => random.next_u64() % 0x7FFF,
+            1 => random.next_u64() % 80,
+            _ => 0x7FFF - 80 + random.next_u64() % 80,
+        });
+        let integer = if random.next_u64() % 32 == 0 {
+            0
+        } else {
+            1 << 63
+        };
+        let significand = u128::from(random.next_u64() | integer);
+        let sign = u128::from(random.next_u64() & 1) << 79;
+        operands.push(sign | (exponent << 64) | significand);
+    }
+    operands
+}
+
+/// Every x87 control setting: each rounding direction at each precision.
+fn settings() -> Vec<(u16, Env)> {
+    let mut settings = Vec::new();
+    for (rounding, rounding_field) in X87_ROUNDINGS {
+        for (precision, precision_field) in X87_PRECISIONS {
+            let control = X87_MASKED | rounding_field | precision_field;
+            let limit = if precision == 64 {
+                None
+            } else {
+                NonZeroU32::new(precision)
+            };
+            settings.push((control, x87_env(rounding).with_precision(limit)));
+        }
+    }
+    settings
+}
+
+/// Compares one x87 arithmetic instruction with floaty in every setting.
+macro_rules! arithmetic {
+    ($pairs:expr, $instruction:path, $method:ident) => {
+        for (control, env) in settings() {
+            for &(a, b) in &$pairs {
+                let (expected, status) = $instruction(a, b, control);
+                let (x, y) = (F80::from_bits(a), F80::from_bits(b));
+                let (ours, flags) = x.$method(y, env);
+                let context = format!(
+                    "{} {a:#x} {b:#x} {env:?} {flags:?} status {status:#06x}",
+                    stringify!($instruction)
+                );
+                assert_eq!(
+                    ours.to_bits(),
+                    expected & ((1 << 80) - 1),
+                    "{context}: result"
+                );
+                let nan_operand = x.is_nan() || y.is_nan();
+                assert_eq!(
+                    arithmetic_status(flags, nan_operand),
+                    status & CHECKED,
+                    "{context}: flags"
+                );
+            }
+        }
+    };
+}
+
+#[test]
+fn arithmetic_matches_at_every_rounding_and_precision() {
+    let mut random = SplitMix64::new(0x0087_A817);
+    let operands = operands(&mut random, 30_000);
+    let mut pairs = Vec::new();
+    for &a in &SPECIALS {
+        for &b in &SPECIALS {
+            pairs.push((a, b));
+        }
+    }
+    for pair in operands[SPECIALS.len()..].chunks_exact(2) {
+        pairs.push((pair[0], pair[1]));
+        // The same magnitude with the other sign and a changed low bit.
+        pairs.push((pair[0], pair[0] ^ (1 << 79) ^ 1));
+    }
+    arithmetic!(pairs, x86::fadd, add_with);
+    arithmetic!(pairs, x86::fsub, sub_with);
+    arithmetic!(pairs, x86::fmul, mul_with);
+    arithmetic!(pairs, x86::fdiv, div_with);
+    for (control, env) in settings() {
+        for &a in &operands {
+            let (expected, status) = x86::fsqrt(a, control);
+            let value = F80::from_bits(a);
+            let (ours, flags) = value.sqrt_with(env);
+            let context = format!("fsqrt {a:#x} {env:?} {flags:?} status {status:#06x}");
+            assert_eq!(
+                ours.to_bits(),
+                expected & ((1 << 80) - 1),
+                "{context}: result"
+            );
+            assert_eq!(
+                arithmetic_status(flags, value.is_nan()),
+                status & CHECKED,
+                "{context}: flags"
+            );
         }
     }
 }

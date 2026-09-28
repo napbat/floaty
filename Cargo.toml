@@ -36,3 +36,8 @@ pedantic = { level = "deny", priority = -1 }
 
 [workspace.lints.rustdoc]
 all = { level = "deny", priority = -1 }
+
+# The verification harness runs millions of oracle comparisons in the normal
+# test run. Optimize it, and the floaty code it instantiates, in test builds.
+[profile.dev.package.floaty-verify]
+opt-level = 3
