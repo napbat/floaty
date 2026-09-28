@@ -290,7 +290,7 @@ where
 /// Returns the sign and magnitude of an integer of type `I`, or `None` when
 /// the value is outside the range of `I`. The range check uses the exact
 /// width, so `Int<24>` holds -2^23 and not 2^23.
-pub fn fit<I: Integer>(negative: bool, magnitude: &[u64; 9]) -> Option<Parts> {
+pub fn fit<I: Integer, M: Limbs>(negative: bool, magnitude: &M) -> Option<Parts> {
     let length = magnitude.bit_length();
     let fits = if magnitude.is_zero() {
         true
@@ -298,7 +298,7 @@ pub fn fit<I: Integer>(negative: bool, magnitude: &[u64; 9]) -> Option<Parts> {
         !negative && length <= I::BITS
     } else if negative {
         // The smallest value, -2^(BITS - 1), has a magnitude of BITS bits.
-        length < I::BITS || *magnitude == <[u64; 9]>::ZERO.with_bit(I::BITS - 1)
+        length < I::BITS || *magnitude == M::ZERO.with_bit(I::BITS - 1)
     } else {
         length < I::BITS
     };

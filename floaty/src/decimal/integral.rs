@@ -147,7 +147,7 @@ where
             };
             round::round_to_integer(&value, env.rounding)
         };
-        let Some(parts) = fit::<I>(negative, &integral.magnitude) else {
+        let Some(parts) = fit::<I, _>(negative, &integral.magnitude) else {
             return out_of_range;
         };
         if integral.inexact {

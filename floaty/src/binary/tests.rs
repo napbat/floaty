@@ -1,4 +1,4 @@
-use super::{Layout, Unpacked};
+use super::{EncodingKind, Layout, Unpacked};
 use crate::float::Class;
 use crate::format::internal::LimbConversion;
 use crate::format::{Encoding, Fnuz, Ieee, NoInf, Storage, Width, X87};
@@ -36,7 +36,9 @@ where
             limbs,
             "{bits:#x} round trip"
         );
-        let count = match Layout::<E, Enc, W>::classify(limbs) {
+        let class = Layout::<E, Enc, W>::classify(limbs);
+        check_normal::<E, Enc, W>(limbs, value, class);
+        let count = match class {
             Class::Zero => &mut census.zero,
             Class::Subnormal => &mut census.subnormal,
             Class::Normal => &mut census.normal,
@@ -48,6 +50,30 @@ where
         *count += 1;
     }
     census
+}
+
+/// Checks that the direct read of a normal operand agrees with the decode:
+/// it reads every normal encoding, except a `NoInf` number with the largest
+/// exponent field, and no other encoding.
+fn check_normal<const E: u32, Enc: Encoding, const W: usize>(
+    limbs: [u64; 1],
+    value: Unpacked<[u64; 1]>,
+    class: Class,
+) where
+    Width<W>: Storage,
+{
+    let field = limbs.field(Layout::<E, Enc, W>::FRACTION_BITS, E);
+    let largest_field = field == Layout::<E, Enc, W>::FIELD_MAX;
+    match Layout::<E, Enc, W>::normal(limbs) {
+        Some(number) => {
+            assert_eq!(class, Class::Normal, "{limbs:x?}");
+            assert_eq!(Some(number), value.number(), "{limbs:x?}");
+        }
+        None => assert!(
+            class != Class::Normal || (Enc::KIND == EncodingKind::NoInf && largest_field),
+            "{limbs:x?}"
+        ),
+    }
 }
 
 /// The census of an IEEE format with `e` exponent bits and `f` fraction bits.
@@ -248,6 +274,34 @@ fn x87_unnormals_and_pseudo_specials_are_unsupported() {
         assert_eq!(X87Layout::decode(limbs), Unpacked::Unsupported, "{bits:#x}");
         assert_eq!(X87Layout::classify(limbs), Class::Unsupported, "{bits:#x}");
         assert!(!X87Layout::is_canonical(limbs), "{bits:#x}");
+        assert_eq!(X87Layout::normal(limbs), None, "{bits:#x}");
+    }
+}
+
+#[test]
+fn x87_normal_operands_read_directly() {
+    // 1.0, the largest finite value, and the smallest normal value read
+    // directly.
+    for bits in [
+        0x3FFF_8000_0000_0000_0000_u128,
+        0x7FFE_FFFF_FFFF_FFFF_FFFF,
+        0x8001_8000_0000_0000_0000,
+    ] {
+        let limbs = x87(bits);
+        assert_eq!(
+            X87Layout::normal(limbs),
+            X87Layout::decode(limbs).number(),
+            "{bits:#x}"
+        );
+    }
+    // A pseudo-denormal, a denormal, the infinity, and a quiet NaN.
+    for bits in [
+        0x0000_8000_0000_0000_0001_u128,
+        0x0000_0000_0000_0000_0001,
+        0x7FFF_8000_0000_0000_0000,
+        0x7FFF_C000_0000_0000_0000,
+    ] {
+        assert_eq!(X87Layout::normal(x87(bits)), None, "{bits:#x}");
     }
 }
 

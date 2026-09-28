@@ -2,7 +2,8 @@
 
 Status: design approved on 2026-09-27. Build steps 1, encoding, 2, rounding,
 3, arithmetic, 4, the other binary operations, 5, the x86 SSE and x87
-presets, 6, performance, 7, decimal, and 8, double-double, are complete.
+presets, 6, performance, 7, decimal, and 8, double-double, are complete. A
+speedup pass of the binary engine followed step 8.
 
 This file is the source of truth for every design decision in floaty. Update
 it in the same change that alters a decision.
@@ -852,12 +853,16 @@ The decimal formats follow the Intel decimal library:
   `[u64; 2 * N]` value that the sealed `Widen` table names for each `N` from 1
   to 8. A generic `[u64; 2 * N]` type needs the unstable `generic_const_exprs`
   feature, and the table avoids it.
-- The engine has one generic path. Step 6 made its integer steps faster:
-  - An array of one or two limbs computes on a native `u128`.
-  - Division of values of at most 128 bits uses the native `u128` division.
-    Wider values use Knuth's Algorithm D, one quotient limb per step.
-  - The integer square root of at most 128 bits uses `u128::isqrt`. A wider
-    root uses Newton's iteration from the root of the top 128 bits.
+- The engine has one generic path. Step 6 made its integer steps faster, and
+  the speedup pass extended them:
+  - An array of one limb computes on a native `u64`, and an array of two
+    limbs on a native `u128`.
+  - Division of values of at most 64 bits uses the native `u64` division, and
+    of at most 128 bits the native `u128` division. Wider values use Knuth's
+    Algorithm D, one quotient limb per step.
+  - The integer square root of at most 64 bits uses `u64::isqrt`, and of at
+    most 128 bits `u128::isqrt`. A wider root uses Newton's iteration from
+    the root of the top 128 bits.
   - Addition works at the limb width of the storage when that width holds
     the precision plus 5 bits, which every named format does. Otherwise it
     works at twice that width.
@@ -867,6 +872,27 @@ The decimal formats follow the Intel decimal library:
   fields would save the two decodes and the encode of an addition, at most a
   quarter of it. They also must keep the raw bits. An unsupported or
   non-canonical x87 encoding round-trips through `from_bits` and `to_bits`.
+- The speedup pass cut the fixed cost of a rounded operation. It kept one
+  arithmetic path and one rounding routine:
+  - The binary `add`, `sub`, `mul`, `div`, `sqrt`, and `mul_add` read a
+    normal operand directly from its encoding. A normal operand needs no
+    special case, no denormal flag, and no DAZ. When every operand is normal,
+    and positive for `sqrt`, the operation goes to the finite code that the
+    general path also runs. Every other operand takes the full decode, and
+    so does a `NoInf` number with the largest exponent field. The direct
+    read saves most of the decode cost that pre-split fields would save,
+    with no new storage form.
+  - The rounding routine has a branch for a value whose top bit is at or
+    above `emin`. The result is normal or overflows, and it is never tiny.
+    So the branch skips the tininess rules, and it keeps the top `precision`
+    bits of the value. The rest of the routine stays out of line, so that
+    the common branch inlines into its callers.
+  - A binary conversion to an integer of at most 64 bits rounds in two
+    limbs, not nine. A value whose top bit reaches the width of the integer
+    is out of range in every rounding direction, so the conversion stops
+    before it rounds.
+  - These branches are not fast paths: they run the code of the general
+    path on fewer steps.
 - A fast path must pass the same oracle tests as the generic path, and this
   file must list it. There is one fast path.
   - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
@@ -909,6 +935,22 @@ The decimal formats follow the Intel decimal library:
 | binary512 `add_with` | 159 | 92 |
 | binary512 `div_with` | 9,092 | 406 |
 | binary512 `sqrt` | 16,938 | 1,902 |
+
+The speedup pass, before and after, on the same host:
+
+| Operation | Before | After |
+| --- | --- | --- |
+| binary64 `add_with` | 39 | 28 |
+| binary64 `mul_add` | 49 | 34 |
+| binary64 `div_with` | 53 | 45 |
+| binary64 `sqrt` | 71 | 63 |
+| binary64 to `i64` | 23 | 14 |
+| binary16 `*` operator | 32 | 21 |
+| binary16 to binary64 | 22 | 17 |
+| OCP FP8 E4M3 `+` operator | 37 | 28 |
+| binary128 `add_with` | 51 | 35 |
+| binary128 `sqrt` | 261 | 255 |
+| binary512 `add_with` | 99 | 71 |
 
 ## Verification
 
@@ -1153,8 +1195,10 @@ Each step passes its oracle tests before the next step starts.
 - The details of the `Unsigned` and `Finite` encodings.
 - Presets for ARM, RISC-V, and Direct3D.
 - An optional layer that carries flags on values through a computation.
-- A later speedup pass on the fixed cost of about 35 to 40 ns per rounded
-  operation, which step 6 measured and left for now.
+- Decide whether a reciprocal square root estimate, as SoftFloat uses,
+  replaces the integer square root and the wide division. The speedup pass
+  left them slow: binary128 `sqrt` takes 255 ns.
+- Decide whether the decimal engine gets a speedup pass.
 - Confirm the `Gcc` double-double results, and the PowerPC `fmadd` and
   `fmsub` NaN rules, on POWER hardware. QEMU stands in for it now.
 - `saturate` applies only to encodings without an infinity. OCP FP8

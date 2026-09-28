@@ -9,7 +9,7 @@
 
 use core::cmp::Ordering;
 
-use super::{Layout, Unpacked};
+use super::{Layout, Number, Unpacked};
 use crate::env::{Env, Flags, Rounding};
 use crate::exact::{self, Unrounded};
 use crate::format::{Encoding, Storage, Width};
@@ -52,26 +52,31 @@ enum Sum<L> {
 /// jammed bit stays below the round bit and the bit below it, after a
 /// cancellation of one bit and a carry.
 fn sum<L: Limbs>(first: Term<L>, second: Term<L>) -> Sum<L> {
-    let highest = first.top().max(second.top());
-    let floor = highest - i64::from(L::BITS - 3);
-    let common = first.exponent.min(second.exponent).max(floor);
-    let align = |term: Term<L>| {
-        if term.exponent >= common {
-            let shift =
-                u32::try_from(term.exponent - common).expect("the shift stays inside the width");
-            term.significand.shl(shift)
-        } else {
-            let shift = u32::try_from(common - term.exponent).unwrap_or(u32::MAX);
-            term.significand.shr_jam(shift)
-        }
+    // `high` has the larger lowest weight. The common weight is at or below
+    // it, so `high` only shifts left, and only `low` can shift right.
+    let (high, low) = if first.exponent >= second.exponent {
+        (first, second)
+    } else {
+        (second, first)
     };
-    let (left, right) = (align(first), align(second));
-    let (negative, significand) = if first.negative == second.negative {
-        (first.negative, left.add(right))
+    let highest = high.top().max(low.top());
+    let floor = highest - i64::from(L::BITS - 3);
+    let common = low.exponent.max(floor);
+    let left_shift =
+        u32::try_from(high.exponent - common).expect("the shift stays inside the width");
+    let left = high.significand.shl(left_shift);
+    let right = if common > low.exponent {
+        let shift = u32::try_from(common - low.exponent).unwrap_or(u32::MAX);
+        low.significand.shr_jam(shift)
+    } else {
+        low.significand
+    };
+    let (negative, significand) = if high.negative == low.negative {
+        (high.negative, left.add(right))
     } else {
         match left.compare(&right) {
-            Ordering::Greater => (first.negative, left.sub(right)),
-            Ordering::Less => (second.negative, right.sub(left)),
+            Ordering::Greater => (high.negative, left.sub(right)),
+            Ordering::Less => (low.negative, right.sub(left)),
             Ordering::Equal => return Sum::Zero,
         }
     };
@@ -154,8 +159,35 @@ where
         }
     }
 
+    /// Returns the square root of a positive finite operand.
+    fn sqrt_finite<L: Widen>(number: Number<L>, env: &Env, flags: Flags) -> (L, Flags) {
+        // Shift the radicand to an even exponent and to 2p + 3 or 2p + 4 bits,
+        // so that the root has p + 2 bits.
+        let mut shift = 2 * Self::PRECISION + 3 - number.significand.bit_length();
+        if (i64::from(number.exponent) - i64::from(shift)) % 2 != 0 {
+            shift += 1;
+        }
+        let radicand = number.significand.resize::<L::Double>().shl(shift);
+        let (root, inexact) = limbs::square_root(radicand);
+        let shift = i32::try_from(shift).expect("a shift fits an i32");
+        let value = Unrounded {
+            negative: false,
+            exponent: (number.exponent - shift) / 2,
+            significand: root,
+            sticky: inexact,
+        };
+        Self::finish(&value, env, flags)
+    }
+
     /// Adds `left` and `right`, or subtracts `right` when `subtract` is set.
     pub fn add<L: Widen>(left: L, right: L, subtract: bool, env: &Env) -> (L, Flags) {
+        if let (Some(a), Some(b)) = (Self::normal(left), Self::normal(right)) {
+            let b = Number {
+                negative: b.negative != subtract,
+                ..b
+            };
+            return Self::add_finite(a, b, env, Flags::NONE);
+        }
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
@@ -163,6 +195,9 @@ where
             return Self::exact(value, flags | special);
         }
         let y = if subtract { y.negate() } else { y };
+        if let (Some(a), Some(b)) = (x.number(), y.number()) {
+            return Self::add_finite(a, b, env, flags);
+        }
         match (x, y) {
             (Unpacked::Infinity { negative: a }, Unpacked::Infinity { negative: b }) if a != b => {
                 Self::exact(default_nan(env), flags | Flags::INVALID)
@@ -197,47 +232,43 @@ where
                 };
                 Self::finish(&value, env, flags)
             }
-            (
-                Unpacked::Finite {
-                    negative: a_negative,
-                    exponent: a_exponent,
-                    significand: a_significand,
-                },
-                Unpacked::Finite {
-                    negative: b_negative,
-                    exponent: b_exponent,
-                    significand: b_significand,
-                },
-            ) => {
-                let a = (a_negative, a_exponent, a_significand);
-                let b = (b_negative, b_exponent, b_significand);
-                if Self::PRECISION + 5 <= L::BITS {
-                    // The limb width of the storage holds the sum and its
-                    // jammed bit.
-                    let term = |(negative, exponent, significand): (bool, i32, L)| Term {
-                        negative,
-                        exponent: i64::from(exponent),
-                        significand,
-                    };
-                    Self::finish_sum(&sum(term(a), term(b)), env, flags)
-                } else {
-                    let term = |(negative, exponent, significand)| {
-                        Self::term(negative, exponent, significand)
-                    };
-                    Self::finish_sum(&sum(term(a), term(b)), env, flags)
-                }
-            }
-            _ => unreachable!("the special cases handle every NaN and unsupported operand"),
+            _ => unreachable!(
+                "the earlier cases handle NaNs, unsupported operands, and finite pairs"
+            ),
+        }
+    }
+
+    /// Adds two nonzero finite operands.
+    fn add_finite<L: Widen>(a: Number<L>, b: Number<L>, env: &Env, flags: Flags) -> (L, Flags) {
+        if Self::PRECISION + 5 <= L::BITS {
+            // The limb width of the storage holds the sum and its jammed bit.
+            let term = |number: Number<L>| Term {
+                negative: number.negative,
+                exponent: i64::from(number.exponent),
+                significand: number.significand,
+            };
+            Self::finish_sum(&sum(term(a), term(b)), env, flags)
+        } else {
+            let term = |number: Number<L>| {
+                Self::term(number.negative, number.exponent, number.significand)
+            };
+            Self::finish_sum(&sum(term(a), term(b)), env, flags)
         }
     }
 
     /// Multiplies `left` by `right`.
     pub fn mul<L: Widen>(left: L, right: L, env: &Env) -> (L, Flags) {
+        if let (Some(a), Some(b)) = (Self::normal(left), Self::normal(right)) {
+            return Self::mul_finite(a, b, env, Flags::NONE);
+        }
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
         if let Some((value, special)) = nan::special(&x, &y, env) {
             return Self::exact(value, flags | special);
+        }
+        if let (Some(a), Some(b)) = (x.number(), y.number()) {
+            return Self::mul_finite(a, b, env, flags);
         }
         let negative = sign(&x) != sign(&y);
         match (x, y) {
@@ -251,37 +282,36 @@ where
             (Unpacked::Zero { .. }, _) | (_, Unpacked::Zero { .. }) => {
                 Self::exact(Unpacked::zero(negative), flags)
             }
-            (
-                Unpacked::Finite {
-                    exponent: a_exponent,
-                    significand: a_significand,
-                    ..
-                },
-                Unpacked::Finite {
-                    exponent: b_exponent,
-                    significand: b_significand,
-                    ..
-                },
-            ) => {
-                let product = Unrounded {
-                    negative,
-                    exponent: a_exponent + b_exponent,
-                    significand: a_significand.widening_mul(b_significand),
-                    sticky: false,
-                };
-                Self::finish(&product, env, flags)
-            }
-            _ => unreachable!("the special cases handle every NaN and unsupported operand"),
+            _ => unreachable!(
+                "the earlier cases handle NaNs, unsupported operands, and finite pairs"
+            ),
         }
+    }
+
+    /// Multiplies two nonzero finite operands.
+    fn mul_finite<L: Widen>(a: Number<L>, b: Number<L>, env: &Env, flags: Flags) -> (L, Flags) {
+        let product = Unrounded {
+            negative: a.negative != b.negative,
+            exponent: a.exponent + b.exponent,
+            significand: a.significand.widening_mul(b.significand),
+            sticky: false,
+        };
+        Self::finish(&product, env, flags)
     }
 
     /// Divides `left` by `right`.
     pub fn div<L: Widen>(left: L, right: L, env: &Env) -> (L, Flags) {
+        if let (Some(a), Some(b)) = (Self::normal(left), Self::normal(right)) {
+            return Self::div_finite(a, b, env, Flags::NONE);
+        }
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
         if let Some((value, special)) = nan::special(&x, &y, env) {
             return Self::exact(value, flags | special);
+        }
+        if let (Some(a), Some(b)) = (x.number(), y.number()) {
+            return Self::div_finite(a, b, env, flags);
         }
         let negative = sign(&x) != sign(&y);
         match (x, y) {
@@ -296,39 +326,34 @@ where
             (_, Unpacked::Zero { .. }) => {
                 Self::exact(Self::infinity(negative, env), flags | Flags::DIVIDE_BY_ZERO)
             }
-            (
-                Unpacked::Finite {
-                    exponent: a_exponent,
-                    significand: a_significand,
-                    ..
-                },
-                Unpacked::Finite {
-                    exponent: b_exponent,
-                    significand: b_significand,
-                    ..
-                },
-            ) => {
-                // Shift the dividend so that the quotient has at least p + 2
-                // bits. The numerator then has at most 2p + 2 bits.
-                let shift =
-                    Self::PRECISION + 2 + b_significand.bit_length() - a_significand.bit_length();
-                let numerator = a_significand.resize::<L::Double>().shl(shift);
-                let (quotient, remainder) = limbs::divide(numerator, b_significand.resize());
-                let shift = i32::try_from(shift).expect("a shift fits an i32");
-                let value = Unrounded {
-                    negative,
-                    exponent: a_exponent - b_exponent - shift,
-                    significand: quotient,
-                    sticky: !remainder.is_zero(),
-                };
-                Self::finish(&value, env, flags)
-            }
-            _ => unreachable!("the special cases handle every NaN and unsupported operand"),
+            _ => unreachable!(
+                "the earlier cases handle NaNs, unsupported operands, and finite pairs"
+            ),
         }
+    }
+
+    /// Divides two nonzero finite operands.
+    fn div_finite<L: Widen>(a: Number<L>, b: Number<L>, env: &Env, flags: Flags) -> (L, Flags) {
+        // Shift the dividend so that the quotient has at least p + 2 bits.
+        // The numerator then has at most 2p + 2 bits.
+        let shift = Self::PRECISION + 2 + b.significand.bit_length() - a.significand.bit_length();
+        let numerator = a.significand.resize::<L::Double>().shl(shift);
+        let (quotient, remainder) = limbs::divide(numerator, b.significand.resize());
+        let shift = i32::try_from(shift).expect("a shift fits an i32");
+        let value = Unrounded {
+            negative: a.negative != b.negative,
+            exponent: a.exponent - b.exponent - shift,
+            significand: quotient,
+            sticky: !remainder.is_zero(),
+        };
+        Self::finish(&value, env, flags)
     }
 
     /// Returns the square root of `value`.
     pub fn sqrt<L: Widen>(value: L, env: &Env) -> (L, Flags) {
+        if let Some(number) = Self::normal(value).filter(|number| !number.negative) {
+            return Self::sqrt_finite(number, env, Flags::NONE);
+        }
         let mut flags = Flags::NONE;
         let x = Self::operand(value, env, &mut flags);
         // A one-operand NaN propagates as SoftFloat does, against a zero.
@@ -345,22 +370,12 @@ where
                 exponent,
                 significand,
             } => {
-                // Shift the radicand to an even exponent and to 2p + 3 or 2p + 4
-                // bits, so that the root has p + 2 bits.
-                let mut shift = 2 * Self::PRECISION + 3 - significand.bit_length();
-                if (i64::from(exponent) - i64::from(shift)) % 2 != 0 {
-                    shift += 1;
-                }
-                let radicand = significand.resize::<L::Double>().shl(shift);
-                let (root, inexact) = limbs::square_root(radicand);
-                let shift = i32::try_from(shift).expect("a shift fits an i32");
-                let value = Unrounded {
+                let positive = Number {
                     negative: false,
-                    exponent: (exponent - shift) / 2,
-                    significand: root,
-                    sticky: inexact,
+                    exponent,
+                    significand,
                 };
-                Self::finish(&value, env, flags)
+                Self::sqrt_finite(positive, env, flags)
             }
             Unpacked::Nan { .. } | Unpacked::Unsupported => {
                 unreachable!("the special cases handle every NaN and unsupported operand")
@@ -373,6 +388,15 @@ where
     /// The `fused_order` field of the NaN rule orders the NaN operands, and
     /// the `invalid_product` field decides `0 * inf + NaN`.
     pub fn mul_add<L: Widen>(left: L, right: L, addend: L, env: &Env) -> (L, Flags) {
+        if let (Some(a), Some(b), Some(c)) = (
+            Self::normal(left),
+            Self::normal(right),
+            Self::normal(addend),
+        ) {
+            let product = Self::product(a, b);
+            let addend = Self::term(c.negative, c.exponent, c.significand);
+            return Self::finish_sum(&sum(product, addend), env, Flags::NONE);
+        }
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
@@ -442,6 +466,15 @@ where
         }
     }
 
+    /// Returns the exact product of two nonzero finite operands.
+    fn product<L: Widen>(a: Number<L>, b: Number<L>) -> Term<L::Double> {
+        Term {
+            negative: a.negative != b.negative,
+            exponent: i64::from(a.exponent) + i64::from(b.exponent),
+            significand: a.significand.widening_mul(b.significand),
+        }
+    }
+
     /// Returns `x * y + z` for finite or zero operands and a finite or zero
     /// addend.
     fn finite_mul_add<L: Widen>(
@@ -452,23 +485,8 @@ where
         env: &Env,
         flags: Flags,
     ) -> (L, Flags) {
-        let product = match (x, y) {
-            (
-                Unpacked::Finite {
-                    exponent: a_exponent,
-                    significand: a_significand,
-                    ..
-                },
-                Unpacked::Finite {
-                    exponent: b_exponent,
-                    significand: b_significand,
-                    ..
-                },
-            ) => Some(Term {
-                negative: product_negative,
-                exponent: i64::from(a_exponent) + i64::from(b_exponent),
-                significand: a_significand.widening_mul(b_significand),
-            }),
+        let product = match (x.number(), y.number()) {
+            (Some(first), Some(second)) => Some(Self::product(first, second)),
             _ => None,
         };
         match (product, z) {

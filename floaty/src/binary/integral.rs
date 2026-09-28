@@ -14,11 +14,6 @@ use crate::integer::{Integer, Parts, ToInt, fit};
 use crate::limbs::Limbs;
 use crate::nan;
 
-/// The highest bit weight of a value that can fit a 512-bit integer after
-/// rounding. The integer part of a smaller value fits nine limbs with its
-/// carry.
-const LARGEST_TOP: i64 = 512;
-
 impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
 where
     Width<W>: Storage,
@@ -110,22 +105,38 @@ where
                 return (ToInt::Nan, flags | Flags::INVALID);
             }
         };
-        let out_of_range = (ToInt::OutOfRange { negative }, flags | Flags::INVALID);
         let top = i64::from(exponent) + i64::from(significand.bit_length()) - 1;
-        if top > LARGEST_TOP {
-            return out_of_range;
+        if top >= i64::from(I::BITS) {
+            // The magnitude is at least 2^BITS, above every integer of the
+            // type, in every rounding direction.
+            return (ToInt::OutOfRange { negative }, flags | Flags::INVALID);
         }
-        let integral = exact::round_to_integer::<L, [u64; 9]>(
-            &Unrounded {
-                negative,
-                exponent,
-                significand,
-                sticky: false,
-            },
-            env.rounding,
-        );
-        let Some(parts) = fit::<I>(negative, &integral.magnitude) else {
-            return out_of_range;
+        let value = Unrounded {
+            negative,
+            exponent,
+            significand,
+            sticky: false,
+        };
+        // The integer part is below 2^BITS, so it fits twice the width of a
+        // 64-bit integer with its carry, and nine limbs for any integer.
+        if I::BITS <= 64 {
+            Self::fit_integer::<L, [u64; 2], I>(&value, env, flags)
+        } else {
+            Self::fit_integer::<L, [u64; 9], I>(&value, env, flags)
+        }
+    }
+
+    /// Rounds a finite value to an integer in `M`, and returns it when it
+    /// fits `I`. The integer part of the value must fit `M` with its carry.
+    fn fit_integer<L: Limbs, M: Limbs, I: Integer>(
+        value: &Unrounded<L>,
+        env: &Env,
+        mut flags: Flags,
+    ) -> (ToInt<I>, Flags) {
+        let negative = value.negative;
+        let integral = exact::round_to_integer::<L, M>(value, env.rounding);
+        let Some(parts) = fit::<I, M>(negative, &integral.magnitude) else {
+            return (ToInt::OutOfRange { negative }, flags | Flags::INVALID);
         };
         if integral.inexact {
             flags |= Flags::INEXACT;
@@ -140,9 +151,31 @@ where
 #[cfg(test)]
 mod tests {
     use crate::env::{Env, Flags, Rounding};
-    use crate::float::{F32, F80, F512, Float};
+    use crate::exact::Exact;
+    use crate::float::{F32, F80, F128, F512, Float};
     use crate::format::Binary;
     use crate::integer::{Int, ToInt, UInt};
+
+    #[test]
+    fn a_carry_to_two_to_the_64_is_out_of_range() {
+        // 2^64 - 0.5 is halfway between 2^64 - 1 and 2^64. The carry of the
+        // rounding to 2^64 needs the second limb of the integer buffer.
+        let halfway = Exact {
+            negative: false,
+            exponent: -1,
+            significand: [u64::MAX, 1],
+            sticky: false,
+        };
+        let (value, _) = F128::round(halfway, Env::IEEE);
+        assert_eq!(
+            value.to_int_with::<u64>(Rounding::NearestEven),
+            (ToInt::OutOfRange { negative: false }, Flags::INVALID)
+        );
+        assert_eq!(
+            value.to_int_with::<u64>(Rounding::TowardZero),
+            (ToInt::Value(u64::MAX), Flags::INEXACT)
+        );
+    }
 
     fn round(bits: u32, rounding: Rounding) -> (u32, Flags) {
         let (value, flags) = F32::from_bits(bits).round_to_integral_with(rounding);

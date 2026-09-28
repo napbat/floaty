@@ -32,6 +32,7 @@ pub enum EncodingKind {
     X87,
 }
 
+pub(crate) use crate::unpacked::Number;
 pub use crate::unpacked::Unpacked;
 
 /// The layout constants and codec of `Binary<E, Enc>` at width `W`.
@@ -166,6 +167,35 @@ where
                 Self::decode_finite(negative, field, fraction)
             }
         }
+    }
+
+    /// Returns the sign, the exponent, and the significand of a normal
+    /// encoding, or `None` for any other encoding. A normal operand needs no
+    /// special case, no denormal flag, and no DAZ, so an operation reads it
+    /// without the full decode. A `NoInf` number with the largest exponent
+    /// field takes the full decode.
+    #[inline]
+    pub(crate) fn normal<L: Limbs>(bits: L) -> Option<Number<L>> {
+        let field = bits.field(Self::FRACTION_BITS, E);
+        let normal = match Enc::KIND {
+            EncodingKind::Ieee | EncodingKind::NoInf => field != 0 && field != Self::FIELD_MAX,
+            EncodingKind::Fnuz => field != 0,
+            EncodingKind::X87 => field != 0 && field != Self::FIELD_MAX && bits.bit(63),
+        };
+        if !normal {
+            return None;
+        }
+        let fraction = bits.low_bits(Self::FRACTION_BITS);
+        let significand = if Self::IS_X87 {
+            fraction
+        } else {
+            fraction.with_bit(Self::FRACTION_BITS)
+        };
+        Some(Number {
+            negative: bits.bit(Self::WIDTH - 1),
+            exponent: Self::unbiased(field) - Self::SHIFT,
+            significand,
+        })
     }
 
     /// Decodes a number of a format with an implicit integer bit.

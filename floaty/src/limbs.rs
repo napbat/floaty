@@ -92,6 +92,24 @@ pub trait Limbs: Copy + Eq + Hash + Debug {
     fn limb(&self, index: usize) -> u64;
 }
 
+/// Returns the limb of a one-limb array.
+#[inline]
+fn narrow_to_u64<const N: usize>(limbs: &[u64; N]) -> u64 {
+    debug_assert!(N == 1, "the array has one limb");
+    limbs.first().copied().unwrap_or(0)
+}
+
+/// Returns a `u64` as a one-limb array.
+#[inline]
+fn narrow_from_u64<const N: usize>(value: u64) -> [u64; N] {
+    debug_assert!(N == 1, "the array has one limb");
+    let mut limbs = [0; N];
+    if let Some(slot) = limbs.first_mut() {
+        *slot = value;
+    }
+    limbs
+}
+
 /// Returns an array of at most two limbs as a `u128`.
 #[inline]
 fn narrow_to_u128<const N: usize>(limbs: &[u64; N]) -> u128 {
@@ -112,9 +130,9 @@ fn narrow_from_u128<const N: usize>(value: u128) -> [u64; N] {
     limbs
 }
 
-/// The arrays of one or two limbs compute on a native `u128`, which
-/// gives the same values as the limb loops, faster. `N` is a constant, so the
-/// compiler keeps one of the two code paths.
+/// An array of one limb computes on a native `u64`, and an array of two limbs
+/// on a native `u128`. The native types give the same values as the limb
+/// loops, faster. `N` is a constant, so the compiler keeps one code path.
 impl<const N: usize> Limbs for [u64; N] {
     const ZERO: Self = [0; N];
 
@@ -140,6 +158,9 @@ impl<const N: usize> Limbs for [u64; N] {
 
     #[inline]
     fn bit_length(&self) -> u32 {
+        if N == 1 {
+            return 64 - narrow_to_u64(self).leading_zeros();
+        }
         if N <= 2 {
             return 128 - narrow_to_u128(self).leading_zeros();
         }
@@ -151,6 +172,13 @@ impl<const N: usize> Limbs for [u64; N] {
 
     #[inline]
     fn any_below(&self, count: u32) -> bool {
+        if N == 1 {
+            let value = narrow_to_u64(self);
+            if count >= 64 {
+                return value != 0;
+            }
+            return value & ((1 << count) - 1) != 0;
+        }
         if N <= 2 {
             let value = narrow_to_u128(self);
             if count >= 128 {
@@ -163,6 +191,9 @@ impl<const N: usize> Limbs for [u64; N] {
 
     #[inline]
     fn shr(self, count: u32) -> Self {
+        if N == 1 {
+            return narrow_from_u64(narrow_to_u64(&self).checked_shr(count).unwrap_or(0));
+        }
         if N <= 2 {
             return narrow_from_u128(narrow_to_u128(&self).checked_shr(count).unwrap_or(0));
         }
@@ -182,6 +213,9 @@ impl<const N: usize> Limbs for [u64; N] {
 
     #[inline]
     fn shl(self, count: u32) -> Self {
+        if N == 1 {
+            return narrow_from_u64(narrow_to_u64(&self).checked_shl(count).unwrap_or(0));
+        }
         if N <= 2 {
             return narrow_from_u128(narrow_to_u128(&self).checked_shl(count).unwrap_or(0));
         }
@@ -203,6 +237,9 @@ impl<const N: usize> Limbs for [u64; N] {
 
     #[inline]
     fn increment(mut self) -> Self {
+        if N == 1 {
+            return narrow_from_u64(narrow_to_u64(&self).wrapping_add(1));
+        }
         if N <= 2 {
             return narrow_from_u128(narrow_to_u128(&self).wrapping_add(1));
         }
@@ -218,6 +255,9 @@ impl<const N: usize> Limbs for [u64; N] {
 
     #[inline]
     fn add(mut self, other: Self) -> Self {
+        if N == 1 {
+            return narrow_from_u64(narrow_to_u64(&self) + narrow_to_u64(&other));
+        }
         if N <= 2 {
             let sum = narrow_to_u128(&self) + narrow_to_u128(&other);
             debug_assert!(N == 2 || sum >> 64 == 0, "the sum fits");
@@ -236,6 +276,9 @@ impl<const N: usize> Limbs for [u64; N] {
 
     #[inline]
     fn sub(mut self, other: Self) -> Self {
+        if N == 1 {
+            return narrow_from_u64(narrow_to_u64(&self) - narrow_to_u64(&other));
+        }
         if N <= 2 {
             return narrow_from_u128(narrow_to_u128(&self) - narrow_to_u128(&other));
         }
@@ -252,6 +295,9 @@ impl<const N: usize> Limbs for [u64; N] {
 
     #[inline]
     fn compare(&self, other: &Self) -> Ordering {
+        if N == 1 {
+            return narrow_to_u64(self).cmp(&narrow_to_u64(other));
+        }
         if N <= 2 {
             return narrow_to_u128(self).cmp(&narrow_to_u128(other));
         }
@@ -295,6 +341,15 @@ impl<const N: usize> Limbs for [u64; N] {
 
     #[inline]
     fn low_bits(mut self, count: u32) -> Self {
+        if N == 1 {
+            let value = narrow_to_u64(&self);
+            let kept = if count >= 64 {
+                value
+            } else {
+                value & ((1 << count) - 1)
+            };
+            return narrow_from_u64(kept);
+        }
         if N <= 2 {
             let value = narrow_to_u128(&self);
             let kept = if count >= 128 {
@@ -486,10 +541,23 @@ pub fn divide_small<L: Limbs>(value: L, divisor: u64) -> (L, u64) {
 /// Divides `numerator` by a nonzero `divisor`. Returns the quotient and the
 /// remainder.
 ///
-/// Values of at most 128 bits use the native `u128` division. Wider values
-/// use Knuth's Algorithm D, one quotient limb per step.
+/// Values of at most 64 bits use the native `u64` division, and values of at
+/// most 128 bits the native `u128` division. Wider values use Knuth's
+/// Algorithm D, one quotient limb per step.
 pub fn divide<L: Limbs>(numerator: L, divisor: L) -> (L, L) {
     debug_assert!(!divisor.is_zero(), "the divisor is not zero");
+    if numerator.bit_length() <= 64 {
+        if divisor.bit_length() > 64 {
+            // The divisor is larger than the numerator.
+            return (L::ZERO, numerator);
+        }
+        // The native 64-bit division is faster than the 128-bit one.
+        let (wide, by) = (numerator.limb(0), divisor.limb(0));
+        return (
+            L::ZERO.with_limb(0, wide / by),
+            L::ZERO.with_limb(0, wide % by),
+        );
+    }
     if numerator.bit_length() <= 128 {
         if divisor.bit_length() > 128 {
             // The divisor is larger than the numerator.
@@ -607,11 +675,17 @@ fn long_divide<L: Limbs, const BUFFER: usize>(numerator: L, divisor: L) -> (L, L
 /// Returns the integer square root of `value`, rounded down, and `true` when
 /// the root is not exact.
 ///
-/// Values of at most 128 bits use the native `u128` square root. For a wider
-/// value, Newton's iteration starts above the root, from the root of the top
-/// 128 bits, and decreases to it.
+/// Values of at most 64 bits use the native `u64` square root, and values of
+/// at most 128 bits the native `u128` square root. For a wider value,
+/// Newton's iteration starts above the root, from the root of the top 128
+/// bits, and decreases to it.
 pub fn square_root<L: Limbs>(value: L) -> (L, bool) {
     let length = value.bit_length();
+    if length <= 64 {
+        let narrow = value.limb(0);
+        let root = narrow.isqrt();
+        return (L::ZERO.with_limb(0, root), root * root != narrow);
+    }
     if length <= 128 {
         let wide = to_u128(&value);
         let root = wide.isqrt();
@@ -699,6 +773,42 @@ mod tests {
         assert_eq!(value.shr(192), [0; 3]);
         assert_eq!(value.shr(1000), [0; 3]);
         assert_eq!(value.shl(192), [0; 3]);
+    }
+
+    #[test]
+    fn one_limb_operations_take_every_count() {
+        let value: [u64; 1] = [0x8000_0000_0000_0001];
+        assert_eq!(value.shl(0), value);
+        assert_eq!(value.shl(63), [1 << 63]);
+        assert_eq!(value.shl(64), [0]);
+        assert_eq!(value.shl(1000), [0]);
+        assert_eq!(value.shr(63), [1]);
+        assert_eq!(value.shr(64), [0]);
+        assert_eq!(value.shr(1000), [0]);
+        assert!(!value.any_below(0) && value.any_below(1) && value.any_below(64));
+        assert!(!<[u64; 1]>::ZERO.any_below(1000) && value.any_below(1000));
+        assert_eq!(value.low_bits(1), [1]);
+        assert_eq!(value.low_bits(64), value);
+        assert_eq!(value.low_bits(100), value);
+        assert_eq!((value.bit_length(), [0_u64].bit_length()), (64, 0));
+        assert_eq!([u64::MAX].increment(), [0]);
+        assert_eq!([3_u64].add([4]), [7]);
+        assert_eq!([7_u64].sub([4]), [3]);
+        assert_eq!([3_u64].compare(&[4]), core::cmp::Ordering::Less);
+        // Division and the square root of values below 2^64 on a wider
+        // array.
+        assert_eq!(
+            super::divide([100_u64, 0], [1 << 40, 0]),
+            ([0, 0], [100, 0])
+        );
+        assert_eq!(
+            super::divide([u64::MAX, 0], [0, 1]),
+            ([0, 0], [u64::MAX, 0])
+        );
+        assert_eq!(
+            super::square_root([u64::MAX, 0]),
+            ([u64::from(u32::MAX), 0], true)
+        );
     }
 
     #[test]

@@ -202,7 +202,27 @@ fn apply<L: Limbs>(cut: Cut<L>, negative: bool, rounding: Rounding) -> (L, bool)
 /// and the flags. `Out` must hold the format precision plus one bit, because
 /// a carry out of the rounded bits happens before the shift that removes it.
 /// Every storage type has at least two bits more than its precision.
+#[inline]
 pub fn round<In: Limbs, Out: Limbs>(
+    value: &Unrounded<In>,
+    target: &Target,
+    env: &Env,
+) -> (Unpacked<Out>, Flags) {
+    let width = value.significand.bit_length();
+    let top = i64::from(value.exponent) + i64::from(width) - 1;
+    if width != 0 && top >= i64::from(target.emin) {
+        return round_normal(value, width, top, target, env);
+    }
+    round_small(value, target, env)
+}
+
+/// Rounds a zero, or a value whose highest bit is below `emin`. The result
+/// can be tiny, subnormal, or zero.
+///
+/// The function stays out of line, so that the common case of [`round`]
+/// inlines into its callers without this rarer code.
+#[inline(never)]
+fn round_small<In: Limbs, Out: Limbs>(
     value: &Unrounded<In>,
     target: &Target,
     env: &Env,
@@ -268,15 +288,73 @@ pub fn round<In: Limbs, Out: Limbs>(
 
     let length = kept.bit_length();
     let result_top = lowest + i64::from(length) - 1;
-    let emax = i64::from(target.emax);
-    let nan_pattern = target.all_ones_is_nan
-        && result_top == emax
-        && precision == target.precision
-        && kept == Out::ones(precision);
-    if result_top > emax || nan_pattern {
+    if overflows(kept, result_top, precision, target) {
         return overflow(negative, precision, target, env);
     }
     (normalize(negative, kept, lowest, target), flags)
+}
+
+/// Rounds a value whose highest bit is at or above `emin`. The result is
+/// normal or overflows, and it is never tiny. So the routine keeps the top
+/// `precision` bits of the value, and a carry out of the kept bits moves the
+/// top up by one.
+#[inline]
+fn round_normal<In: Limbs, Out: Limbs>(
+    value: &Unrounded<In>,
+    width: u32,
+    top: i64,
+    target: &Target,
+    env: &Env,
+) -> (Unpacked<Out>, Flags) {
+    let precision = target.precision_in(env);
+    debug_assert!(
+        !value.sticky || width >= precision + 2,
+        "a sticky value has at least p + 2 significant bits"
+    );
+    let negative = value.negative;
+    // The cut keeps the top `precision` bits of the significand.
+    let significand = value.significand;
+    let first = if width > precision {
+        let shift = width - precision;
+        Cut {
+            kept: significand.shr(shift).resize::<Out>(),
+            round: significand.bit(shift - 1),
+            rest: significand.any_below(shift - 1) || value.sticky,
+        }
+    } else {
+        Cut {
+            kept: significand.resize::<Out>().shl(precision - width),
+            round: false,
+            rest: value.sticky,
+        }
+    };
+    let inexact = first.round || first.rest;
+    let (mut kept, rounded_up) = apply(first, negative, env.rounding);
+    let mut result_top = top;
+    if kept.bit(precision) {
+        kept = kept.shr(1);
+        result_top += 1;
+    }
+    let mut flags = Flags::NONE;
+    if inexact {
+        flags |= Flags::INEXACT;
+    }
+    if rounded_up {
+        flags |= Flags::ROUNDED_UP;
+    }
+    if overflows(kept, result_top, precision, target) {
+        return overflow(negative, precision, target, env);
+    }
+    let full = target.precision;
+    let exponent = result_top - i64::from(full - 1);
+    (
+        Unpacked::Finite {
+            negative,
+            exponent: i32::try_from(exponent).expect("a finite exponent fits an i32"),
+            significand: kept.shl(full - precision),
+        },
+        flags,
+    )
 }
 
 /// The integer that a value rounds to.
@@ -329,6 +407,18 @@ fn normalize<L: Limbs>(negative: bool, kept: L, lowest: i64, target: &Target) ->
         exponent: i32::try_from(exponent).expect("a finite exponent fits an i32"),
         significand: kept.shl(shift),
     }
+}
+
+/// Returns `true` when rounded bits whose highest bit has the weight
+/// `result_top` are above the largest finite value: above `emax`, or the NaN
+/// encoding of a `NoInf` format.
+fn overflows<L: Limbs>(kept: L, result_top: i64, precision: u32, target: &Target) -> bool {
+    let emax = i64::from(target.emax);
+    let nan_pattern = target.all_ones_is_nan
+        && result_top == emax
+        && precision == target.precision
+        && kept == L::ones(precision);
+    result_top > emax || nan_pattern
 }
 
 /// Returns the result of an overflow.

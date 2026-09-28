@@ -55,4 +55,33 @@ impl<L> Unpacked<L> {
             exponent: 0,
         }
     }
+
+    /// Returns the parts of a nonzero finite value, or `None` for any other
+    /// value.
+    #[inline]
+    pub fn number(self) -> Option<Number<L>> {
+        match self {
+            Self::Finite {
+                negative,
+                exponent,
+                significand,
+            } => Some(Number {
+                negative,
+                exponent,
+                significand,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// The parts of a nonzero finite value: `significand * RADIX^exponent`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Number<L> {
+    /// The sign.
+    pub negative: bool,
+    /// The weight of the lowest significand digit, as a power of the radix.
+    pub exponent: i32,
+    /// The significand.
+    pub significand: L,
 }
