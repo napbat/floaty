@@ -66,14 +66,18 @@ cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
   `rustup toolchain install 1.85 --profile minimal --component clippy`.
 - `--workspace` includes `floaty-verify`. Its build runs on Linux x86-64
   hosts only, and needs the submodules (`git submodule update --init`),
-  `make`, `gcc`, `m4`, `curl`, `tar`, `sha256sum`, and `python3`. It
-  builds TestFloat, MPFR, decNumber, and the Intel decimal library from
-  source. Its first build downloads the decimal archives, so it needs
-  network access once. On another host, run the gates with `-p floaty`
-  instead of `--workspace`.
-- Keep the submodules under `floaty-verify/reference/` and the pinned
-  decimal archives in `floaty-verify/build.rs` at their pinned releases. A
-  change of release is a design change: record it in `DESIGN.md`.
+  `make`, `gcc`, `g++` 15.2.0, `objcopy`, `m4`, `curl`, `tar`, `sha256sum`,
+  `python3`, `powerpc64le-linux-gnu-gcc` 15.2.0 with its binutils (package
+  gcc-powerpc64le-linux-gnu), and `qemu-ppc64le` 10.2.1 (package
+  qemu-user). The build compiles TestFloat, MPFR, decNumber, the Intel
+  decimal library, and QD from source. The first build downloads the
+  decimal and QD archives, so it needs network access once. The `Qd` tests
+  need a processor on which glibc's `fma` is the FMA3 instruction. On
+  another host, run the gates with `-p floaty` instead of `--workspace`.
+- Keep the submodules under `floaty-verify/reference/`, the pinned archives
+  in `floaty-verify/build.rs`, the pinned compilers, and the pinned QEMU at
+  their pinned releases. A change of release is a design change: record it
+  in `DESIGN.md`.
 - Run the long exhaustive sweeps with
   `cargo test -p floaty-verify --release -- --ignored`.
 - Measure performance with `cargo bench -p floaty-verify --bench operations`

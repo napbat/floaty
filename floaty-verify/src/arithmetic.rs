@@ -118,13 +118,13 @@ pub fn compute<const N: usize>(
     }
     if nan {
         // The invalid product 0 * inf with a NaN addend signals invalid
-        // unless the NaN rule gives the addend precedence. A NaN factor
-        // makes the product a NaN, not 0 * inf.
+        // unless the rule is `YieldsToNan`. A NaN factor makes the product a
+        // NaN, not 0 * inf.
         let product_nan = operands[..2.min(operands.len())]
             .iter()
             .any(|operand| matches!(operand.decoded, Decoded::Nan { .. }));
         if operation == Operation::MulAdd
-            && env.nan.invalid_product == InvalidProduct::Signals
+            && env.nan.invalid_product != InvalidProduct::YieldsToNan
             && !product_nan
             && is_zero_times_infinity(&numbers[0], &numbers[1])
         {

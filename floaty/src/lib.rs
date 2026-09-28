@@ -7,7 +7,9 @@
 //!
 //! A value has the type [`Float<S, W>`](Float): a standard `S` at a width of
 //! `W` bits. Type aliases name the common formats, for example [`F32`],
-//! [`BF16`], [`F8E4M3`], and [`F80`].
+//! [`BF16`], [`F8E4M3`], [`F80`], and [`D64Bid`]. A double-double value has
+//! the type [`DoubleDouble<Alg>`](DoubleDouble), with the arithmetic of one
+//! reference implementation.
 //!
 //! ```
 //! use floaty::{Class, F8E4M3};
@@ -43,6 +45,7 @@ pub mod format;
 
 mod binary;
 mod decimal;
+mod double_double;
 mod exact;
 mod float;
 mod host;
@@ -52,6 +55,7 @@ mod nan;
 mod radix;
 mod unpacked;
 
+pub use double_double::{Algorithm, DoubleDouble, Gcc, Qd};
 pub use env::{Env, Flags, Rounding, TotalOrder, mode};
 pub use exact::Exact;
 pub use float::{

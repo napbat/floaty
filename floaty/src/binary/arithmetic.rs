@@ -10,7 +10,7 @@
 use core::cmp::Ordering;
 
 use super::{Layout, Unpacked};
-use crate::env::{Env, Flags, InvalidProduct, Rounding};
+use crate::env::{Env, Flags, Rounding};
 use crate::exact::{self, Unrounded};
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
@@ -370,9 +370,8 @@ where
 
     /// Returns `left * right + addend`, rounded once.
     ///
-    /// The NaN cases follow SoftFloat: the NaN of `left` and `right` first,
-    /// then the NaN of that result and `addend`. The `invalid_product` field
-    /// of the NaN rule decides `0 * inf + NaN`.
+    /// The `fused_order` field of the NaN rule orders the NaN operands, and
+    /// the `invalid_product` field decides `0 * inf + NaN`.
     pub fn mul_add<L: Widen>(left: L, right: L, addend: L, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
@@ -395,12 +394,8 @@ where
             match (first, second) {
                 (Unpacked::Infinity { .. }, Unpacked::Zero { .. })
                 | (Unpacked::Zero { .. }, Unpacked::Infinity { .. }) => {
-                    if third.is_nan() && env.nan.invalid_product == InvalidProduct::YieldsToNan {
-                        let (value, special) = nan::propagate(&Unpacked::zero(false), &third, env);
-                        return Self::exact(value, flags | special);
-                    }
-                    flags |= Flags::INVALID;
-                    default_nan(env)
+                    let (value, special) = nan::invalid_product(&third, env);
+                    return Self::exact(value, flags | special);
                 }
                 (Unpacked::Infinity { .. }, _) | (_, Unpacked::Infinity { .. }) => {
                     Unpacked::Infinity {
@@ -427,7 +422,7 @@ where
                 }
             }
         };
-        if product.is_nan() || third.is_nan() {
+        if third.is_nan() {
             let (value, special) = nan::propagate(&product, &third, env);
             return Self::exact(value, flags | special);
         }
@@ -655,6 +650,15 @@ mod tests {
         );
         let (nan, _) = one.mul_add_with(signaling, addend, first);
         assert_eq!(nan.to_bits(), 0x7FC0_0002);
+        // The PowerPC order puts the addend between the two factors.
+        let addend_second = Env::IEEE.with_nan(
+            NanRule::new(NanPropagation::FirstOperand)
+                .with_fused_order(FusedNanOrder::AddendSecond),
+        );
+        let (nan, flags) = one.mul_add_with(signaling, addend, addend_second);
+        assert_eq!((nan.to_bits(), flags), (0x7FC0_0002, Flags::INVALID));
+        let (nan, flags) = factor.mul_add_with(signaling, addend, addend_second);
+        assert_eq!((nan.to_bits(), flags), (0x7FC0_0001, Flags::INVALID));
     }
 
     #[test]
@@ -671,6 +675,16 @@ mod tests {
         assert_eq!((nan.to_bits(), flags), (0xFFC0_0001, Flags::INVALID));
         // Without a NaN addend the product still signals invalid.
         let (nan, flags) = zero.mul_add_with(infinity, F32::from_bits(0x3F80_0000), yields);
+        assert_eq!((nan.to_bits(), flags), (0x7FC0_0000, Flags::INVALID));
+        // The PowerPC rule signals invalid and still returns the addend.
+        let signals = Env::IEEE.with_nan(
+            Env::IEEE
+                .nan
+                .with_invalid_product(InvalidProduct::SignalsAndYieldsToNan),
+        );
+        let (nan, flags) = zero.mul_add_with(infinity, F32::from_bits(0xFFC0_1234), signals);
+        assert_eq!((nan.to_bits(), flags), (0xFFC0_1234, Flags::INVALID));
+        let (nan, flags) = infinity.mul_add_with(zero, F32::from_bits(0x3F80_0000), signals);
         assert_eq!((nan.to_bits(), flags), (0x7FC0_0000, Flags::INVALID));
     }
 

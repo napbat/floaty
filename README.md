@@ -6,7 +6,7 @@ floaty emulates floating-point formats and the behavior of the hardware that
 uses them. Every operation gives the same bits on every host. It is a base
 layer for binary lifters, constant folders, and software FPU emulators.
 
-> **Status:** build steps 1 to 7 of 8 are complete: every binary format
+> **Status:** build steps 1 to 8 of 8 are complete: every binary format
 > decodes, classifies, rounds, converts, and computes `+ - * /`, square root,
 > and fused multiply-add, correctly rounded in every rounding direction, and
 > has comparisons and a total order, the minimum and maximum families,
@@ -17,6 +17,9 @@ layer for binary lifters, constant folders, and software FPU emulators.
 > bits. decimal32, decimal64, and decimal128, in BID and DPD, have the same
 > operations with the IEEE 754 preferred exponents, the quantum operations,
 > and correctly rounded conversions to and from every binary format.
+> Double-double values match libgcc's IBM `long double` under QEMU, or QD's
+> `dd_real`, bit for bit under the behavior of each platform, NaN payloads
+> included.
 > [DESIGN.md](DESIGN.md) holds the approved design and the build order.
 
 ## Planned Scope
@@ -57,9 +60,11 @@ let (sum, flags) = a.add_with(b, Env::X86_SSE);         // full platform behavio
 ## Development
 
 Rust 1.85 or later, edition 2024. The verification harness runs on Linux
-x86-64 hosts and also needs the reference sources, `make`, `gcc`, `m4`,
-`curl`, `tar`, `sha256sum`, and `python3`. Its first build downloads the
-decimal references, so it needs network access once:
+x86-64 hosts and also needs the reference sources, `make`, `gcc`, `g++`
+15.2.0, `objcopy`, `m4`, `curl`, `tar`, `sha256sum`, `python3`,
+`powerpc64le-linux-gnu-gcc` 15.2.0, and `qemu-ppc64le` 10.2.1. The QD
+tests need a processor with FMA3. The first build downloads the decimal
+and QD references, so it needs network access once:
 
 ```text
 git submodule update --init

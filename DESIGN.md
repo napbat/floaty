@@ -2,7 +2,7 @@
 
 Status: design approved on 2026-09-27. Build steps 1, encoding, 2, rounding,
 3, arithmetic, 4, the other binary operations, 5, the x86 SSE and x87
-presets, 6, performance, and 7, decimal, are complete.
+presets, 6, performance, 7, decimal, and 8, double-double, are complete.
 
 This file is the source of truth for every design decision in floaty. Update
 it in the same change that alters a decision.
@@ -277,20 +277,72 @@ Step 7 fixed these rules:
 
 ### Double-Double Family
 
-`DoubleDouble<Alg>` at `W = 128` stores a value as the sum of two binary64
-values, `hi + lo`. No standard defines its correct results. Different
-published algorithms give different low halves for the same inputs. Each
-variant therefore matches one reference implementation bit for bit.
+`DoubleDouble<Alg, M>` stores a value as the sum of two binary64 values,
+`hi + lo`. It is a type of its own, not a `Float` format. No standard
+defines its correct results, and different published algorithms give
+different low halves for the same inputs. Each algorithm therefore matches
+one reference implementation bit for bit. The type has the operations that
+its reference defines, and the operations on its exact value.
 
-| Variant | Reference |
-| --- | --- |
-| `Gcc` | libgcc `config/rs6000/ibm-ldouble.c`: `__gcc_qadd`, `__gcc_qsub`, `__gcc_qmul`, and `__gcc_qdiv`. This is the IBM `long double` of PowerPC. |
-| `Qd` | The QD library `dd_real`, with its accurate IEEE-style addition and accurate division, and its multiply and square root. |
+| Variant | Reference | Arithmetic |
+| --- | --- | --- |
+| `Gcc` | libgcc `config/rs6000/ibm-ldouble.c` of GCC 15.2.0, as its powerpc64le build compiles it: `__gcc_qadd`, `__gcc_qsub`, `__gcc_qmul`, and `__gcc_qdiv`. This is the IBM `long double` of PowerPC. | add, sub, mul, div |
+| `Qd` | QD 2.3.24 `dd_real`, configured with `--enable-ieee-add`, `--disable-sloppy-div`, and `--enable-fma=c99`, and built by g++ 15.2.0 with `-O2 -ffp-contract=off` for x86-64 | add, sub, mul, div, sqrt |
 
-Pin the GCC version, the QD version, and the QD configuration when step 8
-starts. The engine builds on the floaty binary64 format, so it inherits
-bit-exact behavior. One value can have more than one bit pattern, for example
-with the sign of a zero low half.
+Step 8 fixed these rules:
+
+- Each algorithm is a fixed sequence of binary64 operations and
+  comparisons. floaty runs each step on the floaty binary64 engine under
+  the behavior of the call. The result has the union of the flags of the
+  steps, as the hardware sets them when it runs the reference.
+- With the behavior of the reference platform, the result and the five
+  IEEE flags match the reference in every rounding direction. `TINY`,
+  `ROUNDED_UP`, and `DENORMAL_INPUT` say that some step was tiny, rounded
+  up, or read a subnormal operand. They do not describe the double-double
+  result.
+- The platform of `Gcc` is PowerPC, as QEMU's PowerPC target gives it. Its
+  behavior has the `FirstOperand` NaN rule and a positive default NaN. It
+  also has the `AddendSecond` fused NaN order, the `SignalsAndYieldsToNan`
+  invalid product rule, and tininess before rounding. The platform of `Qd`
+  is x86-64 with SSE, `Env::X86_SSE`.
+- Each algorithm follows the machine code that the pinned compiler makes of
+  its reference, not the source. The compiler orders the operands of each
+  instruction, and the operand order decides which NaN a step returns.
+  `build.rs` pins the machine code, so another compiler build stops the
+  build and does not change the reference silently.
+- `Gcc` follows `ibm-ldouble.o` of the pinned libgcc. GCC fuses
+  `a*d + b*c` of `__gcc_qmul` into one fused multiply-add.
+- A pair with a finite high half and a NaN low half is malformed. The
+  libgcc routines combine such NaNs in fused multiply-adds. PowerPC takes
+  their NaN in the order first factor, addend, second factor, which
+  `AddendSecond` gives. `fmsub` selects a NaN operand before it negates the
+  addend, so a NaN addend keeps its sign; the `Gcc` steps do the same. So
+  `Gcc` matches libgcc for every pair, malformed pairs included.
+- `Qd` follows the machine code that g++ 15.2.0 makes of QD for x86-64:
+  addition, subtraction, and multiplication as the harness shim inlines
+  them, `dd_real::accurate_div`, and `sqrt` of `dd_real.o`. The compiler
+  swaps the operands of some additions, and x86 returns the NaN of the first
+  operand. It also drops the error of a `quick_two_sum` whose low half is
+  unused: in the second remainder of the division, and in the square root.
+  So that step signals nothing.
+- QD's own results stay: the square root of a zero is `+0`, and the square
+  root of a negative value is QD's NaN,
+  `(0x7FF8000000000000, 0x7FF8000000000000)`. One signaling comparison of
+  the high half with zero decides both cases.
+- `from_parts(hi, lo)` keeps any pair, and `from_f64(x)` is `(x, +0)`.
+  `hi` and `lo` return the halves. Negation negates both halves, as GCC
+  negates an `__ibm128` and QD negates a `dd_real`. `abs` negates both
+  halves when the exact value has a negative sign. A pair whose high half
+  has the other sign, such as `(-0, 1)`, keeps its halves. Neither signals.
+- The operations on the exact value `hi + lo`: `decode`, conversion to every
+  `Float` format rounded once, the quiet and signaling comparisons, and
+  `PartialEq` and `PartialOrd`. A NaN high half makes the value that NaN,
+  and an infinite high half makes the value that infinity. With a finite
+  high half, an infinite or NaN low half makes the value that low half.
+  Otherwise the value is the exact sum, and a zero sum takes the sign of
+  the high half.
+- One value can have more than one pair, for example with the sign of a
+  zero low half. Arithmetic returns the pair that the reference returns.
 
 ## Behavior
 
@@ -316,8 +368,8 @@ pub struct Env {
 pub struct NanRule {
     pub propagation: NanPropagation, // SignalingFirst, FirstOperand, LargerSignificand, or DefaultNan
     pub default_negative: bool,      // the sign of the default NaN
-    pub invalid_product: InvalidProduct, // Signals or YieldsToNan: fma 0 * inf + NaN
-    pub fused_order: FusedNanOrder,  // ProductFirst or AddendFirst: the NaN operands of fma
+    pub invalid_product: InvalidProduct, // Signals, YieldsToNan, or SignalsAndYieldsToNan: fma 0 * inf + NaN
+    pub fused_order: FusedNanOrder,  // ProductFirst, AddendFirst, or AddendSecond: the NaN operands of fma
 }
 ```
 
@@ -348,9 +400,10 @@ module `mode`.
   that meets the addend under the propagation rule, as SoftFloat does. With
   `SignalingFirst` this gives the result of the Arm `FPMulAdd` pseudocode.
   `YieldsToNan` gives the NaN addend precedence and signals invalid only for
-  a signaling addend, as x86 does. The rule is a field of its own, not a part
-  of a propagation rule, because implementations combine the two
-  independently.
+  a signaling addend, as x86 does. `SignalsAndYieldsToNan` signals invalid
+  and gives the NaN addend precedence, as QEMU's PowerPC target does for
+  `fmadd` and `fmsub`. The rule is a field of its own, not a part of a
+  propagation rule, because implementations combine the two independently.
 - `fused_order` decides the order in which a fused multiply-add offers its
   NaN operands to the propagation rule. `ProductFirst`, the default, selects
   from the two factors, makes that NaN quiet, and then selects from it and
@@ -359,9 +412,11 @@ module `mode`.
   the first factor, and the second factor, with no quieting between them.
   With `SignalingFirst` it gives the result of the Arm `FPMulAdd`
   pseudocode, which passes its operands to `FPProcessNaNs3` in that order.
-  QEMU's Arm target uses the same order. IEEE 754-2019 section 6.2.3 does
-  not say which input NaN gives the payload. The two orders differ for a
-  quiet NaN factor with a quiet NaN addend.
+  QEMU's Arm target uses the same order. `AddendSecond` selects from the
+  first factor, the addend, and the second factor. With `FirstOperand` it
+  gives the result of QEMU's PowerPC target for `fmadd` and `fmsub`. IEEE
+  754-2019 section 6.2.3 does not say which input NaN gives the payload.
+  The orders differ for a quiet NaN factor with a quiet NaN addend.
 - `total_order` decides how `total_cmp` orders two encodings of one datum:
   an x87 pseudo-denormal and the normal encoding of its value, or a
   non-canonical decimal encoding and its canonical twin. `Datum`, the
@@ -613,6 +668,8 @@ flags. Each operation follows IEEE 754 for special values and rounds once.
   checks `Signals` with every propagation rule. The processor checks
   `YieldsToNan` with `FirstOperand`. Arm takes the addend first among NaN
   operands, which `AddendFirst` gives; an Arm preset needs that order.
+  PowerPC takes the addend second, which `AddendSecond` gives, and QEMU
+  checks it with `SignalsAndYieldsToNan`.
 - x86 does not report DE for every subnormal operand. It reports DE only when
   DAZ is off and no NaN operand, invalid operation, or divide-by-zero occurs,
   by the precedence of the Intel SDM Volume 1, section 4.9.2. An x87 store
@@ -895,7 +952,10 @@ an oracle.
 | Decimal, DPD | The decTest 2.62 vectors, and the decNumber 3.68 library | Every decimal64 and decimal128 vector of an operation that floaty has. That includes the `canonical` vectors, for `is_canonical` and a conversion to the same format, and the `apply` vectors of an explicit encoding, for `decode`, which the decimal32 vectors also give. Random operands at the edges of decimal32, decimal64, and decimal128 for every such operation, square root, the conversions between widths, FTZ, and DAZ, in the six shared rounding directions: result bits, the five IEEE flags, `TINY`, and `ROUNDED_UP`. Add, subtract, multiply, divide, fused multiply-add, square root, and `scale_b` of decimal64 and decimal128 under precision limits of 1, 2, 3, 7, and `p - 1` digits. |
 | Decimal, BID, and conversions between decimal and binary32, binary64, x87 extended, and binary128 | The Intel Decimal Floating-Point Math Library 2.0 Update 2 and its `readtest.in` vectors | Every `readtest.in` vector of a function that floaty has: 65,300 operation lines and 41,505 conversion lines. About 22 million seeded random cases in the five directions of the library. They include exact square roots, values on both sides of every integer bound, binary ties at every sign of decimal exponent, and minimum and maximum operands that compare equal. The tests compare result bits with NaN payloads, the five IEEE flags, and the denormal flag of a conversion from binary. Each test asserts every rule and skip count. |
 | Conversions between decimal and binary16, bfloat16, TF32, the FP8 formats, binary256, and binary512 | MPFR, which gives the correctly rounded leading digits of a binary value, and rounds a decimal value that GMP reduces to an integer and a sticky bit | Every encoding of the 8- and 16-bit sources. Boundary and random wide values, and 3,000 random binary256 and binary512 values in the range of each decimal format. Decimal values at the edges of each format, and NaNs with edge payloads. Seven behaviors each: the value, the decimal exponent, and every flag. A NaN result is quiet, with the sign of the source and the payload rule of this design. |
-| Double-double | libgcc on PowerPC under QEMU, and QD | Bit-exact match to each reference |
+| The `AddendSecond` fused NaN order and the `SignalsAndYieldsToNan` invalid product rule | The PowerPC `fmadd` and `fmsub` instructions, run under QEMU 10.2.1 `qemu-ppc64le` in the libgcc batch program | Every triple of twelve binary64 values, the special values of the Arm test, the smallest subnormal, and the largest finite value, in four rounding directions under the PowerPC behavior: result bits and the five IEEE flags |
+| Double-double `Gcc` | libgcc's `__gcc_qadd`, `__gcc_qsub`, `__gcc_qmul`, and `__gcc_qdiv` of the pinned powerpc64le GCC 15.2.0, run under QEMU 10.2.1 `qemu-ppc64le` in one batch process | Random pairs at the edges of binary64 in four rounding directions under the PowerPC behavior, malformed pairs included: both halves bit for bit and the five IEEE flags |
+| Double-double `Qd` | QD 2.3.24, built by `build.rs` in the pinned configuration and called through a C++ shim | Random pairs at the edges of binary64 in four rounding directions under `Env::X86_SSE`: both halves bit for bit, with the payload and sign of a NaN half, and the five IEEE flags |
+| The exact value of a double-double pair | MPFR, which adds the halves exactly | `decode`, conversion to binary16, bfloat16, binary32, x87 extended, binary128, decimal64, and decimal128 in five behaviors, and the quiet and signaling comparisons |
 
 - `rustc_apfloat` follows LLVM, not the processor, for non-canonical x87
   encodings. The processor is the reference for those encodings. See
@@ -937,6 +997,36 @@ an oracle.
   exported `CFLAGS` in place of its own settings.
 - decNumber and the Intel library both detect decimal tininess before
   rounding, as floaty does.
+- `build.rs` builds the libgcc batch program with the cross compiler. It
+  stops when the compiler is not GCC 15.2.0. It also stops when
+  `ibm-ldouble.o` in the libgcc of the compiler does not have the pinned
+  SHA-256. floaty's `Gcc` follows that object.
+- `build.rs` and each QEMU test stop when `qemu-ppc64le` is not QEMU 10.2.1.
+  The tests remove the `QEMU_*` variables that select another processor.
+- QEMU's PowerPC target stands in for POWER hardware. No POWER processor
+  confirms the `Gcc` results or the PowerPC fused multiply-add rules.
+- `build.rs` downloads QD 2.3.24 with a pinned SHA-256, configures it with
+  `--enable-ieee-add --disable-sloppy-div --enable-fma=c99` and the
+  build-only `--disable-fortran --disable-shared --with-pic`, and checks
+  `qd_config.h` for those settings. It stops when `g++` is not GCC 15.2.0,
+  or when the code and constant sections of the shim object or of
+  `dd_real.o` in `libqd.a` do not have the pinned SHA-256. floaty's `Qd`
+  follows that machine code, so a change to the shim needs a new
+  transcription and a new digest.
+- QD's `fma` is the C library `fma`. glibc selects its implementation at
+  run time. On a processor with FMA3 it is `vfmadd213sd`, which computes
+  `fma(x, y, z)` as `y * x + z` and takes the first NaN in that order. So
+  the fused steps of `Qd` pass `y` as the first factor. The `Qd` test first
+  checks the `fma` of the host against floaty on every triple of six special
+  values, and stops on another `fma`.
+- The `Gcc` tests compare every pair, and count the malformed operands. The
+  fused NaN order and the `fmsub` NaN rule decide those cases.
+- The `Gcc` tests aim some operands so that a cross product of
+  `__gcc_qmul` lands just below 2^-1022 while the main product stays normal.
+  There, tininess before rounding decides the underflow flag.
+- The C library of the references does not report the x86 denormal flag, so
+  the double-double tests compare the five IEEE flags. QD's `sqrt` of a
+  negative value signals nothing and writes an error to standard error.
 - decNumber's fixed-size fused multiply-add can lose a small addend, and
   its fixed-size total order can order NaN payloads wrongly. The random
   tests use decNumber's arbitrary-precision functions for those operations.
@@ -992,15 +1082,18 @@ floaty/                  the workspace
 │       ├── binary.rs    unpack, pack, and every binary operation
 │       ├── decimal.rs   the BID and DPD codecs and every decimal operation
 │       ├── radix.rs     exact arithmetic for binary and decimal conversions
-│       └── double_double.rs  step 8
+│       └── double_double.rs  the double-double type, and the Gcc and Qd
+│                        algorithms
 └── floaty-verify/       TestFloat, MPFR, decimal, and hardware harness
     ├── build.rs         builds testfloat_gen from the submodules with make,
-    │                    and decNumber and the Intel decimal library from
-    │                    pinned archives
+    │                    decNumber, the Intel decimal library, and QD from
+    │                    pinned archives, and the libgcc batch program with
+    │                    the pinned PowerPC cross compiler
     ├── reference/       Berkeley SoftFloat and TestFloat, git submodules,
     │                    and the ignored download cache `downloads/`
     ├── shim/            C wrappers of the Intel binary80 conversions, which
-    │                    take a `long double` that Rust has no type for
+    │                    take a `long double` that Rust has no type for, the
+    │                    libgcc batch program for QEMU, and the QD shim
     ├── data/            generated reference tables
     └── scripts/         the generators of the reference tables
 ```
@@ -1062,6 +1155,8 @@ Each step passes its oracle tests before the next step starts.
 - An optional layer that carries flags on values through a computation.
 - A later speedup pass on the fixed cost of about 35 to 40 ns per rounded
   operation, which step 6 measured and left for now.
+- Confirm the `Gcc` double-double results, and the PowerPC `fmadd` and
+  `fmsub` NaN rules, on POWER hardware. QEMU stands in for it now.
 - `saturate` applies only to encodings without an infinity. OCP FP8
   conversions and the x86 and ARM FP8 instructions also saturate E5M2, which
   has an infinity. Decide when a consumer needs those semantics.

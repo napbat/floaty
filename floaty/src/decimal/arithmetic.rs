@@ -9,7 +9,7 @@
 
 use super::digits::{digit_count, power_of_ten};
 use super::{DecimalLayout, Wide, round};
-use crate::env::{Env, Flags, InvalidProduct, Rounding};
+use crate::env::{Env, Flags, Rounding};
 use crate::exact::Unrounded;
 use crate::format::{DecimalEncoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
@@ -424,17 +424,8 @@ where
             return Self::exact(value, flags | special);
         }
         if invalid_product {
-            if z.is_nan() && env.nan.invalid_product == InvalidProduct::YieldsToNan {
-                let (value, special) = nan::propagate(&Unpacked::zero(false), &z, env);
-                return Self::exact(value, flags | special);
-            }
-            let invalid = default_nan(env);
-            let (value, special) = if z.is_nan() {
-                nan::propagate(&invalid, &z, env)
-            } else {
-                (invalid, Flags::NONE)
-            };
-            return Self::exact(value, flags | Flags::INVALID | special);
+            let (value, special) = nan::invalid_product(&z, env);
+            return Self::exact(value, flags | special);
         }
         if z.is_nan() {
             let (value, special) = nan::propagate(&Unpacked::zero(false), &z, env);

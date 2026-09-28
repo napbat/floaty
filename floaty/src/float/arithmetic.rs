@@ -62,10 +62,10 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
 
     /// Returns `self * multiplier + addend`, rounded once, and the flags.
     ///
-    /// A NaN comes from `self` and `multiplier` first, and then from that
-    /// result and `addend`, as in SoftFloat. The
-    /// [`invalid_product`](crate::env::NanRule::invalid_product) field of the
-    /// NaN rule decides `0 * inf + NaN`.
+    /// The [`fused_order`](crate::env::NanRule::fused_order) field of the NaN
+    /// rule orders the NaN operands, and the
+    /// [`invalid_product`](crate::env::NanRule::invalid_product) field decides
+    /// `0 * inf + NaN`.
     #[must_use]
     pub fn mul_add_with(
         self,

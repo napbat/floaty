@@ -83,6 +83,11 @@ pub enum InvalidProduct {
     /// comes before an invalid operation in the Intel SDM Volume 1, section
     /// 4.9.2.
     YieldsToNan,
+    /// The invalid product signals invalid, and the NaN addend takes
+    /// precedence over its default NaN. The propagation rule selects the
+    /// result from the addend alone. QEMU's PowerPC target gives this result
+    /// for `fmadd` and `fmsub`.
+    SignalsAndYieldsToNan,
 }
 
 /// The order in which a fused multiply-add offers its NaN operands to the
@@ -105,6 +110,11 @@ pub enum FusedNanOrder {
     /// Architecture Reference Manual passes its operands to `FPProcessNaNs3`
     /// in this order.
     AddendFirst,
+    /// The rule selects from the first factor, the addend, and the second
+    /// factor, in this order, with no quieting between them. With
+    /// [`NanPropagation::FirstOperand`] it gives the first NaN of that order,
+    /// as QEMU's PowerPC target gives for `fmadd` and `fmsub`.
+    AddendSecond,
 }
 
 /// The NaN that an operation returns.

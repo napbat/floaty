@@ -2,7 +2,7 @@
 
 use core::cmp::Ordering;
 
-use crate::env::{Env, Flags, FusedNanOrder, NanPropagation};
+use crate::env::{Env, Flags, FusedNanOrder, InvalidProduct, NanPropagation};
 use crate::format::internal::MinMax;
 use crate::limbs::Limbs;
 use crate::unpacked::Unpacked;
@@ -136,6 +136,27 @@ pub fn fused<L: Limbs>(
             (value, product_flags | flags)
         }
         FusedNanOrder::AddendFirst => select(&[addend, first, second], env),
+        FusedNanOrder::AddendSecond => select(&[first, addend, second], env),
+    }
+}
+
+/// Returns the result of a fused multiply-add whose product is the invalid
+/// `0 * inf`, by the [`InvalidProduct`] rule. An addend that is not a NaN
+/// gives the default NaN.
+pub fn invalid_product<L: Limbs>(addend: &Unpacked<L>, env: &Env) -> (Unpacked<L>, Flags) {
+    if !addend.is_nan() {
+        return (default_nan(env), Flags::INVALID);
+    }
+    match env.nan.invalid_product {
+        InvalidProduct::Signals => {
+            let (value, flags) = propagate(&default_nan(env), addend, env);
+            (value, flags | Flags::INVALID)
+        }
+        InvalidProduct::YieldsToNan => propagate(&Unpacked::zero(false), addend, env),
+        InvalidProduct::SignalsAndYieldsToNan => {
+            let (value, flags) = propagate(&Unpacked::zero(false), addend, env);
+            (value, flags | Flags::INVALID)
+        }
     }
 }
 

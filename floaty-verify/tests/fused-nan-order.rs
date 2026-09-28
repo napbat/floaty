@@ -1,5 +1,7 @@
-//! Compares the NaN of a fused multiply-add under
-//! `FusedNanOrder::AddendFirst` with the `FPMulAdd` pseudocode of the Arm
+//! Compares the NaN of a fused multiply-add under each hardware fused NaN
+//! order with its reference.
+//!
+//! `FusedNanOrder::AddendFirst` follows the `FPMulAdd` pseudocode of the Arm
 //! Architecture Reference Manual. No Arm processor or emulator runs in the
 //! harness, so the test evaluates the published definition.
 //!
@@ -14,9 +16,16 @@
 //!
 //! A case without a NaN result must give the result of the default order,
 //! which TestFloat checks, because the order only selects a NaN.
+//!
+//! `FusedNanOrder::AddendSecond` follows the PowerPC `fmadd` and `fmsub`
+//! instructions under QEMU, which the `ibm_ldouble` batch program executes.
+//! That test compares every result and every flag.
 
 use floaty::env::{FusedNanOrder, NanPropagation, NanRule};
 use floaty::{Class, D64Bid, Env, F32, F64, Flags};
+use floaty_verify::ibm_ldouble::{
+    self, Flags as ReferenceFlags, Instruction, InstructionCase, Rounding,
+};
 
 /// The Arm behaviors: `SignalingFirst` for the default-NaN mode off, and
 /// `DefaultNan` for it on, both with `InvalidProduct::Signals`.
@@ -180,4 +189,68 @@ fn the_addend_first_order_follows_the_arm_pseudocode() {
     let quiet_decimal = |bits: u64| bits & !0x0200_0000_0000_0000;
     let decimal_nans = check!(D64Bid, decimal64, quiet_decimal, 0x7C00_0000_0000_0000);
     assert_eq!(decimal_nans, 1_664);
+}
+
+#[test]
+fn the_addend_second_order_follows_powerpc() {
+    // The special values of the Arm test, the smallest subnormal, and the
+    // largest finite value.
+    let values = [
+        0_u64,
+        0x8000_0000_0000_0000,
+        0x3FF0_0000_0000_0000,
+        0xC000_0000_0000_0000,
+        0x7FF0_0000_0000_0000,
+        0xFFF0_0000_0000_0000,
+        0x7FF8_0000_0000_0001,
+        0xFFF8_0000_0000_0002,
+        0x7FF0_0000_0000_0003,
+        0xFFF0_0000_0000_0004,
+        0x0000_0000_0000_0001,
+        0x7FEF_FFFF_FFFF_FFFF,
+    ];
+    let values = &values;
+    let cases: Vec<InstructionCase> = Instruction::ALL
+        .into_iter()
+        .flat_map(|instruction| Rounding::ALL.map(|rounding| (instruction, rounding)))
+        .flat_map(|(instruction, rounding)| {
+            values.iter().flat_map(move |&a| {
+                values.iter().flat_map(move |&c| {
+                    values.iter().map(move |&b| InstructionCase {
+                        instruction,
+                        rounding,
+                        a,
+                        c,
+                        b,
+                    })
+                })
+            })
+        })
+        .collect();
+    let outcomes = ibm_ldouble::run_instructions(&cases);
+    let mut nan_results = 0;
+    for (case, outcome) in cases.iter().zip(&outcomes) {
+        let (a, c, b) = (
+            F64::from_bits(case.a),
+            F64::from_bits(case.c),
+            F64::from_bits(case.b),
+        );
+        // `fmsub` selects a NaN operand before it negates the addend.
+        let addend = match case.instruction {
+            Instruction::MultiplySubtract if !b.is_nan() => -b,
+            _ => b,
+        };
+        let (result, flags) = a.mul_add_with(c, addend, ibm_ldouble::behavior(case.rounding));
+        assert_eq!(
+            (result.to_bits(), ReferenceFlags::from_floaty(flags)),
+            (outcome.result, outcome.flags),
+            "{case:x?}"
+        );
+        nan_results += usize::from(result.is_nan());
+    }
+    assert_eq!(
+        (cases.len(), nan_results),
+        (13_824, 10_400),
+        "the cases, and those with a NaN result"
+    );
 }

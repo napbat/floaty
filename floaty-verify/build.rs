@@ -7,10 +7,14 @@
 //!   decTest vectors, from pinned release archives. The Intel archive also
 //!   holds the Intel tests. The build downloads each archive once into
 //!   `reference/downloads/` and checks its SHA-256 before it uses it.
+//! - The double-double references. The IBM `long double` routines of the
+//!   powerpc64le libgcc run in a batch program under `qemu-ppc64le`. QD
+//!   comes from a pinned release archive, as the decimal libraries do.
 //!
-//! The build needs `make`, `gcc`, `ar`, `curl`, `tar`, `python3`, and
-//! `sha256sum`, and it runs on Linux x86-64 hosts only. The pinned Makefiles
-//! name `gcc`.
+//! The build needs `make`, `gcc`, `g++` 15.2.0, `ar`, `objcopy`, `curl`,
+//! `tar`, `python3`, `sha256sum`, `powerpc64le-linux-gnu-gcc` 15.2.0, and
+//! `qemu-ppc64le`, and it runs on Linux x86-64 hosts only. The pinned
+//! Makefiles name `gcc`.
 
 use std::env;
 use std::fs;
@@ -123,6 +127,103 @@ const INTEL_DEFINES: [&str; 7] = [
     "-Defi2",
 ];
 
+/// The compiler variables that the build removes from the environment of
+/// `make` and `configure`, so that an exported value cannot replace a pinned
+/// setting.
+const COMPILER_VARIABLES: [&str; 6] = ["CFLAGS", "CPPFLAGS", "LDFLAGS", "CC", "CXX", "CXXFLAGS"];
+
+/// The cross compiler of the libgcc reference.
+const POWERPC_GCC: &str = "powerpc64le-linux-gnu-gcc";
+
+/// The pinned GCC release of the libgcc reference. `DESIGN.md` pins it.
+const POWERPC_GCC_VERSION: &str = "15.2.0";
+
+/// The SHA-256 of `ibm-ldouble.o` in the pinned libgcc: its machine code,
+/// its constants, and its relocations. floaty's `Gcc` algorithm follows this
+/// object one instruction at a time, so a libgcc that compiles the routines
+/// differently is another reference.
+const IBM_LDOUBLE_SHA256: &str = "c484948ee6c0e1a9b7b4a54f31820707afbbb90ce33564aee121e0f1082d154c";
+
+/// The pinned QEMU release, which executes the libgcc reference and gives
+/// its flags. `DESIGN.md` pins it.
+const QEMU_VERSION: &str = "10.2.1";
+
+/// The emulator that runs the libgcc reference.
+const QEMU_POWERPC: &str = "qemu-ppc64le";
+
+/// The compiler options of the libgcc batch program.
+///
+/// - `-frounding-math` stops the compiler from assuming the default
+///   rounding direction.
+/// - `-static` links the C library into the program, so QEMU needs no
+///   PowerPC system root.
+const IBM_LDOUBLE_FLAGS: [&str; 5] = ["-std=gnu11", "-O2", "-frounding-math", "-Wall", "-static"];
+
+/// QD 2.3.24, under the BSD-LBNL license.
+const QD: Archive = Archive {
+    file: "qd-2.3.24.tar.gz",
+    packing: Packing::GzipTar,
+    url: "https://www.davidhbailey.com/dhbsoftware/qd-2.3.24.tar.gz",
+    sha256: "a47b6c73f86e6421e86a883568dd08e299b20e36c11a99bdfbe50e01bde60e38",
+};
+
+/// The `configure` options of QD. `DESIGN.md` pins the first three.
+///
+/// - `--enable-ieee-add` selects the addition with the IEEE-style error
+///   bound, and `--disable-sloppy-div` selects the accurate division.
+/// - `--enable-fma=c99` computes the error of a product with the C `fma`.
+/// - `--with-pic` lets the library link into the position-independent test
+///   executables. The other options skip parts that the harness does not
+///   use.
+const QD_CONFIGURE: [&str; 6] = [
+    "--enable-ieee-add",
+    "--disable-sloppy-div",
+    "--enable-fma=c99",
+    "--disable-fortran",
+    "--disable-shared",
+    "--with-pic",
+];
+
+/// The C++ compiler of QD and of its shim.
+const QD_CXX: &str = "g++";
+
+/// The pinned GCC release of the C++ compiler of QD. `DESIGN.md` pins it.
+const QD_CXX_VERSION: &str = "15.2.0";
+
+/// The C++ compiler options of QD. `DESIGN.md` pins them. The shim compiles
+/// the inline operators of QD, so it uses the same options.
+const QD_CXXFLAGS: [&str; 2] = ["-O2", "-ffp-contract=off"];
+
+/// The lines of `include/qd/qd_config.h` that the pinned configuration
+/// gives. The build checks each one after `configure`.
+const QD_CONFIG_LINES: [&str; 4] = [
+    "#define QD_IEEE_ADD 1",
+    "/* #undef QD_SLOPPY_DIV */",
+    "#define QD_FMA(x,y,z) fma(x,y,z)",
+    "#define QD_FMS(x,y,z) fma(x,y,-z)",
+];
+
+/// The sections of the shim object that floaty's `Qd` algorithm follows: the
+/// code of `run`, which inlines the addition, subtraction, and multiplication
+/// of QD, the code of `dd_real::accurate_div`, and their constants.
+const QD_SHIM_SECTIONS: [&str; 3] = [
+    ".text",
+    ".text._ZN7dd_real12accurate_divERKS_S1_",
+    ".rodata.cst16",
+];
+
+/// The SHA-256 of [`QD_SHIM_SECTIONS`] in the shim object, one section after
+/// the other.
+const QD_SHIM_SHA256: &str = "8014d42e4610cf75870b2aed54270a083f5a5ed6f35efc0ad4528907983a26bd";
+
+/// The sections of `dd_real.o` in `libqd.a` that floaty's `Qd` algorithm
+/// follows: the code of the square root and its constants.
+const QD_LIBRARY_SECTIONS: [&str; 3] = [".text", ".rodata.cst8", ".rodata.cst16"];
+
+/// The SHA-256 of [`QD_LIBRARY_SECTIONS`] in `dd_real.o`, one section after
+/// the other.
+const QD_LIBRARY_SHA256: &str = "0bcc95f145495cde281ad918b8aa6f1a841eeb879c4049bfcad234edb643dab1";
+
 fn main() {
     let manifest =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
@@ -139,6 +240,8 @@ fn main() {
 
     build_testfloat(&manifest, &out);
     build_decimal(&manifest, &out.join("decimal"));
+    build_ibm_ldouble(&manifest, &out.join("ibm_ldouble"));
+    build_qd(&manifest, &out.join("qd"));
 }
 
 /// Builds `testfloat_gen` for each specialization and names each one in an
@@ -231,6 +334,266 @@ fn build_decimal(manifest: &Path, out: &Path) {
     println!("cargo:rustc-link-lib=static=decnumber");
 }
 
+/// Builds the libgcc batch program for powerpc64le, and names it in
+/// `FLOATY_IBM_LDOUBLE`. Stops the build when the cross compiler is not the
+/// pinned release, or when QEMU cannot run.
+fn build_ibm_ldouble(manifest: &Path, out: &Path) {
+    let source = manifest.join("shim").join("ibm_ldouble.c");
+    println!("cargo:rerun-if-changed={}", source.display());
+    let cross_advice = "install the gcc-powerpc64le-linux-gnu package";
+    let version = tool_output(POWERPC_GCC, &["-dumpfullversion"], cross_advice);
+    assert!(
+        version.trim() == POWERPC_GCC_VERSION,
+        "{POWERPC_GCC} is GCC {}, not the pinned GCC {POWERPC_GCC_VERSION}. The libgcc reference \
+         is a design decision; see the Double-Double Family section of DESIGN.md",
+        version.trim()
+    );
+    // The first line of `--version` names the distribution build of GCC.
+    let compiler = tool_output(POWERPC_GCC, &["--version"], cross_advice);
+    let compiler = compiler.lines().next().unwrap_or_default();
+    let libgcc = tool_output(POWERPC_GCC, &["-print-libgcc-file-name"], cross_advice);
+    let libgcc = PathBuf::from(libgcc.trim());
+    println!("cargo:rerun-if-changed={}", libgcc.display());
+    check_ibm_ldouble(&libgcc, out, cross_advice);
+    let emulator = tool_output(
+        QEMU_POWERPC,
+        &["--version"],
+        "install the qemu-user package",
+    );
+    let emulator = emulator.lines().next().unwrap_or_default();
+    assert!(
+        emulator.starts_with(&format!("qemu-ppc64le version {QEMU_VERSION} ")),
+        "{emulator:?} is not the pinned QEMU {QEMU_VERSION}. QEMU executes the libgcc reference; \
+         see the Verification section of DESIGN.md"
+    );
+    // The tests check the release again, because QEMU can change after the
+    // build.
+    println!("cargo:rustc-env=FLOATY_QEMU_VERSION={QEMU_VERSION}");
+
+    let program = out.join("ibm_ldouble");
+    let content = fs::read_to_string(&source).expect("the libgcc batch program can be read");
+    let key = format!(
+        "{compiler}\n{} {}\n{content}",
+        sha256(&libgcc),
+        IBM_LDOUBLE_FLAGS.join(" ")
+    );
+    run_once(&out.with_extension("stamp"), &key, || {
+        fs::create_dir_all(out).expect("the program directory can be created");
+        let status = Command::new(POWERPC_GCC)
+            .args(IBM_LDOUBLE_FLAGS)
+            .arg(&source)
+            .arg("-lm")
+            .arg("-o")
+            .arg(&program)
+            .status()
+            .expect("the cross compiler can run");
+        assert!(
+            status.success(),
+            "{POWERPC_GCC} cannot build {}",
+            source.display()
+        );
+    });
+    println!("cargo:rustc-env=FLOATY_IBM_LDOUBLE={}", program.display());
+}
+
+/// Stops the build when `ibm-ldouble.o` in `libgcc` differs from the pinned
+/// object.
+fn check_ibm_ldouble(libgcc: &Path, out: &Path, advice: &str) {
+    fs::create_dir_all(out).expect("the program directory can be created");
+    let object = out.join("ibm-ldouble.o");
+    extract_member("powerpc64le-linux-gnu-ar", libgcc, &object, advice);
+    let digest = sha256(&object);
+    assert!(
+        digest == IBM_LDOUBLE_SHA256,
+        "ibm-ldouble.o in {} has SHA-256 {digest}, not the pinned {IBM_LDOUBLE_SHA256}. floaty's \
+         Gcc algorithm follows the pinned object; see the Double-Double Family section of \
+         DESIGN.md",
+        libgcc.display()
+    );
+}
+
+/// Fetches and builds QD, compiles its shim, and links both. Stops the build
+/// when the C++ compiler is not the pinned release, or when it makes other
+/// machine code than floaty's `Qd` algorithm follows.
+fn build_qd(manifest: &Path, out: &Path) {
+    let shim = manifest.join("shim").join("qd_shim.cpp");
+    println!("cargo:rerun-if-changed={}", shim.display());
+    let advice = "install the g++ package";
+    let version = tool_output(QD_CXX, &["-dumpfullversion"], advice);
+    assert!(
+        version.trim() == QD_CXX_VERSION,
+        "{QD_CXX} is GCC {}, not the pinned GCC {QD_CXX_VERSION}. The QD reference is a design \
+         decision; see the Double-Double Family section of DESIGN.md",
+        version.trim()
+    );
+    let compiler = tool_output(QD_CXX, &["--version"], advice);
+    let compiler = compiler.lines().next().unwrap_or_default().to_owned();
+    let downloads = manifest.join("reference").join("downloads");
+    let source = out.join("source");
+    unpack(&fetch(&QD, &downloads), &QD, &source);
+    let root = source.join("qd-2.3.24");
+
+    // configure records the compiler and its options in the Makefiles, so
+    // a new setting starts from `make clean`. The stamp lives in the
+    // extraction, so a new extraction builds the library again.
+    let settings = format!(
+        "{} {} CXX={QD_CXX} CXXFLAGS={}\n{compiler}",
+        QD.sha256,
+        QD_CONFIGURE.join(" "),
+        QD_CXXFLAGS.join(" ")
+    );
+    run_once(&source.join("library.stamp"), &settings, || {
+        configure_qd(&root);
+        make(&root.join("src"), &[String::from("clean")]);
+        make(&root.join("src"), &[]);
+    });
+
+    let libraries = out.join("lib");
+    let content = fs::read_to_string(&shim).expect("the QD shim can be read");
+    run_once(
+        &out.join("shim.stamp"),
+        &format!("{settings}\n{content}"),
+        || {
+            fs::create_dir_all(&libraries).expect("the library directory can be created");
+            let include = format!("-I{}", root.join("include").display());
+            let mut flags = QD_CXXFLAGS.to_vec();
+            flags.extend(["-fPIC", include.as_str()]);
+            let object = libraries.join("floaty_qd.o");
+            compile(QD_CXX, &shim, &flags, &object);
+            archive(&libraries.join("libfloaty_qd.a"), &[object]);
+        },
+    );
+    check_machine_code(
+        &libraries.join("floaty_qd.o"),
+        &QD_SHIM_SECTIONS,
+        QD_SHIM_SHA256,
+    );
+    let library = root.join("src").join(".libs").join("libqd.a");
+    let object = out.join("dd_real.o");
+    extract_member("ar", &library, &object, "install the binutils package");
+    check_machine_code(&object, &QD_LIBRARY_SECTIONS, QD_LIBRARY_SHA256);
+
+    // The shim calls QD, and both call the C++ standard library.
+    println!("cargo:rustc-link-search=native={}", libraries.display());
+    println!(
+        "cargo:rustc-link-search=native={}",
+        root.join("src").join(".libs").display()
+    );
+    println!("cargo:rustc-link-lib=static=floaty_qd");
+    println!("cargo:rustc-link-lib=static=qd");
+    println!("cargo:rustc-link-lib=dylib=stdc++");
+}
+
+/// Runs the QD `configure` script with the pinned options, and checks that
+/// `include/qd/qd_config.h` holds the pinned configuration.
+fn configure_qd(root: &Path) {
+    let mut command = Command::new("./configure");
+    for variable in COMPILER_VARIABLES {
+        command.env_remove(variable);
+    }
+    let status = command
+        .current_dir(root)
+        .args(QD_CONFIGURE)
+        .arg(format!("CXX={QD_CXX}"))
+        .arg(format!("CXXFLAGS={}", QD_CXXFLAGS.join(" ")))
+        .status()
+        .expect("the QD configure script can run");
+    assert!(
+        status.success(),
+        "QD configure failed in {}",
+        root.display()
+    );
+
+    let config = root.join("include").join("qd").join("qd_config.h");
+    let text = fs::read_to_string(&config).expect("configure writes qd_config.h");
+    for expected in QD_CONFIG_LINES {
+        assert!(
+            text.lines().any(|line| line.trim() == expected),
+            "{} does not hold `{expected}`",
+            config.display()
+        );
+    }
+}
+
+/// Stops the build when the given sections of a QD object do not have the
+/// pinned SHA-256. The sections hold the machine code and its constants, and
+/// not the metadata of the object, such as the `.comment` of the compiler.
+/// The digest does not cover the relocations. The compiler pin and the
+/// pinned sources fix them.
+fn check_machine_code(object: &Path, sections: &[&str], expected: &str) {
+    let mut content = Vec::new();
+    let dump = object.with_extension("section");
+    for section in sections {
+        let status = Command::new("objcopy")
+            .args(["-O", "binary"])
+            .arg(format!("--only-section={section}"))
+            .arg(object)
+            .arg(&dump)
+            .status()
+            .unwrap_or_else(|error| {
+                panic!("objcopy cannot run ({error}); install the binutils package")
+            });
+        assert!(
+            status.success(),
+            "objcopy cannot read {section} of {}",
+            object.display()
+        );
+        // objcopy writes an empty file for a section that the object does
+        // not have.
+        let bytes = fs::read(&dump).expect("objcopy writes the section");
+        assert!(
+            !bytes.is_empty(),
+            "{} has no section {section}. floaty's Qd algorithm follows the pinned machine code; \
+             see the Double-Double Family section of DESIGN.md",
+            object.display()
+        );
+        content.extend(bytes);
+    }
+    fs::write(&dump, content).expect("the sections can be written");
+    let digest = sha256(&dump);
+    assert!(
+        digest == expected,
+        "the sections {sections:?} of {} have SHA-256 {digest}, not the pinned {expected}. \
+         floaty's Qd algorithm follows the pinned machine code. A change to the shim or to the \
+         compiler needs a new transcription; see the Double-Double Family section of DESIGN.md",
+        object.display()
+    );
+}
+
+/// Copies the member of a static library that has the file name of `object`
+/// into `object`, with the `ar` program of the library's target.
+fn extract_member(ar: &str, library: &Path, object: &Path, advice: &str) {
+    let member = object.file_name().expect("an object has a file name");
+    let output = Command::new(ar)
+        .arg("p")
+        .arg(library)
+        .arg(member)
+        .output()
+        .unwrap_or_else(|error| panic!("{ar} cannot run ({error}); {advice}"));
+    assert!(
+        output.status.success(),
+        "{} has no {}",
+        library.display(),
+        Path::new(member).display()
+    );
+    fs::write(object, output.stdout).expect("the library member can be written");
+}
+
+/// Runs a tool that the build needs and returns its standard output. Stops
+/// the build with `advice` when the tool cannot run or fails.
+fn tool_output(program: &str, arguments: &[&str], advice: &str) -> String {
+    let output = Command::new(program)
+        .args(arguments)
+        .output()
+        .unwrap_or_else(|error| panic!("{program} cannot run ({error}); {advice}"));
+    assert!(
+        output.status.success(),
+        "`{program} {}` failed; {advice}",
+        arguments.join(" ")
+    );
+    String::from_utf8(output.stdout).expect("the tool writes text")
+}
+
 /// Returns the cached archive, and downloads it first when the cache does
 /// not hold it. Stops the build when the archive does not match its pinned
 /// SHA-256.
@@ -310,7 +673,10 @@ fn unpack(path: &Path, archive: &Archive, destination: &Path) {
                 .arg(destination)
                 .status()
                 .expect("python3 can run"),
+            // The QD archive holds macOS extended headers, which GNU tar
+            // ignores with a warning.
             Packing::GzipTar => Command::new("tar")
+                .arg("--warning=no-unknown-keyword")
                 .arg("-xzf")
                 .arg(path)
                 .arg("-C")
@@ -332,7 +698,12 @@ fn build_decnumber(source: &Path, libraries: &Path) {
             .iter()
             .map(|name| {
                 let object = objects.join(format!("{name}.o"));
-                compile(&source.join(format!("{name}.c")), &DECNUMBER_FLAGS, &object);
+                compile(
+                    "gcc",
+                    &source.join(format!("{name}.c")),
+                    &DECNUMBER_FLAGS,
+                    &object,
+                );
                 object
             })
             .collect();
@@ -362,7 +733,7 @@ fn build_shim(shim: &Path, intel_source: &Path, libraries: &Path) {
         let mut flags = vec!["-std=gnu99", "-O2", "-fPIC", include.as_str()];
         flags.extend(INTEL_DEFINES);
         let object = libraries.join("floaty_binary80.o");
-        compile(shim, &flags, &object);
+        compile("gcc", shim, &flags, &object);
         archive(&libraries.join("libfloaty_binary80.a"), &[object]);
     });
 }
@@ -377,17 +748,21 @@ fn run_once(stamp: &Path, key: &str, step: impl FnOnce()) {
     fs::write(stamp, key).expect("the stamp file can be written");
 }
 
-/// Compiles one C source file with `gcc`.
-fn compile(source: &Path, flags: &[&str], object: &Path) {
-    let status = Command::new("gcc")
+/// Compiles one source file with `compiler`.
+fn compile(compiler: &str, source: &Path, flags: &[&str], object: &Path) {
+    let status = Command::new(compiler)
         .args(flags)
         .arg("-c")
         .arg(source)
         .arg("-o")
         .arg(object)
         .status()
-        .expect("gcc can run");
-    assert!(status.success(), "gcc cannot compile {}", source.display());
+        .expect("the compiler can run");
+    assert!(
+        status.success(),
+        "{compiler} cannot compile {}",
+        source.display()
+    );
 }
 
 /// Replaces a static library with the given objects.
@@ -435,7 +810,7 @@ fn make(directory: &Path, arguments: &[String]) {
     if let Ok(flags) = env::var("CARGO_MAKEFLAGS") {
         command.env("MAKEFLAGS", flags);
     }
-    for variable in ["CFLAGS", "CPPFLAGS", "LDFLAGS", "CC"] {
+    for variable in COMPILER_VARIABLES {
         command.env_remove(variable);
     }
     let status = command

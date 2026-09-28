@@ -8,6 +8,8 @@
 
 use core::cmp::Ordering;
 
+pub mod decimal;
+
 use floaty::env::Tininess;
 use floaty::{Decoded, Env, Flags, Rounding};
 use rug::float::Round;
