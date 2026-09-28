@@ -1,5 +1,5 @@
-//! Behavior: `Env`, `Rounding`, `Tininess`, `NanRule`, `Flags`, overrides,
-//! and the sealed modes.
+//! Behavior: `Env` and its presets, `Rounding`, `Tininess`, `NanRule`, `Flags`,
+//! overrides, and the sealed modes.
 
 use core::fmt::{self, Debug, Formatter};
 use core::num::NonZeroU32;
@@ -170,6 +170,86 @@ impl Env {
         tininess: Tininess::AfterRounding,
         nan: NanRule::new(NanPropagation::SignalingFirst),
         precision: None,
+        saturate: false,
+    };
+
+    /// The x86 SSE unit at reset, for SSE, SSE2, and AVX scalar and packed
+    /// arithmetic.
+    ///
+    /// The fields cite the Intel SDM Volume 1, order number 253665-093US. The
+    /// `floaty-verify` crate confirms each field on the processor. A consumer
+    /// overrides the fields that MXCSR changes: the rounding control, FTZ,
+    /// and DAZ.
+    ///
+    /// The DE flag of MXCSR is [`Flags::DENORMAL_INPUT`] with two
+    /// exceptions. A NaN operand, an invalid operation, or a division by zero
+    /// comes first, by the priority of section 4.9.2, page 4-24. DAZ also
+    /// clears DE, by section 10.2.3.4, page 10-5. That mapping is the
+    /// consumer's.
+    pub const X86_SSE: Self = Self {
+        // MXCSR is 1F80H after power-up or reset: round to nearest, FTZ and
+        // DAZ clear. Table 11-2, page 11-20.
+        rounding: Rounding::NearestEven,
+        flush_to_zero: false,
+        denormals_are_zero: false,
+        // Tininess is detected on the result of rounding with an unbounded
+        // exponent. Section 4.9.1.5, page 4-23.
+        tininess: Tininess::AfterRounding,
+        // Two NaN operands give the first source operand, made quiet. Table
+        // 4-8, page 4-17. An invalid operation gives the QNaN floating-point
+        // indefinite, sections 4.8.3.5 and 4.8.3.7, pages 4-17 and 4-18. It
+        // is negative, Table 4-3, page 4-6. A NaN operand comes before the
+        // invalid operation of 0 * inf. Section 4.9.2, page 4-24.
+        nan: NanRule::new(NanPropagation::FirstOperand)
+            .with_default_negative(true)
+            .with_invalid_product(InvalidProduct::YieldsToNan),
+        // MXCSR has no precision-control field. Section 10.2.3, Figure 10-3,
+        // page 10-4.
+        precision: None,
+        // The SSE formats of Volume 1 have an infinity. Table 4-3, page 4-6.
+        saturate: false,
+    };
+
+    /// The x87 unit after `FNINIT`, for arithmetic on x87 extended-precision
+    /// values.
+    ///
+    /// The fields cite the Intel SDM Volume 1, order number 253665-093US. The
+    /// `floaty-verify` crate confirms each field that the processor can show.
+    /// A consumer overrides the fields that the control word changes: the
+    /// rounding control and the precision control. The DE flag of the status
+    /// word follows [`Flags::DENORMAL_INPUT`] by the priority of section
+    /// 4.9.2, and C1 is [`Flags::ROUNDED_UP`].
+    ///
+    /// The precision limit of 64 bits is the full precision of the x87
+    /// format, so it changes no x87 result. It also limits a wider format:
+    /// binary128 arithmetic under this behavior rounds to 64 bits. The preset
+    /// is for x87 values.
+    pub const X87: Self = Self {
+        // FNINIT sets the control word to 037FH: round to nearest and a
+        // 64-bit precision. Section 8.1.5, page 8-7.
+        rounding: Rounding::NearestEven,
+        // The control word has no FTZ or DAZ field. Section 8.1.5, Figure 8-6,
+        // page 8-7.
+        flush_to_zero: false,
+        denormals_are_zero: false,
+        // Tininess is detected on the result of rounding with an unbounded
+        // exponent, at the precision control. Section 4.9.1.5, page 4-23.
+        tininess: Tininess::AfterRounding,
+        // A QNaN before an SNaN, and the larger significand between two NaNs
+        // of one kind. Table 4-8, page 4-17. The processor gives the positive
+        // NaN between equal significands. An invalid operation gives the
+        // negative QNaN floating-point indefinite, sections 4.8.3.5 and
+        // 4.8.3.7 and Table 4-3, page 4-6. The x87 unit has no fused
+        // multiply-add, so no processor confirms `invalid_product`. The value
+        // follows the priority of section 4.9.2, page 4-24: a NaN operand
+        // comes before an invalid operation.
+        nan: NanRule::new(NanPropagation::LargerSignificand)
+            .with_default_negative(true)
+            .with_invalid_product(InvalidProduct::YieldsToNan),
+        // The precision control is 64 bits after FNINIT, the full precision of
+        // the x87 format. Section 8.1.5.2, page 8-7.
+        precision: NonZeroU32::new(64),
+        // The x87 format has an infinity. Table 4-3, page 4-6.
         saturate: false,
     };
 
@@ -358,7 +438,19 @@ pub trait Mode: Sealed + 'static {
 /// The modes: named behaviors for [`Float`](crate::Float) types.
 ///
 /// The modes live in this module because the encodings already use the names
-/// [`Ieee`](crate::Ieee) and [`X87`](crate::X87) at the crate root.
+/// [`Ieee`](crate::Ieee) and [`X87`](crate::X87) at the crate root. A preset
+/// mode gives a type the behavior of one processor unit:
+///
+/// ```
+/// use floaty::{Binary, Float, X87, mode};
+///
+/// // x87 extended precision with the behavior of the x87 unit after FNINIT.
+/// type Register = Float<Binary<15, X87>, 80, mode::X87>;
+///
+/// let infinity = Register::from_bits(0x7FFF_8000_0000_0000_0000);
+/// // inf - inf is invalid and gives the negative floating-point indefinite.
+/// assert_eq!((infinity - infinity).to_bits(), 0xFFFF_C000_0000_0000_0000);
+/// ```
 pub mod mode {
     use super::{Env, Mode};
     use crate::sealed::Sealed;
@@ -370,5 +462,21 @@ pub mod mode {
     impl Sealed for Ieee {}
     impl Mode for Ieee {
         const ENV: Env = Env::IEEE;
+    }
+
+    /// The x86 SSE preset, [`Env::X86_SSE`].
+    pub enum X86Sse {}
+
+    impl Sealed for X86Sse {}
+    impl Mode for X86Sse {
+        const ENV: Env = Env::X86_SSE;
+    }
+
+    /// The x87 preset, [`Env::X87`].
+    pub enum X87 {}
+
+    impl Sealed for X87 {}
+    impl Mode for X87 {
+        const ENV: Env = Env::X87;
     }
 }

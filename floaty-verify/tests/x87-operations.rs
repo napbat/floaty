@@ -15,16 +15,18 @@ use core::ops::RangeInclusive;
 use floaty::{Env, F80, Flags, Rounding, ToInt};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};
 use floaty_verify::random::SplitMix64;
-use floaty_verify::x86::{self, X87_MASKED, X87_PRECISIONS, X87_ROUNDINGS, x87_env, x87_status};
+use floaty_verify::x86::{
+    self, X87_C1, X87_MASKED, X87_PRECISIONS, X87_ROUNDINGS, X87_STATUS_FLAGS,
+    x87_arithmetic_status, x87_env, x87_status,
+};
 
 /// The control word after `FNINIT`: every exception masked, rounding to
 /// nearest, and 64-bit precision.
 const DEFAULT_CONTROL: u16 = 0x037F;
 
 /// The status bits that the comparisons check: IE, DE, ZE, OE, UE, PE, and C1.
-const CHECKED: u16 = 0b10_0011_1111;
-const DE: u16 = 1 << 1;
-const C1: u16 = 1 << 9;
+const CHECKED: u16 = X87_STATUS_FLAGS;
+const C1: u16 = X87_C1;
 const C2: u16 = 1 << 10;
 
 /// The bits of an 80-bit encoding.
@@ -37,7 +39,7 @@ struct Setting {
     control: u16,
     /// The direction of the rounding-control field.
     rounding: Rounding,
-    /// The limit of the precision-control field, or `None` for 64 bits.
+    /// The limit of the precision-control field.
     precision: Option<NonZeroU32>,
 }
 
@@ -61,34 +63,14 @@ fn settings() -> Vec<Setting> {
     let mut settings = Vec::new();
     for (rounding, rounding_field) in X87_ROUNDINGS {
         for (precision, precision_field) in X87_PRECISIONS {
-            let limit = if precision == 64 {
-                None
-            } else {
-                NonZeroU32::new(precision)
-            };
             settings.push(Setting {
                 control: X87_MASKED | rounding_field | precision_field,
                 rounding,
-                precision: limit,
+                precision: NonZeroU32::new(precision),
             });
         }
     }
     settings
-}
-
-/// Returns the status bits of an arithmetic instruction for floaty flags.
-///
-/// DE follows the precedence of the Intel SDM Volume 1, section 4.9.2 on page
-/// 4-24: a NaN operand, or an invalid operation, hides it. An unsupported
-/// operand is an invalid operation. The hardware shows the same precedence
-/// for the compares.
-fn arithmetic_status(flags: Flags, nan_operand: bool) -> u16 {
-    let bits = x87_status(flags);
-    if nan_operand || flags.contains(Flags::INVALID) {
-        bits & !DE
-    } else {
-        bits
-    }
 }
 
 /// The x87 special operands: zeros, infinities, quiet and signaling NaNs of
@@ -231,8 +213,10 @@ fn check_compare(a: u128, b: u128) {
     ] {
         let context = format!("{instruction} {a:#x} {b:#x} {flags:?} status {status:#06x}");
         assert_eq!(order, expected, "{context}: order");
+        // The hardware shows the DE precedence of the arithmetic
+        // instructions for the compares too.
         assert_eq!(
-            arithmetic_status(flags, nan_operand),
+            x87_arithmetic_status(flags, nan_operand),
             status & CHECKED,
             "{context}: flags"
         );
@@ -275,7 +259,7 @@ fn frndint_matches_rounding_to_an_integral_value() {
             let context = format!("frndint {input:#x} {setting:?} {flags:?} status {status:#06x}");
             assert_eq!(ours.to_bits(), expected & MASK, "{context}: result");
             assert_eq!(
-                arithmetic_status(flags, value.is_nan()),
+                x87_arithmetic_status(flags, value.is_nan()),
                 status & CHECKED,
                 "{context}: flags"
             );
@@ -493,7 +477,7 @@ fn fprem1_matches_the_ieee_remainder() {
             assert_eq!(status & C2, 0, "{context}: the reduction is complete");
             assert_eq!(ours.to_bits(), expected & MASK, "{context}: result");
             assert_eq!(
-                arithmetic_status(flags, x.is_nan() || y.is_nan()),
+                x87_arithmetic_status(flags, x.is_nan() || y.is_nan()),
                 status & CHECKED & !C1,
                 "{context}: flags"
             );
@@ -554,7 +538,7 @@ fn fscale_matches_scale_b_without_precision_control() {
                 format!("fscale {input:#x} {scale} {setting:?} {flags:?} status {status:#06x}");
             assert_eq!(ours.to_bits(), expected & MASK, "{context}: result");
             assert_eq!(
-                arithmetic_status(flags, value.is_nan()),
+                x87_arithmetic_status(flags, value.is_nan()),
                 status & CHECKED,
                 "{context}: flags"
             );

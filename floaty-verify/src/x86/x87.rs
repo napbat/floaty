@@ -40,6 +40,31 @@ pub fn control_word() -> u16 {
     word
 }
 
+/// Runs `FNINIT` and returns the control word that it sets. `FNINIT` also
+/// clears the status word and empties the x87 stack. The previous control
+/// word is restored afterward.
+#[must_use]
+pub fn initialized_control_word() -> u16 {
+    let (mut saved, mut word) = (0_u16, 0_u16);
+    // SAFETY: `FNINIT` resets the control, status, and tag words and empties
+    // the x87 stack. The x87 stack is empty outside the harness functions, so
+    // no value is lost, and the code restores the control word.
+    unsafe {
+        asm!(
+            "fnstcw word ptr [{saved}]",
+            "fninit",
+            "fnstcw word ptr [{word}]",
+            "fldcw word ptr [{saved}]",
+            saved = in(reg) &raw mut saved,
+            word = in(reg) &raw mut word,
+            out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+            out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+            options(nostack),
+        );
+    }
+    word
+}
+
 /// Defines a function that loads x87 operands, runs an operation under a
 /// control word, and stores the result. Returns the result bits and the status
 /// word that the operation leaves.

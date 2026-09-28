@@ -5,6 +5,18 @@ use core::cmp::Ordering;
 
 use super::{CompareFlags, MXCSR_FLAGS};
 
+/// Reads MXCSR.
+#[must_use]
+pub fn mxcsr() -> u32 {
+    let mut value = 0_u32;
+    // SAFETY: `STMXCSR` writes four bytes to `value` and changes no other
+    // state.
+    unsafe {
+        asm!("stmxcsr [{value}]", value = in(reg) &raw mut value, options(nostack));
+    }
+    value
+}
+
 /// Defines a function that runs a two-operand SSE instruction on 32-bit or
 /// 64-bit values under an MXCSR value, and returns the result and the flags.
 macro_rules! sse_binary {

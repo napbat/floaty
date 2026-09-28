@@ -5,10 +5,13 @@
 
 use core::num::NonZeroU32;
 
-use floaty::{Class, Env, F32, F64, F80, Flags};
+use floaty::{Class, Env, F32, F64, F80};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};
 use floaty_verify::random::SplitMix64;
-use floaty_verify::x86::{self, X87_MASKED, X87_PRECISIONS, X87_ROUNDINGS, x87_env, x87_status};
+use floaty_verify::x86::{
+    self, X87_DE, X87_MASKED, X87_PRECISIONS, X87_ROUNDINGS, X87_STATUS_FLAGS,
+    x87_arithmetic_status, x87_env, x87_status,
+};
 
 /// The classes that `FXAM` reports in condition codes C3, C2, and C0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,18 +100,8 @@ fn pseudo_denormals_have_the_value_that_the_processor_computes() {
 }
 
 /// The status bits that the comparisons check: IE, DE, ZE, OE, UE, PE, and C1.
-const CHECKED: u16 = 0b10_0011_1111;
-const DE: u16 = 1 << 1;
-
-/// Returns the status bits that a floaty result reports for an arithmetic
-/// instruction. DE follows the precedence of the Intel SDM Volume 1, section
-/// 4.9.2: a NaN operand, an invalid operation, or a division by zero hides it.
-fn arithmetic_status(flags: Flags, nan_operand: bool) -> u16 {
-    let higher =
-        nan_operand || flags.contains(Flags::INVALID) || flags.contains(Flags::DIVIDE_BY_ZERO);
-    let bits = x87_status(flags);
-    if higher { bits & !DE } else { bits }
-}
+const CHECKED: u16 = X87_STATUS_FLAGS;
+const DE: u16 = X87_DE;
 
 /// Returns the low-bit patterns of `dropped` discarded bits that decide a
 /// rounding: exact, just below halfway, halfway, just above halfway, and all
@@ -254,11 +247,7 @@ fn settings() -> Vec<(u16, Env)> {
     for (rounding, rounding_field) in X87_ROUNDINGS {
         for (precision, precision_field) in X87_PRECISIONS {
             let control = X87_MASKED | rounding_field | precision_field;
-            let limit = if precision == 64 {
-                None
-            } else {
-                NonZeroU32::new(precision)
-            };
+            let limit = NonZeroU32::new(precision);
             settings.push((control, x87_env(rounding).with_precision(limit)));
         }
     }
@@ -284,7 +273,7 @@ macro_rules! arithmetic {
                 );
                 let nan_operand = x.is_nan() || y.is_nan();
                 assert_eq!(
-                    arithmetic_status(flags, nan_operand),
+                    x87_arithmetic_status(flags, nan_operand),
                     status & CHECKED,
                     "{context}: flags"
                 );
@@ -324,7 +313,7 @@ fn arithmetic_matches_at_every_rounding_and_precision() {
                 "{context}: result"
             );
             assert_eq!(
-                arithmetic_status(flags, value.is_nan()),
+                x87_arithmetic_status(flags, value.is_nan()),
                 status & CHECKED,
                 "{context}: flags"
             );

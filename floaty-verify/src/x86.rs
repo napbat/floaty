@@ -14,7 +14,6 @@ mod x87;
 
 use core::cmp::Ordering;
 
-use floaty::env::{InvalidProduct, NanPropagation, NanRule, Tininess};
 use floaty::{Env, Flags, Rounding};
 
 pub use sse::*;
@@ -26,6 +25,8 @@ pub const MXCSR_MASKED: u32 = 0x1F80;
 pub const MXCSR_FLAGS: u32 = 0x3F;
 /// The MXCSR denormals-are-zero bit.
 pub const MXCSR_DAZ: u32 = 1 << 6;
+/// The DE flag of MXCSR.
+pub const MXCSR_DE: u32 = 1 << 1;
 /// The MXCSR flush-to-zero bit.
 pub const MXCSR_FTZ: u32 = 1 << 15;
 
@@ -80,30 +81,51 @@ pub fn mxcsr_flags(flags: Flags, daz: bool, nan_operand: bool) -> u32 {
     bits
 }
 
-/// Returns the behavior of the SSE unit under an MXCSR setting: the first NaN
-/// operand, a negative default NaN, and tininess after rounding.
+/// Returns the behavior of the SSE unit under an MXCSR setting: the
+/// [`Env::X86_SSE`] preset with the rounding control, FTZ, and DAZ of the
+/// setting. Every SSE hardware test compares floaty under this behavior, so
+/// the tests confirm the preset.
 #[must_use]
 pub fn sse_env(rounding: Rounding, ftz: bool, daz: bool) -> Env {
-    Env::IEEE
+    Env::X86_SSE
         .with_rounding(rounding)
         .with_flush_to_zero(ftz)
         .with_denormals_are_zero(daz)
-        .with_tininess(Tininess::AfterRounding)
-        .with_nan(
-            NanRule::new(NanPropagation::FirstOperand)
-                .with_default_negative(true)
-                .with_invalid_product(InvalidProduct::YieldsToNan),
-        )
 }
 
-/// Returns the behavior of the x87 unit: the larger-significand NaN rule, a
-/// negative default NaN, and tininess after rounding.
+/// Returns the behavior of the x87 unit under a rounding control: the
+/// [`Env::X87`] preset with that rounding control. Every x87 hardware test
+/// compares floaty under this behavior, so the tests confirm the preset.
 #[must_use]
 pub fn x87_env(rounding: Rounding) -> Env {
-    Env::IEEE
-        .with_rounding(rounding)
-        .with_tininess(Tininess::AfterRounding)
-        .with_nan(NanRule::new(NanPropagation::LargerSignificand).with_default_negative(true))
+    Env::X87.with_rounding(rounding)
+}
+
+/// The x87 status bits that floaty flags report: IE, DE, ZE, OE, UE, PE, and
+/// C1.
+pub const X87_STATUS_FLAGS: u16 = 0b10_0011_1111;
+
+/// The DE bit of the x87 status word.
+pub const X87_DE: u16 = 1 << 1;
+
+/// The PE bit of the x87 status word.
+pub const X87_PE: u16 = 1 << 5;
+
+/// The C1 bit of the x87 status word.
+pub const X87_C1: u16 = 1 << 9;
+
+/// Returns the x87 status bits of an arithmetic instruction for floaty flags.
+///
+/// DE is `DENORMAL_INPUT` unless a NaN operand, an invalid operation, or a
+/// division by zero comes first. The Intel SDM Volume 1, section 4.9.2 on page
+/// 4-24, gives that order. An unsupported operand is an invalid operation.
+/// `nan_operand` says that an operand is a NaN.
+#[must_use]
+pub fn x87_arithmetic_status(flags: Flags, nan_operand: bool) -> u16 {
+    let higher =
+        nan_operand || flags.contains(Flags::INVALID) || flags.contains(Flags::DIVIDE_BY_ZERO);
+    let bits = x87_status(flags);
+    if higher { bits & !X87_DE } else { bits }
 }
 
 /// Returns the x87 status bits that floaty flags report: IE, DE, ZE, OE, UE,

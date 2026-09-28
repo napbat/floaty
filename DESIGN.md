@@ -1,7 +1,8 @@
 # floaty Design
 
 Status: design approved on 2026-09-27. Build steps 1, encoding, 2, rounding,
-3, arithmetic, and 4, the other binary operations, are complete.
+3, arithmetic, 4, the other binary operations, and 5, the x86 SSE and x87
+presets, are complete.
 
 This file is the source of truth for every design decision in floaty. Update
 it in the same change that alters a decision.
@@ -364,13 +365,47 @@ MXCSR.
 | Tininess | After rounding | After rounding |
 | Two NaN inputs | The first source operand, quieted | A QNaN before an SNaN. With two of one kind, the larger significand. Quieted. |
 | One NaN input | That NaN, quieted | That NaN, quieted |
-| Default NaN of an invalid operation | Negative QNaN, the real indefinite | Negative QNaN, the floating-point indefinite |
+| Default NaN of an invalid operation | Negative QNaN, the QNaN floating-point indefinite | Negative QNaN, the QNaN floating-point indefinite |
+| `0 * inf + NaN` in a fused multiply-add | The NaN addend, made quiet; invalid only for a signaling addend (`YieldsToNan`) | No fused multiply-add; `YieldsToNan` by the same exception priority |
 | Denormal-input flag | MXCSR DE | Status word DE |
+| Round-up flag | Not available | Status word C1 |
 
 Every preset field is a claim about hardware. Cite the vendor manual beside
-the field. In the Intel SDM Volume 1, revision 253665-093US, the NaN rules are
-in Table 4-8 on page 4-17, and tininess is in section 4.9.1.5 on page 4-23.
-Step 5 confirms every row on hardware.
+the field. The source is the Intel SDM Volume 1, revision 253665-093US. The
+NaN rules are in Table 4-8 on page 4-17, and tininess is in section 4.9.1.5
+on page 4-23.
+Step 5 confirms every row that the hardware can show. No x87 instruction
+shows the fused multiply-add row.
+
+```rust
+impl Env {
+    pub const X86_SSE: Self; // MXCSR 1F80H after reset
+    pub const X87: Self;     // control word 037FH after FNINIT
+}
+
+pub mod mode {
+    pub enum X86Sse {} // ENV = Env::X86_SSE
+    pub enum X87 {}    // ENV = Env::X87
+}
+```
+
+- `Env::X86_SSE` and `Env::X87` are the presets, and `mode::X86Sse` and
+  `mode::X87` are their modes. Each field of a preset has its citation in a
+  comment beside it in `env.rs`.
+- A consumer overrides the fields of the control register for each
+  instruction. For SSE they are the MXCSR rounding control, FTZ, and DAZ.
+  For x87 they are the rounding and precision controls.
+- `Env::X87` limits the precision to 64 bits, the reset value of the
+  precision control. That is the full precision of the x87 format, so it
+  changes no x87 result. Binary128 arithmetic under `Env::X87` rounds to 64
+  bits, so the preset is for x87 values.
+- The DE flag is `DENORMAL_INPUT` with two exceptions. A NaN operand, an
+  invalid operation, or a division by zero comes first, by the exception
+  priority of section 4.9.2. DAZ also clears DE, by section 10.2.3.4. Some
+  instructions never report DE, such as `CVTSS2SI`, `ROUNDSS`, and `FISTP`.
+  These mappings are the consumer's. `floaty-verify/src/x86.rs` has the
+  mappings that the hardware tests use: `mxcsr_flags` for SSE and
+  `x87_arithmetic_status` for x87.
 
 #### What Presets Do Not Cover
 
@@ -678,9 +713,9 @@ an oracle.
 | `next_up`, `next_down`, `remainder`, rounding to an integral value, integer conversions of 7 to 128 bits, and scaling | `rustc_apfloat` | Every FP8 operand and pair of E4M3 and E5M2, every binary16 and bfloat16 operand, and boundary and random operands of TF32, binary32, binary64, x87 extended, and binary128, in five directions. The differences of `rustc_apfloat` from IEEE 754 are in `docs/anomalies/` and in the module documentation of the test. |
 | `next_up`, `next_down`, negation, `abs`, and `copy_sign` of the FP8 formats | A table that `ml_dtypes` generates, in `floaty-verify/data` | Every operand, and every pair for `copy_sign`. The FNUZ `copysign` of `ml_dtypes` makes a NaN from the zero; see `docs/anomalies/ml-dtypes-fnuz-copysign.md`. |
 | SSE comparisons, integer conversions, and rounding | The host processor: `UCOMISS`, `COMISS`, their `SD` forms, `CVTSS2SI`, `CVTTSS2SI`, `CVTSD2SI`, `CVTTSD2SI`, `CVTSI2SS`, `CVTSI2SD`, `ROUNDSS`, and `ROUNDSD` | Every MXCSR setting: order, result bits, the integer indefinite for `ToInt::OutOfRange` and `ToInt::Nan`, and the IE, DE, and PE flags. The test maps DE and the suppressed precision exception of `ROUNDSS` as the Intel SDM states. |
-| x87 comparisons, integer conversions, rounding, remainder, scaling, and sign operations | The host processor: `FUCOMIP`, `FCOMIP`, `FUCOMPP`, `FCOMPP`, `FRNDINT`, `FISTP`, `FISTTP`, `FILD`, `FPREM1`, `FSCALE`, `FCHS`, and `FABS` | Every rounding control, and precision control for `FRNDINT` and `FSCALE`, including unsupported operands and pseudo-denormals: result bits, IE, DE, OE, UE, PE, and C1. `FSCALE` and `FILD` ignore precision control, so the test passes no precision limit for them. |
+| x87 comparisons, integer conversions, rounding, remainder, scaling, and sign operations | The host processor: `FUCOMIP`, `FCOMIP`, `FUCOMPP`, `FCOMPP`, `FRNDINT`, `FISTP`, `FISTTP`, `FILD`, `FPREM1`, `FSCALE`, `FCHS`, and `FABS` | Every rounding control, and precision control for `FRNDINT` and `FSCALE`, including unsupported operands and pseudo-denormals: result bits, IE, DE, OE, UE, PE, and C1. `FSCALE` and `FILD` ignore precision control, so the test runs them at the full 64-bit precision. |
 | Conversion of every binary16 encoding to the FP8 formats, rounding to nearest even | A table that `ml_dtypes` generates, in `floaty-verify/data` | Result bits, and NaN and sign for a NaN result |
-| x86 SSE and x87 presets | The host processor, through inline assembly on x86-64 | NaN selection, the denormal-input flag, FTZ, DAZ, x87 C1, and precision control |
+| x86 SSE and x87 presets | The host processor, through inline assembly on x86-64 | The MXCSR of the process and the control word after `FNINIT`, decoded to the preset fields. Products that only the tininess rule tells apart, in both units. NaN selection with one and two operands, the default NaN, the fused multiply-add NaN addend, DE, precision control, and C1. Every other SSE and x87 hardware test compares floaty under behaviors built from the presets. |
 | Decimal | The decTest vectors (DPD) and the Intel decimal library tests (BID) | Arithmetic, rounding, flags, and result exponents |
 | Double-double | libgcc on PowerPC under QEMU, and QD | Bit-exact match to each reference |
 
