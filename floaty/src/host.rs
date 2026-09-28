@@ -34,7 +34,8 @@ pub enum Operation {
 const fn compatible(env: &Env, precision: u32) -> bool {
     // Every field is named, so a new field of `Env` needs a decision here.
     // Tininess and saturation change only flags and formats without an
-    // infinity, and the NaN rule applies only to a NaN result.
+    // infinity, the NaN rule applies only to a NaN result, and the total
+    // order applies to no arithmetic.
     let Env {
         rounding,
         flush_to_zero,
@@ -43,6 +44,7 @@ const fn compatible(env: &Env, precision: u32) -> bool {
         nan: _,
         precision: limit,
         saturate: _,
+        total_order: _,
     } = *env;
     let full_precision = match limit {
         None => true,

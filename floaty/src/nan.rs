@@ -2,9 +2,10 @@
 
 use core::cmp::Ordering;
 
-use super::Unpacked;
-use crate::env::{Env, Flags, NanPropagation};
+use crate::env::{Env, Flags, FusedNanOrder, NanPropagation};
+use crate::format::internal::MinMax;
 use crate::limbs::Limbs;
+use crate::unpacked::Unpacked;
 
 impl<L: Limbs> Unpacked<L> {
     /// Returns `true` for a NaN.
@@ -27,8 +28,9 @@ impl<L: Limbs> Unpacked<L> {
     #[must_use]
     pub fn negate(self) -> Self {
         match self {
-            Self::Zero { negative } => Self::Zero {
+            Self::Zero { negative, exponent } => Self::Zero {
                 negative: !negative,
+                exponent,
             },
             Self::Finite {
                 negative,
@@ -59,6 +61,16 @@ impl<L: Limbs> Unpacked<L> {
             },
             other => other,
         }
+    }
+}
+
+/// Moves a NaN payload of `from` bits to a payload of `to` bits and keeps its
+/// high-order bits.
+pub fn align_payload<In: Limbs, Out: Limbs>(payload: In, from: u32, to: u32) -> Out {
+    if to >= from {
+        payload.resize::<Out>().shl(to - from)
+    } else {
+        payload.shr(from - to).resize()
     }
 }
 
@@ -105,15 +117,65 @@ pub fn propagate<L: Limbs>(
     second: &Unpacked<L>,
     env: &Env,
 ) -> (Unpacked<L>, Flags) {
-    debug_assert!(first.is_nan() || second.is_nan(), "an operand is a NaN");
-    let (first_signaling, second_signaling) = (first.is_signaling(), second.is_signaling());
-    let flags = if first_signaling || second_signaling {
+    select(&[first, second], env)
+}
+
+/// Returns the NaN of a fused multiply-add with a NaN factor, made quiet, in
+/// the order of [`FusedNanOrder`]. A signaling NaN operand signals invalid.
+pub fn fused<L: Limbs>(
+    first: &Unpacked<L>,
+    second: &Unpacked<L>,
+    addend: &Unpacked<L>,
+    env: &Env,
+) -> (Unpacked<L>, Flags) {
+    debug_assert!(first.is_nan() || second.is_nan(), "a factor is a NaN");
+    match env.nan.fused_order {
+        FusedNanOrder::ProductFirst => {
+            let (product, product_flags) = propagate(first, second, env);
+            let (value, flags) = propagate(&product, addend, env);
+            (value, product_flags | flags)
+        }
+        FusedNanOrder::AddendFirst => select(&[addend, first, second], env),
+    }
+}
+
+/// Selects the NaN that the rule gives among operands in operand order, made
+/// quiet. At least one operand is a NaN. A signaling NaN operand signals
+/// invalid.
+fn select<L: Limbs>(operands: &[&Unpacked<L>], env: &Env) -> (Unpacked<L>, Flags) {
+    debug_assert!(
+        operands.iter().any(|value| value.is_nan()),
+        "an operand is a NaN"
+    );
+    let flags = if operands.iter().any(|value| value.is_signaling()) {
         Flags::INVALID
     } else {
         Flags::NONE
     };
-    let chosen = match env.nan.propagation {
-        NanPropagation::DefaultNan => return (default_nan(env), flags),
+    let propagation = env.nan.propagation;
+    if propagation == NanPropagation::DefaultNan {
+        return (default_nan(env), flags);
+    }
+    // Each rule picks one of two operands, and the pick of a list is the
+    // pick of each operand against the earlier picks. The quieting waits
+    // until the end, so a signaling NaN keeps its priority.
+    let chosen = operands
+        .iter()
+        .copied()
+        .reduce(|chosen, next| choose(chosen, next, propagation))
+        .expect("an operation has an operand");
+    (chosen.quiet(), flags)
+}
+
+/// Returns the operand that a propagation rule picks from two, in operand
+/// order. At least one is a NaN.
+fn choose<'a, L: Limbs>(
+    first: &'a Unpacked<L>,
+    second: &'a Unpacked<L>,
+    propagation: NanPropagation,
+) -> &'a Unpacked<L> {
+    let (first_signaling, second_signaling) = (first.is_signaling(), second.is_signaling());
+    match propagation {
         NanPropagation::SignalingFirst => {
             if first_signaling || (!second_signaling && first.is_nan()) {
                 first
@@ -135,8 +197,45 @@ pub fn propagate<L: Limbs>(
             (false, true) => second,
             _ => larger(first, second),
         },
-    };
-    (chosen.quiet(), flags)
+        NanPropagation::DefaultNan => unreachable!("the caller gives the default NaN"),
+    }
+}
+
+/// Returns the result of a minimum or maximum operation with a NaN operand,
+/// or `None` when both operands are numbers.
+///
+/// `minimum` and `maximum` return a NaN for a NaN operand. `minimumNumber`
+/// and `maximumNumber` return the number, and signal invalid for a signaling
+/// NaN. `minNum` and `maxNum` return the number for a quiet NaN, and a NaN for
+/// a signaling NaN. The NaN rule selects a NaN result.
+pub fn min_max<L: Limbs>(
+    first: &Unpacked<L>,
+    second: &Unpacked<L>,
+    operation: MinMax,
+    env: &Env,
+) -> Option<(Unpacked<L>, Flags)> {
+    let signaling = first.is_signaling() || second.is_signaling();
+    match (first.is_nan(), second.is_nan()) {
+        (false, false) => None,
+        (true, true) => Some(propagate(first, second, env)),
+        (true, false) | (false, true) => {
+            let returns_nan = match operation {
+                MinMax::Minimum | MinMax::Maximum => true,
+                MinMax::MinNum | MinMax::MaxNum => signaling,
+                MinMax::MinimumNumber | MinMax::MaximumNumber => false,
+            };
+            if returns_nan {
+                return Some(propagate(first, second, env));
+            }
+            let flags = if signaling {
+                Flags::INVALID
+            } else {
+                Flags::NONE
+            };
+            let number = if first.is_nan() { *second } else { *first };
+            Some((number, flags))
+        }
+    }
 }
 
 /// Returns the NaN with the larger significand, as the x87 unit does. A NaN is

@@ -3,7 +3,7 @@
 
 use core::cmp::Ordering;
 
-use floaty::{Decoded, Env, Flags};
+use floaty::{Decoded, Env, Flags, TotalOrder};
 use rug::Integer;
 use rug::integer::Order;
 
@@ -61,17 +61,33 @@ pub fn compare_signaling<const N: usize>(
 /// order by value, with `-0` below `+0`, as MPFR's `mpfr_total_order_p`
 /// orders them. Among positive NaNs a signaling NaN
 /// orders below a quiet NaN, and a smaller payload below a larger one; the
-/// negative NaNs order in reverse. The NaN of `Fnuz` is negative. An
-/// encoding that is not canonical orders by the rule in `DESIGN.md`: by the
-/// sign bit, and then by the magnitude bits.
+/// negative NaNs order in reverse. The NaN of `Fnuz` is negative.
+///
+/// An encoding that is not canonical orders by the rules in `DESIGN.md`.
+/// With `TotalOrder::Encoding` it orders by the sign bit, and then by the
+/// magnitude bits. With `TotalOrder::Datum` an x87 pseudo-denormal is its
+/// datum, the equal normal value, and an unsupported encoding orders by the
+/// sign bit and the magnitude bits of its own encoding and the canonical
+/// encoding of the other operand.
 ///
 /// # Panics
 ///
 /// Panics for an unsupported encoding that `canonical` does not exclude.
 #[must_use]
-pub fn total_order<const N: usize>(first: &Sample<N>, second: &Sample<N>) -> Ordering {
-    if !first.canonical || !second.canonical {
-        return by_bits(first, second);
+pub fn total_order<const N: usize>(
+    first: &Sample<N>,
+    second: &Sample<N>,
+    order: TotalOrder,
+) -> Ordering {
+    let datum = |sample: &Sample<N>| !matches!(sample.operand.decoded, Decoded::Unsupported);
+    match order {
+        TotalOrder::Encoding if !first.canonical || !second.canonical => {
+            return by_bits(&first.bits, &second.bits, first.width);
+        }
+        TotalOrder::Datum if !datum(first) || !datum(second) => {
+            return by_bits(&canonical_bits(first), &canonical_bits(second), first.width);
+        }
+        _ => {}
     }
     let rank = |sample: &Sample<N>| match sample.operand.decoded {
         Decoded::Nan {
@@ -111,13 +127,32 @@ pub fn total_order<const N: usize>(first: &Sample<N>, second: &Sample<N>) -> Ord
     })
 }
 
-/// Orders two encodings by the sign bit and then the magnitude bits.
-fn by_bits<const N: usize>(first: &Sample<N>, second: &Sample<N>) -> Ordering {
-    let key = |sample: &Sample<N>| {
-        let sign = sample.width - 1;
-        let mut magnitude = sample.bits.clone();
+/// Returns the canonical encoding of a datum, or the encoding of an
+/// unsupported operand. The only binary encoding of a datum that is not
+/// canonical is an x87 pseudo-denormal: exponent field 0 with the integer bit
+/// set. The normal encoding of its value has exponent field 1, so it sets bit
+/// 64.
+fn canonical_bits<const N: usize>(sample: &Sample<N>) -> Integer {
+    if sample.canonical || matches!(sample.operand.decoded, Decoded::Unsupported) {
+        return sample.bits.clone();
+    }
+    assert_eq!(
+        sample.width, 80,
+        "only an x87 encoding of a datum is not canonical"
+    );
+    let mut twin = sample.bits.clone();
+    twin.set_bit(64, true);
+    twin
+}
+
+/// Orders two encodings of `width` bits by the sign bit and then the
+/// magnitude bits.
+fn by_bits(first: &Integer, second: &Integer, width: u32) -> Ordering {
+    let key = |bits: &Integer| {
+        let sign = width - 1;
+        let mut magnitude = bits.clone();
         magnitude.set_bit(sign, false);
-        (sample.bits.get_bit(sign), magnitude)
+        (bits.get_bit(sign), magnitude)
     };
     let ((first_negative, first_magnitude), (second_negative, second_magnitude)) =
         (key(first), key(second));

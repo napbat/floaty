@@ -31,15 +31,17 @@ floaty is bit-exact, platform-independent software floating point.
   in `floaty`: no `f32` or `f64` operations and no math library calls. A fast
   path is the only exception. It must pass the same oracle tests as the
   generic path, and `DESIGN.md` must list it.
-- Round through the one rounding routine in `exact`. Do not write a second
+- Round through the one rounding routine of each radix: `exact` for binary
+  formats and `decimal::round` for decimal formats. Do not write another
   rounding path.
 - Handle special values in the operation. NaNs, infinities, and zeros never
   reach the rounding routine.
 - Test every behavior against an established oracle: TestFloat, MPFR,
-  `rustc_apfloat`, `ml_dtypes`, the host processor, decTest, the Intel decimal
-  library tests, QD, or libgcc. Where no implementation exists, evaluate the
-  published definition from IEEE 754 or a vendor manual with MPFR. A behavior
-  without an oracle test is not finished.
+  `rustc_apfloat`, `ml_dtypes`, the host processor, decTest and decNumber,
+  the Intel decimal library and its tests, QD, or libgcc. Where no
+  implementation exists, evaluate the published definition from IEEE 754, a
+  vendor manual, or `DESIGN.md` with MPFR or decNumber. A behavior without an
+  oracle test is not finished.
 - A preset field is a claim about hardware. Cite the vendor manual, volume,
   and section beside the field. Confirm the field on hardware in
   `floaty-verify`.
@@ -64,11 +66,14 @@ cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
   `rustup toolchain install 1.85 --profile minimal --component clippy`.
 - `--workspace` includes `floaty-verify`. Its build runs on Linux x86-64
   hosts only, and needs the submodules (`git submodule update --init`),
-  `make`, `gcc`, and `m4`. It builds TestFloat and MPFR from source. On
-  another host, run the gates with `-p floaty` instead of `--workspace`.
-- Keep the submodules under `floaty-verify/reference/` at their pinned
-  releases. A change of release is a design change: record it in
-  `DESIGN.md`.
+  `make`, `gcc`, `m4`, `curl`, `tar`, `sha256sum`, and `python3`. It
+  builds TestFloat, MPFR, decNumber, and the Intel decimal library from
+  source. Its first build downloads the decimal archives, so it needs
+  network access once. On another host, run the gates with `-p floaty`
+  instead of `--workspace`.
+- Keep the submodules under `floaty-verify/reference/` and the pinned
+  decimal archives in `floaty-verify/build.rs` at their pinned releases. A
+  change of release is a design change: record it in `DESIGN.md`.
 - Run the long exhaustive sweeps with
   `cargo test -p floaty-verify --release -- --ignored`.
 - Measure performance with `cargo bench -p floaty-verify --bench operations`

@@ -6,13 +6,14 @@ use core::marker::PhantomData;
 use crate::binary::Unpacked;
 use crate::env::{Env, Flags, Mode, Override, mode};
 use crate::exact::{Exact, Unrounded};
-use crate::format::internal::LimbConversion;
-use crate::format::{Binary, Fnuz, NoInf, Standard, X87};
+use crate::format::internal::{LimbConversion, Source};
+use crate::format::{Bid, Binary, Decimal, Dpd, Fnuz, NoInf, Standard, X87};
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 
 mod arithmetic;
 mod compare;
+mod decimal;
 mod integer;
 
 /// A floating-point value of standard `S` at width `W`, with default mode `M`.
@@ -46,13 +47,18 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// The behavior of the default mode.
     pub const ENV: Env = M::ENV;
 
-    /// The precision in bits, including the leading bit.
+    /// The radix: 2 for a binary format, 10 for a decimal format.
+    pub const RADIX: u32 = S::RADIX;
+
+    /// The precision in digits of the radix, including the leading digit.
     pub const PRECISION: u32 = S::PRECISION;
 
-    /// The exponent of the largest finite value, `emax` in IEEE 754.
+    /// The exponent of the largest finite value, `emax` in IEEE 754, as a
+    /// power of the radix.
     pub const EMAX: i32 = S::EMAX;
 
-    /// The exponent of the smallest normal value, `emin` in IEEE 754.
+    /// The exponent of the smallest normal value, `emin` in IEEE 754, as a
+    /// power of the radix.
     pub const EMIN: i32 = S::EMIN;
 
     /// Makes a value from its encoding.
@@ -84,6 +90,11 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// `behavior` is a [`Rounding`](crate::Rounding) that overrides only the
     /// rounding direction, or an [`Env`] that replaces the whole behavior.
     /// Pass [`Self::ENV`] to use the default mode.
+    ///
+    /// The exact value is in the radix of the format. A decimal result that
+    /// is exact takes the member of its cohort whose exponent is nearest the
+    /// exponent of `exact`. An inexact decimal result has the least possible
+    /// exponent.
     #[must_use]
     pub fn round<const N: usize>(exact: Exact<N>, behavior: impl Override) -> (Self, Flags) {
         let env = behavior.apply(M::ENV);
@@ -128,12 +139,22 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
         if S::classify(self.bits) == Class::Subnormal {
             input = Flags::DENORMAL_INPUT;
             if env.denormals_are_zero {
+                // A decimal zero keeps the quantum of the subnormal value.
+                let exponent = match value {
+                    Unpacked::Finite { exponent, .. } if S::RADIX == 10 => exponent,
+                    _ => 0,
+                };
                 value = Unpacked::Zero {
                     negative: self.is_sign_negative(),
+                    exponent,
                 };
             }
         }
-        let (result, flags) = T::convert_from(value, S::PAYLOAD_BITS, &env);
+        let source = Source {
+            radix: S::RADIX,
+            payload_digits: S::PAYLOAD_DIGITS,
+        };
+        let (result, flags) = T::convert_from(value, source, &env);
         (result, flags | input)
     }
 
@@ -146,7 +167,9 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Returns the exact value of the encoding.
     ///
     /// `N` is the limb count of the significand and the payload. It must hold
-    /// at least [`PRECISION`](Self::PRECISION) bits. A smaller `N` fails a
+    /// the largest significand: [`PRECISION`](Self::PRECISION) bits for a
+    /// binary format, and 24, 54, or 113 bits for decimal32, decimal64, or
+    /// decimal128. A smaller `N` fails a
     /// compile-time assertion when the compiler generates code for the call.
     /// `cargo check` does not report that assertion.
     ///
@@ -163,12 +186,12 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
             // The cast widens a u32 to a usize and loses no bits. `From` is not
             // callable in a constant.
             assert!(
-                N * 64 >= S::PRECISION as usize,
+                N * 64 >= S::SIGNIFICAND_BITS as usize,
                 "the limb count holds the significand"
             );
         }
         match S::unpack(self.bits) {
-            Unpacked::Zero { negative } => Decoded::Zero { negative },
+            Unpacked::Zero { negative, exponent } => Decoded::Zero { negative, exponent },
             Unpacked::Finite {
                 negative,
                 exponent,
@@ -259,7 +282,11 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// value, as IEEE 754 `isCanonical` defines.
     ///
     /// An x87 pseudo-denormal and every unsupported encoding are not
-    /// canonical. Every encoding of the other binary formats is canonical.
+    /// canonical. Every encoding of the other binary formats is canonical. In
+    /// a decimal format, each member of a cohort, such as 1.0 and 1.00, has
+    /// its own canonical encoding. A BID coefficient above `10^p - 1`, a
+    /// non-canonical DPD declet, and an infinity or NaN with extra bits are
+    /// not canonical.
     #[must_use]
     pub fn is_canonical(self) -> bool {
         S::is_canonical(self.bits)
@@ -313,10 +340,9 @@ pub trait FloatType: Sealed + Copy {
     #[doc(hidden)]
     const DEFAULT_ENV: Env;
 
-    /// Converts a decoded value of another format, whose NaN payloads have
-    /// `payload_bits` bits.
+    /// Converts a decoded value of another format, the source.
     #[doc(hidden)]
-    fn convert_from<L: Limbs>(value: Unpacked<L>, payload_bits: u32, env: &Env) -> (Self, Flags);
+    fn convert_from<L: Limbs>(value: Unpacked<L>, source: Source, env: &Env) -> (Self, Flags);
 }
 
 impl<S: Standard<W>, const W: usize, M: Mode> Sealed for Float<S, W, M> {}
@@ -324,32 +350,38 @@ impl<S: Standard<W>, const W: usize, M: Mode> Sealed for Float<S, W, M> {}
 impl<S: Standard<W>, const W: usize, M: Mode> FloatType for Float<S, W, M> {
     const DEFAULT_ENV: Env = M::ENV;
 
-    fn convert_from<L: Limbs>(value: Unpacked<L>, payload_bits: u32, env: &Env) -> (Self, Flags) {
-        let (bits, flags) = S::convert_from(value, payload_bits, env);
+    fn convert_from<L: Limbs>(value: Unpacked<L>, source: Source, env: &Env) -> (Self, Flags) {
+        let (bits, flags) = S::convert_from(value, source, env);
         (Self::from_masked(bits), flags)
     }
 }
 
 /// The exact value of an encoding, as [`Float::decode`] returns it.
 ///
-/// A finite value is `significand * 2^exponent`. `exponent` is the weight of
-/// the lowest significand bit. The significand is below `2^PRECISION`, and a
-/// normal value has bit `PRECISION - 1` set. Limb 0 of an array holds the
-/// least significant 64 bits.
+/// A finite value is `significand * RADIX^exponent`. `exponent` is the weight
+/// of the lowest significand digit. The significand is below
+/// `RADIX^PRECISION`. A normal binary value has bit `PRECISION - 1` set. A
+/// decimal value keeps the coefficient and the exponent of its encoding, so
+/// 1.0 and 1.00 decode apart. Limb 0 of an array holds the least significant
+/// 64 bits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Decoded<const N: usize> {
     /// A zero.
     Zero {
         /// The sign.
         negative: bool,
+        /// The exponent of a decimal zero, its quantum. A binary zero has
+        /// exponent 0.
+        exponent: i32,
     },
     /// A nonzero finite value.
     Finite {
         /// The sign.
         negative: bool,
-        /// The weight of the lowest significand bit.
+        /// The weight of the lowest significand digit, as a power of the
+        /// radix.
         exponent: i32,
-        /// The significand, an integer below `2^PRECISION`.
+        /// The significand, an integer below `RADIX^PRECISION`.
         significand: [u64; N],
     },
     /// An infinity.
@@ -363,8 +395,10 @@ pub enum Decoded<const N: usize> {
         negative: bool,
         /// `true` for a signaling NaN.
         signaling: bool,
-        /// The fraction bits below the quiet bit. The `NoInf` and `Fnuz`
-        /// encodings have no payload, so their payload is zero.
+        /// The payload. A binary format gives the fraction bits below the
+        /// quiet bit; the `NoInf` and `Fnuz` encodings have no payload, so
+        /// their payload is zero. A decimal format gives the value of the
+        /// trailing significand field, or zero for a non-canonical value.
         payload: [u64; N],
     },
     /// An encoding that the format does not define as a value, such as an x87
@@ -444,6 +478,18 @@ pub type F8E4M3Fnuz = Float<Binary<4, Fnuz>, 8>;
 pub type F8E5M2Fnuz = Float<Binary<5, Fnuz>, 8>;
 /// x87 80-bit extended precision.
 pub type F80 = Float<Binary<15, X87>, 80>;
+/// IEEE 754 decimal32 in the BID encoding.
+pub type D32Bid = Float<Decimal<Bid>, 32>;
+/// IEEE 754 decimal64 in the BID encoding.
+pub type D64Bid = Float<Decimal<Bid>, 64>;
+/// IEEE 754 decimal128 in the BID encoding.
+pub type D128Bid = Float<Decimal<Bid>, 128>;
+/// IEEE 754 decimal32 in the DPD encoding.
+pub type D32Dpd = Float<Decimal<Dpd>, 32>;
+/// IEEE 754 decimal64 in the DPD encoding.
+pub type D64Dpd = Float<Decimal<Dpd>, 64>;
+/// IEEE 754 decimal128 in the DPD encoding.
+pub type D128Dpd = Float<Decimal<Dpd>, 128>;
 
 #[cfg(test)]
 mod tests;

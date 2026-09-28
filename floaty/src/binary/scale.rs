@@ -1,13 +1,13 @@
 //! Scaling by a power of two, and the next value up or down, for the binary
 //! formats.
 
-use super::nan;
 use super::{Layout, Unpacked};
 use crate::env::{Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::internal::Step;
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::Limbs;
+use crate::nan;
 
 /// The largest scale that `scale_b` applies. Every format overflows or
 /// underflows at a smaller scale, and the limit keeps every exponent inside
@@ -38,7 +38,7 @@ where
                 (Self::encode(rounded), flags | round_flags)
             }
             Unpacked::Nan { .. } | Unpacked::Unsupported => {
-                let (nan, special) = nan::special(&value, &Unpacked::Zero { negative: false }, env)
+                let (nan, special) = nan::special(&value, &Unpacked::zero(false), env)
                     .expect("a NaN or an unsupported operand has a special result");
                 Self::exact(nan, flags | special)
             }
@@ -57,8 +57,7 @@ where
     pub fn next<L: Limbs>(bits: L, step: Step, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let value = Self::operand(bits, env, &mut flags);
-        if let Some((nan, special)) = nan::special(&value, &Unpacked::Zero { negative: false }, env)
-        {
+        if let Some((nan, special)) = nan::special(&value, &Unpacked::zero(false), env) {
             return Self::exact(nan, flags | special);
         }
         let past_largest = |negative| {
@@ -121,7 +120,7 @@ where
             } => {
                 let next = significand.sub(one);
                 if next.is_zero() {
-                    Unpacked::Zero { negative: true }
+                    Unpacked::zero(true)
                 } else if next.bit_length() < Self::PRECISION && exponent > smallest_exponent {
                     // Below a power of two, the spacing halves: the next value
                     // has a full significand at the next lower exponent.

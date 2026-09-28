@@ -1,20 +1,23 @@
 //! Exact values and the one rounding routine that every operation uses.
 
+use core::cmp::Ordering;
+
 use crate::binary::Unpacked;
 use crate::env::{Env, Flags, Rounding, Tininess};
 use crate::limbs::Limbs;
 
-/// An exact value to round: `significand * 2^exponent`, plus a sticky bit.
+/// An exact value to round: `significand * RADIX^exponent`, plus a sticky
+/// bit. `RADIX` is the radix of the format that rounds the value.
 ///
-/// `exponent` is the weight of the lowest significand bit. The significand is
-/// an integer of any width, and the caller never normalizes it. `sticky`
-/// says that the true magnitude is above `significand * 2^exponent` by less
-/// than one lowest bit.
+/// `exponent` is the weight of the lowest significand digit. The significand
+/// is an integer of any width, and the caller never normalizes it. `sticky`
+/// says that the true magnitude is above `significand * RADIX^exponent` by
+/// less than one unit of the lowest digit.
 ///
-/// When `sticky` is set, the significand must have at least `p + 2`
-/// significant bits, where `p` is the target precision. With fewer bits the
-/// value is not known well enough to round correctly. A debug build checks
-/// this contract.
+/// When `sticky` is set, a binary significand must have at least `p + 2`
+/// significant bits, where `p` is the target precision. A decimal significand
+/// must have more than `p` digits. With fewer digits the value is not known
+/// well enough to round correctly. A debug build checks this contract.
 ///
 /// ```
 /// use floaty::{Exact, F32, Flags, Rounding};
@@ -31,12 +34,12 @@ use crate::limbs::Limbs;
 pub struct Exact<const N: usize> {
     /// The sign.
     pub negative: bool,
-    /// The weight of the lowest significand bit.
+    /// The weight of the lowest significand digit, as a power of the radix.
     pub exponent: i32,
-    /// The significand, least significant limb first.
+    /// The significand, a binary integer, least significant limb first.
     pub significand: [u64; N],
     /// `true` when the true magnitude is above the value by less than one
-    /// lowest bit.
+    /// unit of the lowest digit.
     pub sticky: bool,
 }
 
@@ -119,25 +122,74 @@ fn cut<In: Limbs, Out: Limbs>(value: &Unrounded<In>, lowest: i64) -> Cut<Out> {
     }
 }
 
-/// Applies a rounding direction to a cut. Returns the rounded bits and `true`
-/// when the magnitude grew.
-fn apply<L: Limbs>(cut: Cut<L>, negative: bool, rounding: Rounding) -> (L, bool) {
-    let inexact = cut.round || cut.rest;
-    let increment = match rounding {
-        Rounding::NearestEven => cut.round && (cut.rest || cut.kept.bit(0)),
-        Rounding::NearestAway => cut.round,
+/// The dropped part of a value, against half a unit of the last kept digit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dropped {
+    /// Nothing: the kept digits are exact.
+    Nothing,
+    /// Above zero and below half a unit.
+    BelowHalf,
+    /// Exactly half a unit.
+    Half,
+    /// Above half a unit.
+    AboveHalf,
+}
+
+impl Dropped {
+    /// Returns the dropped part from the first dropped digit against half a
+    /// unit, and `true` when a later dropped digit is nonzero.
+    pub fn new(first: Ordering, rest: bool) -> Self {
+        match (first, rest) {
+            (Ordering::Less, false) => Self::Nothing,
+            (Ordering::Less, true) => Self::BelowHalf,
+            (Ordering::Equal, false) => Self::Half,
+            (Ordering::Equal, true) | (Ordering::Greater, _) => Self::AboveHalf,
+        }
+    }
+
+    /// Returns `true` when the dropped part is not zero.
+    pub fn is_inexact(self) -> bool {
+        self != Self::Nothing
+    }
+}
+
+/// Returns `true` when a rounding in the direction `rounding` adds one unit
+/// to the kept digits. The binary and the decimal rounding routines share
+/// this choice.
+///
+/// `last_digit` is the last kept digit in `radix`. Round to odd adds one when
+/// that digit is 0, or 5 in radix 10. In radix 10, this rule is IBM's round
+/// to prepare for shorter precision.
+pub fn rounds_up(
+    rounding: Rounding,
+    negative: bool,
+    dropped: Dropped,
+    last_digit: u64,
+    radix: u32,
+) -> bool {
+    let inexact = dropped.is_inexact();
+    match rounding {
+        Rounding::NearestEven => {
+            dropped == Dropped::AboveHalf || (dropped == Dropped::Half && last_digit % 2 == 1)
+        }
+        Rounding::NearestAway => matches!(dropped, Dropped::Half | Dropped::AboveHalf),
         Rounding::TowardPositive => inexact && !negative,
         Rounding::TowardNegative => inexact && negative,
         Rounding::TowardZero => false,
-        Rounding::ToOdd => {
-            return if inexact && !cut.kept.bit(0) {
-                (cut.kept.with_bit(0), true)
-            } else {
-                (cut.kept, false)
-            };
-        }
+        Rounding::ToOdd => inexact && (last_digit == 0 || (radix == 10 && last_digit == 5)),
+    }
+}
+
+/// Applies a rounding direction to a cut. Returns the rounded bits and `true`
+/// when the magnitude grew.
+fn apply<L: Limbs>(cut: Cut<L>, negative: bool, rounding: Rounding) -> (L, bool) {
+    let first = if cut.round {
+        Ordering::Equal
+    } else {
+        Ordering::Less
     };
-    if increment {
+    let dropped = Dropped::new(first, cut.rest);
+    if rounds_up(rounding, negative, dropped, u64::from(cut.kept.bit(0)), 2) {
         (cut.kept.increment(), true)
     } else {
         (cut.kept, false)
@@ -159,7 +211,7 @@ pub fn round<In: Limbs, Out: Limbs>(
     let width = value.significand.bit_length();
     if width == 0 {
         debug_assert!(!value.sticky, "a sticky bit needs a nonzero significand");
-        return (Unpacked::Zero { negative }, Flags::NONE);
+        return (Unpacked::zero(negative), Flags::NONE);
     }
     let precision = target.precision_in(env);
     debug_assert!(
@@ -196,7 +248,7 @@ pub fn round<In: Limbs, Out: Limbs>(
         flags |= Flags::TINY;
         if env.flush_to_zero {
             return (
-                Unpacked::Zero { negative },
+                Unpacked::zero(negative),
                 flags | Flags::UNDERFLOW | Flags::INEXACT,
             );
         }
@@ -208,7 +260,7 @@ pub fn round<In: Limbs, Out: Limbs>(
         }
     }
     if kept.is_zero() {
-        return (Unpacked::Zero { negative }, flags);
+        return (Unpacked::zero(negative), flags);
     }
     if rounded_up {
         flags |= Flags::ROUNDED_UP;

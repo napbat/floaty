@@ -9,12 +9,12 @@
 
 use core::cmp::Ordering;
 
-use super::nan::{self, default_nan};
 use super::{Layout, Unpacked};
 use crate::env::{Env, Flags, InvalidProduct, Rounding};
 use crate::exact::{self, Unrounded};
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
+use crate::nan::{self, default_nan};
 
 /// A nonzero finite value: `significand * 2^exponent`.
 #[derive(Clone, Copy)]
@@ -104,9 +104,7 @@ where
         }
         *flags |= Flags::DENORMAL_INPUT;
         if env.denormals_are_zero {
-            Unpacked::Zero {
-                negative: bits.bit(Self::WIDTH - 1),
-            }
+            Unpacked::zero(bits.bit(Self::WIDTH - 1))
         } else {
             value
         }
@@ -122,12 +120,7 @@ where
     fn finish_sum<In: Limbs, L: Limbs>(sum: &Sum<In>, env: &Env, flags: Flags) -> (L, Flags) {
         match sum {
             Sum::Value(value) => Self::finish(value, env, flags),
-            Sum::Zero => Self::exact(
-                Unpacked::Zero {
-                    negative: zero_sum_sign(env),
-                },
-                flags,
-            ),
+            Sum::Zero => Self::exact(Unpacked::zero(zero_sum_sign(env)), flags),
         }
     }
 
@@ -176,9 +169,9 @@ where
             }
             (Unpacked::Infinity { .. }, _) => Self::exact(x, flags),
             (_, Unpacked::Infinity { .. }) => Self::exact(y, flags),
-            (Unpacked::Zero { negative: a }, Unpacked::Zero { negative: b }) => {
+            (Unpacked::Zero { negative: a, .. }, Unpacked::Zero { negative: b, .. }) => {
                 let negative = if a == b { a } else { zero_sum_sign(env) };
-                Self::exact(Unpacked::Zero { negative }, flags)
+                Self::exact(Unpacked::zero(negative), flags)
             }
             (
                 Unpacked::Zero { .. },
@@ -256,7 +249,7 @@ where
                 Self::exact(Unpacked::Infinity { negative }, flags)
             }
             (Unpacked::Zero { .. }, _) | (_, Unpacked::Zero { .. }) => {
-                Self::exact(Unpacked::Zero { negative }, flags)
+                Self::exact(Unpacked::zero(negative), flags)
             }
             (
                 Unpacked::Finite {
@@ -298,7 +291,7 @@ where
             }
             (Unpacked::Infinity { .. }, _) => Self::exact(Unpacked::Infinity { negative }, flags),
             (_, Unpacked::Infinity { .. }) | (Unpacked::Zero { .. }, _) => {
-                Self::exact(Unpacked::Zero { negative }, flags)
+                Self::exact(Unpacked::zero(negative), flags)
             }
             (_, Unpacked::Zero { .. }) => {
                 Self::exact(Self::infinity(negative, env), flags | Flags::DIVIDE_BY_ZERO)
@@ -339,8 +332,7 @@ where
         let mut flags = Flags::NONE;
         let x = Self::operand(value, env, &mut flags);
         // A one-operand NaN propagates as SoftFloat does, against a zero.
-        if let Some((result, special)) = nan::special(&x, &Unpacked::Zero { negative: false }, env)
-        {
+        if let Some((result, special)) = nan::special(&x, &Unpacked::zero(false), env) {
             return Self::exact(result, flags | special);
         }
         match x {
@@ -392,20 +384,19 @@ where
         {
             return Self::exact(default_nan(env), flags | Flags::INVALID);
         }
+        if first.is_nan() || second.is_nan() {
+            let (value, special) = nan::fused(&first, &second, &third, env);
+            return Self::exact(value, flags | special);
+        }
         let product_negative = sign(&first) != sign(&second);
         // The product of the first two operands, as a value to combine with
-        // the addend: a NaN, an infinity, an invalid product, or a number.
-        let product = if first.is_nan() || second.is_nan() {
-            let (value, special) = nan::propagate(&first, &second, env);
-            flags |= special;
-            value
-        } else {
+        // the addend: an infinity, an invalid product, or a number.
+        let product = {
             match (first, second) {
                 (Unpacked::Infinity { .. }, Unpacked::Zero { .. })
                 | (Unpacked::Zero { .. }, Unpacked::Infinity { .. }) => {
                     if third.is_nan() && env.nan.invalid_product == InvalidProduct::YieldsToNan {
-                        let (value, special) =
-                            nan::propagate(&Unpacked::Zero { negative: false }, &third, env);
+                        let (value, special) = nan::propagate(&Unpacked::zero(false), &third, env);
                         return Self::exact(value, flags | special);
                     }
                     flags |= Flags::INVALID;
@@ -418,7 +409,7 @@ where
                 }
                 _ => {
                     if let Some((value, special)) =
-                        nan::special(&Unpacked::Zero { negative: false }, &third, env)
+                        nan::special(&Unpacked::zero(false), &third, env)
                     {
                         return Self::exact(value, flags | special);
                     }
@@ -486,13 +477,13 @@ where
             _ => None,
         };
         match (product, z) {
-            (None, Unpacked::Zero { negative }) => {
+            (None, Unpacked::Zero { negative, .. }) => {
                 let negative = if negative == product_negative {
                     negative
                 } else {
                     zero_sum_sign(env)
                 };
-                Self::exact(Unpacked::Zero { negative }, flags)
+                Self::exact(Unpacked::zero(negative), flags)
             }
             (
                 None,
@@ -529,7 +520,7 @@ where
 /// Returns the sign of a zero, finite, or infinite value.
 fn sign<L: Limbs>(value: &Unpacked<L>) -> bool {
     match value {
-        Unpacked::Zero { negative }
+        Unpacked::Zero { negative, .. }
         | Unpacked::Finite { negative, .. }
         | Unpacked::Infinity { negative } => *negative,
         Unpacked::Nan { .. } | Unpacked::Unsupported => false,
@@ -551,7 +542,9 @@ impl<L: Limbs> Unrounded<L> {
 
 #[cfg(test)]
 mod tests {
-    use crate::env::{Env, Flags, InvalidProduct, NanPropagation, NanRule, Rounding};
+    use crate::env::{
+        Env, Flags, FusedNanOrder, InvalidProduct, NanPropagation, NanRule, Rounding,
+    };
     use crate::float::{F8E4M3, F32, F64, F80};
 
     const F64_TWO: u64 = 0x4000_0000_0000_0000;
@@ -636,6 +629,32 @@ mod tests {
             Env::IEEE,
         );
         assert_eq!((addend.to_bits(), flags), (0x7F80_0000, Flags::NONE));
+    }
+
+    #[test]
+    fn the_fused_order_selects_among_the_nan_operands() {
+        let one = F32::from_bits(0x3F80_0000);
+        let (factor, addend) = (F32::from_bits(0x7FC0_0001), F32::from_bits(0x7FC0_0002));
+        let signaling = F32::from_bits(0x7F80_0003);
+        let addend_first = Env::IEEE.with_nan(
+            NanRule::new(NanPropagation::SignalingFirst)
+                .with_fused_order(FusedNanOrder::AddendFirst),
+        );
+        // Two quiet NaNs: the factor first by default, the addend first in
+        // the Arm order.
+        let (nan, flags) = factor.mul_add_with(one, addend, Env::IEEE);
+        assert_eq!((nan.to_bits(), flags), (0x7FC0_0001, Flags::NONE));
+        let (nan, flags) = factor.mul_add_with(one, addend, addend_first);
+        assert_eq!((nan.to_bits(), flags), (0x7FC0_0002, Flags::NONE));
+        // A signaling second factor comes before a quiet addend in both.
+        let (nan, flags) = one.mul_add_with(signaling, addend, addend_first);
+        assert_eq!((nan.to_bits(), flags), (0x7FC0_0003, Flags::INVALID));
+        // With the first-operand rule, the addend is the first operand.
+        let first = Env::IEEE.with_nan(
+            NanRule::new(NanPropagation::FirstOperand).with_fused_order(FusedNanOrder::AddendFirst),
+        );
+        let (nan, _) = one.mul_add_with(signaling, addend, first);
+        assert_eq!(nan.to_bits(), 0x7FC0_0002);
     }
 
     #[test]

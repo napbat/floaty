@@ -6,12 +6,12 @@
 
 use core::cmp::Ordering;
 
-use super::nan::{self, default_nan};
 use super::{EncodingKind, Layout, Unpacked};
-use crate::env::{Env, Flags};
+use crate::env::{Env, Flags, TotalOrder};
 use crate::format::internal::MinMax;
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::Limbs;
+use crate::nan::{self, default_nan};
 
 /// Orders the magnitudes of two numbers: zeros, finite values, or
 /// infinities.
@@ -88,8 +88,23 @@ where
     /// `totalOrder`: a negative NaN first, then the numbers, then a positive
     /// NaN. A signaling NaN is nearer the numbers than a quiet NaN. The one
     /// NaN of `Fnuz` has only the sign bit set; it orders first, as a negative
-    /// NaN does. An x87 encoding that is not canonical orders by its bits.
-    pub fn total_cmp<L: Limbs>(left: L, right: L) -> Ordering {
+    /// NaN does.
+    ///
+    /// An x87 pseudo-denormal has a canonical twin: the normal encoding with
+    /// exponent field 1. With [`TotalOrder::Datum`] the pseudo-denormal
+    /// orders as its twin, and with [`TotalOrder::Encoding`] by its own bits.
+    /// An unsupported x87 encoding is no datum, so it orders by its bits.
+    pub fn total_cmp<L: Limbs>(left: L, right: L, order: TotalOrder) -> Ordering {
+        let canonical = |bits: L| {
+            if order != TotalOrder::Datum || !matches!(Enc::KIND, EncodingKind::X87) {
+                return bits;
+            }
+            match Self::decode(bits) {
+                Unpacked::Unsupported => bits,
+                value => Self::encode(value),
+            }
+        };
+        let (left, right) = (canonical(left), canonical(right));
         let key = |bits: L| {
             let magnitude = bits.low_bits(Self::WIDTH - 1);
             let negative = bits.bit(Self::WIDTH - 1);
@@ -123,29 +138,8 @@ where
         if matches!(first, Unpacked::Unsupported) || matches!(second, Unpacked::Unsupported) {
             return Self::exact(default_nan(env), flags | Flags::INVALID);
         }
-        let signaling = first.is_signaling() || second.is_signaling();
-        match (first.is_nan(), second.is_nan()) {
-            (false, false) => {}
-            (true, true) => {
-                let (value, special) = nan::propagate(&first, &second, env);
-                return Self::exact(value, flags | special);
-            }
-            (true, false) | (false, true) => {
-                let returns_nan = match operation {
-                    MinMax::Minimum | MinMax::Maximum => true,
-                    MinMax::MinNum | MinMax::MaxNum => signaling,
-                    MinMax::MinimumNumber | MinMax::MaximumNumber => false,
-                };
-                if returns_nan {
-                    let (value, special) = nan::propagate(&first, &second, env);
-                    return Self::exact(value, flags | special);
-                }
-                if signaling {
-                    flags |= Flags::INVALID;
-                }
-                let number = if first.is_nan() { second } else { first };
-                return Self::exact(number, flags);
-            }
+        if let Some((value, special)) = nan::min_max(&first, &second, operation, env) {
+            return Self::exact(value, flags | special);
         }
         let order = match compare_numbers(&first, &second) {
             // Zeros of different signs: -0 orders below +0.
@@ -153,9 +147,11 @@ where
                 (
                     Unpacked::Zero {
                         negative: first_negative,
+                        ..
                     },
                     Unpacked::Zero {
                         negative: second_negative,
+                        ..
                     },
                 ) => second_negative.cmp(&first_negative),
                 _ => Ordering::Equal,
@@ -274,6 +270,30 @@ mod tests {
         assert_eq!(
             bits(f32(QUIET).max_num_with(f32(0x7FC0_0002), Env::IEEE)).0,
             QUIET
+        );
+    }
+
+    #[test]
+    fn an_x87_pseudo_denormal_orders_as_its_twin() {
+        use crate::TotalOrder;
+        use crate::float::F80;
+        // Exponent field 0 with the integer bit set, and the normal encoding
+        // of the same value with exponent field 1.
+        let pseudo = F80::from_bits((1 << 63) | 5);
+        let twin = F80::from_bits((1 << 64) | (1 << 63) | 5);
+        assert_eq!(pseudo.total_cmp(twin), Ordering::Equal);
+        assert_eq!(
+            pseudo.total_cmp_with(twin, TotalOrder::Encoding),
+            Ordering::Less
+        );
+        let above = F80::from_bits((1 << 64) | (1 << 63) | 6);
+        assert_eq!(pseudo.total_cmp(above), Ordering::Less);
+        // An unnormal is no datum, so it orders by its bits in both rules.
+        let unnormal = F80::from_bits((2 << 64) | 5);
+        assert_eq!(unnormal.total_cmp(twin), Ordering::Greater);
+        assert_eq!(
+            unnormal.total_cmp_with(twin, TotalOrder::Encoding),
+            Ordering::Greater
         );
     }
 }

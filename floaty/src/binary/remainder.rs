@@ -2,12 +2,12 @@
 
 use core::cmp::Ordering;
 
-use super::nan::{self, default_nan};
 use super::{Layout, Unpacked};
 use crate::env::{Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
+use crate::nan::{self, default_nan};
 
 impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
 where
@@ -137,7 +137,7 @@ where
         };
         let magnitude = if above_half { divisor.sub(rest) } else { rest };
         if magnitude.is_zero() {
-            return Self::exact(Unpacked::Zero { negative }, flags);
+            return Self::exact(Unpacked::zero(negative), flags);
         }
         let value = Unrounded {
             negative: negative != above_half,

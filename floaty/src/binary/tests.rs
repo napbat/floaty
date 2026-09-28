@@ -120,7 +120,7 @@ fn binary32_decodes_known_values() {
     assert_eq!(L::decode([0x3F80_0000]), finite(false, -23, [1 << 23]));
     assert_eq!(L::decode([0x0000_0001]), finite(false, -149, [1]));
     assert_eq!(L::decode([0xFF7F_FFFF]), finite(true, 104, [0xFF_FFFF]));
-    assert_eq!(L::decode([0x8000_0000]), Unpacked::Zero { negative: true });
+    assert_eq!(L::decode([0x8000_0000]), Unpacked::zero(true));
     assert_eq!(
         L::decode([0xFF80_0001]),
         Unpacked::Nan {
@@ -161,11 +161,11 @@ fn fp8_formats_decode_their_largest_values() {
 #[test]
 fn fnuz_encodes_negative_zero_as_positive_zero() {
     assert_eq!(
-        Layout::<4, Fnuz, 8>::encode::<[u64; 1]>(Unpacked::Zero { negative: true }),
+        Layout::<4, Fnuz, 8>::encode::<[u64; 1]>(Unpacked::zero(true)),
         [0]
     );
     assert_eq!(
-        Layout::<4, NoInf, 8>::encode::<[u64; 1]>(Unpacked::Zero { negative: true }),
+        Layout::<4, NoInf, 8>::encode::<[u64; 1]>(Unpacked::zero(true)),
         [0x80]
     );
 }
@@ -263,7 +263,7 @@ fn binary512_decodes_its_boundary_encodings() {
     let smallest_normal = zero.with_bit(511).with_field(488, 23, 1);
     let smallest_subnormal = zero.with_bit(0);
     let cases = [
-        (zero, Class::Zero, Unpacked::Zero { negative: false }),
+        (zero, Class::Zero, Unpacked::zero(false)),
         (
             infinity,
             Class::Infinite,

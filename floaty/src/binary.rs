@@ -5,18 +5,19 @@ use core::marker::PhantomData;
 
 mod arithmetic;
 mod compare;
+mod from_decimal;
 mod integral;
-mod nan;
 mod remainder;
 mod scale;
 
-use crate::env::{Env, Flags, NanPropagation};
+use crate::env::{Env, Flags, NanPropagation, TotalOrder};
 use crate::exact::{self, Target, Unrounded};
 use crate::float::Class;
-use crate::format::internal::{Host, LimbConversion, MinMax, Step};
+use crate::format::internal::{Host, LimbConversion, MinMax, Source, Step};
 use crate::format::{Binary, Encoding, Standard, Storage, Width};
 use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
+use crate::nan;
 
 /// The encoding rules of a binary format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -31,44 +32,7 @@ pub enum EncodingKind {
     X87,
 }
 
-/// A decoded binary value.
-///
-/// A finite value is `significand * 2^exponent`. `exponent` is the weight of
-/// the lowest significand bit. A normal significand has its bit
-/// `PRECISION - 1` set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Unpacked<L> {
-    /// A zero.
-    Zero {
-        /// The sign.
-        negative: bool,
-    },
-    /// A nonzero finite value.
-    Finite {
-        /// The sign.
-        negative: bool,
-        /// The weight of the lowest significand bit.
-        exponent: i32,
-        /// The significand, below `2^PRECISION`.
-        significand: L,
-    },
-    /// An infinity.
-    Infinity {
-        /// The sign.
-        negative: bool,
-    },
-    /// A NaN.
-    Nan {
-        /// The sign.
-        negative: bool,
-        /// `true` for a signaling NaN.
-        signaling: bool,
-        /// The fraction bits below the quiet bit.
-        payload: L,
-    },
-    /// An encoding that the format does not define, such as an x87 unnormal.
-    Unsupported,
-}
+pub use crate::unpacked::Unpacked;
 
 /// The layout constants and codec of `Binary<E, Enc>` at width `W`.
 pub struct Layout<const E: u32, Enc, const W: usize> {
@@ -153,7 +117,7 @@ where
     };
 
     /// The number of NaN payload bits, below the quiet bit.
-    const PAYLOAD_BITS: u32 = match Enc::KIND {
+    const PAYLOAD_DIGITS: u32 = match Enc::KIND {
         EncodingKind::Ieee => Self::FRACTION_BITS - 1,
         EncodingKind::X87 => 62,
         EncodingKind::NoInf | EncodingKind::Fnuz => 0,
@@ -194,7 +158,7 @@ where
                         payload: L::ZERO,
                     }
                 } else {
-                    Unpacked::Zero { negative }
+                    Unpacked::zero(negative)
                 }
             }
             EncodingKind::X87 => Self::decode_x87(negative, field, fraction),
@@ -213,7 +177,7 @@ where
                 significand: fraction.with_bit(Self::FRACTION_BITS),
             }
         } else if fraction.is_zero() {
-            Unpacked::Zero { negative }
+            Unpacked::zero(negative)
         } else {
             Unpacked::Finite {
                 negative,
@@ -243,7 +207,7 @@ where
             // A pseudo-denormal has the integer bit set. Its value equals the
             // normal value with exponent field 1, so both share one exponent.
             if fraction.is_zero() {
-                Unpacked::Zero { negative }
+                Unpacked::zero(negative)
             } else {
                 Unpacked::Finite {
                     negative,
@@ -324,7 +288,7 @@ where
     pub fn encode<L: Limbs>(value: Unpacked<L>) -> L {
         let () = Self::VALID;
         match value {
-            Unpacked::Zero { negative } => {
+            Unpacked::Zero { negative, .. } => {
                 let negative = negative && !matches!(Enc::KIND, EncodingKind::Fnuz);
                 Self::assemble(negative, 0, L::ZERO)
             }
@@ -437,28 +401,37 @@ where
         (Self::encode(rounded), flags)
     }
 
-    /// Converts a decoded value of another format, whose NaN payloads have
-    /// `payload_bits` bits, to this format.
+    /// Converts a decoded value of another format, binary or decimal.
+    ///
+    /// A NaN payload keeps its high-order bits. The payload of a decimal
+    /// source is the value of its trailing significand field, as the Intel
+    /// decimal library converts it.
     pub fn convert_from<In: Limbs, Out: Limbs>(
         value: Unpacked<In>,
-        payload_bits: u32,
+        source: Source,
         env: &Env,
     ) -> (Out, Flags) {
         match value {
-            Unpacked::Zero { negative } => (Self::encode(Unpacked::Zero { negative }), Flags::NONE),
+            Unpacked::Zero { negative, .. } => {
+                (Self::encode(Unpacked::zero(negative)), Flags::NONE)
+            }
             Unpacked::Finite {
                 negative,
                 exponent,
                 significand,
-            } => Self::round(
-                &Unrounded {
+            } => {
+                let value = Unrounded {
                     negative,
                     exponent,
                     significand,
                     sticky: false,
-                },
-                env,
-            ),
+                };
+                if source.radix == 10 {
+                    Self::from_decimal(&value, env)
+                } else {
+                    Self::round(&value, env)
+                }
+            }
             Unpacked::Infinity { negative } => Self::convert_infinity(negative, env),
             Unpacked::Nan {
                 negative,
@@ -477,7 +450,11 @@ where
                     | NanPropagation::LargerSignificand => Self::encode(Unpacked::Nan {
                         negative,
                         signaling: false,
-                        payload: align(payload, payload_bits, Self::PAYLOAD_BITS),
+                        payload: nan::align_payload(
+                            payload,
+                            source.payload_bits(),
+                            Self::PAYLOAD_DIGITS,
+                        ),
                     }),
                 };
                 (nan, flags)
@@ -530,10 +507,12 @@ where
 {
     type Bits = <Width<W> as Storage>::Bits;
 
+    const RADIX: u32 = 2;
     const PRECISION: u32 = Layout::<E, Enc, W>::PRECISION;
+    const SIGNIFICAND_BITS: u32 = Layout::<E, Enc, W>::PRECISION;
     const EMAX: i32 = Layout::<E, Enc, W>::EMAX;
     const EMIN: i32 = Layout::<E, Enc, W>::EMIN;
-    const PAYLOAD_BITS: u32 = Layout::<E, Enc, W>::PAYLOAD_BITS;
+    const PAYLOAD_DIGITS: u32 = Layout::<E, Enc, W>::PAYLOAD_DIGITS;
     const HOST: Host = Layout::<E, Enc, W>::HOST;
 
     fn mask(bits: Self::Bits) -> Self::Bits {
@@ -564,10 +543,10 @@ where
 
     fn convert_from<L: Limbs>(
         value: Unpacked<L>,
-        payload_bits: u32,
+        source: Source,
         env: &Env,
     ) -> (Self::Bits, Flags) {
-        let (bits, flags) = Layout::<E, Enc, W>::convert_from(value, payload_bits, env);
+        let (bits, flags) = Layout::<E, Enc, W>::convert_from(value, source, env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
@@ -611,8 +590,8 @@ where
         Layout::<E, Enc, W>::compare(left.to_limbs(), right.to_limbs(), env)
     }
 
-    fn total_cmp(left: Self::Bits, right: Self::Bits) -> Ordering {
-        Layout::<E, Enc, W>::total_cmp(left.to_limbs(), right.to_limbs())
+    fn total_cmp(left: Self::Bits, right: Self::Bits, order: TotalOrder) -> Ordering {
+        Layout::<E, Enc, W>::total_cmp(left.to_limbs(), right.to_limbs(), order)
     }
 
     fn min_max(
@@ -648,16 +627,6 @@ where
     fn next(value: Self::Bits, step: Step, env: &Env) -> (Self::Bits, Flags) {
         let (bits, flags) = Layout::<E, Enc, W>::next(value.to_limbs(), step, env);
         (Self::Bits::from_limbs(bits), flags)
-    }
-}
-
-/// Moves a NaN payload of `from` bits to a payload of `to` bits and keeps its
-/// high-order bits.
-fn align<In: Limbs, Out: Limbs>(payload: In, from: u32, to: u32) -> Out {
-    if to >= from {
-        payload.resize::<Out>().shl(to - from)
-    } else {
-        payload.shr(from - to).resize()
     }
 }
 

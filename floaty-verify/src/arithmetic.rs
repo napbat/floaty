@@ -92,7 +92,7 @@ pub fn compute<const N: usize>(
                 signaling |= sign;
                 numbers.push(Number::Zero(false));
             }
-            Decoded::Zero { negative } => numbers.push(Number::Zero(negative)),
+            Decoded::Zero { negative, .. } => numbers.push(Number::Zero(negative)),
             Decoded::Finite { negative, .. } if operand.subnormal && env.denormals_are_zero => {
                 numbers.push(Number::Zero(negative));
             }

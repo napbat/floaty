@@ -6,7 +6,7 @@ floaty emulates floating-point formats and the behavior of the hardware that
 uses them. Every operation gives the same bits on every host. It is a base
 layer for binary lifters, constant folders, and software FPU emulators.
 
-> **Status:** build steps 1 to 6 of 8 are complete: every binary format
+> **Status:** build steps 1 to 7 of 8 are complete: every binary format
 > decodes, classifies, rounds, converts, and computes `+ - * /`, square root,
 > and fused multiply-add, correctly rounded in every rounding direction, and
 > has comparisons and a total order, the minimum and maximum families,
@@ -14,7 +14,9 @@ layer for binary lifters, constant folders, and software FPU emulators.
 > `scale_b`, `next_up` and `next_down`, and the sign operations. The x86
 > SSE and x87 presets give the behavior of those units. The binary32 and
 > binary64 operators use the host unit on x86-64 where it gives the same
-> bits.
+> bits. decimal32, decimal64, and decimal128, in BID and DPD, have the same
+> operations with the IEEE 754 preferred exponents, the quantum operations,
+> and correctly rounded conversions to and from every binary format.
 > [DESIGN.md](DESIGN.md) holds the approved design and the build order.
 
 ## Planned Scope
@@ -55,7 +57,9 @@ let (sum, flags) = a.add_with(b, Env::X86_SSE);         // full platform behavio
 ## Development
 
 Rust 1.85 or later, edition 2024. The verification harness runs on Linux
-x86-64 hosts and also needs the reference sources, `make`, `gcc`, and `m4`:
+x86-64 hosts and also needs the reference sources, `make`, `gcc`, `m4`,
+`curl`, `tar`, `sha256sum`, and `python3`. Its first build downloads the
+decimal references, so it needs network access once:
 
 ```text
 git submodule update --init

@@ -94,7 +94,7 @@ fn check(context: &str, ours: Class, decoded: Decoded<1>, row: (&str, &str, &str
         _ => panic!("unknown class {class} for {context}"),
     }
     let negative = match decoded {
-        Decoded::Zero { negative }
+        Decoded::Zero { negative, .. }
         | Decoded::Infinity { negative }
         | Decoded::Nan { negative, .. } => negative,
         Decoded::Finite {

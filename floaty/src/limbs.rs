@@ -402,15 +402,19 @@ fn multiply<const N: usize, const D: usize>(left: &[u64; N], right: &[u64; N]) -
 
 /// Splits a `u128` into its low and high 64 bits.
 #[inline]
-fn split_u128(value: u128) -> [u64; 2] {
+pub fn split_u128(value: u128) -> [u64; 2] {
     let low = u64::try_from(value & u128::from(u64::MAX)).expect("the mask keeps 64 bits");
     let high = u64::try_from(value >> 64).expect("the shift keeps 64 bits");
     [low, high]
 }
 
-/// The most limbs that `divide` takes: the double width of the widest
-/// storage type.
-const MAX_LIMBS: usize = 16;
+/// The buffer of `divide` for values of up to 1,024 bits: the double width of
+/// the widest storage type, and one limb more.
+const SMALL_BUFFER: usize = 17;
+
+/// The buffer of `divide` for the wide values of a conversion between radixes:
+/// up to 16,384 bits, and one limb more.
+const LARGE_BUFFER: usize = 257;
 
 /// Returns the low 64 bits of a `u128`.
 #[inline]
@@ -420,14 +424,14 @@ fn low_u64(value: u128) -> u64 {
 
 /// Returns a value of at most 128 bits as a `u128`.
 #[inline]
-fn to_u128<L: Limbs>(value: &L) -> u128 {
+pub fn to_u128<L: Limbs>(value: &L) -> u128 {
     debug_assert!(value.bit_length() <= 128, "the value fits 128 bits");
     u128::from(value.limb(0)) | (u128::from(value.limb(1)) << 64)
 }
 
 /// Returns a `u128` as limbs. The value must fit `L`.
 #[inline]
-fn from_u128<L: Limbs>(value: u128) -> L {
+pub fn from_u128<L: Limbs>(value: u128) -> L {
     let [low, high] = split_u128(value);
     let low_limb = L::ZERO.with_limb(0, low);
     if high == 0 {
@@ -437,10 +441,46 @@ fn from_u128<L: Limbs>(value: u128) -> L {
     }
 }
 
+/// Returns `value * factor`. The product must fit `L`.
+pub fn multiply_small<L: Limbs>(value: L, factor: u64) -> L {
+    let count = limb_count(&value);
+    let mut product = L::ZERO;
+    let mut carry = 0_u64;
+    // The carry passes from each limb to the next, so the loop indexes.
+    for index in 0..count {
+        let [low, high] =
+            split_u128(u128::from(value.limb(index)) * u128::from(factor) + u128::from(carry));
+        product = product.with_limb(index, low);
+        carry = high;
+    }
+    if carry != 0 {
+        product = product.with_limb(count, carry);
+    }
+    product
+}
+
 /// Returns the number of limbs up to the highest nonzero limb.
 #[inline]
 fn limb_count<L: Limbs>(value: &L) -> usize {
     usize::try_from(value.bit_length().div_ceil(64)).expect("a limb count fits a usize")
+}
+
+/// Divides `value` by a nonzero `divisor` of one limb. Returns the quotient
+/// and the remainder. The division needs no buffer, so it takes a value of
+/// any width.
+pub fn divide_small<L: Limbs>(value: L, divisor: u64) -> (L, u64) {
+    debug_assert!(divisor != 0, "the divisor is not zero");
+    let by = u128::from(divisor);
+    let mut quotient = L::ZERO;
+    let mut rest = 0_u128;
+    // The remainder passes from each limb to the next lower one, so the loop
+    // indexes.
+    for index in (0..limb_count(&value)).rev() {
+        let current = (rest << 64) | u128::from(value.limb(index));
+        quotient = quotient.with_limb(index, low_u64(current / by));
+        rest = current % by;
+    }
+    (quotient, low_u64(rest))
 }
 
 /// Divides `numerator` by a nonzero `divisor`. Returns the quotient and the
@@ -458,18 +498,24 @@ pub fn divide<L: Limbs>(numerator: L, divisor: L) -> (L, L) {
         let (wide, by) = (to_u128(&numerator), to_u128(&divisor));
         return (from_u128(wide / by), from_u128(wide % by));
     }
-    long_divide(numerator, divisor)
+    if L::BITS <= 1024 {
+        long_divide::<L, SMALL_BUFFER>(numerator, divisor)
+    } else {
+        long_divide::<L, LARGE_BUFFER>(numerator, divisor)
+    }
 }
 
 /// Divides by Knuth's Algorithm D (The Art of Computer Programming, Volume 2,
 /// section 4.3.1). The divisor is normalized so that its top limb has its
 /// high bit set; each quotient limb estimate is then at most two too large.
-fn long_divide<L: Limbs>(numerator: L, divisor: L) -> (L, L) {
+///
+/// `BUFFER` holds the numerator and one limb more.
+fn long_divide<L: Limbs, const BUFFER: usize>(numerator: L, divisor: L) -> (L, L) {
     let length = limb_count(&divisor);
     let total = limb_count(&numerator);
     assert!(
-        total <= MAX_LIMBS,
-        "a numerator has at most {MAX_LIMBS} limbs"
+        total < BUFFER,
+        "the buffer holds the numerator and one limb more"
     );
     if total < length {
         return (L::ZERO, numerator);
@@ -495,11 +541,11 @@ fn long_divide<L: Limbs>(numerator: L, divisor: L) -> (L, L) {
         };
         (value.limb(index) << shift) | low
     };
-    let mut by = [0_u64; MAX_LIMBS];
+    let mut by = [0_u64; BUFFER];
     for (index, limb) in by.iter_mut().enumerate().take(length) {
         *limb = shifted(&divisor, index);
     }
-    let mut rest = [0_u64; MAX_LIMBS + 1];
+    let mut rest = [0_u64; BUFFER];
     for (index, limb) in rest.iter_mut().enumerate().take(total + 1) {
         *limb = shifted(&numerator, index);
     }

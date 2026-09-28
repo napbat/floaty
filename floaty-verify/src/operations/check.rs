@@ -4,7 +4,7 @@
 //! floaty differs from the oracle. A float result must also be canonical.
 
 use floaty::format::Standard;
-use floaty::{Env, Flags, Float};
+use floaty::{Env, Flags, Float, TotalOrder};
 use rug::Integer;
 
 use super::compare::{self, MinMax};
@@ -77,8 +77,14 @@ pub fn check_order_and_signs<S: Standard<W>, const W: usize>(
     let context = || format!("{:?} {:?}", x.value, y.value);
     assert_eq!(
         x.value.total_cmp(y.value),
-        compare::total_order(&x.sample, &y.sample),
+        compare::total_order(&x.sample, &y.sample, TotalOrder::Datum),
         "total_cmp {}",
+        context()
+    );
+    assert_eq!(
+        x.value.total_cmp_with(y.value, TotalOrder::Encoding),
+        compare::total_order(&x.sample, &y.sample, TotalOrder::Encoding),
+        "total_cmp by encoding {}",
         context()
     );
     let (order, _) = compare::compare_quiet(&x.sample.operand, &y.sample.operand, &Env::IEEE);

@@ -2,7 +2,7 @@
 
 Status: design approved on 2026-09-27. Build steps 1, encoding, 2, rounding,
 3, arithmetic, 4, the other binary operations, 5, the x86 SSE and x87
-presets, and 6, performance, are complete.
+presets, 6, performance, and 7, decimal, are complete.
 
 This file is the source of truth for every design decision in floaty. Update
 it in the same change that alters a decision.
@@ -92,7 +92,7 @@ a default for operations. It does not change the value.
   the sign. `is_canonical` implements IEEE 754 `isCanonical`: an encoding is
   canonical when encoding its decoded value gives the same bits.
 - `decode::<N>()` returns the exact value as `Decoded<N>`: a zero, a finite
-  value `significand * 2^exponent`, an infinity, a NaN with its sign and
+  value `significand * RADIX^exponent`, an infinity, a NaN with its sign and
   payload, or an unsupported encoding. `N` is the limb count of the
   significand. A consumer reads its operands with `decode` and rounds its
   result with `round`.
@@ -202,6 +202,79 @@ The decimal engine has its own exact value, a coefficient times a power of
 10 plus a sticky bit, and its own rounding routine. Conversion between binary
 and decimal formats needs its own correctly rounded path.
 
+Step 7 fixed these rules:
+
+- The widths are 32, 64, and 128 bits, with the parameters of IEEE 754-2019
+  Table 3.6. Another width fails at compile time. The aliases are `D32Bid`,
+  `D64Bid`, `D128Bid`, `D32Dpd`, `D64Dpd`, and `D128Dpd`. No encoding is the
+  default.
+- The API is radix-generic. `Float::RADIX` is 2 or 10. `PRECISION` counts
+  digits of the radix, and `EMAX` and `EMIN` are exponents of the radix.
+  `Decoded` and `Exact` hold `significand * RADIX^exponent`. A decimal
+  `decode` keeps the exponent of the encoding, its quantum, so it tells 1.0
+  from 1.00. `round` takes an exact value in the radix of the format.
+- The decimal rounding routine takes a preferred exponent. An exact result
+  is the member of its cohort whose exponent is nearest the preferred one.
+  An inexact result has the least possible exponent, so it keeps every
+  digit. An exponent can be above the largest exponent of a full
+  coefficient. It then clamps down when the coefficient has room for
+  trailing zeros, as IEEE 754 requires.
+- The decimal rounding routine and the binary one share the choice of the
+  direction. For a decimal result, `ToOdd` is IBM's round to prepare for
+  shorter precision: it rounds toward zero and, when the result is inexact
+  and its last digit is 0 or 5, adds one. That keeps a later rounding to
+  fewer digits correct, as binary round to odd does for bits.
+- The precision limit counts decimal digits for a decimal format. It moves
+  only the rounding position. The result then takes its exponent by the
+  rules of the format at its full precision, so an inexact result has
+  trailing zeros. FTZ and DAZ treat a value below `10^EMIN` as subnormal.
+- A BID coefficient above `10^p - 1` is non-canonical and reads as zero. A
+  non-canonical DPD declet reads as its digit value. An infinity with a bit
+  set below its five leading combination bits is non-canonical. A NaN with
+  a bit set between its signaling bit and its trailing field, or with a
+  payload above `10^(p - 1) - 1`, is non-canonical. `is_canonical` reports
+  these encodings. An operation returns canonical encodings.
+- `Decoded::Zero` has an `exponent` field: the quantum of a decimal zero,
+  and 0 for a binary zero. The field changes the public enum.
+- `quantize_with` signals no underflow or overflow, as IEEE 754-2019
+  section 5.3.2 states. It reports no `TINY`, and FTZ does not apply. It
+  reports `ROUNDED_UP` when its rounding increments the coefficient.
+- `log_b_with`, the comparisons, and the sign operations report neither
+  `TINY` nor `ROUNDED_UP`.
+- The decimal operations are those of the binary family, and the decimal
+  operations of IEEE 754: `quantize`, `same_quantum`, `quantum`, `log_b`,
+  and `scale_b`, which scales by a power of 10. Comparison, `total_cmp`, and
+  the minimum and maximum families order the members of one cohort as
+  IEEE 754 and decTest do.
+- Conversions go between the decimal formats, between BID and DPD, to and
+  from integers, and to and from every binary format. A binary-to-decimal or
+  decimal-to-binary conversion rounds correctly. It divides by a power of 5
+  and shifts to reach a few digits or bits more than the precision, with a
+  sticky bit. The numbers stay below 16,384 bits, although 10^6144 is about
+  2^20410. A value far outside the decimal range rounds as a stand-in on the
+  same side, which rounds alike in every direction.
+- A decimal result is tiny when its exact value is below `10^EMIN`, before
+  rounding, as IEEE 754 section 7.5 requires for decimal formats and
+  decNumber does. The `tininess` field of `Env` applies only to binary
+  formats.
+- A conversion from a decimal format keeps the exponent of the source where
+  the destination holds it, as IEEE 754 prefers. A conversion from a binary
+  format prefers exponent 0, as the Intel library gives it: binary64 0.5
+  converts to `5E-1`.
+- A finite value divided by an infinity gives a zero with the least
+  exponent, as decTest requires.
+- `remainder_with` is exact at every quotient size, as IEEE 754 requires.
+  decNumber reports `Division_impossible` when the integer quotient has
+  more than `p` digits. floaty follows IEEE 754, as the Intel library does,
+  and the decNumber tests of that case are excluded with this reason. See
+  `docs/anomalies/decnumber-remainder-near-division-impossible.md`.
+- `log_b` gives the exponent of the leading digit as a decimal value. Only
+  the decimal formats have it: the binary `logB` returns an integer, which
+  a consumer reads from `decode`.
+- decTest's `half_down` and `up` rounding modes are not `Rounding`
+  directions. They are part of the open question on the IBM POWER decimal
+  rounding modes.
+
 ### Double-Double Family
 
 `DoubleDouble<Alg>` at `W = 128` stores a value as the sum of two binary64
@@ -236,6 +309,7 @@ pub struct Env {
     pub nan: NanRule,             // which NaN an operation returns
     pub precision: Option<NonZeroU32>, // x87 precision control
     pub saturate: bool,           // FP8 saturating overflow
+    pub total_order: TotalOrder,  // Datum or Encoding: two encodings of one datum
 }
 
 #[non_exhaustive]
@@ -243,11 +317,13 @@ pub struct NanRule {
     pub propagation: NanPropagation, // SignalingFirst, FirstOperand, LargerSignificand, or DefaultNan
     pub default_negative: bool,      // the sign of the default NaN
     pub invalid_product: InvalidProduct, // Signals or YieldsToNan: fma 0 * inf + NaN
+    pub fused_order: FusedNanOrder,  // ProductFirst or AddendFirst: the NaN operands of fma
 }
 ```
 
-`Env`, `NanRule`, `InvalidProduct`, `Tininess`, `Override`, and `Mode` live in the module
-`floaty::env`. The crate root re-exports `Env`, `Flags`, `Rounding`, and the
+`Env`, `NanRule`, `InvalidProduct`, `FusedNanOrder`, `TotalOrder`,
+`Tininess`, `Override`, and `Mode` live in the module `floaty::env`. The
+crate root re-exports `Env`, `Flags`, `Rounding`, `TotalOrder`, and the
 module `mode`.
 
 - `Env` is `#[non_exhaustive]`. Build a new value from `Env::IEEE` or a
@@ -263,7 +339,8 @@ module `mode`.
   made quiet. It also sets the sign of the default NaN of an invalid
   operation. The default NaN is quiet and has a zero payload. `NanRule` is
   `#[non_exhaustive]`: build it with `NanRule::new(propagation)` and the
-  builder methods `with_default_negative` and `with_invalid_product`.
+  builder methods `with_default_negative`, `with_invalid_product`, and
+  `with_fused_order`.
 - `invalid_product` decides a fused multiply-add whose product is the invalid
   `0 * inf` and whose addend is a NaN. IEEE 754-2019, section 7.2 (c), lets
   the implementation decide whether a quiet NaN addend signals invalid there.
@@ -274,6 +351,25 @@ module `mode`.
   a signaling addend, as x86 does. The rule is a field of its own, not a part
   of a propagation rule, because implementations combine the two
   independently.
+- `fused_order` decides the order in which a fused multiply-add offers its
+  NaN operands to the propagation rule. `ProductFirst`, the default, selects
+  from the two factors, makes that NaN quiet, and then selects from it and
+  the addend, as SoftFloat does. With `FirstOperand` it gives the first NaN
+  of the three operands, as x86 does. `AddendFirst` selects from the addend,
+  the first factor, and the second factor, with no quieting between them.
+  With `SignalingFirst` it gives the result of the Arm `FPMulAdd`
+  pseudocode, which passes its operands to `FPProcessNaNs3` in that order.
+  QEMU's Arm target uses the same order. IEEE 754-2019 section 6.2.3 does
+  not say which input NaN gives the payload. The two orders differ for a
+  quiet NaN factor with a quiet NaN addend.
+- `total_order` decides how `total_cmp` orders two encodings of one datum:
+  an x87 pseudo-denormal and the normal encoding of its value, or a
+  non-canonical decimal encoding and its canonical twin. `Datum`, the
+  default, makes them equal, as the note in IEEE 754-2019 section 5.10
+  states. `Encoding` orders them by their bits, so two different encodings
+  are never equal. No processor has a total-order instruction, so every
+  preset keeps `Datum`. `TotalOrder` is an `Override`:
+  `a.total_cmp_with(b, TotalOrder::Encoding)`.
 - `precision` rounds the significand to fewer bits and keeps the exponent
   range of the format, as x87 precision control does. The format then acts
   as a `p`-bit format with the same exponent range: a tiny result rounds at
@@ -445,9 +541,9 @@ round its result.
 ```rust
 pub struct Exact<const N: usize> {
     pub negative: bool,
-    pub exponent: i32,         // value = significand * 2^exponent: the weight of the lowest bit
-    pub significand: [u64; N], // any width; the rounding routine finds the top bit
-    pub sticky: bool,          // the true magnitude is above the value by less than one lowest bit
+    pub exponent: i32,         // value = significand * RADIX^exponent: the weight of the lowest digit
+    pub significand: [u64; N], // a binary integer of any width; the rounding routine finds the top digit
+    pub sticky: bool,          // the true magnitude is above the value by less than one lowest digit
 }
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
@@ -464,10 +560,12 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
   never normalizes.
 - `N` is generic. A 1,024-bit binary512 product and a 66-bit x87 constant use
   the same routine.
-- Contract: when `sticky` is set, `significand` must have at least `p + 2`
-  significant bits, where `p` is the target precision. With fewer bits the
-  true value is not known well enough to round correctly. The rule comes from
-  the round-to-odd property. A debug assertion checks it.
+- Contract: when `sticky` is set, a binary `significand` must have at least
+  `p + 2` significant bits, where `p` is the target precision. With fewer
+  bits the true value is not known well enough to round correctly. The rule
+  comes from the round-to-odd property. A decimal `significand` must have
+  more than `p` digits, because decimal tininess does not depend on the
+  rounded value. A debug assertion checks the contract.
 - `exponent` is `i32`. The binary512 maximum exponent is 4,194,303. A product
   doubles it, and the result still fits.
 
@@ -507,13 +605,14 @@ flags. Each operation follows IEEE 754 for special values and rounds once.
   rounding toward negative.
 - A division by zero in a format without an infinity gives the NaN, or the
   largest finite value when `saturate` is set, and signals divide-by-zero.
-- `mul_add` selects a NaN in SoftFloat's order: the NaN of the two factors
+- `mul_add` selects a NaN in the order of the `fused_order` field. The
+  default, `ProductFirst`, is SoftFloat's order: the NaN of the two factors
   first, then the NaN of that result and the addend. With `FirstOperand` the
   order gives the first NaN of the three operands, as x86 does. The
   `invalid_product` field of the NaN rule decides `0 * inf + NaN`. TestFloat
   checks `Signals` with every propagation rule. The processor checks
-  `YieldsToNan` with `FirstOperand`. Real ARM hardware takes the addend
-  first among NaN operands; an ARM preset needs that order.
+  `YieldsToNan` with `FirstOperand`. Arm takes the addend first among NaN
+  operands, which `AddendFirst` gives; an Arm preset needs that order.
 - x86 does not report DE for every subnormal operand. It reports DE only when
   DAZ is off and no NaN operand, invalid operation, or divide-by-zero occurs,
   by the precedence of the Intel SDM Volume 1, section 4.9.2. An x87 store
@@ -536,6 +635,8 @@ can need millions of bits.
 | Divide and square root | `p + 2` bits, with a nonzero remainder as the sticky bit |
 | Fused multiply-add | The exact product, and the addend aligned with a sticky bit |
 | Conversion | The exact source significand |
+| Decimal operations | Coefficients in 512 bits, 154 digits. A product is exact, with at most `2p` digits. A sum keeps both terms exact, or cuts a term that is far smaller below the round digit with a digit that stands for the lost part: at most `2p + 2` digits. A square root scales its operand to at most `2p + 3` digits, 71 for decimal128 |
+| Conversion between binary and decimal | Exact values in 1,024 bits when they fit, and in 16,384 bits otherwise: the value divided by a power of 5 and of 2 to a few digits more than the precision, with a sticky bit. The 16,384-bit arrays take tens of KiB of stack, which a `no_std` consumer with a small stack must allow for |
 
 The engine keeps the product, quotient, and root in a limb array of twice
 the storage width. Stable Rust cannot name `[u64; 2 * N]` for a generic `N`,
@@ -647,7 +748,19 @@ instruction-level behavior from the result and the flags.
   default mode; compare `to_bits` for equal encodings.
 - `total_cmp` is IEEE 754 `totalOrder`. It orders by the sign bit and then
   the magnitude bits. The NaN of `Fnuz` orders first, as a negative NaN
-  does. An x87 encoding that is not canonical orders by its bits.
+  does. `total_cmp_with` takes a `TotalOrder` override.
+- Under `TotalOrder::Datum`, the default, an x87 pseudo-denormal orders as
+  the normal encoding of its value, so the two are equal. An unsupported x87
+  encoding is no datum and orders by its bits under both rules. Step 4
+  ordered every non-canonical x87 encoding by its bits; step 7 made that
+  order `TotalOrder::Encoding` and the default the IEEE 754 rule, for both
+  radices.
+- A decimal `total_cmp` decodes both encodings. Members of one cohort order
+  by exponent. Under `TotalOrder::Datum`, two encodings of one datum are
+  equal, as the note in IEEE 754-2019 section 5.10 states: for example, a
+  non-canonical infinity and the canonical one. decNumber and the Intel
+  library agree. Under `TotalOrder::Encoding` they order by the bits below
+  the sign, reversed for a negative sign.
 - The minimum and maximum families return an operand in its canonical
   encoding, or a NaN that the NaN rule selects, and never round. Every
   family orders `-0` below `+0`, including `minNum` and `maxNum`, where IEEE
@@ -664,6 +777,17 @@ A conversion keeps the high-order payload bits, as x86 and ARM do. A
 narrowing conversion drops the low-order bits. A conversion quiets the NaN,
 so the result stays a NaN. An encoding with one NaN pattern loses the
 payload. A canonical `NanRule` ignores payloads, as RISC-V does.
+
+The decimal formats follow the Intel decimal library:
+
+- Between two decimal formats, the payload keeps its high-order digits. A
+  widening conversion multiplies it by a power of 10.
+- Between a binary and a decimal format, the payload bits align with the
+  trailing significand field of the decimal format, and keep their
+  high-order bits. The field holds the payload value as a binary integer of
+  the field width, in DPD as in BID; the declet bits do not align. The
+  Intel library confirms the rule for BID.
+- A payload above `10^(p - 1) - 1` is non-canonical, and becomes zero.
 
 ## Engine and Performance
 
@@ -759,14 +883,18 @@ an oracle.
 | SSE conversions | The host processor: `CVTSD2SS` and `CVTSS2SD` under MXCSR | Every MXCSR rounding direction with FTZ and DAZ on and off, including exact, halfway, and near-halfway results at every binary32 boundary: result bits and the IE, DE, OE, UE, and PE flags |
 | x87 stores | The host processor: `FLD` and `FSTP` to 64 and 32 bits | Every rounding control, including unsupported encodings, pseudo-denormals, and exact, halfway, and near-halfway results at every binary32 and binary64 boundary: result bits, IE, OE, UE, PE, and the C1 round-up bit. `FSTP` never reports DE. |
 | Comparison, remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, x87 extended, and binary128 | TestFloat | The six comparison predicates once, `rem` at level 1 in every direction, and `roundToInt` and the conversions to and from 32- and 64-bit integers at level 2 in every direction: result and the five IEEE flags. `rem` and `roundToInt` also run with the default-NaN, 8086, and 8086-SSE NaN rules, and for x87 at precision control 32 and 64, which both ignore. `-notexact` runs show that the non-exact IEEE operations are the same results with `INEXACT` ignored. The conversions to integers map `ToInt` to the ARM-VFPv2 values and to the x86 integer indefinite; the x86 runs cannot tell `Nan` from `OutOfRange`, and the ARM runs can. |
-| The step 4 operations of the FP8 formats, bfloat16, TF32, x87 extended, binary256, binary512, and a layout whose exponent field crosses a limb boundary | MPFR, and the definitions of IEEE 754-2019 and this design for the special values and NaN selection | Every FP8 operand pair for the comparisons, `total_cmp`, the six minimum and maximum operations, and `remainder`, and every FP8 operand for `round_to_integral`, `to_int` into five integer types, `scale_b`, `next_up`, and `next_down`, in eight behaviors that use every direction, DAZ, FTZ, saturation, a precision limit, and every NaN rule. Boundary, special, and random operands of the wider formats, `to_int` into integers of 24 to 512 bits, and `from_int` from integers of 24 to 512 bits. |
+| The step 4 operations of the FP8 formats, bfloat16, TF32, x87 extended, binary256, binary512, and a layout whose exponent field crosses a limb boundary | MPFR, and the definitions of IEEE 754-2019 and this design for the special values and NaN selection | Every FP8 operand pair for the comparisons, `total_cmp` under both `TotalOrder` rules, the six minimum and maximum operations, and `remainder`, and every FP8 operand for `round_to_integral`, `to_int` into five integer types, `scale_b`, `next_up`, and `next_down`, in eight behaviors that use every direction, DAZ, FTZ, saturation, a precision limit, and every NaN rule. Boundary, special, and random operands of the wider formats, `to_int` into integers of 24 to 512 bits, and `from_int` from integers of 24 to 512 bits. |
 | `next_up`, `next_down`, `remainder`, rounding to an integral value, integer conversions of 7 to 128 bits, and scaling | `rustc_apfloat` | Every FP8 operand and pair of E4M3 and E5M2, every binary16 and bfloat16 operand, and boundary and random operands of TF32, binary32, binary64, x87 extended, and binary128, in five directions. The differences of `rustc_apfloat` from IEEE 754 are in `docs/anomalies/` and in the module documentation of the test. |
 | `next_up`, `next_down`, negation, `abs`, and `copy_sign` of the FP8 formats | A table that `ml_dtypes` generates, in `floaty-verify/data` | Every operand, and every pair for `copy_sign`. The FNUZ `copysign` of `ml_dtypes` makes a NaN from the zero; see `docs/anomalies/ml-dtypes-fnuz-copysign.md`. |
 | SSE comparisons, integer conversions, and rounding | The host processor: `UCOMISS`, `COMISS`, their `SD` forms, `CVTSS2SI`, `CVTTSS2SI`, `CVTSD2SI`, `CVTTSD2SI`, `CVTSI2SS`, `CVTSI2SD`, `ROUNDSS`, and `ROUNDSD` | Every MXCSR setting: order, result bits, the integer indefinite for `ToInt::OutOfRange` and `ToInt::Nan`, and the IE, DE, and PE flags. The test maps DE and the suppressed precision exception of `ROUNDSS` as the Intel SDM states. |
 | x87 comparisons, integer conversions, rounding, remainder, scaling, and sign operations | The host processor: `FUCOMIP`, `FCOMIP`, `FUCOMPP`, `FCOMPP`, `FRNDINT`, `FISTP`, `FISTTP`, `FILD`, `FPREM1`, `FSCALE`, `FCHS`, and `FABS` | Every rounding control, and precision control for `FRNDINT` and `FSCALE`, including unsupported operands and pseudo-denormals: result bits, IE, DE, OE, UE, PE, and C1. `FSCALE` and `FILD` ignore precision control, so the test runs them at the full 64-bit precision. |
 | Conversion of every binary16 encoding to the FP8 formats, rounding to nearest even | A table that `ml_dtypes` generates, in `floaty-verify/data` | Result bits, and NaN and sign for a NaN result |
+| The `AddendFirst` fused NaN order | The `FPMulAdd` and `FPProcessNaNs3` pseudocode of the Arm Architecture Reference Manual, evaluated in the test; QEMU's `pickNaNMulAdd` for Arm agrees | Every triple of ten special values of binary32, binary64, and decimal64, with the default-NaN mode off and on: the NaN result and the flags. A case without a NaN result gives the result of the default order. |
+| `TotalOrder` of decimal encodings of one datum | decNumber's `canonical` and its arbitrary-precision total order | Random decimal64 and decimal128 encodings against their canonical twins and random operands, for the values and the magnitudes, under both rules |
 | x86 SSE and x87 presets | The host processor, through inline assembly on x86-64 | The MXCSR of the process and the control word after `FNINIT`, decoded to the preset fields. Products that only the tininess rule tells apart, in both units. NaN selection with one and two operands, the default NaN, the fused multiply-add NaN addend, DE, precision control, and C1. Every other SSE and x87 hardware test compares floaty under behaviors built from the presets. |
-| Decimal | The decTest vectors (DPD) and the Intel decimal library tests (BID) | Arithmetic, rounding, flags, and result exponents |
+| Decimal, DPD | The decTest 2.62 vectors, and the decNumber 3.68 library | Every decimal64 and decimal128 vector of an operation that floaty has. That includes the `canonical` vectors, for `is_canonical` and a conversion to the same format, and the `apply` vectors of an explicit encoding, for `decode`, which the decimal32 vectors also give. Random operands at the edges of decimal32, decimal64, and decimal128 for every such operation, square root, the conversions between widths, FTZ, and DAZ, in the six shared rounding directions: result bits, the five IEEE flags, `TINY`, and `ROUNDED_UP`. Add, subtract, multiply, divide, fused multiply-add, square root, and `scale_b` of decimal64 and decimal128 under precision limits of 1, 2, 3, 7, and `p - 1` digits. |
+| Decimal, BID, and conversions between decimal and binary32, binary64, x87 extended, and binary128 | The Intel Decimal Floating-Point Math Library 2.0 Update 2 and its `readtest.in` vectors | Every `readtest.in` vector of a function that floaty has: 65,300 operation lines and 41,505 conversion lines. About 22 million seeded random cases in the five directions of the library. They include exact square roots, values on both sides of every integer bound, binary ties at every sign of decimal exponent, and minimum and maximum operands that compare equal. The tests compare result bits with NaN payloads, the five IEEE flags, and the denormal flag of a conversion from binary. Each test asserts every rule and skip count. |
+| Conversions between decimal and binary16, bfloat16, TF32, the FP8 formats, binary256, and binary512 | MPFR, which gives the correctly rounded leading digits of a binary value, and rounds a decimal value that GMP reduces to an integer and a sticky bit | Every encoding of the 8- and 16-bit sources. Boundary and random wide values, and 3,000 random binary256 and binary512 values in the range of each decimal format. Decimal values at the edges of each format, and NaNs with edge payloads. Seven behaviors each: the value, the decimal exponent, and every flag. A NaN result is quiet, with the sign of the source and the payload rule of this design. |
 | Double-double | libgcc on PowerPC under QEMU, and QD | Bit-exact match to each reference |
 
 - `rustc_apfloat` follows LLVM, not the processor, for non-canonical x87
@@ -785,7 +913,7 @@ an oracle.
   `docs/anomalies/softfloat-arm-extf80-nan-quieting.md`.
 - The workspace manifest optimizes `floaty-verify` in test builds, because
   the normal run makes tens of millions of oracle comparisons. The whole run
-  takes about one minute.
+  takes about one and a half minutes.
 - `ml_dtypes` gives every NaN a canonical payload, so its conversion table
   checks only NaN and sign for a NaN result.
 - Test every FP8 input pair for every operation and rounding direction in the
@@ -794,6 +922,57 @@ an oracle.
   One binary operation in one direction has about 4.3 billion pairs.
 - `floaty-verify` holds the whole harness. It is not a default workspace
   member, so a plain build never needs a C toolchain.
+- `build.rs` downloads the decTest, decNumber, and Intel archives once into
+  `floaty-verify/reference/downloads/`. It checks the SHA-256 that it pins
+  for each archive before it uses the archive. A change of archive is a
+  design change.
+- decNumber's decDouble and decQuad functions never report `Clamped`,
+  `Rounded`, or `Subnormal`, as the decNumber manual states. The tests
+  compare the five IEEE conditions.
+- The Intel library builds with its rounding direction and status flags as
+  function arguments, and without optimization: at `-O2`, `bid128_pow`
+  does not return on line 11425 of `readtest.in`. It compiles with
+  `-std=gnu99`. The build removes `CFLAGS`, `CPPFLAGS`, `LDFLAGS`, and `CC`
+  from the environment of `make`, because the Intel makefile takes an
+  exported `CFLAGS` in place of its own settings.
+- decNumber and the Intel library both detect decimal tininess before
+  rounding, as floaty does.
+- decNumber's fixed-size fused multiply-add can lose a small addend, and
+  its fixed-size total order can order NaN payloads wrongly. The random
+  tests use decNumber's arbitrary-precision functions for those operations.
+  See `docs/anomalies/decnumber-fma-directed-residue.md` and
+  `docs/anomalies/decnumber-comparetotal-nan-payload.md`.
+- decNumber gives a quiet NaN addend for `0 * inf + NaN`, which is
+  `InvalidProduct::YieldsToNan`, so its fused multiply-add tests use that
+  rule. IEEE 754-2019 section 7.2 leaves the choice to the implementation.
+- The Intel library selects NaNs with `FirstOperand` and `YieldsToNan`, and
+  its fused multiply-add takes the NaN of `y`, then `z`, then `x`. The tests
+  run the library's `fma(x, y, z)` as `y.mul_add_with(x, z, env)`. A NaN `x`
+  and `z` with a number `y` stays different, because floaty takes the NaN
+  of the factors first. The tests count those cases and skip them.
+- The Intel library reports its denormal flag only for a conversion from a
+  binary format, when the binary operand is subnormal or an x87
+  pseudo-denormal. The tests compare it with `DENORMAL_INPUT` there. An
+  invalid conversion to an integer gives the integer with only its top bit
+  set.
+- The Intel `minnum` and `maxnum` return the second operand for two zeros
+  and for two members of one cohort. Where the operands compare equal and
+  the library gives an equal value, the tests take the value and the flags
+  from the library. They take the operand from the rule of this design,
+  ordered by the library's `totalOrder`.
+- floaty has no IEEE 754 `encodeDecimal` or `decodeDecimal`. A conversion
+  between BID and DPD is `convertFormat`: it quiets a signaling NaN, signals
+  invalid, and gives a canonical encoding. The Intel `bid_to_dpd` and
+  `bid_dpd_to_bid` functions re-encode the bits and keep a signaling NaN.
+  For a NaN, the tests take the sign and the payload from the library, and
+  expect a quiet NaN and invalid for a signaling NaN.
+- The Intel library's `quantum` and some of its decimal32 and decimal64
+  fused multiply-adds are wrong. See `docs/anomalies/intel-decimal-quantum.md`
+  and `docs/anomalies/intel-decimal-narrow-fma.md`.
+- decNumber's width conversions keep a signaling NaN signaling, and a
+  narrowing conversion keeps the low-order payload digits. The DPD width
+  tests take the sign and payload from decNumber and apply floaty's payload
+  rule. The Intel library checks the payload rule for BID.
 
 ## Workspace Layout
 
@@ -806,13 +985,22 @@ floaty/                  the workspace
 │       ├── env.rs       Env, Rounding, NanRule, Flags, modes, presets
 │       ├── limbs.rs     [u64; N] arithmetic
 │       ├── integer.rs   Int<BITS>, UInt<BITS>, Integer, ToInt
-│       ├── exact.rs     Exact<N> and the rounding routine
+│       ├── unpacked.rs  the decoded value that every engine computes on
+│       ├── nan.rs       NaN selection and payloads, shared by both radices
+│       ├── exact.rs     Exact<N>, the binary rounding routine, and the
+│       │                direction choice that both radices share
 │       ├── binary.rs    unpack, pack, and every binary operation
-│       ├── decimal.rs   step 7
+│       ├── decimal.rs   the BID and DPD codecs and every decimal operation
+│       ├── radix.rs     exact arithmetic for binary and decimal conversions
 │       └── double_double.rs  step 8
-└── floaty-verify/       TestFloat, MPFR, and hardware harness
-    ├── build.rs         builds testfloat_gen from the submodules with make
-    ├── reference/       Berkeley SoftFloat and TestFloat, git submodules
+└── floaty-verify/       TestFloat, MPFR, decimal, and hardware harness
+    ├── build.rs         builds testfloat_gen from the submodules with make,
+    │                    and decNumber and the Intel decimal library from
+    │                    pinned archives
+    ├── reference/       Berkeley SoftFloat and TestFloat, git submodules,
+    │                    and the ignored download cache `downloads/`
+    ├── shim/            C wrappers of the Intel binary80 conversions, which
+    │                    take a `long double` that Rust has no type for
     ├── data/            generated reference tables
     └── scripts/         the generators of the reference tables
 ```
@@ -839,6 +1027,33 @@ Each step passes its oracle tests before the next step starts.
 
 ## Open Questions
 
+- decNumber rounds square root only to nearest. The oracle takes its root
+  at `2p + 4` digits and rounds that to the format.
+- No decimal library has FTZ or DAZ. The tests apply the definitions of
+  this design to decNumber's results. DAZ replaces each subnormal operand
+  by a zero with its sign and exponent. A result is tiny when decNumber's
+  result rounded toward zero is subnormal, or is an inexact zero.
+- `TINY` and `ROUNDED_UP` come from decNumber's result rounded toward zero.
+  A result is rounded up when it is inexact and differs from that result.
+- No library has a decimal precision limit. The test rounds decNumber's
+  exact result once to the limit, with the exponent range of the format
+  and no clamp. It then applies the representation rule of the precision
+  limit. decNumber first computes at `2p + 4` digits with 05up, because
+  `decNumberAdd` and `decNumberScaleB` do not round correctly when an
+  operand has more digits than the context.
+- decSingle has no arithmetic. The decimal32 random tests use decNumber's
+  arbitrary-precision numbers in the decimal32 context. They leave out the
+  copy operations, which give canonical encodings there. A decimal32 fused
+  multiply-add with a special operand takes `decDoubleFMA` of the widened
+  operands. See `docs/anomalies/decnumber-fma-invalid-product-nan.md`.
+- The tests decide every skip from decNumber's class and string, not from
+  floaty. They skip these vectors: the rounding modes `half_down` and `up`;
+  the decNumber operations `abs`, `minus`, `plus`, `reduce`, `divideint`,
+  `remainder`, `maxmag`, `minmag`, and `nexttoward`, and the logical ones;
+  text conversions; null operands; `remaindernear` with
+  `Division_impossible`; `scaleb` operands that are not integers with
+  exponent 0 within `2 * (emax + p)`; and a fused multiply-add of two
+  different signaling NaNs.
 - The final names of the aliases, the `Rounding` directions, and the
   `NanPropagation` variants.
 - The extra IBM POWER decimal rounding modes, and decimal widths above 128.

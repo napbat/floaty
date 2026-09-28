@@ -97,7 +97,7 @@ impl Outcome {
     #[must_use]
     pub fn from_decoded<const N: usize>(decoded: Decoded<N>) -> Self {
         match decoded {
-            Decoded::Zero { negative } => Self::Zero { negative },
+            Decoded::Zero { negative, .. } => Self::Zero { negative },
             Decoded::Finite {
                 negative,
                 exponent,
@@ -229,7 +229,7 @@ fn read<const N: usize>(operand: &Operand<N>, env: &Env, flags: &mut Flags) -> R
         *flags |= Flags::DENORMAL_INPUT;
     }
     match operand.decoded {
-        Decoded::Zero { negative } => Read::Number(zero(negative)),
+        Decoded::Zero { negative, .. } => Read::Number(zero(negative)),
         Decoded::Finite { negative, .. } if operand.subnormal && env.denormals_are_zero => {
             Read::Number(zero(negative))
         }

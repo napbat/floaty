@@ -131,14 +131,14 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
         (Self::from_masked(bits), flags)
     }
 
-    /// Returns `self * 2^scale`, rounded with the default mode.
+    /// Returns `self * RADIX^scale`, rounded with the default mode.
     #[must_use]
     pub fn scale_b(self, scale: i32) -> Self {
         self.scale_b_with(scale, M::ENV).0
     }
 
-    /// Returns `self * 2^scale`, rounded, as IEEE 754 `scaleB` does. Returns
-    /// the result and the flags.
+    /// Returns `self * RADIX^scale`, rounded, as IEEE 754 `scaleB` does.
+    /// Returns the result and the flags.
     #[must_use]
     pub fn scale_b_with(self, scale: i32, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) = S::scale_b(self.bits, scale, &behavior.apply(M::ENV));

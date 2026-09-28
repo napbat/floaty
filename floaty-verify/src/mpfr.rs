@@ -79,7 +79,7 @@ impl Value {
     #[must_use]
     pub fn from_decoded<const N: usize>(decoded: Decoded<N>) -> Self {
         match decoded {
-            Decoded::Zero { negative } => Self::Zero { negative },
+            Decoded::Zero { negative, .. } => Self::Zero { negative },
             Decoded::Finite {
                 negative,
                 exponent,
@@ -319,7 +319,7 @@ pub fn convert<const N: usize>(
         Flags::NONE
     };
     match *source {
-        Decoded::Zero { negative } => (zero(negative, format), Flags::NONE),
+        Decoded::Zero { negative, .. } => (zero(negative, format), Flags::NONE),
         Decoded::Finite { negative, .. } if subnormal && env.denormals_are_zero => {
             (zero(negative, format), input)
         }

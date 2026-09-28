@@ -6,13 +6,13 @@
 //! operations that do not signal inexact, such as `roundToIntegralTiesToEven`,
 //! are these operations with `INEXACT` ignored.
 
-use super::nan;
 use super::{Layout, Unpacked};
 use crate::env::{Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::{Encoding, Storage, Width};
-use crate::integer::{Integer, Parts, ToInt};
+use crate::integer::{Integer, Parts, ToInt, fit};
 use crate::limbs::Limbs;
+use crate::nan;
 
 /// The highest bit weight of a value that can fit a 512-bit integer after
 /// rounding. The integer part of a smaller value fits nine limbs with its
@@ -40,7 +40,7 @@ where
                 significand,
             } if exponent < 0 => (negative, exponent, significand),
             Unpacked::Nan { .. } | Unpacked::Unsupported => {
-                let (nan, special) = nan::special(&value, &Unpacked::Zero { negative: false }, env)
+                let (nan, special) = nan::special(&value, &Unpacked::zero(false), env)
                     .expect("a NaN or an unsupported operand has a special result");
                 return Self::exact(nan, flags | special);
             }
@@ -63,7 +63,7 @@ where
             flags |= Flags::ROUNDED_UP;
         }
         if integral.magnitude.is_zero() {
-            return Self::exact(Unpacked::Zero { negative }, flags);
+            return Self::exact(Unpacked::zero(negative), flags);
         }
         // The integer has at most PRECISION + 1 bits. With PRECISION + 1 bits
         // it is a power of two. So it is exact at the full precision, but it
@@ -124,31 +124,15 @@ where
             },
             env.rounding,
         );
-        let magnitude = integral.magnitude;
-        let length = magnitude.bit_length();
-        let fits = if magnitude.is_zero() {
-            true
-        } else if !I::SIGNED {
-            !negative && length <= I::BITS
-        } else if negative {
-            // The smallest value, -2^(BITS - 1), has a magnitude of BITS bits.
-            length < I::BITS || magnitude == <[u64; 9]>::ZERO.with_bit(I::BITS - 1)
-        } else {
-            length < I::BITS
-        };
-        if !fits {
+        let Some(parts) = fit::<I>(negative, &integral.magnitude) else {
             return out_of_range;
-        }
+        };
         if integral.inexact {
             flags |= Flags::INEXACT;
         }
         if integral.rounded_up {
             flags |= Flags::ROUNDED_UP;
         }
-        let parts = Parts {
-            negative: negative && !magnitude.is_zero(),
-            magnitude: magnitude.resize(),
-        };
         (ToInt::Value(I::from_parts(parts)), flags)
     }
 }

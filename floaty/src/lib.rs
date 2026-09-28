@@ -42,19 +42,24 @@ pub mod env;
 pub mod format;
 
 mod binary;
+mod decimal;
 mod exact;
 mod float;
 mod host;
 mod integer;
 mod limbs;
+mod nan;
+mod radix;
+mod unpacked;
 
-pub use env::{Env, Flags, Rounding, mode};
+pub use env::{Env, Flags, Rounding, TotalOrder, mode};
 pub use exact::Exact;
 pub use float::{
-    BF16, Class, Decoded, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F160,
-    F192, F224, F256, F288, F320, F352, F384, F416, F448, F480, F512, Float, FloatType, TF32,
+    BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, F8E4M3, F8E4M3Fnuz,
+    F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352, F384,
+    F416, F448, F480, F512, Float, FloatType, TF32,
 };
-pub use format::{Binary, Fnuz, Ieee, NoInf, X87};
+pub use format::{Bid, Binary, Decimal, Dpd, Fnuz, Ieee, NoInf, X87};
 pub use integer::{Int, Integer, ToInt, UInt};
 
 mod sealed {

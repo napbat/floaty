@@ -21,12 +21,17 @@ pub enum Rounding {
     TowardNegative,
     /// Round toward zero.
     TowardZero,
-    /// Round toward zero, then set the lowest significand bit when the result
-    /// is inexact. The result never overflows to an infinity.
+    /// Round toward zero, then add one unit in the last place when the result
+    /// is inexact and its last digit is 0, or 5 in a decimal format. For a
+    /// binary format, the rule sets the lowest significand bit. For a decimal
+    /// format, the rule is IBM's round to prepare for shorter precision. The
+    /// result never overflows to an infinity.
     ToOdd,
 }
 
-/// When a result is tiny, for the underflow flag and for flush-to-zero.
+/// When a binary result is tiny, for the underflow flag and for
+/// flush-to-zero. A decimal result is always tiny before rounding, as IEEE 754
+/// requires.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Tininess {
     /// A nonzero result is tiny when its exact value is below the smallest
@@ -80,6 +85,28 @@ pub enum InvalidProduct {
     YieldsToNan,
 }
 
+/// The order in which a fused multiply-add offers its NaN operands to the
+/// propagation rule.
+///
+/// IEEE 754-2019 section 6.2.3 does not say which input NaN gives the
+/// payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FusedNanOrder {
+    /// The rule selects a NaN from the two factors, which it makes quiet. It
+    /// then selects from that NaN and the addend. SoftFloat uses this order.
+    /// With [`NanPropagation::FirstOperand`] it gives the first NaN of the
+    /// three operands, as x86 does.
+    ProductFirst,
+    /// The rule selects from the addend, the first factor, and the second
+    /// factor, in this order, with no quieting between them. With
+    /// [`NanPropagation::SignalingFirst`] it gives the first signaling NaN of
+    /// that order, or else its first NaN. The `FPMulAdd` pseudocode of the Arm
+    /// Architecture Reference Manual passes its operands to `FPProcessNaNs3`
+    /// in this order.
+    AddendFirst,
+}
+
 /// The NaN that an operation returns.
 ///
 /// An operation with a NaN input returns a NaN that
@@ -98,11 +125,13 @@ pub struct NanRule {
     pub default_negative: bool,
     /// What a fused multiply-add does for `0 * inf + NaN`.
     pub invalid_product: InvalidProduct,
+    /// The order in which a fused multiply-add offers its NaN operands.
+    pub fused_order: FusedNanOrder,
 }
 
 impl NanRule {
-    /// Returns a rule with this propagation, a positive default NaN, and
-    /// [`InvalidProduct::Signals`].
+    /// Returns a rule with this propagation, a positive default NaN,
+    /// [`InvalidProduct::Signals`], and [`FusedNanOrder::ProductFirst`].
     #[must_use]
     #[inline]
     pub const fn new(propagation: NanPropagation) -> Self {
@@ -110,6 +139,7 @@ impl NanRule {
             propagation,
             default_negative: false,
             invalid_product: InvalidProduct::Signals,
+            fused_order: FusedNanOrder::ProductFirst,
         }
     }
 
@@ -132,6 +162,35 @@ impl NanRule {
             ..self
         }
     }
+
+    /// Returns a copy with another order of the NaN operands of a fused
+    /// multiply-add.
+    #[must_use]
+    #[inline]
+    pub const fn with_fused_order(self, fused_order: FusedNanOrder) -> Self {
+        Self {
+            fused_order,
+            ..self
+        }
+    }
+}
+
+/// How [`total_cmp`](crate::Float::total_cmp) orders two encodings of one
+/// datum: a non-canonical encoding and the canonical encoding of its value.
+///
+/// Only an x87 pseudo-denormal and the non-canonical decimal encodings have
+/// such a twin. The other encodings order the same way under both rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TotalOrder {
+    /// Two encodings of one datum are equal. The note in IEEE 754-2019
+    /// section 5.10 states that `totalOrder` does not distinguish them.
+    /// decNumber and the Intel decimal library follow this rule.
+    Datum,
+    /// Two encodings of one datum order by their bits: by the sign bit, and
+    /// then by the other bits, reversed for a negative sign. Two different
+    /// encodings are then never equal.
+    Encoding,
 }
 
 /// The behavior of an operation: everything that changes the bits of its
@@ -148,17 +207,21 @@ pub struct Env {
     pub flush_to_zero: bool,
     /// DAZ: a subnormal input reads as a zero with the same sign.
     pub denormals_are_zero: bool,
-    /// When a result is tiny.
+    /// When a binary result is tiny. A decimal result is tiny before
+    /// rounding, as IEEE 754 requires.
     pub tininess: Tininess,
     /// Which NaN an operation returns.
     pub nan: NanRule,
-    /// Rounds the significand to this many bits and keeps the exponent range
-    /// of the format, as x87 precision control does. `None` uses the precision
-    /// of the format. A value above the format precision has no effect.
+    /// Rounds the significand to this many digits of the radix and keeps the
+    /// exponent range of the format, as x87 precision control does. `None`
+    /// uses the precision of the format. A value above the format precision
+    /// has no effect.
     pub precision: Option<NonZeroU32>,
     /// An overflow in an encoding without infinity gives the largest finite
     /// value instead of a NaN.
     pub saturate: bool,
+    /// How `total_cmp` orders two encodings of one datum.
+    pub total_order: TotalOrder,
 }
 
 impl Env {
@@ -174,6 +237,7 @@ impl Env {
         nan: NanRule::new(NanPropagation::SignalingFirst),
         precision: None,
         saturate: false,
+        total_order: TotalOrder::Datum,
     };
 
     /// The x86 SSE unit at reset, for SSE, SSE2, and AVX scalar and packed
@@ -211,6 +275,9 @@ impl Env {
         precision: None,
         // The SSE formats of Volume 1 have an infinity. Table 4-3, page 4-6.
         saturate: false,
+        // The unit has no total-order instruction, and every SSE encoding is
+        // canonical. The field keeps the rule of IEEE 754-2019 section 5.10.
+        total_order: TotalOrder::Datum,
     };
 
     /// The x87 unit after `FNINIT`, for arithmetic on x87 extended-precision
@@ -254,6 +321,9 @@ impl Env {
         precision: NonZeroU32::new(64),
         // The x87 format has an infinity. Table 4-3, page 4-6.
         saturate: false,
+        // The unit has no total-order instruction. The field keeps the rule
+        // of IEEE 754-2019 section 5.10.
+        total_order: TotalOrder::Datum,
     };
 
     /// Returns a copy with another rounding direction.
@@ -279,6 +349,17 @@ impl Env {
     pub const fn with_denormals_are_zero(self, denormals_are_zero: bool) -> Self {
         Self {
             denormals_are_zero,
+            ..self
+        }
+    }
+
+    /// Returns a copy with another rule for two encodings of one datum in
+    /// `total_cmp`.
+    #[must_use]
+    #[inline]
+    pub const fn with_total_order(self, total_order: TotalOrder) -> Self {
+        Self {
+            total_order,
             ..self
         }
     }
@@ -435,6 +516,14 @@ impl Override for Rounding {
     #[inline]
     fn apply(self, base: Env) -> Env {
         base.with_rounding(self)
+    }
+}
+
+impl Sealed for TotalOrder {}
+impl Override for TotalOrder {
+    #[inline]
+    fn apply(self, base: Env) -> Env {
+        base.with_total_order(self)
     }
 }
 

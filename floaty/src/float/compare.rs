@@ -76,17 +76,45 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
         }
     }
 
-    /// Orders the encodings as IEEE 754 `totalOrder` does.
+    /// Orders the encodings as IEEE 754 `totalOrder` does, with the rule of
+    /// the default mode for two encodings of one datum.
+    #[must_use]
+    pub fn total_cmp(self, other: Self) -> Ordering {
+        self.total_cmp_with(other, M::ENV)
+    }
+
+    /// Orders the encodings as IEEE 754 `totalOrder` does, with the
+    /// [`TotalOrder`](crate::TotalOrder) of the behavior for two encodings of
+    /// one datum.
     ///
     /// A negative NaN orders first, then the numbers from negative infinity
     /// to positive infinity with `-0` below `+0`, then a positive NaN. A
     /// signaling NaN orders nearer the numbers than a quiet NaN, and a larger
-    /// payload farther. The NaN of [`Fnuz`](crate::Fnuz) orders first. An x87
-    /// encoding that is not canonical orders by its exponent field and
-    /// significand. The operation reads no behavior and signals nothing.
+    /// payload farther. The NaN of [`Fnuz`](crate::Fnuz) orders first. In a
+    /// decimal format, members of one cohort order by exponent.
+    ///
+    /// An x87 pseudo-denormal and a non-canonical decimal encoding each have
+    /// a canonical twin of the same datum. [`TotalOrder::Datum`] makes the
+    /// two equal, and [`TotalOrder::Encoding`] orders them by their bits. An
+    /// unsupported x87 encoding orders by its exponent field and significand.
+    /// The operation reads only the total-order rule, and signals nothing.
+    ///
+    /// [`TotalOrder::Datum`]: crate::TotalOrder::Datum
+    /// [`TotalOrder::Encoding`]: crate::TotalOrder::Encoding
+    ///
+    /// ```
+    /// use core::cmp::Ordering;
+    /// use floaty::{D64Bid, TotalOrder};
+    ///
+    /// let infinity = D64Bid::from_bits(0x7800_0000_0000_0000);
+    /// // An infinity with a trailing bit set is a non-canonical twin.
+    /// let twin = D64Bid::from_bits(0x7800_0000_0000_0001);
+    /// assert_eq!(twin.total_cmp(infinity), Ordering::Equal);
+    /// assert_eq!(twin.total_cmp_with(infinity, TotalOrder::Encoding), Ordering::Greater);
+    /// ```
     #[must_use]
-    pub fn total_cmp(self, other: Self) -> Ordering {
-        S::total_cmp(self.bits, other.bits)
+    pub fn total_cmp_with(self, other: Self, behavior: impl Override) -> Ordering {
+        S::total_cmp(self.bits, other.bits, behavior.apply(M::ENV).total_order)
     }
 
     min_max!(

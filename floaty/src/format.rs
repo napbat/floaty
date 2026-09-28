@@ -7,14 +7,14 @@ use core::hash::Hash;
 use core::marker::PhantomData;
 
 use crate::binary::{EncodingKind, Unpacked};
-use crate::env::{Env, Flags};
+use crate::env::{Env, Flags, TotalOrder};
 use crate::exact::Unrounded;
 use crate::float::Class;
 use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 
-use self::internal::{Host, LimbConversion, MinMax, Step};
+use self::internal::{Host, LimbConversion, MinMax, Source, Step};
 
 /// A floating-point format family at a width of `W` bits.
 ///
@@ -25,18 +25,29 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     /// The integer type that stores an encoding.
     type Bits: Bits;
 
-    /// The precision in bits, including the leading bit.
+    /// The radix: 2 for a binary format, 10 for a decimal format.
+    const RADIX: u32;
+
+    /// The precision in digits of the radix, including the leading digit.
     const PRECISION: u32;
 
-    /// The exponent of the largest finite value, `emax` in IEEE 754.
+    /// The exponent of the largest finite value, `emax` in IEEE 754, as a
+    /// power of the radix.
     const EMAX: i32;
 
-    /// The exponent of the smallest normal value, `emin` in IEEE 754.
+    /// The exponent of the smallest normal value, `emin` in IEEE 754, as a
+    /// power of the radix.
     const EMIN: i32;
 
-    /// The number of NaN payload bits, below the quiet bit.
+    /// The bits of the largest significand: the precision of a binary
+    /// format, and the bits of `10^PRECISION - 1` for a decimal format.
     #[doc(hidden)]
-    const PAYLOAD_BITS: u32;
+    const SIGNIFICAND_BITS: u32;
+
+    /// The number of NaN payload digits of the radix: bits below the quiet
+    /// bit for a binary format, and decimal digits for a decimal format.
+    #[doc(hidden)]
+    const PAYLOAD_DIGITS: u32;
 
     /// The host format with the same encoding, for the host fast path.
     #[doc(hidden)]
@@ -67,14 +78,10 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     #[doc(hidden)]
     fn round<L: Limbs>(value: &Unrounded<L>, env: &Env) -> (Self::Bits, Flags);
 
-    /// Converts a decoded value of another format, whose NaN payloads have
-    /// `payload_bits` bits.
+    /// Converts a decoded value of another format, the source.
     #[doc(hidden)]
-    fn convert_from<L: Limbs>(
-        value: Unpacked<L>,
-        payload_bits: u32,
-        env: &Env,
-    ) -> (Self::Bits, Flags);
+    fn convert_from<L: Limbs>(value: Unpacked<L>, source: Source, env: &Env)
+    -> (Self::Bits, Flags);
 
     /// Adds, or subtracts when `subtract` is set.
     #[doc(hidden)]
@@ -110,9 +117,10 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     #[doc(hidden)]
     fn compare(left: Self::Bits, right: Self::Bits, env: &Env) -> (Option<Ordering>, Flags);
 
-    /// Orders two encodings as IEEE 754 `totalOrder` does.
+    /// Orders two encodings as IEEE 754 `totalOrder` does, with `order` for
+    /// two encodings of one datum.
     #[doc(hidden)]
-    fn total_cmp(left: Self::Bits, right: Self::Bits) -> Ordering;
+    fn total_cmp(left: Self::Bits, right: Self::Bits, order: TotalOrder) -> Ordering;
 
     /// Returns the minimum or the maximum of one family.
     #[doc(hidden)]
@@ -135,7 +143,7 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     #[doc(hidden)]
     fn remainder(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags);
 
-    /// Returns `value * 2^scale`, rounded.
+    /// Returns `value * RADIX^scale`, rounded.
     #[doc(hidden)]
     fn scale_b(value: Self::Bits, scale: i32, env: &Env) -> (Self::Bits, Flags);
 
@@ -178,6 +186,29 @@ pub(crate) mod internal {
         #[inline]
         pub fn is_minimum(self) -> bool {
             matches!(self, Self::Minimum | Self::MinimumNumber | Self::MinNum)
+        }
+    }
+
+    /// The format of the value that a conversion reads.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Source {
+        /// The radix of the source format.
+        pub radix: u32,
+        /// The number of NaN payload digits of the source format.
+        pub payload_digits: u32,
+    }
+
+    impl Source {
+        /// Returns the width in bits of the field that holds a NaN payload.
+        /// A decimal format keeps three payload digits in each 10-bit declet
+        /// of its trailing significand field.
+        #[must_use]
+        pub const fn payload_bits(self) -> u32 {
+            if self.radix == 10 {
+                self.payload_digits / 3 * 10
+            } else {
+                self.payload_digits
+            }
         }
     }
 
@@ -460,4 +491,60 @@ pub enum X87 {}
 impl Sealed for X87 {}
 impl Encoding for X87 {
     const KIND: EncodingKind = EncodingKind::X87;
+}
+
+/// The decimal floating-point family: IEEE 754 decimal32, decimal64, and
+/// decimal128 at widths 32, 64, and 128.
+///
+/// `Enc` is the encoding of the coefficient, [`Bid`] or [`Dpd`]. A value is a
+/// coefficient times a power of 10. A decimal value keeps its exponent, so 1.0
+/// and 1.00 are different encodings of one value.
+///
+/// Another width fails when the compiler generates code for it:
+///
+/// ```compile_fail,E0080
+/// let _ = floaty::Float::<floaty::Decimal<floaty::Bid>, 96>::PRECISION;
+/// ```
+pub struct Decimal<Enc: DecimalEncoding> {
+    encoding: PhantomData<Enc>,
+}
+
+impl<Enc: DecimalEncoding> Sealed for Decimal<Enc> {}
+
+/// The encoding of the coefficient of a decimal format.
+///
+/// The trait is sealed. The encodings are [`Bid`] and [`Dpd`].
+pub trait DecimalEncoding: Sealed + 'static {
+    /// The encoding rules that the decimal engine applies.
+    #[doc(hidden)]
+    const KIND: DecimalKind;
+}
+
+/// The encoding rules of a decimal format.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DecimalKind {
+    /// The binary integer decimal encoding.
+    Bid,
+    /// The densely packed decimal encoding.
+    Dpd,
+}
+
+/// The binary integer decimal (BID) encoding of IEEE 754: the coefficient is
+/// a binary integer. Intel's decimal library uses it.
+pub enum Bid {}
+
+impl Sealed for Bid {}
+impl DecimalEncoding for Bid {
+    const KIND: DecimalKind = DecimalKind::Bid;
+}
+
+/// The densely packed decimal (DPD) encoding of IEEE 754: the coefficient is
+/// a leading digit and groups of three digits in 10-bit declets. IBM POWER
+/// hardware uses it.
+pub enum Dpd {}
+
+impl Sealed for Dpd {}
+impl DecimalEncoding for Dpd {
+    const KIND: DecimalKind = DecimalKind::Dpd;
 }

@@ -88,7 +88,7 @@ fn ieee_definition(encoding: &Integer, width: u32, exponent_bits: u32) -> Expect
 /// Converts a decoded value to the same shape as the definition.
 fn from_decoded<const N: usize>(decoded: Decoded<N>, precision: u32, emin: i32) -> Expected {
     match decoded {
-        Decoded::Zero { negative } => Expected::Zero { negative },
+        Decoded::Zero { negative, .. } => Expected::Zero { negative },
         Decoded::Finite {
             negative,
             exponent,

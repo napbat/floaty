@@ -10,10 +10,14 @@
 
 pub mod apfloat;
 pub mod arithmetic;
+pub mod decnumber;
+pub mod dectest;
 pub mod encodings;
+pub mod intel_decimal;
 pub mod mpfr;
 pub mod operations;
 pub mod random;
+pub mod readtest;
 pub mod shape;
 pub mod testfloat;
 #[cfg(target_arch = "x86_64")]

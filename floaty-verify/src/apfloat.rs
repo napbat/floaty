@@ -38,7 +38,7 @@ pub fn class<T: Float>(value: T) -> Class {
 /// Panics with `context` when the values differ.
 pub fn check_value<T: Float>(ours: Decoded<2>, theirs: T, context: &str) {
     match ours {
-        Decoded::Zero { negative } => {
+        Decoded::Zero { negative, .. } => {
             assert!(theirs.is_zero(), "{context}: zero");
             assert_eq!(negative, theirs.is_negative(), "{context}: sign");
         }
