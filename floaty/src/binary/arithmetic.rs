@@ -46,6 +46,11 @@ enum Sum<L> {
 /// lowest bit when it loses bits. That happens only when the lower term is at
 /// least four times smaller than the other, so the lost bits stay far below
 /// the rounding position, where a set lowest bit rounds like the true value.
+///
+/// The width of `L` must hold each term plus 3 bits, for the carry and the
+/// jammed bit. It must also hold the rounding precision plus 5 bits. Then a
+/// jammed bit stays below the round bit and the bit below it, after a
+/// cancellation of one bit and a carry.
 fn sum<L: Limbs>(first: Term<L>, second: Term<L>) -> Sum<L> {
     let highest = first.top().max(second.top());
     let floor = highest - i64::from(L::BITS - 3);
@@ -80,6 +85,7 @@ fn sum<L: Limbs>(first: Term<L>, second: Term<L>) -> Sum<L> {
 
 /// Returns the sign of an exact zero sum of operands with different signs:
 /// negative only when rounding toward negative.
+#[inline]
 fn zero_sum_sign(env: &Env) -> bool {
     env.rounding == Rounding::TowardNegative
 }
@@ -107,9 +113,22 @@ where
     }
 
     /// Rounds an exact value and encodes it.
-    fn finish<L: Widen>(value: &Unrounded<L::Double>, env: &Env, flags: Flags) -> (L, Flags) {
-        let (rounded, round_flags) = exact::round::<L::Double, L>(value, &Self::TARGET, env);
+    fn finish<In: Limbs, L: Limbs>(value: &Unrounded<In>, env: &Env, flags: Flags) -> (L, Flags) {
+        let (rounded, round_flags) = exact::round::<In, L>(value, &Self::TARGET, env);
         (Self::encode(rounded), flags | round_flags)
+    }
+
+    /// Rounds a sum, or encodes an exact zero sum.
+    fn finish_sum<In: Limbs, L: Limbs>(sum: &Sum<In>, env: &Env, flags: Flags) -> (L, Flags) {
+        match sum {
+            Sum::Value(value) => Self::finish(value, env, flags),
+            Sum::Zero => Self::exact(
+                Unpacked::Zero {
+                    negative: zero_sum_sign(env),
+                },
+                flags,
+            ),
+        }
     }
 
     /// Encodes a result that needs no rounding.
@@ -177,8 +196,13 @@ where
                 },
                 Unpacked::Zero { .. },
             ) => {
-                let term = Self::term(negative, exponent, significand);
-                Self::finish::<L>(&Unrounded::from_term(term), env, flags)
+                let value = Unrounded {
+                    negative,
+                    exponent,
+                    significand,
+                    sticky: false,
+                };
+                Self::finish(&value, env, flags)
             }
             (
                 Unpacked::Finite {
@@ -192,16 +216,22 @@ where
                     significand: b_significand,
                 },
             ) => {
-                let a = Self::term(a_negative, a_exponent, a_significand);
-                let b = Self::term(b_negative, b_exponent, b_significand);
-                match sum(a, b) {
-                    Sum::Value(value) => Self::finish::<L>(&value, env, flags),
-                    Sum::Zero => Self::exact(
-                        Unpacked::Zero {
-                            negative: zero_sum_sign(env),
-                        },
-                        flags,
-                    ),
+                let a = (a_negative, a_exponent, a_significand);
+                let b = (b_negative, b_exponent, b_significand);
+                if Self::PRECISION + 5 <= L::BITS {
+                    // The limb width of the storage holds the sum and its
+                    // jammed bit.
+                    let term = |(negative, exponent, significand): (bool, i32, L)| Term {
+                        negative,
+                        exponent: i64::from(exponent),
+                        significand,
+                    };
+                    Self::finish_sum(&sum(term(a), term(b)), env, flags)
+                } else {
+                    let term = |(negative, exponent, significand)| {
+                        Self::term(negative, exponent, significand)
+                    };
+                    Self::finish_sum(&sum(term(a), term(b)), env, flags)
                 }
             }
             _ => unreachable!("the special cases handle every NaN and unsupported operand"),
@@ -246,7 +276,7 @@ where
                     significand: a_significand.widening_mul(b_significand),
                     sticky: false,
                 };
-                Self::finish::<L>(&product, env, flags)
+                Self::finish(&product, env, flags)
             }
             _ => unreachable!("the special cases handle every NaN and unsupported operand"),
         }
@@ -298,7 +328,7 @@ where
                     significand: quotient,
                     sticky: !remainder.is_zero(),
                 };
-                Self::finish::<L>(&value, env, flags)
+                Self::finish(&value, env, flags)
             }
             _ => unreachable!("the special cases handle every NaN and unsupported operand"),
         }
@@ -338,7 +368,7 @@ where
                     significand: root,
                     sticky: inexact,
                 };
-                Self::finish::<L>(&value, env, flags)
+                Self::finish(&value, env, flags)
             }
             Unpacked::Nan { .. } | Unpacked::Unsupported => {
                 unreachable!("the special cases handle every NaN and unsupported operand")
@@ -471,13 +501,13 @@ where
                     exponent,
                     significand,
                 },
-            ) => Self::finish::<L>(
+            ) => Self::finish(
                 &Unrounded::from_term(Self::term(negative, exponent, significand)),
                 env,
                 flags,
             ),
             (Some(product), Unpacked::Zero { .. }) => {
-                Self::finish::<L>(&Unrounded::from_term(product), env, flags)
+                Self::finish(&Unrounded::from_term(product), env, flags)
             }
             (
                 Some(product),
@@ -486,15 +516,11 @@ where
                     exponent,
                     significand,
                 },
-            ) => match sum(product, Self::term(negative, exponent, significand)) {
-                Sum::Value(value) => Self::finish::<L>(&value, env, flags),
-                Sum::Zero => Self::exact(
-                    Unpacked::Zero {
-                        negative: zero_sum_sign(env),
-                    },
-                    flags,
-                ),
-            },
+            ) => Self::finish_sum(
+                &sum(product, Self::term(negative, exponent, significand)),
+                env,
+                flags,
+            ),
             _ => unreachable!("the addend is zero or finite"),
         }
     }

@@ -17,6 +17,32 @@ pub fn mxcsr() -> u32 {
     value
 }
 
+/// Runs `body` with MXCSR set to `control`, and restores MXCSR afterward.
+///
+/// Rust assumes the default floating-point environment, so `body` must not
+/// depend on its own host floating-point arithmetic. The tests use it to show
+/// that floaty reads MXCSR before its host fast path.
+pub fn with_mxcsr<T>(control: u32, body: impl FnOnce() -> T) -> T {
+    let mut saved = 0_u32;
+    // SAFETY: the code saves MXCSR to `saved` and loads `control`. It reads
+    // and writes only those variables.
+    unsafe {
+        asm!(
+            "stmxcsr [{saved}]",
+            "ldmxcsr [{control}]",
+            saved = in(reg) &raw mut saved,
+            control = in(reg) &raw const control,
+            options(nostack),
+        );
+    }
+    let result = body();
+    // SAFETY: the code loads the saved MXCSR value.
+    unsafe {
+        asm!("ldmxcsr [{saved}]", saved = in(reg) &raw const saved, options(nostack));
+    }
+    result
+}
+
 /// Defines a function that runs a two-operand SSE instruction on 32-bit or
 /// 64-bit values under an MXCSR value, and returns the result and the flags.
 macro_rules! sse_binary {

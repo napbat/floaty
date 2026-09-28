@@ -14,7 +14,7 @@ use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 
-use self::internal::{LimbConversion, MinMax, Step};
+use self::internal::{Host, LimbConversion, MinMax, Step};
 
 /// A floating-point format family at a width of `W` bits.
 ///
@@ -37,6 +37,10 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     /// The number of NaN payload bits, below the quiet bit.
     #[doc(hidden)]
     const PAYLOAD_BITS: u32;
+
+    /// The host format with the same encoding, for the host fast path.
+    #[doc(hidden)]
+    const HOST: Host;
 
     /// Clears the storage bits above `W`.
     #[doc(hidden)]
@@ -171,9 +175,21 @@ pub(crate) mod internal {
 
     impl MinMax {
         /// Returns `true` for a minimum operation.
+        #[inline]
         pub fn is_minimum(self) -> bool {
             matches!(self, Self::Minimum | Self::MinimumNumber | Self::MinNum)
         }
+    }
+
+    /// The host format with the same encoding as a floaty format.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Host {
+        /// No host format.
+        None,
+        /// The host `f32`: IEEE 754 binary32.
+        Single,
+        /// The host `f64`: IEEE 754 binary64.
+        Double,
     }
 
     /// The direction of `next_up` and `next_down`.
@@ -250,10 +266,12 @@ macro_rules! array_bits {
             impl LimbConversion for [u64; $limbs] {
                 type Limbs = Self;
 
+                #[inline]
                 fn to_limbs(self) -> Self {
                     self
                 }
 
+                #[inline]
                 fn from_limbs(limbs: Self) -> Self {
                     limbs
                 }

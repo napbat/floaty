@@ -13,7 +13,7 @@ mod scale;
 use crate::env::{Env, Flags, NanPropagation};
 use crate::exact::{self, Target, Unrounded};
 use crate::float::Class;
-use crate::format::internal::{LimbConversion, MinMax, Step};
+use crate::format::internal::{Host, LimbConversion, MinMax, Step};
 use crate::format::{Binary, Encoding, Standard, Storage, Width};
 use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
@@ -143,6 +143,13 @@ where
         emax: Self::EMAX,
         has_infinity: matches!(Enc::KIND, EncodingKind::Ieee | EncodingKind::X87),
         all_ones_is_nan: matches!(Enc::KIND, EncodingKind::NoInf),
+    };
+
+    /// The host format with the same encoding.
+    const HOST: Host = match (E, Self::WIDTH, Enc::KIND) {
+        (8, 32, EncodingKind::Ieee) => Host::Single,
+        (11, 64, EncodingKind::Ieee) => Host::Double,
+        _ => Host::None,
     };
 
     /// The number of NaN payload bits, below the quiet bit.
@@ -527,6 +534,7 @@ where
     const EMAX: i32 = Layout::<E, Enc, W>::EMAX;
     const EMIN: i32 = Layout::<E, Enc, W>::EMIN;
     const PAYLOAD_BITS: u32 = Layout::<E, Enc, W>::PAYLOAD_BITS;
+    const HOST: Host = Layout::<E, Enc, W>::HOST;
 
     fn mask(bits: Self::Bits) -> Self::Bits {
         let () = Layout::<E, Enc, W>::VALID;

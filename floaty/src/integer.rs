@@ -139,12 +139,14 @@ pub trait Integer: Sealed + Copy {
 }
 
 /// Returns the magnitude of a `u128` as limbs.
+#[inline]
 fn u128_limbs(value: u128) -> [u64; 8] {
     let [low, high] = value.to_limbs();
     [low, high, 0, 0, 0, 0, 0, 0]
 }
 
 /// Returns a magnitude of at most 128 bits as a `u128`.
+#[inline]
 fn limbs_u128(magnitude: [u64; 8]) -> u128 {
     debug_assert!(
         magnitude[2..].iter().all(|&limb| limb == 0),

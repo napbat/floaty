@@ -12,7 +12,7 @@
 use core::num::NonZeroU32;
 
 use floaty::env::Tininess;
-use floaty::{Env, F16, F32, F64, F80, F128, Rounding};
+use floaty::{Env, F16, F32, F64, F80, F128, Rounding, mode};
 use floaty_verify::testfloat::{
     self, ARM, ARM_DEFAULT_NAN, DEFAULT_NAN_RULE, ROUNDINGS, SSE, SSE_RULE, TININESS, X87,
     X87_RULE, fields, flag_bits, quiet_extended_nan,
@@ -104,8 +104,12 @@ fn check(
 }
 
 /// Compares one two-operand case.
+///
+/// A run that rounds to nearest even with the NaN rule of a mode also checks
+/// the operator of a type with that mode. The operators of binary32 and
+/// binary64 take the host fast path, so this checks that path.
 macro_rules! two_operands {
-    ($alias:ty, $method:ident, $function:expr, $expected:expr) => {
+    ($alias:ty, $method:ident, $operator:tt, $function:expr, $expected:expr) => {
         |line: &str, env: Env| {
             let [a, b, result, flags] = fields::<4>(line);
             let result = $expected(result);
@@ -114,6 +118,24 @@ macro_rules! two_operands {
             let (ours, ours_flags) = a.$method(b, env);
             let context = format!("{} {env:?} {line}", $function);
             assert_eq!(u128::from(ours.to_bits()), result, "{context}: result");
+            if env.rounding == Rounding::NearestEven && env.precision.is_none() {
+                let rule = (env.nan.propagation, env.nan.default_negative);
+                let operator = if rule == (Env::IEEE.nan.propagation, false) {
+                    Some(u128::from((a $operator b).to_bits()))
+                } else if rule == (Env::X86_SSE.nan.propagation, true) {
+                    let (a, b) = (a.with_mode::<mode::X86Sse>(), b.with_mode::<mode::X86Sse>());
+                    Some(u128::from((a $operator b).to_bits()))
+                } else if rule == (Env::X87.nan.propagation, true) && <$alias>::PRECISION <= 64 {
+                    // The x87 mode limits the precision to 64 bits.
+                    let (a, b) = (a.with_mode::<mode::X87>(), b.with_mode::<mode::X87>());
+                    Some(u128::from((a $operator b).to_bits()))
+                } else {
+                    None
+                };
+                if let Some(bits) = operator {
+                    assert_eq!(bits, result, "{context}: operator");
+                }
+            }
             assert_eq!(
                 flag_bits(ours_flags),
                 flags,
@@ -138,7 +160,7 @@ macro_rules! format_tests {
                     "1",
                     &runs($precision_control, true),
                     None,
-                    two_operands!($alias, add_with, function, $expected),
+                    two_operands!($alias, add_with, +, function, $expected),
                 );
             }
 
@@ -150,7 +172,7 @@ macro_rules! format_tests {
                     "1",
                     &runs($precision_control, true),
                     None,
-                    two_operands!($alias, sub_with, function, $expected),
+                    two_operands!($alias, sub_with, -, function, $expected),
                 );
             }
 
@@ -162,7 +184,7 @@ macro_rules! format_tests {
                     "1",
                     &runs($precision_control, true),
                     None,
-                    two_operands!($alias, mul_with, function, $expected),
+                    two_operands!($alias, mul_with, *, function, $expected),
                 );
             }
 
@@ -174,7 +196,7 @@ macro_rules! format_tests {
                     "1",
                     &runs($precision_control, true),
                     None,
-                    two_operands!($alias, div_with, function, $expected),
+                    two_operands!($alias, div_with, /, function, $expected),
                 );
             }
 

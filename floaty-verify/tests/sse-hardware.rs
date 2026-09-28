@@ -5,7 +5,9 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use floaty::{Env, F32, F64};
+use std::hint::black_box;
+
+use floaty::{Env, F32, F64, mode};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, MXCSR_DAZ, MXCSR_FTZ, MXCSR_MASKED, MXCSR_ROUNDINGS, mxcsr_flags, sse_env,
@@ -188,8 +190,12 @@ fn double_operands(random: &mut SplitMix64, count: usize) -> Vec<u64> {
 }
 
 /// Compares one SSE arithmetic instruction with floaty in every setting.
+///
+/// Under the MXCSR value at reset, the operator of a type with the SSE mode
+/// also gives the result. The operators of binary32 and binary64 take the
+/// host fast path, so this checks that path.
 macro_rules! arithmetic {
-    ($pairs:expr, $alias:ty, $instruction:path, $method:ident) => {
+    ($pairs:expr, $alias:ty, $instruction:path, $method:ident, $operator:tt) => {
         for (control, env, daz) in settings() {
             for &(a, b) in &$pairs {
                 let (expected, expected_flags) = $instruction(a, b, control);
@@ -201,6 +207,10 @@ macro_rules! arithmetic {
                     stringify!($instruction)
                 );
                 assert_eq!(ours.to_bits(), expected, "{context}: result");
+                if control == MXCSR_MASKED {
+                    let (x, y) = (x.with_mode::<mode::X86Sse>(), y.with_mode::<mode::X86Sse>());
+                    assert_eq!((x $operator y).to_bits(), expected, "{context}: operator");
+                }
                 assert_eq!(
                     mxcsr_flags(flags, daz, nan_operand),
                     expected_flags,
@@ -238,10 +248,10 @@ fn binary32_arithmetic_matches_in_every_mode() {
     let mut random = SplitMix64::new(0x0055_0032);
     let operands = single_operands(&mut random, 40_000);
     let pairs = pairs(&operands, SINGLE_SPECIALS.len(), 1 << 31, 1);
-    arithmetic!(pairs, F32, x86::addss, add_with);
-    arithmetic!(pairs, F32, x86::subss, sub_with);
-    arithmetic!(pairs, F32, x86::mulss, mul_with);
-    arithmetic!(pairs, F32, x86::divss, div_with);
+    arithmetic!(pairs, F32, x86::addss, add_with, +);
+    arithmetic!(pairs, F32, x86::subss, sub_with, -);
+    arithmetic!(pairs, F32, x86::mulss, mul_with, *);
+    arithmetic!(pairs, F32, x86::divss, div_with, /);
     for (control, env, daz) in settings() {
         for &a in &operands {
             let (expected, expected_flags) = x86::sqrtss(a, 0, control);
@@ -263,10 +273,10 @@ fn binary64_arithmetic_matches_in_every_mode() {
     let mut random = SplitMix64::new(0x0055_0064);
     let operands = double_operands(&mut random, 40_000);
     let pairs = pairs(&operands, 10, 1 << 63, 1);
-    arithmetic!(pairs, F64, x86::addsd, add_with);
-    arithmetic!(pairs, F64, x86::subsd, sub_with);
-    arithmetic!(pairs, F64, x86::mulsd, mul_with);
-    arithmetic!(pairs, F64, x86::divsd, div_with);
+    arithmetic!(pairs, F64, x86::addsd, add_with, +);
+    arithmetic!(pairs, F64, x86::subsd, sub_with, -);
+    arithmetic!(pairs, F64, x86::mulsd, mul_with, *);
+    arithmetic!(pairs, F64, x86::divsd, div_with, /);
     for (control, env, daz) in settings() {
         for &a in &operands {
             let (expected, expected_flags) = x86::sqrtsd(a, 0, control);
@@ -349,4 +359,53 @@ fn check_single(first: u32, second: u32, third: u32, control: u32, env: Env, daz
         expected_flags,
         "{context}: flags"
     );
+}
+
+/// Checks the four operators of one type under one MXCSR value against the
+/// engine results of the default mode.
+macro_rules! operators_under {
+    ($alias:ty, $control:expr, $pairs:expr) => {
+        for &(a, b) in $pairs {
+            let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
+            let env = <$alias>::ENV;
+            let expected = [
+                x.add_with(y, env).0.to_bits(),
+                x.sub_with(y, env).0.to_bits(),
+                x.mul_with(y, env).0.to_bits(),
+                x.div_with(y, env).0.to_bits(),
+            ];
+            let ours = x86::with_mxcsr($control, || {
+                let (x, y) = (black_box(x), black_box(y));
+                [
+                    (x + y).to_bits(),
+                    (x - y).to_bits(),
+                    (x * y).to_bits(),
+                    (x / y).to_bits(),
+                ]
+            });
+            assert_eq!(ours, expected, "{a:#x} {b:#x} under MXCSR {:#x}", $control);
+        }
+    };
+}
+
+#[test]
+fn operators_read_mxcsr_before_the_host_unit() {
+    // FTZ, DAZ, and each directed rounding change the host results. Under
+    // each, the operators still give the engine results of the default mode.
+    let controls = [
+        MXCSR_MASKED | MXCSR_FTZ,
+        MXCSR_MASKED | MXCSR_DAZ,
+        MXCSR_MASKED | (1 << 13),
+        MXCSR_MASKED | (2 << 13),
+        MXCSR_MASKED | (3 << 13),
+    ];
+    let mut random = SplitMix64::new(0x00C5_0000);
+    let single = single_operands(&mut random, 4_000);
+    let single_pairs = pairs(&single, SINGLE_SPECIALS.len(), 1 << 31, 1);
+    let double = double_operands(&mut random, 4_000);
+    let double_pairs = pairs(&double, 10, 1 << 63, 1);
+    for control in controls {
+        operators_under!(F32, control, &single_pairs);
+        operators_under!(F64, control, &double_pairs);
+    }
 }

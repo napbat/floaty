@@ -71,6 +71,8 @@ cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
   `DESIGN.md`.
 - Run the long exhaustive sweeps with
   `cargo test -p floaty-verify --release -- --ignored`.
+- Measure performance with `cargo bench -p floaty-verify --bench operations`
+  before and after a change to the engine.
 
 A change is not finished until every gate passes.
 

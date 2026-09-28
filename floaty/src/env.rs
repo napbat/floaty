@@ -104,6 +104,7 @@ impl NanRule {
     /// Returns a rule with this propagation, a positive default NaN, and
     /// [`InvalidProduct::Signals`].
     #[must_use]
+    #[inline]
     pub const fn new(propagation: NanPropagation) -> Self {
         Self {
             propagation,
@@ -114,6 +115,7 @@ impl NanRule {
 
     /// Returns a copy with another sign of the default NaN.
     #[must_use]
+    #[inline]
     pub const fn with_default_negative(self, default_negative: bool) -> Self {
         Self {
             default_negative,
@@ -123,6 +125,7 @@ impl NanRule {
 
     /// Returns a copy with another rule for `0 * inf + NaN`.
     #[must_use]
+    #[inline]
     pub const fn with_invalid_product(self, invalid_product: InvalidProduct) -> Self {
         Self {
             invalid_product,
@@ -255,12 +258,14 @@ impl Env {
 
     /// Returns a copy with another rounding direction.
     #[must_use]
+    #[inline]
     pub const fn with_rounding(self, rounding: Rounding) -> Self {
         Self { rounding, ..self }
     }
 
     /// Returns a copy with flush-to-zero set or clear.
     #[must_use]
+    #[inline]
     pub const fn with_flush_to_zero(self, flush_to_zero: bool) -> Self {
         Self {
             flush_to_zero,
@@ -270,6 +275,7 @@ impl Env {
 
     /// Returns a copy with denormals-are-zero set or clear.
     #[must_use]
+    #[inline]
     pub const fn with_denormals_are_zero(self, denormals_are_zero: bool) -> Self {
         Self {
             denormals_are_zero,
@@ -279,24 +285,28 @@ impl Env {
 
     /// Returns a copy with another tininess rule.
     #[must_use]
+    #[inline]
     pub const fn with_tininess(self, tininess: Tininess) -> Self {
         Self { tininess, ..self }
     }
 
     /// Returns a copy with another NaN rule.
     #[must_use]
+    #[inline]
     pub const fn with_nan(self, nan: NanRule) -> Self {
         Self { nan, ..self }
     }
 
     /// Returns a copy with another precision limit.
     #[must_use]
+    #[inline]
     pub const fn with_precision(self, precision: Option<NonZeroU32>) -> Self {
         Self { precision, ..self }
     }
 
     /// Returns a copy with saturation set or clear.
     #[must_use]
+    #[inline]
     pub const fn with_saturate(self, saturate: bool) -> Self {
         Self { saturate, ..self }
     }
@@ -345,24 +355,28 @@ impl Flags {
 
     /// Returns `true` when every flag of `other` is set in `self`.
     #[must_use]
+    #[inline]
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
 
     /// Returns `true` when no flag is set.
     #[must_use]
+    #[inline]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
 
     /// Returns the flags of both values.
     #[must_use]
+    #[inline]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 
     /// Returns the flags of `self` that are not in `other`.
     #[must_use]
+    #[inline]
     pub const fn difference(self, other: Self) -> Self {
         Self(self.0 & !other.0)
     }
@@ -371,12 +385,14 @@ impl Flags {
 impl BitOr for Flags {
     type Output = Self;
 
+    #[inline]
     fn bitor(self, other: Self) -> Self {
         self.union(other)
     }
 }
 
 impl BitOrAssign for Flags {
+    #[inline]
     fn bitor_assign(&mut self, other: Self) {
         *self = self.union(other);
     }
@@ -416,6 +432,7 @@ pub trait Override: Sealed {
 
 impl Sealed for Rounding {}
 impl Override for Rounding {
+    #[inline]
     fn apply(self, base: Env) -> Env {
         base.with_rounding(self)
     }
@@ -423,6 +440,7 @@ impl Override for Rounding {
 
 impl Sealed for Env {}
 impl Override for Env {
+    #[inline]
     fn apply(self, _base: Env) -> Env {
         self
     }

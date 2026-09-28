@@ -6,13 +6,15 @@ floaty emulates floating-point formats and the behavior of the hardware that
 uses them. Every operation gives the same bits on every host. It is a base
 layer for binary lifters, constant folders, and software FPU emulators.
 
-> **Status:** build steps 1 to 5 of 8 are complete: every binary format
+> **Status:** build steps 1 to 6 of 8 are complete: every binary format
 > decodes, classifies, rounds, converts, and computes `+ - * /`, square root,
 > and fused multiply-add, correctly rounded in every rounding direction, and
 > has comparisons and a total order, the minimum and maximum families,
 > integer conversions, rounding to an integral value, the IEEE remainder,
 > `scale_b`, `next_up` and `next_down`, and the sign operations. The x86
-> SSE and x87 presets give the behavior of those units.
+> SSE and x87 presets give the behavior of those units. The binary32 and
+> binary64 operators use the host unit on x86-64 where it gives the same
+> bits.
 > [DESIGN.md](DESIGN.md) holds the approved design and the build order.
 
 ## Planned Scope

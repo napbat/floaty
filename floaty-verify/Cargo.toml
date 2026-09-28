@@ -14,3 +14,7 @@ rustc_apfloat.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "operations"
+harness = false

@@ -1,7 +1,9 @@
 //! Bit-exact, platform-independent software floating point.
 //!
 //! `floaty` emulates binary, decimal, and double-double floating-point formats
-//! in software. Every operation gives the same bits on every host.
+//! in software. Every operation gives the same bits on every host. The
+//! binary32 and binary64 operators use the host unit on x86-64 only where it
+//! gives those bits.
 //!
 //! A value has the type [`Float<S, W>`](Float): a standard `S` at a width of
 //! `W` bits. Type aliases name the common formats, for example [`F32`],
@@ -42,6 +44,7 @@ pub mod format;
 mod binary;
 mod exact;
 mod float;
+mod host;
 mod integer;
 mod limbs;
 

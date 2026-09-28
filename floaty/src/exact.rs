@@ -58,6 +58,7 @@ pub struct Target {
 impl Target {
     /// Returns the precision that `env` rounds to: the precision limit of the
     /// behavior, when it is below the format precision.
+    #[inline]
     pub fn precision_in(&self, env: &Env) -> u32 {
         env.precision
             .map_or(self.precision, |limit| limit.get().min(self.precision))

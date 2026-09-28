@@ -1,8 +1,8 @@
 # floaty Design
 
 Status: design approved on 2026-09-27. Build steps 1, encoding, 2, rounding,
-3, arithmetic, 4, the other binary operations, and 5, the x86 SSE and x87
-presets, are complete.
+3, arithmetic, 4, the other binary operations, 5, the x86 SSE and x87
+presets, and 6, performance, are complete.
 
 This file is the source of truth for every design decision in floaty. Update
 it in the same change that alters a decision.
@@ -81,8 +81,8 @@ a default for operations. It does not change the value.
   format. `cargo check` does not report that assertion.
 - Each standard and width pair selects its storage and its engine through its
   trait implementation. This gives static dispatch without specialization.
-- The storage layout is private. Step 6 of the build order chooses packed bits
-  or pre-split fields for each format, by benchmark.
+- The storage layout is private. Step 6 kept packed bits for every format,
+  by benchmark; see [Engine and Performance](#engine-and-performance).
 - `from_bits` ignores the storage bits above `W`. For example, TF32 in a
   `u32` ignores bits 19 to 31. `to_bits` returns those bits as zero.
 - `Float::PRECISION`, `Float::EMAX`, and `Float::EMIN` give the precision and
@@ -531,21 +531,25 @@ can need millions of bits.
 
 | Operation | Intermediate |
 | --- | --- |
-| Add and subtract | Both operands exact in twice the storage width, or the lower operand shifted right with its lost bits in the lowest bit |
+| Add and subtract | Both operands exact in the limb width of the storage, or the lower operand shifted right with its lost bits in the lowest bit |
 | Multiply | The exact `2p`-bit product |
 | Divide and square root | `p + 2` bits, with a nonzero remainder as the sticky bit |
 | Fused multiply-add | The exact product, and the addend aligned with a sticky bit |
 | Conversion | The exact source significand |
 
-The engine keeps these values in a limb array of twice the storage width.
-Stable Rust cannot name `[u64; 2 * N]` for a generic `N`, so a sealed table,
-`Widen`, names the double width of each limb count from 1 to 8. The design
-first proposed separate high and low halves; the table keeps one value type
-for the rounding routine. An aligned sum keeps both operands exact when the
-double width holds them. Otherwise the lower operand is at least four times
-smaller, and it shifts right with its lost bits in the lowest bit, which stays
-far below the rounding position. Division and square root compute bit by bit;
-step 6 decides faster algorithms.
+The engine keeps the product, quotient, and root in a limb array of twice
+the storage width. Stable Rust cannot name `[u64; 2 * N]` for a generic `N`,
+so a sealed table, `Widen`, names the double width of each limb count from 1
+to 8. The design first proposed separate high and low halves; the table
+keeps one value type for the rounding routine.
+
+An aligned sum keeps both operands exact when its width holds them.
+Otherwise the lower operand is at least four times smaller. It shifts right
+with its lost bits in the lowest bit, which stays far below the rounding
+position. That needs a width of each term plus 3 bits, and of the rounding
+precision plus 5 bits. Addition uses the limb width of the storage when it
+has that room, and twice that width otherwise. The fused multiply-add sums at
+twice the width.
 
 ## Operations
 
@@ -667,17 +671,63 @@ payload. A canonical `NanRule` ignores payloads, as RISC-V does.
   `[u64; 2 * N]` value that the sealed `Widen` table names for each `N` from 1
   to 8. A generic `[u64; 2 * N]` type needs the unstable `generic_const_exprs`
   feature, and the table avoids it.
-- Start with one generic path. For `N` of 1 or 2 the compiler unrolls the
-  loops. Specialize a format only when a benchmark shows a gap.
-- Step 6 evaluates these fast paths:
-  - Host `f32` and `f64` arithmetic for `NearestEven` when the caller does not
-    want flags, with NaN results fixed in software.
-  - An exact computation in a wider host format and one software rounding.
-    For example, a binary16 product is exact in binary32.
-  - Lookup tables for FP8.
+- The engine has one generic path. Step 6 made its integer steps faster:
+  - An array of one or two limbs computes on a native `u128`.
+  - Division of values of at most 128 bits uses the native `u128` division.
+    Wider values use Knuth's Algorithm D, one quotient limb per step.
+  - The integer square root of at most 128 bits uses `u128::isqrt`. A wider
+    root uses Newton's iteration from the root of the top 128 bits.
+  - Addition works at the limb width of the storage when that width holds
+    the precision plus 5 bits, which every named format does. Otherwise it
+    works at twice that width.
+- Step 6 kept packed bits as the storage of every binary format. On the
+  benchmark host a binary64 `decode` takes 4 ns. A conversion, which decodes,
+  rounds, and encodes, takes 19 ns, and `add_with` takes 38 ns. Pre-split
+  fields would save the two decodes and the encode of an addition, at most a
+  quarter of it. They also must keep the raw bits. An unsupported or
+  non-canonical x87 encoding round-trips through `from_bits` and `to_bits`.
 - A fast path must pass the same oracle tests as the generic path, and this
-  file must list it.
-- Step 6 also decides the storage layout of each format.
+  file must list it. There is one fast path.
+  - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
+    the host `f32` and `f64` on x86-64 with SSE2. The mode must round to
+    nearest even without FTZ, DAZ, or a precision limit below the format
+    precision. MXCSR must also round to nearest even without FTZ or DAZ.
+    Each call reads MXCSR with `STMXCSR`, because an emulator or a library
+    built with `-ffast-math` can change it. That read is the one `unsafe`
+    block of `floaty`.
+  - The operators return no flags. A NaN result goes back to the engine,
+    which selects the NaN by the rule of the mode. The `_with` methods never
+    take the path, because portable Rust cannot read the host flags. `sqrt`
+    and `mul_add` are not in `core`, so they stay in the engine.
+  - The TestFloat arithmetic tests check the operators in every run that
+    rounds to nearest even with the NaN rule of a mode. The SSE hardware
+    tests check them under the MXCSR value at reset. They also check that
+    the operators give the engine result under FTZ, DAZ, and each directed
+    rounding of MXCSR. A test checks that the operators of every format give
+    the `_with` result of the default mode.
+  - Other hosts use the engine until the oracle tests run there.
+- Step 6 rejected two fast paths:
+  - Lookup tables for FP8. A table takes 64 KiB for each operation, format,
+    and behavior, and the engine computes an FP8 operation in 25 to 47 ns.
+  - An exact computation in a wider host format and one software rounding.
+    The software rounding is most of the cost, and the path would be a
+    second arithmetic path for a small gain.
+- `cargo bench -p floaty-verify --bench operations` measures the main
+  operations of each format against the host types and `rustc_apfloat`.
+  Results on an Intel i9-9900K, in nanoseconds per operation, before and
+  after step 6:
+
+| Operation | Before | After |
+| --- | --- | --- |
+| binary64 `+` operator | 45 | 1.8 |
+| binary64 `add_with` | 45 | 38 |
+| binary64 `div_with` | 302 | 47 |
+| binary64 `sqrt` | 247 | 65 |
+| binary128 `div_with` | 851 | 117 |
+| binary128 `sqrt` | 767 | 316 |
+| binary512 `add_with` | 159 | 92 |
+| binary512 `div_with` | 9,092 | 406 |
+| binary512 `sqrt` | 16,938 | 1,902 |
 
 ## Verification
 
@@ -795,6 +845,8 @@ Each step passes its oracle tests before the next step starts.
 - The details of the `Unsigned` and `Finite` encodings.
 - Presets for ARM, RISC-V, and Direct3D.
 - An optional layer that carries flags on values through a computation.
+- A later speedup pass on the fixed cost of about 35 to 40 ns per rounded
+  operation, which step 6 measured and left for now.
 - `saturate` applies only to encodings without an infinity. OCP FP8
   conversions and the x86 and ARM FP8 instructions also saturate E5M2, which
   has an infinity. Decide when a consumer needs those semantics.

@@ -5,6 +5,7 @@ use super::Float;
 use crate::env::{Flags, Mode, Override};
 use crate::format::Standard;
 use crate::format::internal::Step;
+use crate::host::{self, Operation};
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Adds `other`. Returns the sum and the flags.
@@ -189,7 +190,11 @@ macro_rules! operator {
             type Output = Self;
 
             fn $method(self, other: Self) -> Self {
-                self.$with(other, M::ENV).0
+                let host = host::binary::<S, W>(self.bits, other.bits, Operation::$trait, &M::ENV);
+                match host {
+                    Some(bits) => Self::from_masked(bits),
+                    None => self.$with(other, M::ENV).0,
+                }
             }
         }
     };

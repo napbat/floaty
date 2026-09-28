@@ -87,8 +87,34 @@ pub trait Limbs: Copy + Eq + Hash + Debug {
     /// the limb count.
     #[must_use]
     fn with_limb(self, index: usize, value: u64) -> Self;
+
+    /// Returns limb `index`, or zero at or above the limb count.
+    fn limb(&self, index: usize) -> u64;
 }
 
+/// Returns an array of at most two limbs as a `u128`.
+#[inline]
+fn narrow_to_u128<const N: usize>(limbs: &[u64; N]) -> u128 {
+    debug_assert!(N <= 2, "the array has at most two limbs");
+    let low = limbs.first().copied().unwrap_or(0);
+    let high = limbs.get(1).copied().unwrap_or(0);
+    u128::from(low) | (u128::from(high) << 64)
+}
+
+/// Returns the low `64 * N` bits of a `u128` as an array of at most two limbs.
+#[inline]
+fn narrow_from_u128<const N: usize>(value: u128) -> [u64; N] {
+    debug_assert!(N <= 2, "the array has at most two limbs");
+    let mut limbs = [0; N];
+    for (slot, limb) in limbs.iter_mut().zip(split_u128(value)) {
+        *slot = limb;
+    }
+    limbs
+}
+
+/// The arrays of one or two limbs compute on a native `u128`, which
+/// gives the same values as the limb loops, faster. `N` is a constant, so the
+/// compiler keeps one of the two code paths.
 impl<const N: usize> Limbs for [u64; N] {
     const ZERO: Self = [0; N];
 
@@ -112,18 +138,34 @@ impl<const N: usize> Limbs for [u64; N] {
             .is_some_and(|limb| (limb >> offset) & 1 == 1)
     }
 
+    #[inline]
     fn bit_length(&self) -> u32 {
+        if N <= 2 {
+            return 128 - narrow_to_u128(self).leading_zeros();
+        }
         self.iter().rposition(|&limb| limb != 0).map_or(0, |index| {
             let above = u32::try_from(index).expect("a limb index fits a u32") * 64;
             above + 64 - self[index].leading_zeros()
         })
     }
 
+    #[inline]
     fn any_below(&self, count: u32) -> bool {
+        if N <= 2 {
+            let value = narrow_to_u128(self);
+            if count >= 128 {
+                return value != 0;
+            }
+            return value & ((1 << count) - 1) != 0;
+        }
         !self.low_bits(count).is_zero()
     }
 
+    #[inline]
     fn shr(self, count: u32) -> Self {
+        if N <= 2 {
+            return narrow_from_u128(narrow_to_u128(&self).checked_shr(count).unwrap_or(0));
+        }
         let (limbs, offset) = split(count);
         let mut result = Self::ZERO;
         for (index, slot) in result.iter_mut().enumerate() {
@@ -138,7 +180,11 @@ impl<const N: usize> Limbs for [u64; N] {
         result
     }
 
+    #[inline]
     fn shl(self, count: u32) -> Self {
+        if N <= 2 {
+            return narrow_from_u128(narrow_to_u128(&self).checked_shl(count).unwrap_or(0));
+        }
         let (limbs, offset) = split(count);
         let mut result = Self::ZERO;
         for (index, slot) in result.iter_mut().enumerate() {
@@ -155,7 +201,11 @@ impl<const N: usize> Limbs for [u64; N] {
         result
     }
 
+    #[inline]
     fn increment(mut self) -> Self {
+        if N <= 2 {
+            return narrow_from_u128(narrow_to_u128(&self).wrapping_add(1));
+        }
         for limb in &mut self {
             let (sum, carry) = limb.overflowing_add(1);
             *limb = sum;
@@ -166,7 +216,13 @@ impl<const N: usize> Limbs for [u64; N] {
         self
     }
 
+    #[inline]
     fn add(mut self, other: Self) -> Self {
+        if N <= 2 {
+            let sum = narrow_to_u128(&self) + narrow_to_u128(&other);
+            debug_assert!(N == 2 || sum >> 64 == 0, "the sum fits");
+            return narrow_from_u128(sum);
+        }
         let mut carry = false;
         for (limb, &addend) in self.iter_mut().zip(&other) {
             let (sum, first) = limb.overflowing_add(addend);
@@ -178,7 +234,11 @@ impl<const N: usize> Limbs for [u64; N] {
         self
     }
 
+    #[inline]
     fn sub(mut self, other: Self) -> Self {
+        if N <= 2 {
+            return narrow_from_u128(narrow_to_u128(&self) - narrow_to_u128(&other));
+        }
         let mut borrow = false;
         for (limb, &subtrahend) in self.iter_mut().zip(&other) {
             let (difference, first) = limb.overflowing_sub(subtrahend);
@@ -190,7 +250,11 @@ impl<const N: usize> Limbs for [u64; N] {
         self
     }
 
+    #[inline]
     fn compare(&self, other: &Self) -> Ordering {
+        if N <= 2 {
+            return narrow_to_u128(self).cmp(&narrow_to_u128(other));
+        }
         self.iter().rev().cmp(other.iter().rev())
     }
 
@@ -229,7 +293,17 @@ impl<const N: usize> Limbs for [u64; N] {
         self
     }
 
+    #[inline]
     fn low_bits(mut self, count: u32) -> Self {
+        if N <= 2 {
+            let value = narrow_to_u128(&self);
+            let kept = if count >= 128 {
+                value
+            } else {
+                value & ((1 << count) - 1)
+            };
+            return narrow_from_u128(kept);
+        }
         let (boundary, offset) = split(count);
         for (index, limb) in self.iter_mut().enumerate() {
             if index > boundary || (index == boundary && offset == 0) {
@@ -269,6 +343,10 @@ impl<const N: usize> Limbs for [u64; N] {
     fn with_limb(mut self, index: usize, value: u64) -> Self {
         self[index] = value;
         self
+    }
+
+    fn limb(&self, index: usize) -> u64 {
+        self.get(index).copied().unwrap_or(0)
     }
 }
 
@@ -330,46 +408,182 @@ fn split_u128(value: u128) -> [u64; 2] {
     [low, high]
 }
 
+/// The most limbs that `divide` takes: the double width of the widest
+/// storage type.
+const MAX_LIMBS: usize = 16;
+
+/// Returns the low 64 bits of a `u128`.
+#[inline]
+fn low_u64(value: u128) -> u64 {
+    split_u128(value)[0]
+}
+
+/// Returns a value of at most 128 bits as a `u128`.
+#[inline]
+fn to_u128<L: Limbs>(value: &L) -> u128 {
+    debug_assert!(value.bit_length() <= 128, "the value fits 128 bits");
+    u128::from(value.limb(0)) | (u128::from(value.limb(1)) << 64)
+}
+
+/// Returns a `u128` as limbs. The value must fit `L`.
+#[inline]
+fn from_u128<L: Limbs>(value: u128) -> L {
+    let [low, high] = split_u128(value);
+    let low_limb = L::ZERO.with_limb(0, low);
+    if high == 0 {
+        low_limb
+    } else {
+        low_limb.with_limb(1, high)
+    }
+}
+
+/// Returns the number of limbs up to the highest nonzero limb.
+#[inline]
+fn limb_count<L: Limbs>(value: &L) -> usize {
+    usize::try_from(value.bit_length().div_ceil(64)).expect("a limb count fits a usize")
+}
+
 /// Divides `numerator` by a nonzero `divisor`. Returns the quotient and the
 /// remainder.
+///
+/// Values of at most 128 bits use the native `u128` division. Wider values
+/// use Knuth's Algorithm D, one quotient limb per step.
 pub fn divide<L: Limbs>(numerator: L, divisor: L) -> (L, L) {
     debug_assert!(!divisor.is_zero(), "the divisor is not zero");
-    let mut quotient = L::ZERO;
-    let mut remainder = L::ZERO;
-    for position in (0..numerator.bit_length()).rev() {
-        remainder = remainder.shl(1);
-        if numerator.bit(position) {
-            remainder = remainder.with_bit(0);
+    if numerator.bit_length() <= 128 {
+        if divisor.bit_length() > 128 {
+            // The divisor is larger than the numerator.
+            return (L::ZERO, numerator);
         }
-        if remainder.compare(&divisor) != Ordering::Less {
-            remainder = remainder.sub(divisor);
-            quotient = quotient.with_bit(position);
-        }
+        let (wide, by) = (to_u128(&numerator), to_u128(&divisor));
+        return (from_u128(wide / by), from_u128(wide % by));
     }
-    (quotient, remainder)
+    long_divide(numerator, divisor)
+}
+
+/// Divides by Knuth's Algorithm D (The Art of Computer Programming, Volume 2,
+/// section 4.3.1). The divisor is normalized so that its top limb has its
+/// high bit set; each quotient limb estimate is then at most two too large.
+fn long_divide<L: Limbs>(numerator: L, divisor: L) -> (L, L) {
+    let length = limb_count(&divisor);
+    let total = limb_count(&numerator);
+    assert!(
+        total <= MAX_LIMBS,
+        "a numerator has at most {MAX_LIMBS} limbs"
+    );
+    if total < length {
+        return (L::ZERO, numerator);
+    }
+    if length == 1 {
+        // One 128-by-64-bit division for each limb.
+        let by = u128::from(divisor.limb(0));
+        let mut quotient = L::ZERO;
+        let mut rest = 0_u128;
+        for index in (0..total).rev() {
+            let current = (rest << 64) | u128::from(numerator.limb(index));
+            quotient = quotient.with_limb(index, low_u64(current / by));
+            rest = current % by;
+        }
+        return (quotient, from_u128(rest));
+    }
+    let shift = divisor.limb(length - 1).leading_zeros();
+    let shifted = |value: &L, index: usize| {
+        let low = if shift == 0 || index == 0 {
+            0
+        } else {
+            value.limb(index - 1) >> (64 - shift)
+        };
+        (value.limb(index) << shift) | low
+    };
+    let mut by = [0_u64; MAX_LIMBS];
+    for (index, limb) in by.iter_mut().enumerate().take(length) {
+        *limb = shifted(&divisor, index);
+    }
+    let mut rest = [0_u64; MAX_LIMBS + 1];
+    for (index, limb) in rest.iter_mut().enumerate().take(total + 1) {
+        *limb = shifted(&numerator, index);
+    }
+    let (top, next) = (u128::from(by[length - 1]), u128::from(by[length - 2]));
+    let mut quotient = L::ZERO;
+    // Each step divides the top limbs of the rest and subtracts the estimate
+    // times the divisor. The loops carry between limbs, so they index.
+    for step in (0..=total - length).rev() {
+        let leading = (u128::from(rest[step + length]) << 64) | u128::from(rest[step + length - 1]);
+        let mut estimate = leading / top;
+        let mut remainder = leading % top;
+        while estimate >> 64 != 0
+            || estimate * next > ((remainder << 64) | u128::from(rest[step + length - 2]))
+        {
+            estimate -= 1;
+            remainder += top;
+            if remainder >> 64 != 0 {
+                break;
+            }
+        }
+        let mut carry = 0_u64;
+        let mut borrow = false;
+        for index in 0..length {
+            let [low, high] = split_u128(estimate * u128::from(by[index]) + u128::from(carry));
+            carry = high;
+            let (difference, first) = rest[step + index].overflowing_sub(low);
+            let (difference, second) = difference.overflowing_sub(u64::from(borrow));
+            rest[step + index] = difference;
+            borrow = first || second;
+        }
+        let (difference, first) = rest[step + length].overflowing_sub(carry);
+        let (difference, second) = difference.overflowing_sub(u64::from(borrow));
+        rest[step + length] = difference;
+        let mut digit = low_u64(estimate);
+        if first || second {
+            // The estimate was one too large: add the divisor back.
+            digit -= 1;
+            let mut carry = false;
+            for index in 0..length {
+                let (sum, first) = rest[step + index].overflowing_add(by[index]);
+                let (sum, second) = sum.overflowing_add(u64::from(carry));
+                rest[step + index] = sum;
+                carry = first || second;
+            }
+            rest[step + length] = rest[step + length].wrapping_add(u64::from(carry));
+        }
+        quotient = quotient.with_limb(step, digit);
+    }
+    let normalized = rest
+        .iter()
+        .take(length)
+        .enumerate()
+        .fold(L::ZERO, |value, (index, &limb)| {
+            value.with_limb(index, limb)
+        });
+    (quotient, normalized.shr(shift))
 }
 
 /// Returns the integer square root of `value`, rounded down, and `true` when
 /// the root is not exact.
+///
+/// Values of at most 128 bits use the native `u128` square root. For a wider
+/// value, Newton's iteration starts above the root, from the root of the top
+/// 128 bits, and decreases to it.
 pub fn square_root<L: Limbs>(value: L) -> (L, bool) {
-    let mut remainder = value;
-    let mut root = L::ZERO;
     let length = value.bit_length();
-    if length == 0 {
-        return (root, false);
+    if length <= 128 {
+        let wide = to_u128(&value);
+        let root = wide.isqrt();
+        return (from_u128(root), root * root != wide);
     }
-    // The highest power of four at or below the value.
-    let mut bit = L::ZERO.with_bit((length - 1) & !1);
-    while !bit.is_zero() {
-        let trial = root.add(bit);
-        root = root.shr(1);
-        if remainder.compare(&trial) != Ordering::Less {
-            remainder = remainder.sub(trial);
-            root = root.add(bit);
+    // An even shift keeps the root of the shifted value at half the shift.
+    let shift = (length - 127) & !1;
+    let top = to_u128(&value.shr(shift));
+    let mut root = from_u128::<L>(top.isqrt() + 1).shl(shift / 2);
+    loop {
+        let (quotient, rest) = divide(value, root);
+        let next = root.add(quotient).shr(1);
+        if next.compare(&root) != Ordering::Less {
+            // The root is exact when the value divides into it evenly.
+            return (root, quotient != root || !rest.is_zero());
         }
-        bit = bit.shr(2);
+        root = next;
     }
-    (root, !remainder.is_zero())
 }
 
 /// Splits a bit position into a limb index and a bit offset in that limb.
@@ -482,6 +696,34 @@ mod tests {
             super::square_root(product),
             ([u64::MAX, u64::MAX, 0, 0], false)
         );
+    }
+
+    #[test]
+    fn long_division_matches_the_definition() {
+        // (2^128 - 1)^2 + 5 divided by 2^128 - 1. The top limb of the divisor
+        // needs no normalization.
+        let product = [u64::MAX, u64::MAX].widening_mul([u64::MAX, u64::MAX]);
+        let with_rest = product.add([5, 0, 0, 0]);
+        assert_eq!(
+            super::divide(with_rest, [u64::MAX, u64::MAX, 0, 0]),
+            ([u64::MAX, u64::MAX, 0, 0], [5, 0, 0, 0])
+        );
+        // A quotient limb whose estimate is too large exercises the add-back
+        // step: 2^192 / (2^128 + 1).
+        let (quotient, remainder) = super::divide([0, 0, 0, 1], [1, 0, 1, 0]);
+        // 2^192 = (2^64 - 1)(2^128 + 1) + (2^128 - 2^64 + 1).
+        assert_eq!(quotient, [u64::MAX, 0, 0, 0]);
+        assert_eq!(remainder, [1, u64::MAX, 0, 0]);
+        // One-limb divisor of a wide numerator.
+        assert_eq!(
+            super::divide([7, 0, 0, 1], [2, 0, 0, 0]),
+            ([3, 0, 1 << 63, 0], [1, 0, 0, 0])
+        );
+        // A wide square root by Newton's iteration.
+        let (root, inexact) = super::square_root(product);
+        assert_eq!((root, inexact), ([u64::MAX, u64::MAX, 0, 0], false));
+        let (root, inexact) = super::square_root(with_rest);
+        assert_eq!((root, inexact), ([u64::MAX, u64::MAX, 0, 0], true));
     }
 
     #[test]
