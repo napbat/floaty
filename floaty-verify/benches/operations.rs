@@ -318,8 +318,10 @@ fn each_pair<T: Copy, R>(left: &[T], right: &[T], operation: impl Fn(T, T) -> R)
 }
 
 /// Measures the `Lanes` table for one format and lane count, in nanoseconds
-/// per lane. `convert` converts the lanes to the other of binary32 and
-/// binary64.
+/// per lane. `convert` converts the lanes to another format: binary32 and
+/// binary64 to each other, and the other formats to binary32 or binary64.
+/// The formats without a packed host path show the cost of the scalar
+/// operation of each lane.
 fn lanes_row<S: Standard<W>, const W: usize, const N: usize, T: Copy>(
     name: &str,
     seed: u64,
@@ -625,4 +627,7 @@ fn main() {
     lanes_row::<Binary<8>, 32, 8, _>("F32 x 8", 52, Lanes::convert::<F64>);
     lanes_row::<Binary<11>, 64, 2, _>("F64 x 2", 53, Lanes::convert::<F32>);
     lanes_row::<Binary<11>, 64, 4, _>("F64 x 4", 54, Lanes::convert::<F32>);
+    lanes_row::<Binary<5>, 16, 8, _>("F16 x 8", 55, Lanes::convert::<F32>);
+    lanes_row::<Binary<8>, 16, 8, _>("BF16 x 8", 56, Lanes::convert::<F32>);
+    lanes_row::<Binary<15, X87>, 80, 2, _>("F80 x 2", 57, Lanes::convert::<F64>);
 }

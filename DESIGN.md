@@ -1441,6 +1441,8 @@ it sends every other input to the engine.
   gives the result of its `_with` method in the default mode.
 - The table below lists each host path. `cargo bench -p floaty-verify
   --bench operations` must show the gain of each one.
+- `docs/x86-64-acceleration.md` compares each operation of `Lanes` with the
+  x86-64 instructions that can compute it, and lists the gaps in order.
 
 | Host path | Feature | Formats and operations | Goes back to the engine | Manual | Oracle tests |
 | --- | --- | --- | --- | --- | --- |
