@@ -176,6 +176,125 @@ pub fn mul_add<S: Standard<W>, const W: usize>(
     }
 }
 
+/// Returns the value rounded to an integral value to nearest even from the
+/// host unit, or `None` when the path does not apply or the result is a NaN.
+#[inline]
+pub fn round_to_integral<S: Standard<W>, const W: usize>(
+    value: S::Bits,
+    env: &Env,
+) -> Option<S::Bits> {
+    if !ready_for(env, S::PRECISION) {
+        return None;
+    }
+    match S::HOST {
+        Host::None => None,
+        Host::Single => {
+            let result = environment::round_f32(single::<S, W>(value))?;
+            encoding::<S, W>(u64::from(result.to_bits()), result.is_nan())
+        }
+        Host::Double => {
+            let result = environment::round_f64(double::<S, W>(value))?;
+            encoding::<S, W>(result.to_bits(), result.is_nan())
+        }
+        // The integral value of a binary16 value is a binary16 value, so the
+        // narrowing is exact.
+        Host::Half => half_encoding::<S, W>(environment::round_f32(half::<S, W>(value)?)?),
+    }
+}
+
+/// Returns the value rounded to a 64-bit integer to nearest even from the
+/// host unit, or `None` when the path does not apply, for a NaN, and for a
+/// result that the host cannot tell from a value out of range.
+#[inline]
+pub fn to_int<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Option<i64> {
+    if !ready_for(env, S::PRECISION) {
+        return None;
+    }
+    match S::HOST {
+        Host::None => None,
+        Host::Single => environment::to_int_f32(single::<S, W>(value)),
+        Host::Double => environment::to_int_f64(double::<S, W>(value)),
+        Host::Half => environment::to_int_f32(half::<S, W>(value)?),
+    }
+}
+
+/// Returns a 64-bit integer rounded to the format by the host unit, or
+/// `None` when the path does not apply.
+#[inline]
+pub fn from_int<S: Standard<W>, const W: usize>(value: i64, env: &Env) -> Option<S::Bits> {
+    if !ready_for(env, S::PRECISION) {
+        return None;
+    }
+    match S::HOST {
+        Host::None => None,
+        Host::Single => {
+            let result = environment::from_int_f32(value);
+            encoding::<S, W>(u64::from(result.to_bits()), false)
+        }
+        Host::Double => encoding::<S, W>(environment::from_int_f64(value).to_bits(), false),
+        // An integer below 2^16 in magnitude converts to binary32 exactly. A
+        // larger one overflows binary16 after either rounding, so the result
+        // rounds once in effect.
+        Host::Half => half_encoding::<S, W>(environment::from_int_f32(value)),
+    }
+}
+
+/// Returns the precision of a host kind.
+const fn precision_of(host: Host) -> u32 {
+    match host {
+        Host::None => 0,
+        Host::Half => 11,
+        Host::Single => 24,
+        Host::Double => 53,
+    }
+}
+
+/// Returns an encoding of the host kind `from` converted to the host kind
+/// `to` by the host unit, or `None` when the path does not apply or the
+/// value is a NaN. A widening is exact, and a narrowing rounds once.
+#[inline]
+pub fn convert(from: Host, to: Host, bits: u64, env: &Env) -> Option<u64> {
+    if !ready_for(env, precision_of(to)) {
+        return None;
+    }
+    let single = |bits: u64| f32::from_bits(u32::try_from(bits).expect("a binary32 encoding"));
+    let half =
+        |bits: u64| environment::widen_half(u16::try_from(bits).expect("a binary16 encoding"));
+    match (from, to) {
+        (Host::Single, Host::Double) => {
+            let value = single(bits);
+            (!value.is_nan()).then(|| f64::from(value).to_bits())
+        }
+        (Host::Half, Host::Single) => {
+            let value = half(bits)?;
+            (!value.is_nan()).then(|| u64::from(value.to_bits()))
+        }
+        (Host::Half, Host::Double) => {
+            let value = half(bits)?;
+            (!value.is_nan()).then(|| f64::from(value).to_bits())
+        }
+        (Host::Double, Host::Single) => {
+            let value = f64::from_bits(bits);
+            (!value.is_nan()).then(|| u64::from(environment::narrow_double(value).to_bits()))
+        }
+        (Host::Single, Host::Half) => {
+            let value = single(bits);
+            if value.is_nan() {
+                return None;
+            }
+            environment::narrow_half(value).map(u64::from)
+        }
+        (Host::Double, Host::Half) => {
+            let value = f64::from_bits(bits);
+            if value.is_nan() {
+                return None;
+            }
+            environment::narrow_double_to_half(value).map(u64::from)
+        }
+        _ => None,
+    }
+}
+
 /// Proof that the mode and the floating-point environment of the host allow
 /// the host paths of binary64. [`ready`] checks both once for the steps of one
 /// double-double operation, and no other code makes a `Ready`.

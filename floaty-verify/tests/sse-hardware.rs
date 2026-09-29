@@ -443,6 +443,42 @@ macro_rules! operators_under {
     };
 }
 
+/// Checks `round_to_integral`, `to_int`, `from_int`, and the conversions to
+/// binary16, binary32, and binary64 of one type under one control value
+/// against the engine results of the default mode.
+macro_rules! conversions_under {
+    ($alias:ty, $control:expr, $values:expr) => {
+        for &bits in $values {
+            let x = <$alias>::from_bits(bits);
+            let integer =
+                i64::from_ne_bytes(u64::from(bits).to_ne_bytes()) >> (u64::from(bits) % 64);
+            let env = <$alias>::ENV;
+            let expected = (
+                u64::from(x.round_to_integral_with(env).0.to_bits()),
+                x.to_int_with::<i64>(env).0,
+                x.to_int_with::<u32>(env).0,
+                u64::from(<$alias>::from_int_with(integer, env).0.to_bits()),
+                x.convert_with::<F16>(F16::ENV).0.to_bits(),
+                x.convert_with::<F32>(F32::ENV).0.to_bits(),
+                x.convert_with::<F64>(F64::ENV).0.to_bits(),
+            );
+            let ours = x86::with_mxcsr($control, || {
+                let x = black_box(x);
+                (
+                    u64::from(x.round_to_integral().to_bits()),
+                    x.to_int::<i64>(),
+                    x.to_int::<u32>(),
+                    u64::from(<$alias>::from_int(black_box(integer)).to_bits()),
+                    x.convert::<F16>().to_bits(),
+                    x.convert::<F32>().to_bits(),
+                    x.convert::<F64>().to_bits(),
+                )
+            });
+            assert_eq!(ours, expected, "{bits:#x} {integer} under {:#x}", $control);
+        }
+    };
+}
+
 #[test]
 fn operators_read_mxcsr_before_the_host_unit() {
     // FTZ, DAZ, and each directed rounding change the host results, and an
@@ -481,5 +517,8 @@ fn operators_read_mxcsr_before_the_host_unit() {
         operators_under!(F16, control, &half_pairs);
         operators_under!(F32, control, &single_pairs);
         operators_under!(F64, control, &double_pairs);
+        conversions_under!(F16, control, &halves);
+        conversions_under!(F32, control, &single);
+        conversions_under!(F64, control, &double);
     }
 }

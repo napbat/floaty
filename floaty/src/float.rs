@@ -6,8 +6,9 @@ use core::marker::PhantomData;
 use crate::binary::Unpacked;
 use crate::env::{Behavior, Env, Flags, Mode, Override, mode};
 use crate::exact::{Exact, Unrounded};
-use crate::format::internal::{LimbConversion, Source};
+use crate::format::internal::{Host, LimbConversion, Source};
 use crate::format::{Bid, Binary, Decimal, Dpd, Fnuz, NoInf, Standard, X87};
+use crate::host;
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 
@@ -120,8 +121,16 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// assert_eq!(rounded.to_bits(), 0x4049);
     /// ```
     #[must_use]
+    #[inline]
     pub fn convert<T: FloatType>(self) -> T {
-        self.convert_with(T::Mode::default()).0
+        if !host::convertible(S::HOST, T::HOST) {
+            return self.convert_with(T::Mode::default()).0;
+        }
+        let low = self.bits.to_limbs().limb(0);
+        match host::convert(S::HOST, T::HOST, low, &<T::Mode as Mode>::ENV) {
+            Some(bits) => T::from_host(bits),
+            None => convert_in_engine(self),
+        }
     }
 
     /// Converts the value to another format, with an override of the
@@ -342,6 +351,15 @@ pub trait FloatType: Sealed + Copy {
     #[doc(hidden)]
     type Mode: Mode;
 
+    /// The host format of the type, for the host paths of conversions.
+    #[doc(hidden)]
+    const HOST: Host;
+
+    /// Returns the value of an encoding of the host format. The type must
+    /// have a host format.
+    #[doc(hidden)]
+    fn from_host(bits: u64) -> Self;
+
     /// Converts a decoded value of another format, the source.
     #[doc(hidden)]
     fn convert_from<L: Limbs, B: Behavior>(
@@ -351,10 +369,28 @@ pub trait FloatType: Sealed + Copy {
     ) -> (Self, Flags);
 }
 
+/// Runs a conversion in the engine, for a pair of formats whose host path
+/// does not apply.
+#[cold]
+#[inline(never)]
+fn convert_in_engine<S: Standard<W>, const W: usize, M: Mode, T: FloatType>(
+    value: Float<S, W, M>,
+) -> T {
+    value.convert_with(T::Mode::default()).0
+}
+
 impl<S: Standard<W>, const W: usize, M: Mode> Sealed for Float<S, W, M> {}
 
 impl<S: Standard<W>, const W: usize, M: Mode> FloatType for Float<S, W, M> {
     type Mode = M;
+
+    const HOST: Host = S::HOST;
+
+    #[inline]
+    fn from_host(bits: u64) -> Self {
+        let limbs = <S::Bits as LimbConversion>::Limbs::ZERO.with_limb(0, bits);
+        Self::from_masked(S::Bits::from_limbs(limbs))
+    }
 
     #[inline]
     fn convert_from<L: Limbs, B: Behavior>(

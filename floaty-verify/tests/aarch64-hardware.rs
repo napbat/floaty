@@ -22,6 +22,14 @@ fn pairs(random: &mut SplitMix64, width: u32, exponent_bits: u32) -> Vec<(u128, 
         .collect()
 }
 
+/// Returns the first operands of `pairs` in the storage type `T`.
+fn encodings<T: TryFrom<u128, Error: core::fmt::Debug>>(pairs: &[(u128, u128)]) -> Vec<T> {
+    pairs
+        .iter()
+        .map(|&(bits, _)| T::try_from(bits).expect("the encoding fits"))
+        .collect()
+}
+
 /// Checks the four operators, `sqrt`, and `mul_add` of one type under one
 /// FPCR value against the engine results of the default mode.
 macro_rules! operators_under {
@@ -57,6 +65,42 @@ macro_rules! operators_under {
     };
 }
 
+/// Checks `round_to_integral`, `to_int`, `from_int`, and the conversions to
+/// binary16, binary32, and binary64 of one type under one control value
+/// against the engine results of the default mode.
+macro_rules! conversions_under {
+    ($alias:ty, $control:expr, $values:expr) => {
+        for &bits in $values {
+            let x = <$alias>::from_bits(bits);
+            let integer =
+                i64::from_ne_bytes(u64::from(bits).to_ne_bytes()) >> (u64::from(bits) % 64);
+            let env = <$alias>::ENV;
+            let expected = (
+                u64::from(x.round_to_integral_with(env).0.to_bits()),
+                x.to_int_with::<i64>(env).0,
+                x.to_int_with::<u32>(env).0,
+                u64::from(<$alias>::from_int_with(integer, env).0.to_bits()),
+                x.convert_with::<F16>(F16::ENV).0.to_bits(),
+                x.convert_with::<F32>(F32::ENV).0.to_bits(),
+                x.convert_with::<F64>(F64::ENV).0.to_bits(),
+            );
+            let ours = with_fpcr($control, || {
+                let x = black_box(x);
+                (
+                    u64::from(x.round_to_integral().to_bits()),
+                    x.to_int::<i64>(),
+                    x.to_int::<u32>(),
+                    u64::from(<$alias>::from_int(black_box(integer)).to_bits()),
+                    x.convert::<F16>().to_bits(),
+                    x.convert::<F32>().to_bits(),
+                    x.convert::<F64>().to_bits(),
+                )
+            });
+            assert_eq!(ours, expected, "{bits:#x} {integer} under {:#x}", $control);
+        }
+    };
+}
+
 #[test]
 fn operators_read_fpcr_before_the_host_unit() {
     // Each setting changes a host result or traps. Under each, and under the
@@ -69,5 +113,8 @@ fn operators_read_fpcr_before_the_host_unit() {
         operators_under!(F16, u16, control, &half);
         operators_under!(F32, u32, control, &single);
         operators_under!(F64, u64, control, &double);
+        conversions_under!(F16, control, &encodings::<u16>(&half));
+        conversions_under!(F32, control, &encodings::<u32>(&single));
+        conversions_under!(F64, control, &encodings::<u64>(&double));
     }
 }

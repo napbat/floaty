@@ -100,8 +100,15 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
 
     /// Rounds to an integral value in the format, with the default mode.
     #[must_use]
+    #[inline]
     pub fn round_to_integral(self) -> Self {
-        self.round_to_integral_with(M::default()).0
+        if !host::available(S::HOST, Kind::RoundToIntegral) {
+            return self.round_to_integral_with(M::default()).0;
+        }
+        match host::round_to_integral::<S, W>(self.bits, &M::ENV) {
+            Some(bits) => Self::from_masked(bits),
+            None => round_to_integral_in_engine(self),
+        }
     }
 
     /// Rounds to an integral value in the format, in the rounding direction of
@@ -249,6 +256,16 @@ fn sqrt_in_engine<S: Standard<W>, const W: usize, M: Mode>(
     value: Float<S, W, M>,
 ) -> Float<S, W, M> {
     value.sqrt_with(M::default()).0
+}
+
+/// Runs the rounding to an integral value in the engine, for a format whose
+/// host path does not apply.
+#[cold]
+#[inline(never)]
+fn round_to_integral_in_engine<S: Standard<W>, const W: usize, M: Mode>(
+    value: Float<S, W, M>,
+) -> Float<S, W, M> {
+    value.round_to_integral_with(M::default()).0
 }
 
 /// Runs the fused multiply-add in the engine, for a format whose host path

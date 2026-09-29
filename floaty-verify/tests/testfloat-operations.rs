@@ -306,15 +306,31 @@ fn check_remainder<S: Standard<W, Bits: Field>, const W: usize>(format: Format) 
 
 /// Checks round to integral of a format, as `roundToIntegralExact` with
 /// `-exact` and as the operations without inexact with `-notexact`.
+/// The runs of the default mode also check `round_to_integral`, which returns
+/// no flags and takes a host path where the build has one.
 fn check_round_to_integral<S: Standard<W, Bits: Field>, const W: usize>(format: Format) {
     let function = format!("{}_roundToInt", format.name);
     let runs = float_runs(format, &[Exactness::Exact, Exactness::NotExact]);
+    let defaults = core::cell::Cell::new(0_usize);
     check(&function, "2", &runs, |line, run| {
         let [a, result, flags] = fields::<3>(line);
         let (ours, ours_flags) = decode::<S, W>(a).round_to_integral_with(run.env);
         let ours = (ours.to_bits().into(), ours_flags);
         assert_case(&function, line, run, ours, [format.expected(result), flags]);
+        if run.env == Env::IEEE {
+            let default: u128 = decode::<S, W>(a).round_to_integral().to_bits().into();
+            assert_eq!(
+                default,
+                format.expected(result),
+                "{function} {line}: default mode"
+            );
+            defaults.set(defaults.get() + 1);
+        }
     });
+    assert!(
+        defaults.get() > 0,
+        "{function}: the default mode rounded test cases"
+    );
 }
 
 /// Returns the TestFloat name of an integer type, such as `ui32`.
@@ -399,6 +415,7 @@ where
     let exactness = [Exactness::Exact, Exactness::NotExact];
     let arm = directions(ARM, Env::IEEE, &exactness, "-precision80");
     let sse = directions(SSE, Env::IEEE, &[Exactness::Exact], "-precision80");
+    let defaults = core::cell::Cell::new(0_usize);
     for (runs, encoding) in [
         (arm, IntegerEncoding::Saturating),
         (sse, IntegerEncoding::Indefinite),
@@ -408,8 +425,19 @@ where
             let (ours, ours_flags) = decode::<S, W>(a).to_int_with::<I>(run.env);
             let ours = (encoding.bits(ours), ours_flags);
             assert_case(&function, line, run, ours, [result, flags]);
+            // `to_int` returns no flags and takes a host path where the build
+            // has one.
+            if run.env == Env::IEEE {
+                let default = encoding.bits(decode::<S, W>(a).to_int::<I>());
+                assert_eq!(default, result, "{function} {line}: default mode");
+                defaults.set(defaults.get() + 1);
+            }
         });
     }
+    assert!(
+        defaults.get() > 0,
+        "{function}: the default mode converted test cases"
+    );
 }
 
 /// Checks the conversion of the integer type `I` to a format, in every
@@ -425,13 +453,25 @@ where
 {
     let function = format!("{}_to_{}", integer_name::<I>(), format.name);
     let runs = directions(ARM, Env::IEEE, &[Exactness::Exact], "-precision80");
+    let defaults = core::cell::Cell::new(0_usize);
     check(&function, "2", &runs, |line, run| {
         let [a, result, flags] = fields::<3>(line);
         let value = integer_from_field::<I>(a);
         let (ours, ours_flags) = Float::<S, W>::from_int_with(value, run.env);
         let ours = (ours.to_bits().into(), ours_flags);
         assert_case(&function, line, run, ours, [result, flags]);
+        // `from_int` returns no flags and takes a host path where the build
+        // has one.
+        if run.env == Env::IEEE {
+            let default: u128 = Float::<S, W>::from_int(value).to_bits().into();
+            assert_eq!(default, result, "{function} {line}: default mode");
+            defaults.set(defaults.get() + 1);
+        }
     });
+    assert!(
+        defaults.get() > 0,
+        "{function}: the default mode converted test cases"
+    );
 }
 
 /// Defines the tests of one format.

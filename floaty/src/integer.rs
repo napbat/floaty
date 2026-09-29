@@ -164,6 +164,7 @@ macro_rules! unsigned {
                 const BITS: u32 = <$integer>::BITS;
                 const SIGNED: bool = false;
 
+                #[inline]
                 fn to_parts(self) -> Parts {
                     Parts {
                         negative: false,
@@ -171,6 +172,7 @@ macro_rules! unsigned {
                     }
                 }
 
+                #[inline]
                 fn from_parts(parts: Parts) -> Self {
                     debug_assert!(!parts.negative, "an unsigned value is not negative");
                     Self::try_from(limbs_u128(parts.magnitude)).expect("the magnitude fits the type")
@@ -189,6 +191,7 @@ macro_rules! signed {
                 const BITS: u32 = <$integer>::BITS;
                 const SIGNED: bool = true;
 
+                #[inline]
                 fn to_parts(self) -> Parts {
                     Parts {
                         negative: self < 0,
@@ -196,6 +199,7 @@ macro_rules! signed {
                     }
                 }
 
+                #[inline]
                 fn from_parts(parts: Parts) -> Self {
                     let magnitude = limbs_u128(parts.magnitude);
                     let value = if parts.negative {

@@ -25,7 +25,9 @@ mod paths;
     all(target_arch = "x86_64", target_feature = "sse2"),
     target_arch = "aarch64"
 ))]
-pub use self::paths::{Ready, binary, mul_add, ready, sqrt};
+pub use self::paths::{
+    Ready, binary, convert, from_int, mul_add, ready, round_to_integral, sqrt, to_int,
+};
 
 #[cfg(all(
     target_arch = "x86_64",
@@ -67,6 +69,12 @@ pub enum Kind {
     SquareRoot,
     /// The fused multiply-add.
     FusedMultiplyAdd,
+    /// The rounding to an integral value, to nearest even.
+    RoundToIntegral,
+    /// The conversion to an integer, to nearest even.
+    ToInt,
+    /// The conversion from an integer.
+    FromInt,
 }
 
 /// Returns `true` when this build has a host path of `kind` for a format of
@@ -87,12 +95,46 @@ pub const fn available(host: Host, kind: Kind) -> bool {
         all(target_arch = "x86_64", target_feature = "f16c"),
         target_arch = "aarch64"
     ));
+    let rounding = cfg!(any(
+        all(target_arch = "x86_64", target_feature = "sse4.1"),
+        target_arch = "aarch64"
+    ));
     match (host, kind) {
         // Two roundings of a binary16 fused multiply-add can differ from one.
         (Host::None, _) | (Host::Half, Kind::FusedMultiplyAdd) => false,
-        (Host::Single | Host::Double, Kind::Arithmetic | Kind::SquareRoot) => unit,
+        (
+            Host::Single | Host::Double,
+            Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt,
+        ) => unit,
         (Host::Single | Host::Double, Kind::FusedMultiplyAdd) => unit && fused,
-        (Host::Half, Kind::Arithmetic | Kind::SquareRoot) => unit && half,
+        (Host::Single | Host::Double, Kind::RoundToIntegral) => unit && rounding,
+        (Host::Half, Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt) => {
+            unit && half
+        }
+        (Host::Half, Kind::RoundToIntegral) => unit && half && rounding,
+    }
+}
+
+/// Returns `true` when this build has a host path that converts a format of
+/// the host kind `from` to one of the host kind `to`. The answer is a
+/// constant, so a conversion without a host path compiles to the engine.
+#[must_use]
+pub const fn convertible(from: Host, to: Host) -> bool {
+    let unit = !cfg!(floaty_engine_only)
+        && cfg!(any(
+            all(target_arch = "x86_64", target_feature = "sse2"),
+            target_arch = "aarch64"
+        ));
+    let half = cfg!(any(
+        all(target_arch = "x86_64", target_feature = "f16c"),
+        target_arch = "aarch64"
+    ));
+    match (from, to) {
+        (Host::Single, Host::Double) | (Host::Double, Host::Single) => unit,
+        (Host::Half, Host::Single | Host::Double) | (Host::Single, Host::Half) => unit && half,
+        // Only AArch64 rounds binary64 to binary16 once.
+        (Host::Double, Host::Half) => unit && cfg!(target_arch = "aarch64"),
+        _ => false,
     }
 }
 
@@ -103,7 +145,9 @@ pub const fn available(host: Host, kind: Kind) -> bool {
         target_arch = "aarch64"
     ))
 ))]
-pub use self::none::{Ready, binary, mul_add, ready, sqrt};
+pub use self::none::{
+    Ready, binary, convert, from_int, mul_add, ready, round_to_integral, sqrt, to_int,
+};
 
 /// The entry points of a build without a host path: each returns `None`.
 #[cfg(any(
@@ -117,6 +161,7 @@ mod none {
     use super::Operation;
     use crate::env::Env;
     use crate::format::Standard;
+    use crate::format::internal::Host;
 
     /// Returns `None`: this build has no host path.
     #[inline]
@@ -171,6 +216,33 @@ mod none {
     /// Returns `None`: this build has no host path.
     #[inline]
     pub fn ready(_env: &Env) -> Option<Ready> {
+        None
+    }
+
+    /// Returns `None`: this build has no host path.
+    #[inline]
+    pub fn round_to_integral<S: Standard<W>, const W: usize>(
+        _value: S::Bits,
+        _env: &Env,
+    ) -> Option<S::Bits> {
+        None
+    }
+
+    /// Returns `None`: this build has no host path.
+    #[inline]
+    pub fn to_int<S: Standard<W>, const W: usize>(_value: S::Bits, _env: &Env) -> Option<i64> {
+        None
+    }
+
+    /// Returns `None`: this build has no host path.
+    #[inline]
+    pub fn from_int<S: Standard<W>, const W: usize>(_value: i64, _env: &Env) -> Option<S::Bits> {
+        None
+    }
+
+    /// Returns `None`: this build has no host path.
+    #[inline]
+    pub fn convert(_from: Host, _to: Host, _bits: u64, _env: &Env) -> Option<u64> {
         None
     }
 }

@@ -4,7 +4,8 @@ use super::Float;
 use crate::env::{Flags, Mode, Override};
 use crate::exact::Unrounded;
 use crate::format::Standard;
-use crate::integer::{Integer, ToInt};
+use crate::host::{self, Kind};
+use crate::integer::{Integer, Parts, ToInt, fit};
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Converts an integer, rounding with the default mode.
@@ -16,8 +17,17 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// assert_eq!(F32::from_int(Int::<24>::from_bits(0xFF_FFFF)).to_bits(), 0xBF80_0000);
     /// ```
     #[must_use]
+    #[inline]
     pub fn from_int<I: Integer>(value: I) -> Self {
-        Self::from_int_with(value, M::default()).0
+        if !host::available(S::HOST, Kind::FromInt) {
+            return Self::from_int_with(value, M::default()).0;
+        }
+        let host = signed_64(value.to_parts())
+            .and_then(|integer| host::from_int::<S, W>(integer, &M::ENV));
+        match host {
+            Some(bits) => Self::from_masked(bits),
+            None => from_int_in_engine(value),
+        }
     }
 
     /// Converts an integer, and returns the result and the flags.
@@ -43,8 +53,23 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// truncates; pass [`Rounding::TowardZero`](crate::Rounding::TowardZero)
     /// to [`to_int_with`](Self::to_int_with) for that.
     #[must_use]
+    #[inline]
     pub fn to_int<I: Integer>(self) -> ToInt<I> {
-        self.to_int_with(M::default()).0
+        if !host::available(S::HOST, Kind::ToInt) {
+            return self.to_int_with(M::default()).0;
+        }
+        match host::to_int::<S, W>(self.bits, &M::ENV) {
+            // The host rounds to a 64-bit integer, and the range of `I`
+            // decides the result, as the engine decides it.
+            Some(integer) => {
+                let negative = integer < 0;
+                match fit::<I, _>(negative, &[integer.unsigned_abs()]) {
+                    Some(parts) => ToInt::Value(I::from_parts(parts)),
+                    None => ToInt::OutOfRange { negative },
+                }
+            }
+            None => to_int_in_engine(self),
+        }
     }
 
     /// Converts to an integer of type `I`, in the rounding direction of the
@@ -68,4 +93,38 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     pub fn to_int_with<I: Integer>(self, behavior: impl Override) -> (ToInt<I>, Flags) {
         S::to_int(self.bits, behavior.apply::<M>())
     }
+}
+
+/// Returns an integer as an `i64`, or `None` when it does not fit.
+#[inline]
+fn signed_64(parts: Parts) -> Option<i64> {
+    let [low, rest @ ..] = parts.magnitude;
+    if rest.iter().any(|&limb| limb != 0) {
+        return None;
+    }
+    if parts.negative {
+        0_i64.checked_sub_unsigned(low)
+    } else {
+        i64::try_from(low).ok()
+    }
+}
+
+/// Runs a conversion from an integer in the engine, for a format or a value
+/// whose host path does not apply.
+#[cold]
+#[inline(never)]
+fn from_int_in_engine<S: Standard<W>, const W: usize, M: Mode, I: Integer>(
+    value: I,
+) -> Float<S, W, M> {
+    Float::from_int_with(value, M::default()).0
+}
+
+/// Runs a conversion to an integer in the engine, for a value whose host path
+/// does not apply.
+#[cold]
+#[inline(never)]
+fn to_int_in_engine<S: Standard<W>, const W: usize, M: Mode, I: Integer>(
+    value: Float<S, W, M>,
+) -> ToInt<I> {
+    value.to_int_with(M::default()).0
 }

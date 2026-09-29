@@ -144,3 +144,158 @@ pub fn narrow_half(value: f32) -> Option<u16> {
     }
     Some(u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits"))
 }
+
+/// Returns a binary64 value rounded to binary32, by `FCVT` in the rounding
+/// direction of FPCR, which the path requires to be to nearest even.
+#[inline]
+pub fn narrow_double(value: f64) -> f32 {
+    let result: f32;
+    // SAFETY: FCVT reads and writes SIMD and floating-point registers. Every
+    // AArch64 target has the instruction, and the rounding changes only the
+    // status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "fcvt {result:s}, {value:d}",
+            value = in(vreg) value,
+            result = lateout(vreg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    result
+}
+
+/// Returns a binary64 value rounded once to binary16, by `FCVT` in the rounding
+/// direction of FPCR.
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, which has no such instruction.
+pub fn narrow_double_to_half(value: f64) -> Option<u16> {
+    let bits: u32;
+    // SAFETY: FCVT rounds in a SIMD and floating-point register and clears its
+    // other bits, and FMOV moves the low 32 bits to a general register. Every
+    // AArch64 target has both instructions, and the rounding changes only the
+    // status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "fcvt {value:h}, {value:d}",
+            "fmov {bits:w}, {value:s}",
+            value = inout(vreg) value => _,
+            bits = out(reg) bits,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    Some(u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits"))
+}
+
+/// Returns a binary32 value rounded to an integral value to nearest even, by
+/// `FRINTN`.
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack SSE4.1.
+pub fn round_f32(mut value: f32) -> Option<f32> {
+    // SAFETY: FRINTN reads and writes one SIMD and floating-point register.
+    // Every AArch64 target has the instruction, and it changes only the status
+    // flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "frintn {value:s}, {value:s}",
+            value = inout(vreg) value,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    Some(value)
+}
+
+/// Returns a binary64 value rounded to an integral value to nearest even, by
+/// `FRINTN`.
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack SSE4.1.
+pub fn round_f64(mut value: f64) -> Option<f64> {
+    // SAFETY: FRINTN reads and writes one SIMD and floating-point register.
+    // Every AArch64 target has the instruction, and it changes only the status
+    // flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "frintn {value:d}, {value:d}",
+            value = inout(vreg) value,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    Some(value)
+}
+
+/// Returns a binary32 value rounded to a 64-bit integer to nearest even by
+/// `FCVTNS`, or `None` for a value at a bound of the saturating conversion,
+/// which a NaN, an infinity, and a value out of range can give.
+#[inline]
+pub fn to_int_f32(value: f32) -> Option<i64> {
+    let result: i64;
+    // SAFETY: FCVTNS reads a SIMD and floating-point register and writes a
+    // general register. Every AArch64 target has the instruction, and it
+    // changes only the status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "fcvtns {result}, {value:s}",
+            value = in(vreg) value,
+            result = lateout(reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    (result != i64::MIN && result != i64::MAX && !value.is_nan()).then_some(result)
+}
+
+/// Returns a binary64 value rounded to a 64-bit integer to nearest even by
+/// `FCVTNS`, or `None` for a value at a bound of the saturating conversion,
+/// which a NaN, an infinity, and a value out of range can give.
+#[inline]
+pub fn to_int_f64(value: f64) -> Option<i64> {
+    let result: i64;
+    // SAFETY: FCVTNS reads a SIMD and floating-point register and writes a
+    // general register. Every AArch64 target has the instruction, and it
+    // changes only the status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "fcvtns {result}, {value:d}",
+            value = in(vreg) value,
+            result = lateout(reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    (result != i64::MIN && result != i64::MAX && !value.is_nan()).then_some(result)
+}
+
+/// Returns a 64-bit integer rounded to binary32, by `SCVTF` in the rounding
+/// direction of FPCR.
+#[inline]
+pub fn from_int_f32(value: i64) -> f32 {
+    let result: f32;
+    // SAFETY: SCVTF reads a general register and writes a SIMD and
+    // floating-point register. Every AArch64 target has the instruction, and
+    // it changes only the status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "scvtf {result:s}, {value}",
+            value = in(reg) value,
+            result = lateout(vreg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    result
+}
+
+/// Returns a 64-bit integer rounded to binary64, by `SCVTF` in the rounding
+/// direction of FPCR.
+#[inline]
+pub fn from_int_f64(value: i64) -> f64 {
+    let result: f64;
+    // SAFETY: SCVTF reads a general register and writes a SIMD and
+    // floating-point register. Every AArch64 target has the instruction, and
+    // it changes only the status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "scvtf {result:d}, {value}",
+            value = in(reg) value,
+            result = lateout(vreg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    result
+}

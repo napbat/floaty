@@ -174,3 +174,165 @@ pub fn widen_half(_bits: u16) -> Option<f32> {
 pub fn narrow_half(_value: f32) -> Option<u16> {
     None
 }
+
+/// Returns a binary64 value rounded to binary32, by `CVTSD2SS` in the rounding
+/// direction of MXCSR, which the path requires to be to nearest even.
+#[inline]
+pub fn narrow_double(value: f64) -> f32 {
+    let result: f32;
+    // SAFETY: CVTSD2SS reads and writes SSE registers. SSE2 is part of every
+    // x86-64 target, and the rounding changes only the status flags of MXCSR,
+    // which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "cvtsd2ss {result}, {value}",
+            value = in(xmm_reg) value,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    result
+}
+
+/// Returns `None`: x86-64 has no instruction that rounds binary64 to binary16
+/// once.
+#[inline]
+pub fn narrow_double_to_half(_value: f64) -> Option<u16> {
+    None
+}
+
+/// Returns a binary32 value rounded to an integral value to nearest even, by
+/// `ROUNDSS` with the rounding control 0 in its immediate.
+#[cfg(target_feature = "sse4.1")]
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // A build without SSE4.1 returns `None` from the same signature.
+pub fn round_f32(mut value: f32) -> Option<f32> {
+    // SAFETY: ROUNDSS reads and writes one SSE register. The build enables
+    // SSE4.1, and the instruction changes only the status flags of MXCSR,
+    // which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "roundss {value}, {value}, 0",
+            value = inout(xmm_reg) value,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    Some(value)
+}
+
+/// Returns a binary64 value rounded to an integral value to nearest even, by
+/// `ROUNDSD` with the rounding control 0 in its immediate.
+#[cfg(target_feature = "sse4.1")]
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // A build without SSE4.1 returns `None` from the same signature.
+pub fn round_f64(mut value: f64) -> Option<f64> {
+    // SAFETY: ROUNDSD reads and writes one SSE register. The build enables
+    // SSE4.1, and the instruction changes only the status flags of MXCSR,
+    // which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "roundsd {value}, {value}, 0",
+            value = inout(xmm_reg) value,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    Some(value)
+}
+
+/// Returns `None`: a build without SSE4.1 has no path that rounds to an
+/// integral value.
+#[cfg(not(target_feature = "sse4.1"))]
+#[inline]
+pub fn round_f32(_value: f32) -> Option<f32> {
+    None
+}
+
+/// Returns `None`: a build without SSE4.1 has no path that rounds to an
+/// integral value.
+#[cfg(not(target_feature = "sse4.1"))]
+#[inline]
+pub fn round_f64(_value: f64) -> Option<f64> {
+    None
+}
+
+/// Returns a binary32 value rounded to a 64-bit integer by `CVTSS2SI` in the
+/// rounding direction of MXCSR, or `None` for the integer indefinite, which a
+/// NaN, an infinity, a value out of range, and `-2^63` give.
+#[inline]
+pub fn to_int_f32(value: f32) -> Option<i64> {
+    let result: i64;
+    // SAFETY: CVTSS2SI reads an SSE register and writes a general register.
+    // SSE2 is part of every x86-64 target, and the conversion changes only the
+    // status flags of MXCSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "cvtss2si {result}, {value}",
+            value = in(xmm_reg) value,
+            result = lateout(reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    (result != i64::MIN).then_some(result)
+}
+
+/// Returns a binary64 value rounded to a 64-bit integer by `CVTSD2SI` in the
+/// rounding direction of MXCSR, or `None` for the integer indefinite, which a
+/// NaN, an infinity, a value out of range, and `-2^63` give.
+#[inline]
+pub fn to_int_f64(value: f64) -> Option<i64> {
+    let result: i64;
+    // SAFETY: CVTSD2SI reads an SSE register and writes a general register.
+    // SSE2 is part of every x86-64 target, and the conversion changes only the
+    // status flags of MXCSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "cvtsd2si {result}, {value}",
+            value = in(xmm_reg) value,
+            result = lateout(reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    (result != i64::MIN).then_some(result)
+}
+
+/// Returns a 64-bit integer rounded to binary32, by `CVTSI2SS` in the rounding
+/// direction of MXCSR.
+#[inline]
+pub fn from_int_f32(value: i64) -> f32 {
+    let result: f32;
+    // SAFETY: XORPS clears an SSE register, so CVTSI2SS does not wait on its
+    // old value. CVTSI2SS writes the converted value into the low lane. SSE2 is
+    // part of every x86-64 target, and the conversion changes only the status
+    // flags of MXCSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "xorps {result}, {result}",
+            "cvtsi2ss {result}, {value}",
+            value = in(reg) value,
+            result = out(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    result
+}
+
+/// Returns a 64-bit integer rounded to binary64, by `CVTSI2SD` in the rounding
+/// direction of MXCSR.
+#[inline]
+pub fn from_int_f64(value: i64) -> f64 {
+    let result: f64;
+    // SAFETY: XORPD clears an SSE register, so CVTSI2SD does not wait on its
+    // old value. CVTSI2SD writes the converted value into the low lane. SSE2 is
+    // part of every x86-64 target, and the conversion changes only the status
+    // flags of MXCSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "xorpd {result}, {result}",
+            "cvtsi2sd {result}, {value}",
+            value = in(reg) value,
+            result = out(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    result
+}

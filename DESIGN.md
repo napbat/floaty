@@ -1018,11 +1018,11 @@ The decimal formats follow the Intel decimal library:
     such as the binary16 conversion of F16C.
 - `cargo bench -p floaty-verify --bench operations` measures the main
   operations of each format against the host types and `rustc_apfloat`. A
-  second table measures other operations and operands in the engine: the
-  remainder of close and of distant operands, the conversions to decimal64
-  and from `i64`, and additions of subnormal operands and of a zero. A third
-  table measures the double-double types. Results on an Intel i9-9900K, in
-  nanoseconds per operation, before and after step 6:
+  second table measures other operations and operands: the remainder of
+  close and of distant operands, the conversions to binary32, binary16, and
+  decimal64 and from `i64`, and additions of subnormal operands and of a
+  zero. A third table measures the double-double types. Results on an Intel
+  i9-9900K, in nanoseconds per operation, before and after step 6:
 
 | Operation | Before | After |
 | --- | --- | --- |
@@ -1179,6 +1179,32 @@ and F16C.
 | `Gcc` `*` | 158 | 135 | 33 |
 | `Gcc` `/` | 254 | 91 | 48 |
 
+The host paths of conversions, integer conversions, and rounding to an
+integral value, in nanoseconds per operation of the entry points without
+flags. The engine column is the engine-only build. The x86-64-v3 build
+enables F16C and SSE4.1. Each figure is the lower of two interleaved runs.
+
+| Operation | Engine | Default build | x86-64-v3 build |
+| --- | --- | --- | --- |
+| binary32 to binary64 | 9.4 | 1.3 | 1.3 |
+| binary64 to binary32 | 14.1 | 1.3 | 1.3 |
+| binary16 to binary64 | 8.9 | 8.4 | 1.3 |
+| binary32 to binary16 | 12.7 | 12.6 | 1.3 |
+| binary16 to `i64` | 10.3 | 9.7 | 2.4 |
+| binary32 to `i64` | 12.9 | 2.6 | 2.6 |
+| binary64 to `i64` | 11.5 | 2.2 | 2.2 |
+| binary16 from `i64` | 13.2 | 13.2 | 2.2 |
+| binary32 from `i64` | 12.6 | 2.5 | 2.0 |
+| binary64 from `i64` | 10.3 | 2.1 | 1.9 |
+| binary16 round to integral | 8.7 | 8.6 | 1.6 |
+| binary32 round to integral | 9.9 | 9.8 | 1.3 |
+| binary64 round to integral | 8.9 | 9.0 | 1.3 |
+
+The primitive integers convert to and from their sign and magnitude inline,
+which makes the engine conversion from `i64` faster in every format. Against
+the code before that change, binary16 takes 13 ns against 20 ns, and
+binary128 takes 7.4 ns against 16 ns.
+
 The integer square root without a division, the 256-bit conversion width,
 and the DPD decoder on 64-bit groups, before and after, in nanoseconds per
 operation with an `Env`. Each figure is the lower of two interleaved runs.
@@ -1271,6 +1297,11 @@ it sends every other input to the engine.
 | FMA fused multiply-add | x86-64 with FMA | `mul_add` of binary32 and binary64, by `VFMADD213SS` and `VFMADD213SD` | As the SSE operators | Intel SDM Volume 2: `VFMADD213SS`, `VFMADD213SD` | TestFloat arithmetic, SSE hardware, and host paths, in the x86-64-v3 build |
 | F16C binary16 | x86-64 with F16C | `+`, `-`, `*`, `/`, and `sqrt` of binary16: `VCVTPH2PS` widens the operands exactly, the SSE unit computes in binary32, and `VCVTPS2PH` rounds to nearest even | As the SSE operators. The fused multiply-add of binary16 always runs in the engine. | Intel SDM Volume 2: `VCVTPH2PS`, `VCVTPS2PH` | TestFloat arithmetic, SSE hardware, and host paths with every square root and an ignored sweep of every pair, in the x86-64-v3 build |
 | AArch64 square root, fused multiply-add, and binary16 | AArch64 | `sqrt` and `mul_add` of binary32 and binary64, by `FSQRT` and `FMADD`, and binary16 as F16C gives it, with `FCVT` | As the AArch64 operators | Arm Architecture Reference Manual, DDI 0487: `FSQRT`, `FMADD`, `FCVT` | Host paths and AArch64 hardware, under `qemu-aarch64` |
+| SSE conversions | x86-64 with SSE2 | `convert` from binary32 to binary64, which is exact, and from binary64 to binary32, by `CVTSS2SD` and `CVTSD2SS` | As the SSE operators | Intel SDM Volume 2: `CVTSS2SD`, `CVTSD2SS` | TestFloat conversions, SSE hardware, host paths |
+| F16C conversions | x86-64 with F16C | `convert` from binary16 to binary32 and binary64, which is exact, and from binary32 to binary16, by `VCVTPH2PS` and `VCVTPS2PH` | As the SSE operators. binary64 to binary16 always runs in the engine, because two roundings through binary32 can differ from one. | Intel SDM Volume 2: `VCVTPH2PS`, `VCVTPS2PH` | TestFloat conversions, SSE hardware, and host paths, in the x86-64-v3 build |
+| SSE integer conversions | x86-64 with SSE2 | `to_int` of binary32 and binary64 by `CVTSS2SI` and `CVTSD2SI` to a 64-bit integer. `from_int` of binary32 and binary64 by `CVTSI2SS` and `CVTSI2SD`, for an integer in the range of `i64`. binary16 through binary32 with F16C. | As the SSE operators, and a 64-bit result of 0x8000_0000_0000_0000, the integer indefinite | Intel SDM Volume 2: `CVTSS2SI`, `CVTSD2SI`, `CVTSI2SS`, `CVTSI2SD` | TestFloat operations, SSE hardware, host paths |
+| SSE4.1 rounding to an integral value | x86-64 with SSE4.1 | `round_to_integral` of binary32 and binary64 by `ROUNDSS` and `ROUNDSD` with immediate 0, and binary16 through binary32 with F16C | As the SSE operators | Intel SDM Volume 2: `ROUNDSS`, `ROUNDSD` | TestFloat operations, SSE hardware, and host paths, in the x86-64-v3 build |
+| AArch64 conversions, integer conversions, and rounding | AArch64 | `convert` among binary16, binary32, and binary64 by `FCVT`, which also rounds binary64 to binary16 once. `to_int` by `FCVTNS`, `from_int` by `SCVTF`, and `round_to_integral` by `FRINTN`, for the formats of the SSE paths. | As the AArch64 operators, and a 64-bit result of `i64::MIN` or `i64::MAX`, where `FCVTNS` saturates | Arm Architecture Reference Manual, DDI 0487: `FCVT`, `FCVTNS`, `SCVTF`, `FRINTN` | Host paths and AArch64 hardware, under `qemu-aarch64` |
 | Double-double operators | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`. One check of MXCSR or FPCR serves every step, and each binary64 step takes a binary64 path. | A step that its path declines runs in the engine | As the binary64 paths | Double-double, with the operators of the SSE mode against QD, and host paths |
 
 The binary16 path rounds twice: to binary32, and then to binary16. binary32
@@ -1279,7 +1310,25 @@ multiply, divide, and square root give the correctly rounded result:
 Figueroa, "When is double rounding innocuous?", ACM SIGNUM Newsletter 30(3),
 1995. Every binary32 result of binary16 operands is a normal number, so the
 binary32 rounding keeps all 24 bits. The theorem does not hold for the fused
-multiply-add, whose exact result can need many more bits.
+multiply-add, whose exact result can need many more bits. The theorem also
+does not hold for a conversion from binary64 to binary16 through binary32:
+1 + 2^-11 + 2^-40 rounds to 1 + 2^-11 in binary32, and then to 1 and not to
+1 + 2^-10.
+
+A conversion from an integer to binary16 through binary32 rounds once in
+effect. An integer below 2^16 in magnitude converts to binary32 exactly. A
+larger integer stays at or above 65520, the overflow threshold of binary16,
+after the binary32 rounding, so both roundings give the infinity.
+
+The host conversions to an integer round to a 64-bit integer. The range of
+the integer type then decides the result, as the engine decides it. A NaN, an
+infinity, and a value out of the range of `i64` give the integer indefinite,
+`i64::MIN`, on x86-64. On AArch64 they give `i64::MIN`, `i64::MAX`, or zero
+for a NaN. Those results go back to the engine, and so does the exact value
+`-2^63` on x86-64.
+
+The integral value of a binary16 value is a binary16 value, so the rounding
+to an integral value through binary32 narrows exactly.
 
 The SSE and AArch64 operators:
 

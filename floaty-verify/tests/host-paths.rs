@@ -283,3 +283,223 @@ fn double_double_operators_give_the_default_mode_results() {
         );
     }
 }
+
+/// Returns binary64 operands for the conversions: boundary and random
+/// encodings, values near the halfway points of binary32 and binary16, and
+/// values near the bounds of the integer types.
+fn conversion_operands(random: &mut SplitMix64) -> Vec<F64> {
+    let mut bits: Vec<u64> = boundary_encodings_u128(64, 11, IntegerBit::Implicit)
+        .into_iter()
+        .map(|bits| u64::try_from(bits).expect("a binary64 encoding"))
+        .collect();
+    bits.extend((0..20_000).map(|_| random.next_u64()));
+    // A binary64 value holds 29 bits below binary32 and 42 below binary16:
+    // the halfway point, and one unit on each side of it.
+    for shift in [28, 41] {
+        for _ in 0..5_000 {
+            let base = (random.next_u64() >> 1) & !((1 << (shift + 1)) - 1);
+            let half = base | (1 << shift);
+            bits.extend([half - 1, half, half + 1]);
+        }
+    }
+    let mut values: Vec<F64> = bits.into_iter().map(F64::from_bits).collect();
+    // Integers and halves near the bounds of 32- and 64-bit integers.
+    for exponent in [31, 32, 53, 63, 64] {
+        let bound = F64::from_bits(0x3FF0_0000_0000_0000).scale_b(exponent);
+        let half = F64::from_bits(0x3FE0_0000_0000_0000);
+        for value in [
+            bound,
+            -bound,
+            bound.next_up(),
+            bound.next_down(),
+            -bound.next_down(),
+        ] {
+            values.push(value);
+            values.push(value.add_with(half, floaty::Env::IEEE).0);
+            values.push(value.sub_with(half, floaty::Env::IEEE).0);
+        }
+    }
+    values
+}
+
+/// Checks that `convert` gives the result of `convert_with` under the mode of
+/// the destination.
+macro_rules! convert_matches {
+    ($destination:ty, $values:expr) => {{
+        for value in $values {
+            let converted: $destination = value.convert();
+            let (expected, _): ($destination, _) = value.convert_with(<$destination>::ENV);
+            assert_eq!(
+                converted.to_bits(),
+                expected.to_bits(),
+                "{value:?} to {}",
+                stringify!($destination)
+            );
+        }
+    }};
+}
+
+#[test]
+fn conversions_give_the_default_mode_results() {
+    let mut random = SplitMix64::new(0xC0C0);
+    let doubles = conversion_operands(&mut random);
+    let singles: Vec<floaty::F32> = doubles.iter().map(|value| value.convert()).collect();
+    let halves: Vec<floaty::F16> = (0..=u16::MAX).map(floaty::F16::from_bits).collect();
+    convert_matches!(floaty::F32, doubles.iter().copied());
+    convert_matches!(floaty::F16, doubles.iter().copied());
+    convert_matches!(BF16, doubles.iter().copied());
+    convert_matches!(floaty::F64, singles.iter().copied());
+    convert_matches!(floaty::F16, singles.iter().copied());
+    // The halfway points of binary16 in binary32.
+    let near_half: Vec<floaty::F32> = (0..20_000_u32)
+        .flat_map(|index| {
+            let base = (index.wrapping_mul(0x9E37_79B9) >> 1) & !0x1FFF;
+            [base | 0xFFF, base | 0x1000, base | 0x1001].map(floaty::F32::from_bits)
+        })
+        .collect();
+    convert_matches!(floaty::F16, near_half.iter().copied());
+    convert_matches!(floaty::F32, halves.iter().copied());
+    convert_matches!(floaty::F64, halves.iter().copied());
+    convert_matches!(floaty::F128, halves.iter().copied());
+}
+
+/// Checks that `to_int` gives the result of `to_int_with` under the default
+/// mode, `Env::IEEE`, for integer types of several widths.
+macro_rules! to_int_matches {
+    ($values:expr, $($integer:ty),+) => {{
+        for value in $values {
+            let env = floaty::Env::IEEE;
+            $(
+                assert_eq!(
+                    value.to_int::<$integer>(),
+                    value.to_int_with::<$integer>(env).0,
+                    "{value:?} to {}",
+                    stringify!($integer)
+                );
+            )+
+        }
+    }};
+}
+
+#[test]
+fn integer_conversions_give_the_default_mode_results() {
+    use floaty::{Int, UInt};
+    let mut random = SplitMix64::new(0x1A1A);
+    let doubles = conversion_operands(&mut random);
+    let singles: Vec<floaty::F32> = doubles.iter().map(|value| value.convert()).collect();
+    let halves: Vec<floaty::F16> = (0..=u16::MAX).map(floaty::F16::from_bits).collect();
+    to_int_matches!(
+        doubles.iter().copied(),
+        i8,
+        i16,
+        i32,
+        i64,
+        i128,
+        u8,
+        u16,
+        u32,
+        u64,
+        u128,
+        Int<24>,
+        UInt<40>
+    );
+    to_int_matches!(singles.iter().copied(), i8, i32, i64, u8, u32, u64, i128);
+    to_int_matches!(halves.iter().copied(), i8, i16, i32, i64, u8, u16, u64);
+    // Integers of every magnitude, the bounds of each type, and the halfway
+    // points and the overflow threshold of binary16.
+    let mut integers: Vec<i128> = (0..20_000)
+        .map(|_| {
+            let bits = random.next_u64() % 127;
+            i128::from_le_bytes(random.next_u128().to_le_bytes()) >> bits
+        })
+        .collect();
+    for bound in [
+        i128::from(i32::MIN),
+        i128::from(i32::MAX),
+        i128::from(i64::MIN),
+        i128::from(i64::MAX),
+        i128::from(u64::MAX),
+        1 << 24,
+        (1 << 24) + 1,
+        1 << 53,
+        (1 << 53) + 1,
+        2049,
+        4097,
+        65_504,
+        65_520,
+        1 << 16,
+    ] {
+        integers.extend([bound - 1, bound, bound + 1, -bound]);
+    }
+    let env = floaty::Env::IEEE;
+    for integer in integers {
+        let check = |ours: u128, expected: u128, format: &str| {
+            assert_eq!(ours, expected, "{integer} to {format}");
+        };
+        check(
+            floaty::F64::from_int(integer).to_bits().into(),
+            floaty::F64::from_int_with(integer, env).0.to_bits().into(),
+            "binary64",
+        );
+        check(
+            floaty::F32::from_int(integer).to_bits().into(),
+            floaty::F32::from_int_with(integer, env).0.to_bits().into(),
+            "binary32",
+        );
+        check(
+            floaty::F16::from_int(integer).to_bits().into(),
+            floaty::F16::from_int_with(integer, env).0.to_bits().into(),
+            "binary16",
+        );
+        if let Ok(narrow) = i64::try_from(integer) {
+            check(
+                floaty::F64::from_int(narrow).to_bits().into(),
+                floaty::F64::from_int_with(narrow, env).0.to_bits().into(),
+                "binary64 from i64",
+            );
+        }
+        if let Ok(narrow) = u64::try_from(integer) {
+            check(
+                floaty::F32::from_int(narrow).to_bits().into(),
+                floaty::F32::from_int_with(narrow, env).0.to_bits().into(),
+                "binary32 from u64",
+            );
+        }
+    }
+}
+
+#[test]
+fn rounding_to_integral_gives_the_default_mode_result() {
+    let mut random = SplitMix64::new(0x2B2B);
+    for bits in 0..=u16::MAX {
+        let value = floaty::F16::from_bits(bits);
+        assert_eq!(
+            value.round_to_integral().to_bits(),
+            value.round_to_integral_with(floaty::F16::ENV).0.to_bits(),
+            "{value:?}"
+        );
+    }
+    let doubles = conversion_operands(&mut random);
+    // Exact halves, which a tie rounds to even.
+    let halves: Vec<F64> = (0..10_000)
+        .map(|_| {
+            let integer = F64::from_int(random.next_u64() >> 12);
+            integer
+                .add_with(F64::from_bits(0x3FE0_0000_0000_0000), floaty::Env::IEEE)
+                .0
+        })
+        .collect();
+    for value in doubles.iter().chain(&halves).copied() {
+        assert_eq!(
+            value.round_to_integral().to_bits(),
+            value.round_to_integral_with(F64::ENV).0.to_bits(),
+            "{value:?}"
+        );
+        let single: floaty::F32 = value.convert();
+        assert_eq!(
+            single.round_to_integral().to_bits(),
+            single.round_to_integral_with(floaty::F32::ENV).0.to_bits(),
+            "{single:?}"
+        );
+    }
+}

@@ -29,13 +29,25 @@ macro_rules! convert {
     }};
 }
 
+/// Converts one encoding with `convert`, which returns no flags and takes a
+/// host path where the build has one, and returns the result bits.
+macro_rules! convert_default {
+    ($source:ty => $destination:ty, $bits:expr) => {{
+        let source = <$source>::from_bits($bits.try_into().expect("the operand fits the storage"));
+        let result: $destination = source.convert();
+        u128::from(result.to_bits())
+    }};
+}
+
 /// Defines one test that checks one conversion against both generators, in
-/// every rounding direction and with both tininess rules.
+/// every rounding direction and with both tininess rules. The runs of the
+/// default mode also check `convert`.
 macro_rules! conversion_test {
     ($name:ident, $function:literal, $source:ty => $destination:ty) => {
         #[test]
         fn $name() {
             let fixed_count = core::cell::Cell::new(0_usize);
+            let default_count = core::cell::Cell::new(0_usize);
             for (generator, nan) in GENERATORS {
                 let mut count = 0_usize;
                 for (rounding, rounding_option) in ROUNDINGS {
@@ -60,6 +72,11 @@ macro_rules! conversion_test {
                                     "{context}: static mode"
                                 );
                                 fixed_count.set(fixed_count.get() + 1);
+                                if env == Env::IEEE {
+                                    let default = convert_default!($source => $destination, operand);
+                                    assert_eq!(default, result, "{context}: convert");
+                                    default_count.set(default_count.get() + 1);
+                                }
                             }
                         });
                     }
@@ -67,6 +84,7 @@ macro_rules! conversion_test {
                 assert!(count > 0, "{generator} gave test cases");
             }
             assert!(fixed_count.get() > 0, "the static modes converted test cases");
+            assert!(default_count.get() > 0, "convert converted test cases");
         }
     };
 }
