@@ -997,6 +997,11 @@ The decimal formats follow the Intel decimal library:
     computes in 1,024 or 16,384 bits otherwise.
   - The DPD decoder reads each group of six declets into a 64-bit integer,
     and joins the two groups with one 128-bit multiplication.
+  - The decimal rounding routine moves an exact coefficient toward its
+    preferred exponent in few steps. It drops trailing zeros 16, 8, 4, 2,
+    and 1 at a time, after a test of the last digit, and it appends zeros
+    with one multiplication. Exact quotients, roots, and conversions of
+    short binary values have many trailing zeros.
 - A fast path must pass the same oracle tests as the generic path, and this
   file must list it. There is one fast path.
   - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
@@ -1188,6 +1193,19 @@ operation with an `Env`. Each figure is the lower of two interleaved runs.
 | decimal64 BID to binary64 | 139 | 75 |
 | decimal128 DPD to binary64 | 155 | 86 |
 | decimal128 DPD add | 123 | 117 |
+
+Trailing zeros in steps of 16, 8, 4, 2, and 1 digits, before and after, in
+nanoseconds per operation. The decimal64 operands of the last two rows are
+cents: coefficients below 10^6 at exponent -2. Each figure is the lower of
+two interleaved runs, or the counters of the processor at 4.6 GHz.
+
+| Operation | Before | After |
+| --- | --- | --- |
+| OCP FP8 E4M3 to decimal64 | 118 | 85 |
+| bfloat16 to decimal64 | 116 | 90 |
+| binary16 to decimal64 | 106 | 92 |
+| decimal64 BID, a cent value divided by 4 | 105 | 86 |
+| decimal64 BID, the square root of a square of a cent value | 106 | 80 |
 
 ## Verification
 
@@ -1437,6 +1455,14 @@ Each step passes its oracle tests before the next step starts.
 - Decide whether the square root of a value wider than 128 bits iterates
   on the reciprocal square root with multiplications only. Each Newton step
   of such a value takes one long division: binary512 `sqrt` takes 975 ns.
+- Decide whether the remainder of distant operands uses Barrett reduction
+  for a modulus of 2 to 4 limbs. A trial cut the distant remainder of
+  binary128, binary256, and decimal128 by a third. Its factor takes one long
+  division, so it slowed the remainder of close operands, and a modulus of
+  one limb or of 8 limbs gained nothing.
+- Decide whether the double-double operators, which drop the flags, run
+  their binary64 steps through the binary64 operators and their host fast
+  path. Each step now takes the engine, so `Qd` division takes about 1 us.
 - Measure the specialization per format and behavior again on an idle host.
   Other work loaded the host during the measurement in this file.
 - Add mode combinators for the NaN rule and the tininess rule with the Arm

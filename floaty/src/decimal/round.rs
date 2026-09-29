@@ -139,13 +139,14 @@ pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
     if kept.is_zero() {
         return (zero, flags);
     }
-    if position + i64::from(digit_count(&kept)) - 1 > i64::from(target.emax) {
+    let digits = digit_count(&kept);
+    if position + i64::from(digits) - 1 > i64::from(target.emax) {
         return overflow(negative, precision, target, env);
     }
     let (kept, position) = if inexact {
-        least_exponent(kept, position, target)
+        least_exponent(kept, digits, position, target)
     } else {
-        nearest_to_preferred(kept, position, preferred, target)
+        nearest_to_preferred(kept, digits, position, preferred, target)
     };
     let finite = Unpacked::Finite {
         negative,
@@ -240,32 +241,84 @@ pub fn round_digits<In: Limbs, Out: Limbs>(
 /// is below the overflow bound.
 fn nearest_to_preferred<L: Limbs>(
     mut kept: L,
+    digits: u32,
     mut position: i64,
     preferred: i32,
     target: &DecimalTarget,
 ) -> (L, i64) {
     let (lowest, highest) = target.exponents(target.precision);
     let preferred = i64::from(preferred).clamp(lowest, highest);
-    while position < preferred && last_digit(&kept) == 0 {
-        kept = limbs::divide_small(kept, digits::power_divisor(1)).0;
-        position += 1;
-    }
-    while position > preferred && digit_count(&kept) < target.precision {
-        kept = limbs::multiply_small(kept, 10);
-        position -= 1;
+    match position.cmp(&preferred) {
+        // Most coefficients end in a nonzero digit, so one test skips the
+        // divisions.
+        Ordering::Less if last_digit(&kept) == 0 => {
+            let dropped;
+            (kept, dropped) = drop_zeros(kept, gap(preferred - position));
+            position += i64::from(dropped);
+        }
+        Ordering::Greater => {
+            let appended;
+            (kept, appended) =
+                append_zeros(kept, digits, gap(position - preferred), target.precision);
+            position -= i64::from(appended);
+        }
+        Ordering::Less | Ordering::Equal => {}
     }
     debug_assert!(position <= highest, "the value is below the overflow bound");
     (kept, position)
 }
 
+/// Returns a count of digits, `difference` or 0 for a negative difference.
+#[inline]
+fn gap(difference: i64) -> u32 {
+    u32::try_from(difference.max(0)).unwrap_or(u32::MAX)
+}
+
+/// Drops up to `limit` trailing zeros of a nonzero coefficient. Returns the
+/// coefficient and the count of zeros it dropped. Steps of 16, 8, 4, 2, and 1
+/// digits make the count of divisions grow with the logarithm of the count
+/// of zeros. The caller tests the last digit first, so the steps stay out of
+/// line.
+#[inline(never)]
+fn drop_zeros<L: Limbs>(mut kept: L, limit: u32) -> (L, u32) {
+    let mut dropped = 0;
+    for chunk in [16, 8, 4, 2, 1] {
+        while dropped + chunk <= limit {
+            let (quotient, rest) = limbs::divide_small(kept, digits::power_divisor(chunk));
+            if rest != 0 {
+                break;
+            }
+            kept = quotient;
+            dropped += chunk;
+        }
+    }
+    (kept, dropped)
+}
+
+/// Appends up to `limit` zeros to a nonzero coefficient of `digits` digits
+/// while it has fewer digits than `precision`. Returns the coefficient and
+/// the count of zeros it appended.
+#[inline]
+fn append_zeros<L: Limbs>(kept: L, digits: u32, limit: u32, precision: u32) -> (L, u32) {
+    let count = precision.saturating_sub(digits).min(limit);
+    if count == 0 {
+        return (kept, 0);
+    }
+    (limbs::multiply_fit(kept, power_of_ten(count)), count)
+}
+
 /// Adds trailing zeros to an inexact coefficient, down to the least possible
 /// exponent. A precision limit leaves fewer digits than the format holds.
-fn least_exponent<L: Limbs>(mut kept: L, mut position: i64, target: &DecimalTarget) -> (L, i64) {
+fn least_exponent<L: Limbs>(
+    mut kept: L,
+    digits: u32,
+    mut position: i64,
+    target: &DecimalTarget,
+) -> (L, i64) {
     let (lowest, highest) = target.exponents(target.precision);
-    while position > lowest && digit_count(&kept) < target.precision {
-        kept = limbs::multiply_small(kept, 10);
-        position -= 1;
-    }
+    let appended;
+    (kept, appended) = append_zeros(kept, digits, gap(position - lowest), target.precision);
+    position -= i64::from(appended);
     debug_assert!(position <= highest, "the value is below the overflow bound");
     (kept, position)
 }
