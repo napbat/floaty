@@ -729,7 +729,7 @@ can need millions of bits.
 | Fused multiply-add | The exact product, and the addend aligned with a sticky bit |
 | Conversion | The exact source significand |
 | Decimal operations | Coefficients in twice the storage limbs: 128 bits, 38 digits, for decimal32 and decimal64, and 256 bits, 77 digits, for decimal128. A product is exact, with at most `2p` digits. A sum keeps both terms exact, or cuts a term that is far smaller below the round digit with a digit that stands for the lost part: at most `2p + 2` digits. A square root scales its operand to at most `2p + 3` digits, 71 for decimal128 |
-| Conversion between binary and decimal | Exact values in 1,024 bits when they fit, and in 16,384 bits otherwise: the value divided by a power of 5 and of 2 to a few digits more than the precision, with a sticky bit. The 16,384-bit arrays take tens of KiB of stack, which a `no_std` consumer with a small stack must allow for |
+| Conversion between binary and decimal | Exact values in 256 or 1,024 bits when they fit, and in 16,384 bits otherwise: the value divided by a power of 5 and of 2 to a few digits more than the precision, with a sticky bit. The 16,384-bit arrays take tens of KiB of stack, which a `no_std` consumer with a small stack must allow for |
 
 The engine keeps the product, quotient, and root in a limb array of twice
 the storage width. Stable Rust cannot name `[u64; 2 * N]` for a generic `N`,
@@ -982,6 +982,9 @@ The decimal formats follow the Intel decimal library:
     divisor, gives 11 bits. Three Newton steps give the reciprocal less at
     most 1, and a last step corrects it. The same function builds the table
     of powers of 10 at compile time.
+  - A conversion between binary and decimal computes in 256 bits when its
+    numbers fit, as they do for most values within about 10^60 of 1. It
+    computes in 1,024 or 16,384 bits otherwise.
 - A fast path must pass the same oracle tests as the generic path, and this
   file must list it. There is one fast path.
   - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on

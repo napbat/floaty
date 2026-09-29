@@ -26,7 +26,9 @@ where
             + i64::from(Self::PRECISION)
             + 4
             + radix::power_of_five_bits(value.exponent.unsigned_abs());
-        if radix::fits_small(bits) {
+        if radix::fits::<{ radix::NARROW }>(bits) {
+            Self::from_decimal_in::<{ radix::NARROW }, In, Out>(value, env)
+        } else if radix::fits::<{ radix::SMALL }>(bits) {
             Self::from_decimal_in::<{ radix::SMALL }, In, Out>(value, env)
         } else {
             Self::from_decimal_in::<{ radix::LARGE }, In, Out>(value, env)

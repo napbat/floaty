@@ -4,12 +4,17 @@
 //! A conversion reduces a value to a few digits more than the precision by a
 //! power of 5 and a shift. 10^6144, the scale of decimal128, is about
 //! 2^20410, and the reduced numbers stay below 16,384 bits: 5^6216 has 14,434
-//! bits. A conversion whose numbers fit 1,024 bits computes in that width.
+//! bits. A conversion whose numbers fit 256 or 1,024 bits computes in the
+//! narrower of those widths that holds them.
 //!
 //! The functions work in place on `[u64; N]`, because the by-value limb
 //! operations copy the whole array for each limb.
 
 use crate::limbs::{self, Limbs};
+
+/// The limb count of a conversion whose numbers fit 256 bits: most
+/// conversions of values within about 10^60 of 1.
+pub const NARROW: usize = 4;
 
 /// The limb count of a conversion whose numbers fit 1,024 bits.
 pub const SMALL: usize = 16;
@@ -20,9 +25,9 @@ pub const LARGE: usize = 256;
 /// The largest power of 5 in a `u64`: 5^27.
 const FIVE_STEP: u64 = 7_450_580_596_923_828_125;
 
-/// Returns `true` when numbers of `bits` bits fit the small width.
-pub fn fits_small(bits: i64) -> bool {
-    bits <= i64::from(<[u64; SMALL]>::BITS)
+/// Returns `true` when numbers of `bits` bits fit `N` limbs.
+pub fn fits<const N: usize>(bits: i64) -> bool {
+    bits <= i64::from(<[u64; N]>::BITS)
 }
 
 /// Returns the number of limbs up to the highest nonzero limb.

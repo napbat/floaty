@@ -152,7 +152,9 @@ where
             + radix::power_of_five_bits(magnitude)
             + (i64::from(exponent) - scale).max(0)
             + 1;
-        let (coefficient, sticky) = if radix::fits_small(bits) {
+        let (coefficient, sticky) = if radix::fits::<{ radix::NARROW }>(bits) {
+            reduce::<{ radix::NARROW }, In, Wide<Out>>(significand, exponent, scale)
+        } else if radix::fits::<{ radix::SMALL }>(bits) {
             reduce::<{ radix::SMALL }, In, Wide<Out>>(significand, exponent, scale)
         } else {
             reduce::<{ radix::LARGE }, In, Wide<Out>>(significand, exponent, scale)
