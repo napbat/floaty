@@ -1235,6 +1235,20 @@ figure is the lower of two interleaved runs.
 | binary64 to x87 extended | 10.7 | 2.3 |
 | binary32 to x87 extended | 10.6 | 2.9 |
 
+The paths of `FEAT_FP16` and `FEAT_BF16`, in nanoseconds per operation of
+the entry points without flags under `qemu-aarch64`. The gate host has no
+AArch64 processor. QEMU runs each floating-point instruction as a software
+routine, so the figures show the relative cost only and understate the gain
+on hardware. The engine column is the AArch64 build.
+
+| Operation | Engine | AArch64 FP16 build |
+| --- | --- | --- |
+| binary16 `mul_add` | 249 | 142 |
+| bfloat16 `+` | 185 | 120 |
+| bfloat16 `/` | 164 | 113 |
+| bfloat16 `sqrt` | 202 | 112 |
+| binary32 to bfloat16 | 191 | 99 |
+
 The comparison and the minimum of two numbers by their bits, before and
 after, in nanoseconds per operation of `partial_cmp`, `minimum`, and the
 `Gcc` operators. Each
@@ -1331,6 +1345,11 @@ it sends every other input to the engine.
   before the check of MXCSR, and a signaling NaN trapped under an unmasked
   invalid-operation exception. LLVM does not move an inline assembly block
   above a branch.
+- A primitive that needs an optional feature of AArch64 runs its
+  instruction in a function with `#[target_feature]` for that feature. The
+  AArch64 assembler rejects an instruction of a feature that the caller was
+  not compiled with, and a doctest does not take `RUSTFLAGS`. The function
+  still inlines into a caller with the feature.
 - A host path is a direct instruction or a host algorithm. A direct
   instruction is the IEEE 754 operation, such as `SQRTSD`. A host algorithm
   composes exact host operations, such as binary16 arithmetic through
@@ -1348,7 +1367,7 @@ it sends every other input to the engine.
   that build, so the oracle tests cover the engine where a host path would
   run.
 - Each host path passes the oracle tests in a build that enables it: the
-  default build, the x86-64-v3 build, and the AArch64 build under
+  default build, the x86-64-v3 build, and the AArch64 builds under
   `qemu-aarch64`. A test also checks that each entry point of a host path
   gives the result of its `_with` method in the default mode.
 - The table below lists each host path. `cargo bench -p floaty-verify
@@ -1368,6 +1387,8 @@ it sends every other input to the engine.
 | SSE4.1 rounding to an integral value | x86-64 with SSE4.1 | `round_to_integral` of binary32 and binary64 by `ROUNDSS` and `ROUNDSD` with immediate 0, and binary16 through binary32 with F16C | As the SSE operators | Intel SDM Volume 2: `ROUNDSS`, `ROUNDSD` | TestFloat operations, SSE hardware, and host paths, in the x86-64-v3 build |
 | AArch64 conversions, integer conversions, and rounding | AArch64 | `convert` among binary16, binary32, and binary64 by `FCVT`, which also rounds binary64 to binary16 once. `to_int` by `FCVTNS`, `from_int` by `SCVTF`, and `round_to_integral` by `FRINTN`, for the formats of the SSE paths. | As the AArch64 operators, and a 64-bit result of `i64::MIN` or `i64::MAX`, where `FCVTNS` saturates | Arm Architecture Reference Manual, DDI 0487: `FCVT`, `FCVTNS`, `SCVTF`, `FRINTN` | Host paths and AArch64 hardware, under `qemu-aarch64` |
 | x87 extended | x86-64 | `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral`, `to_int`, and `from_int` of x87 extended precision, by `FADDP`, `FSUBP`, `FMULP`, `FDIVP`, `FSQRT`, `FRNDINT`, `FISTP`, and `FILD`. `convert` to and from binary32 and binary64, by `FLD` and `FSTP`. | A NaN result, a 64-bit result of 0x8000_0000_0000_0000, the integer indefinite, or an x87 control word other than round to nearest at the 64-bit precision with every exception masked | Intel SDM Volume 1, revision 253665-093US, section 8.1.5, Figure 8-6: the x87 control word; Volume 2: the instructions | TestFloat arithmetic, conversions, and operations, x87 hardware, host paths |
+| `FEAT_FP16` fused multiply-add | AArch64 with `FEAT_FP16` | `mul_add` of binary16, by `FMADD` on half-precision registers | As the AArch64 operators | Arm Architecture Reference Manual, DDI 0487: `FMADD` | Host paths and AArch64 hardware, in the AArch64 FP16 build |
+| `FEAT_BF16` bfloat16 | AArch64 with `FEAT_BF16` | `+`, `-`, `*`, `/`, and `sqrt` of bfloat16: a shift widens the operands exactly to binary32, the unit computes in binary32, and `BFCVT` rounds to nearest even. `convert` from binary32 to bfloat16 by `BFCVT`. | As the AArch64 operators. The fused multiply-add of bfloat16 always runs in the engine. | Arm Architecture Reference Manual, DDI 0487: `BFCVT`, which honors every control of FPCR that applies to single-precision arithmetic | Host paths with every square root and an ignored sweep of every pair, and AArch64 hardware, in the AArch64 FP16 build |
 | Double-double operators | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`. One check of MXCSR or FPCR serves every step, and each binary64 step takes a binary64 path. | A step that its path declines runs in the engine | As the binary64 paths | Double-double, with the operators of the SSE mode against QD, and host paths |
 
 The binary16 path rounds twice: to binary32, and then to binary16. binary32
@@ -1380,6 +1401,14 @@ multiply-add, whose exact result can need many more bits. The theorem also
 does not hold for a conversion from binary64 to binary16 through binary32:
 1 + 2^-11 + 2^-40 rounds to 1 + 2^-11 in binary32, and then to 1 and not to
 1 + 2^-10.
+
+The bfloat16 path rounds twice in the same way, and binary32 holds 2p + 2
+bits of bfloat16 too. bfloat16 has the exponent range of binary32, so a
+binary32 result can be subnormal. At a subnormal exponent, binary32 still
+holds 16 bits more than bfloat16, and a bfloat16 subnormal has at most 7
+bits, so the condition of the theorem holds there as well. The ignored sweep
+checks every pair of the four operators, and a test checks every square
+root.
 
 A conversion from an integer to binary16 through binary32 rounds once in
 effect. An integer below 2^16 in magnitude converts to binary32 exactly. A
@@ -1455,7 +1484,7 @@ evaluates the published definition, from IEEE 754 or a vendor manual, with an
 established library such as MPFR. A reference written only for floaty is not
 an oracle.
 
-The gates run the tests in four builds:
+The gates run the tests in five builds:
 
 - The default build for x86-64.
 - The x86-64-v3 build, `-C target-cpu=x86-64-v3`, for the host paths of FMA,
@@ -1470,6 +1499,9 @@ The gates run the tests in four builds:
   gives the same bits on every host, so that comparison checks each AArch64
   host path against those oracles. QEMU's AArch64 target stands in for
   AArch64 hardware.
+- The AArch64 FP16 build, `--target aarch64-unknown-linux-gnu` with
+  `-C target-feature=+fp16,+bf16`, for the paths of `FEAT_FP16` and
+  `FEAT_BF16`. The default CPU of `qemu-aarch64`, `max`, has both features.
 
 Code for one architecture, such as inline assembly and `core::arch`
 intrinsics, is behind `cfg(target_arch)` in `floaty` and in `floaty-verify`,

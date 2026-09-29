@@ -49,6 +49,12 @@ const fn nan_32(bits: u32) -> bool {
     bits & 0x7FFF_FFFF > 0x7F80_0000
 }
 
+/// Returns `true` for the bits of a binary16 NaN.
+#[inline]
+const fn nan_16(bits: u16) -> bool {
+    bits & 0x7FFF > 0x7C00
+}
+
 /// Returns `true` for the bits of a binary64 NaN.
 #[inline]
 const fn nan_64(bits: u64) -> bool {
@@ -78,6 +84,24 @@ fn half_encoding<S: Standard<W>, const W: usize>(result: f32) -> Option<S::Bits>
         return None;
     }
     encoding::<S, W>(u64::from(environment::narrow_half(result)?), false)
+}
+
+/// Returns the host value of a bfloat16 encoding, widened exactly to
+/// binary32: a bfloat16 encoding is the high half of a binary32 encoding.
+#[inline]
+fn bfloat<S: Standard<W>, const W: usize>(bits: S::Bits) -> f32 {
+    let low = bits.to_limbs().limb(0);
+    f32::from_bits(u32::try_from(low << 16).expect("a bfloat16 encoding has 16 bits"))
+}
+
+/// Returns the encoding of a binary32 result rounded to bfloat16 in a host
+/// instruction, or `None` for a NaN or in a build without the instruction.
+#[inline]
+fn bfloat_encoding<S: Standard<W>, const W: usize>(result: f32) -> Option<S::Bits> {
+    if nan_32(result.to_bits()) {
+        return None;
+    }
+    encoding::<S, W>(u64::from(environment::narrow_bfloat(result)?), false)
 }
 
 /// Returns the host value of a binary64 encoding.
@@ -131,7 +155,9 @@ fn extended_encoding<S: Standard<W>, const W: usize>(result: [u64; 2]) -> S::Bit
 fn ready_for(host: Host, env: &Env, precision: u32) -> bool {
     let unit = match host {
         Host::Extended => environment::x87_environment(),
-        Host::None | Host::Half | Host::Single | Host::Double => default_environment(),
+        Host::None | Host::Half | Host::BFloat | Host::Single | Host::Double => {
+            default_environment()
+        }
     };
     compatible(env, precision) && unit
 }
@@ -162,6 +188,10 @@ pub fn binary<S: Standard<W>, const W: usize>(
             let (left, right) = (half::<S, W>(left)?, half::<S, W>(right)?);
             half_encoding::<S, W>(environment::binary_f32(left, right, operation))
         }
+        Host::BFloat => {
+            let (left, right) = (bfloat::<S, W>(left), bfloat::<S, W>(right));
+            bfloat_encoding::<S, W>(environment::binary_f32(left, right, operation))
+        }
         Host::Extended => {
             let (left, right) = (extended::<S, W>(left), extended::<S, W>(right));
             environment::x87_binary(&left, &right, operation).map(extended_encoding::<S, W>)
@@ -181,6 +211,7 @@ pub fn sqrt<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Option
         Host::Single => single_encoding::<S, W>(environment::sqrt_f32(single::<S, W>(value))),
         Host::Double => double_encoding::<S, W>(environment::sqrt_f64(double::<S, W>(value))),
         Host::Half => half_encoding::<S, W>(environment::sqrt_f32(half::<S, W>(value)?)),
+        Host::BFloat => bfloat_encoding::<S, W>(environment::sqrt_f32(bfloat::<S, W>(value))),
         Host::Extended => {
             environment::x87_sqrt(&extended::<S, W>(value)).map(extended_encoding::<S, W>)
         }
@@ -202,7 +233,15 @@ pub fn mul_add<S: Standard<W>, const W: usize>(
     match S::HOST {
         // Two roundings of a fused multiply-add can differ from one, and the
         // x87 unit has no fused multiply-add.
-        Host::None | Host::Half | Host::Extended => None,
+        Host::None | Host::BFloat | Host::Extended => None,
+        // `FEAT_FP16` rounds the binary16 result once.
+        Host::Half => {
+            let [a, b, c] = [left, right, addend].map(|bits| {
+                u16::try_from(bits.to_limbs().limb(0)).expect("a binary16 encoding has 16 bits")
+            });
+            let result = environment::mul_add_f16(a, b, c)?;
+            encoding::<S, W>(u64::from(result), nan_16(result))
+        }
         Host::Single => {
             let (a, b) = (single::<S, W>(left), single::<S, W>(right));
             single_encoding::<S, W>(environment::mul_add_f32(a, b, single::<S, W>(addend))?)
@@ -225,7 +264,8 @@ pub fn round_to_integral<S: Standard<W>, const W: usize>(
         return None;
     }
     match S::HOST {
-        Host::None => None,
+        // `available` gives bfloat16 no path to an integral value.
+        Host::None | Host::BFloat => None,
         Host::Single => single_encoding::<S, W>(environment::round_f32(single::<S, W>(value))?),
         Host::Double => double_encoding::<S, W>(environment::round_f64(double::<S, W>(value))?),
         // The integral value of a binary16 value is a binary16 value, so the
@@ -248,7 +288,8 @@ pub fn to_int<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Opti
         return None;
     }
     match S::HOST {
-        Host::None => None,
+        // `available` gives bfloat16 no path to an integer.
+        Host::None | Host::BFloat => None,
         Host::Single => environment::to_int_f32(single::<S, W>(value)),
         Host::Double => environment::to_int_f64(double::<S, W>(value)),
         Host::Half => environment::to_int_f32(half::<S, W>(value)?),
@@ -264,7 +305,8 @@ pub fn from_int<S: Standard<W>, const W: usize>(value: i64, env: &Env) -> Option
         return None;
     }
     match S::HOST {
-        Host::None => None,
+        // `available` gives bfloat16 no path from an integer.
+        Host::None | Host::BFloat => None,
         Host::Single => {
             let result = environment::from_int_f32(value);
             encoding::<S, W>(u64::from(result.to_bits()), false)
@@ -283,6 +325,7 @@ pub fn from_int<S: Standard<W>, const W: usize>(value: i64, env: &Env) -> Option
 const fn precision_of(host: Host) -> u32 {
     match host {
         Host::None => 0,
+        Host::BFloat => 8,
         Host::Half => 11,
         Host::Single => 24,
         Host::Double => 53,
@@ -338,6 +381,13 @@ pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 
                 return None;
             }
             environment::narrow_double_to_half(f64::from_bits(low)).map(u64::from)
+        }
+        (Host::Single, Host::BFloat) => {
+            let value = single(low);
+            if nan_32(value.to_bits()) {
+                return None;
+            }
+            environment::narrow_bfloat(value).map(u64::from)
         }
         (Host::Single, Host::Extended) => {
             let encoding = u32::try_from(low).expect("a binary32 encoding");

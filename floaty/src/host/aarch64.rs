@@ -210,6 +210,113 @@ pub fn narrow_half(value: f32) -> Option<u16> {
     Some(u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits"))
 }
 
+/// Returns a binary32 value rounded to bfloat16 in the rounding direction of
+/// FPCR, which the path requires to be to nearest even, by `BFCVT`. The Arm
+/// Architecture Reference Manual states that `BFCVT` honors every control of
+/// FPCR that applies to single-precision arithmetic.
+#[cfg(target_feature = "bf16")]
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // A build without `FEAT_BF16` returns `None` from the same signature.
+pub fn narrow_bfloat(value: f32) -> Option<u16> {
+    // SAFETY: the build enables `FEAT_BF16`, so the processor that runs it
+    // has the feature.
+    Some(unsafe { bfcvt(value) })
+}
+
+/// Rounds a binary32 value to bfloat16 by `BFCVT`.
+///
+/// The function enables `FEAT_BF16` for its own code. A caller compiled
+/// without the feature, such as a doctest, which does not take `RUSTFLAGS`,
+/// then still assembles the instruction.
+///
+/// # Safety
+///
+/// The processor must have `FEAT_BF16`.
+#[cfg(target_feature = "bf16")]
+#[target_feature(enable = "bf16")]
+#[inline]
+unsafe fn bfcvt(value: f32) -> u16 {
+    let bits: u32;
+    // SAFETY: BFCVT rounds in SIMD and floating-point registers and clears
+    // the other bits of its destination, and FMOV moves the low 32 bits to a
+    // general register. The caller guarantees `FEAT_BF16`, and the rounding
+    // changes only the status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "bfcvt {half:h}, {value:s}",
+            "fmov {bits:w}, {half:s}",
+            value = in(vreg) value,
+            half = out(vreg) _,
+            bits = out(reg) bits,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits")
+}
+
+/// Returns `None`: a build without `FEAT_BF16` has no bfloat16 path.
+#[cfg(not(target_feature = "bf16"))]
+#[inline]
+pub fn narrow_bfloat(_value: f32) -> Option<u16> {
+    None
+}
+
+/// Returns `left * right + addend` of binary16 encodings, rounded once, by
+/// `FMADD` on half-precision registers.
+#[cfg(target_feature = "fp16")]
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // A build without `FEAT_FP16` returns `None` from the same signature.
+pub fn mul_add_f16(left: u16, right: u16, addend: u16) -> Option<u16> {
+    // SAFETY: the build enables `FEAT_FP16`, so the processor that runs it
+    // has the feature.
+    Some(unsafe { fmadd_f16(left, right, addend) })
+}
+
+/// Returns `left * right + addend` of binary16 encodings by `FMADD`.
+///
+/// The function enables `FEAT_FP16` for its own code, as `bfcvt` does for
+/// `FEAT_BF16`.
+///
+/// # Safety
+///
+/// The processor must have `FEAT_FP16`.
+#[cfg(target_feature = "fp16")]
+#[target_feature(enable = "fp16")]
+#[inline]
+unsafe fn fmadd_f16(left: u16, right: u16, addend: u16) -> u16 {
+    let bits: u32;
+    // SAFETY: FMOV moves each encoding into a half-precision register, FMADD
+    // computes `addend + left * right` there, and FMOV moves the result back.
+    // The caller guarantees `FEAT_FP16`, and FMADD changes only the status
+    // flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "fmov {a:h}, {left:w}",
+            "fmov {b:h}, {right:w}",
+            "fmov {c:h}, {addend:w}",
+            "fmadd {a:h}, {a:h}, {b:h}, {c:h}",
+            "fmov {bits:w}, {a:h}",
+            left = in(reg) u32::from(left),
+            right = in(reg) u32::from(right),
+            addend = in(reg) u32::from(addend),
+            a = out(vreg) _,
+            b = out(vreg) _,
+            c = out(vreg) _,
+            bits = lateout(reg) bits,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits")
+}
+
+/// Returns `None`: a build without `FEAT_FP16` has no binary16 fused
+/// multiply-add path.
+#[cfg(not(target_feature = "fp16"))]
+#[inline]
+pub fn mul_add_f16(_left: u16, _right: u16, _addend: u16) -> Option<u16> {
+    None
+}
+
 /// Returns a binary64 value rounded to binary32, by `FCVT` in the rounding
 /// direction of FPCR, which the path requires to be to nearest even.
 #[inline]

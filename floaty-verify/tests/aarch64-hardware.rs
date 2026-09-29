@@ -6,7 +6,7 @@
 
 use core::hint::black_box;
 
-use floaty::{F16, F32, F64};
+use floaty::{BF16, F16, F32, F64};
 use floaty_verify::aarch64::{FPCR_SETTINGS, with_fpcr};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
@@ -109,12 +109,19 @@ fn operators_read_fpcr_before_the_host_unit() {
     let half = pairs(&mut random, 16, 5);
     let single = pairs(&mut random, 32, 8);
     let double = pairs(&mut random, 64, 11);
+    let bfloat = pairs(&mut random, 16, 8);
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
         operators_under!(F16, u16, control, &half);
+        operators_under!(BF16, u16, control, &bfloat);
         operators_under!(F32, u32, control, &single);
         operators_under!(F64, u64, control, &double);
         conversions_under!(F16, control, &encodings::<u16>(&half));
         conversions_under!(F32, control, &encodings::<u32>(&single));
         conversions_under!(F64, control, &encodings::<u64>(&double));
+        for x in encodings::<u32>(&single).into_iter().map(F32::from_bits) {
+            let expected = x.convert_with::<BF16>(BF16::ENV).0.to_bits();
+            let ours = with_fpcr(control, || black_box(x).convert::<BF16>().to_bits());
+            assert_eq!(ours, expected, "{x:?} to BF16 under FPCR {control:#x}");
+        }
     }
 }

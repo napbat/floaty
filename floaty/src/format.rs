@@ -245,6 +245,11 @@ pub(crate) mod internal {
         /// x87 extended precision, which computes on the x87 unit of x86-64
         /// at the 64-bit precision.
         Extended,
+        /// bfloat16, which computes in the host `f32` and rounds in a host
+        /// instruction. binary32 holds 2p + 2 bits of bfloat16, so the two
+        /// roundings of add, subtract, multiply, divide, and square root give
+        /// the correctly rounded result.
+        BFloat,
     }
 
     /// The direction of `next_up` and `next_down`.

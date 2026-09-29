@@ -79,11 +79,11 @@ cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
 ```
 
 Then run the clippy and test gates in the other builds of `DESIGN.md`: the
-x86-64-v3 build, the engine-only build, and the AArch64 build under QEMU.
-Each build of the host keeps its own target directory.
+x86-64-v3 build, the engine-only build, and the two AArch64 builds under
+QEMU. Each build with its own flags keeps its own target directory.
 
 ```text
-export V3="-C target-cpu=x86-64-v3" ENGINE="--cfg floaty_engine_only"
+export V3="-C target-cpu=x86-64-v3" ENGINE="--cfg floaty_engine_only" FP16="-C target-feature=+fp16,+bf16"
 RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
 RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo test --workspace --no-fail-fast
 RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
@@ -92,6 +92,9 @@ RUSTFLAGS="$ENGINE" CARGO_TARGET_DIR=target/engine-only cargo test --workspace -
 cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 cargo test --workspace --no-fail-fast --target aarch64-unknown-linux-gnu
 cargo +1.85 clippy -p floaty --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
+RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
+RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo test --workspace --no-fail-fast --target aarch64-unknown-linux-gnu
+RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo +1.85 clippy -p floaty --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 ```
 
 - Install the minimum-version toolchain once:

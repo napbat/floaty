@@ -193,6 +193,49 @@ fn every_binary16_square_root_gives_the_default_mode_result() {
     }
 }
 
+/// Every bfloat16 square root. The bfloat16 path computes in binary32 and
+/// rounds twice, so this and the sweep below check every result.
+#[test]
+fn every_bfloat16_square_root_gives_the_default_mode_result() {
+    for bits in 0..=u16::MAX {
+        let value = BF16::from_bits(bits);
+        assert_eq!(
+            value.sqrt().to_bits(),
+            value.sqrt_with(BF16::ENV).0.to_bits(),
+            "sqrt({bits:#06x})"
+        );
+    }
+}
+
+/// Every pair of bfloat16 operands through the four operators, in 16 threads.
+/// Run time in a release build: about one minute on x86-64, and about six
+/// minutes under `qemu-aarch64`.
+#[test]
+#[ignore = "exhaustive sweep; run with --ignored"]
+fn every_bfloat16_pair_gives_the_default_mode_results() {
+    std::thread::scope(|scope| {
+        for part in 0..16_u16 {
+            scope.spawn(move || {
+                for high in part * 0x1000..(part + 1) * 0x1000 {
+                    for low in 0..=u16::MAX {
+                        let (x, y) = (BF16::from_bits(high), BF16::from_bits(low));
+                        let env = BF16::ENV;
+                        let ours = [x + y, x - y, x * y, x / y].map(BF16::to_bits);
+                        let engine = [
+                            x.add_with(y, env).0,
+                            x.sub_with(y, env).0,
+                            x.mul_with(y, env).0,
+                            x.div_with(y, env).0,
+                        ]
+                        .map(BF16::to_bits);
+                        assert_eq!(ours, engine, "{high:#06x} {low:#06x}");
+                    }
+                }
+            });
+        }
+    });
+}
+
 /// Every pair of binary16 operands through the four operators, in 16 threads.
 /// Run time in a release build: about one minute on x86-64, and about ten
 /// minutes under `qemu-aarch64`.
@@ -388,6 +431,7 @@ fn conversions_give_the_default_mode_results() {
     convert_matches!(BF16, doubles.iter().copied());
     convert_matches!(floaty::F64, singles.iter().copied());
     convert_matches!(floaty::F16, singles.iter().copied());
+    convert_matches!(BF16, singles.iter().copied());
     // The halfway points of binary16 in binary32.
     let near_half: Vec<floaty::F32> = (0..20_000_u32)
         .flat_map(|index| {
@@ -396,6 +440,14 @@ fn conversions_give_the_default_mode_results() {
         })
         .collect();
     convert_matches!(floaty::F16, near_half.iter().copied());
+    // The halfway points of bfloat16 in binary32.
+    let near_bfloat: Vec<floaty::F32> = (0..20_000_u32)
+        .flat_map(|index| {
+            let base = index.wrapping_mul(0x9E37_79B9) & !0xFFFF;
+            [base | 0x7FFF, base | 0x8000, base | 0x8001].map(floaty::F32::from_bits)
+        })
+        .collect();
+    convert_matches!(BF16, near_bfloat.iter().copied());
     convert_matches!(floaty::F32, halves.iter().copied());
     convert_matches!(floaty::F64, halves.iter().copied());
     convert_matches!(floaty::F128, halves.iter().copied());

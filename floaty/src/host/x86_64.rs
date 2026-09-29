@@ -240,6 +240,20 @@ pub fn narrow_half(_value: f32) -> Option<u16> {
     None
 }
 
+/// Returns `None`: the bfloat16 conversions of x86-64 flush subnormal
+/// values, so no bfloat16 path exists.
+#[inline]
+pub fn narrow_bfloat(_value: f32) -> Option<u16> {
+    None
+}
+
+/// Returns `None`: x86-64 has no binary16 fused multiply-add below
+/// AVX512-FP16, which no host of the gates has.
+#[inline]
+pub fn mul_add_f16(_left: u16, _right: u16, _addend: u16) -> Option<u16> {
+    None
+}
+
 /// Returns a binary64 value rounded to binary32, by `CVTSD2SS` in the rounding
 /// direction of MXCSR, which the path requires to be to nearest even.
 #[inline]

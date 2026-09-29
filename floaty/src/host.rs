@@ -101,10 +101,21 @@ pub const fn available(host: Host, kind: Kind) -> bool {
     ));
     // Every x86-64 processor has the x87 unit.
     let x87 = cfg!(target_arch = "x86_64");
+    // `FEAT_FP16` computes binary16 in its own precision, and `FEAT_BF16`
+    // rounds binary32 to bfloat16.
+    let fp16 = cfg!(all(target_arch = "aarch64", target_feature = "fp16"));
+    let bf16 = cfg!(all(target_arch = "aarch64", target_feature = "bf16"));
     match (host, kind) {
-        // Two roundings of a binary16 fused multiply-add can differ from one,
-        // and the x87 unit has no fused multiply-add.
-        (Host::None, _) | (Host::Half | Host::Extended, Kind::FusedMultiplyAdd) => false,
+        // The x87 unit has no fused multiply-add. Two roundings of a bfloat16
+        // fused multiply-add through binary32 can differ from one.
+        (Host::None, _)
+        | (Host::Extended, Kind::FusedMultiplyAdd)
+        | (
+            Host::BFloat,
+            Kind::FusedMultiplyAdd | Kind::RoundToIntegral | Kind::ToInt | Kind::FromInt,
+        ) => false,
+        (Host::Half, Kind::FusedMultiplyAdd) => unit && fp16,
+        (Host::BFloat, Kind::Arithmetic | Kind::SquareRoot) => unit && bf16,
         (
             Host::Single | Host::Double,
             Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt,
@@ -141,6 +152,7 @@ pub const fn convertible(from: Host, to: Host) -> bool {
         target_arch = "aarch64"
     ));
     let x87 = cfg!(target_arch = "x86_64");
+    let bf16 = cfg!(all(target_arch = "aarch64", target_feature = "bf16"));
     match (from, to) {
         (Host::Single, Host::Double) | (Host::Double, Host::Single) => unit,
         (Host::Half, Host::Single | Host::Double) | (Host::Single, Host::Half) => unit && half,
@@ -148,6 +160,7 @@ pub const fn convertible(from: Host, to: Host) -> bool {
         (Host::Double, Host::Half) => unit && cfg!(target_arch = "aarch64"),
         (Host::Single | Host::Double, Host::Extended)
         | (Host::Extended, Host::Single | Host::Double) => unit && x87,
+        (Host::Single, Host::BFloat) => unit && bf16,
         _ => false,
     }
 }
