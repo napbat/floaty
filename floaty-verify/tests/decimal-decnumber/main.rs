@@ -494,6 +494,41 @@ where
     (answer, flags)
 }
 
+/// Runs the add, subtract, multiply, or divide of [`run_floaty`] with the
+/// static mode `Rounded<Ieee, R>` of the direction. Returns `None` for the
+/// other operations.
+fn run_floaty_static<F: Arithmetic, const W: usize>(
+    operation: &Operation,
+    operands: &[F::Bits],
+    rounding: Rounding,
+) -> Option<(Answer<F::Bits>, Flags)>
+where
+    Width<W>: Storage<Bits = F::Bits>,
+    Decimal<Dpd>: Standard<W, Bits = F::Bits>,
+{
+    let Operation::Binary(binary) = operation else {
+        return None;
+    };
+    if !matches!(
+        binary,
+        Binary::Add | Binary::Subtract | Binary::Multiply | Binary::Divide
+    ) {
+        return None;
+    }
+    let outcome = floaty_verify::with_rounding_mode!(rounding, floaty::mode::Ieee, Mode => {
+        let value = |index: usize| DpdFloat::<W>::from_bits(operands[index]).with_mode::<Mode>();
+        let (x, y) = (value(0), value(1));
+        let (result, flags) = match binary {
+            Binary::Add => x.add_with(y, Mode::default()),
+            Binary::Subtract => x.sub_with(y, Mode::default()),
+            Binary::Multiply => x.mul_with(y, Mode::default()),
+            _ => x.div_with(y, Mode::default()),
+        };
+        (Answer::Encoding(result.to_bits()), flags)
+    });
+    Some(outcome)
+}
+
 /// Runs an operation on decNumber. Returns the result and the conditions.
 ///
 /// `fma`, `comparetotal`, and `comparetotmag` go through decNumber's

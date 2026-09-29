@@ -8,7 +8,7 @@ use super::{
     BF16, Class, Decoded, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F256,
     F512, TF32,
 };
-use crate::env::{Env, Flags, NanPropagation, NanRule, Rounding, mode};
+use crate::env::{Env, Flags, Mode, NanPropagation, NanRule, Rounding, mode};
 use crate::exact::Exact;
 
 #[test]
@@ -196,4 +196,43 @@ fn integers_convert_at_every_width() {
     let smallest = Int::<512>::from_bits([0, 0, 0, 0, 0, 0, 0, 1 << 63]);
     let exact = F512::from_int(smallest);
     assert_eq!(exact.to_int::<Int<512>>(), ToInt::Value(smallest));
+}
+
+#[test]
+fn a_mode_value_and_its_env_give_the_same_results() {
+    use crate::mode::direction::TowardZero;
+    use crate::mode::{Rounded, X86Sse};
+
+    type Truncating = Rounded<X86Sse, TowardZero>;
+
+    let (a, b) = (
+        F64::from_bits(0x3FB9_9999_9999_999A),
+        F64::from_bits(0x3FC9_9999_9999_999A),
+    );
+    // A mode overrides the whole behavior, as its Env does.
+    assert_eq!(a.add_with(b, X86Sse), a.add_with(b, Env::X86_SSE));
+    let truncated = a.add_with(b, Truncating::default());
+    assert_eq!(truncated, a.add_with(b, <Truncating as Mode>::ENV));
+    assert_eq!(
+        truncated,
+        a.add_with(b, Env::X86_SSE.with_rounding(Rounding::TowardZero))
+    );
+    // A rounding override keeps the other fields of the mode of the type.
+    let sse = a.with_mode::<X86Sse>();
+    let (value, flags) = sse.add_with(b.with_mode::<X86Sse>(), Rounding::TowardZero);
+    assert_eq!(
+        (value.to_bits(), flags),
+        (truncated.0.to_bits(), truncated.1)
+    );
+    // The override keeps the NaN rule of the mode: x86 gives a negative
+    // default NaN, and the default mode a positive one.
+    let infinity = F64::from_bits(0x7FF0_0000_0000_0000).with_mode::<X86Sse>();
+    let (nan, flags) = infinity.sub_with(infinity, Rounding::TowardZero);
+    assert_eq!(
+        (nan.to_bits(), flags),
+        (0xFFF8_0000_0000_0000, Flags::INVALID)
+    );
+    // The operator of a type with a mode uses the mode.
+    let (x, y) = (a.with_mode::<Truncating>(), b.with_mode::<Truncating>());
+    assert_eq!((x + y).to_bits(), truncated.0.to_bits());
 }

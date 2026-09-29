@@ -3,7 +3,7 @@
 use core::cmp::Ordering;
 
 use super::Float;
-use crate::env::{Flags, Mode, Override};
+use crate::env::{Behavior, Flags, Mode, Override};
 use crate::format::Standard;
 use crate::format::internal::MinMax;
 
@@ -14,7 +14,7 @@ macro_rules! min_max {
         #[doc = concat!("Returns ", $summary, ", with the default mode.")]
         #[must_use]
         pub fn $name(self, other: Self) -> Self {
-            self.$with(other, M::ENV).0
+            self.$with(other, M::default()).0
         }
 
         #[doc = concat!("Returns ", $summary, ", and the flags.")]
@@ -28,7 +28,7 @@ macro_rules! min_max {
                 self.bits,
                 other.bits,
                 MinMax::$operation,
-                &behavior.apply(M::ENV),
+                behavior.apply::<M>(),
             );
             (Self::from_masked(bits), flags)
         }
@@ -58,7 +58,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
         other: Self,
         behavior: impl Override,
     ) -> (Option<Ordering>, Flags) {
-        S::compare(self.bits, other.bits, &behavior.apply(M::ENV))
+        S::compare(self.bits, other.bits, behavior.apply::<M>())
     }
 
     /// Compares with `other` as the IEEE 754 signaling predicates do, such as
@@ -80,7 +80,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// the default mode for two encodings of one datum.
     #[must_use]
     pub fn total_cmp(self, other: Self) -> Ordering {
-        self.total_cmp_with(other, M::ENV)
+        self.total_cmp_with(other, M::default())
     }
 
     /// Orders the encodings as IEEE 754 `totalOrder` does, with the
@@ -114,7 +114,11 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// ```
     #[must_use]
     pub fn total_cmp_with(self, other: Self, behavior: impl Override) -> Ordering {
-        S::total_cmp(self.bits, other.bits, behavior.apply(M::ENV).total_order)
+        S::total_cmp(
+            self.bits,
+            other.bits,
+            behavior.apply::<M>().env().total_order,
+        )
     }
 
     min_max!(
@@ -168,6 +172,6 @@ impl<S: Standard<W>, const W: usize, M: Mode> PartialEq for Float<S, W, M> {
 /// unordered.
 impl<S: Standard<W>, const W: usize, M: Mode> PartialOrd for Float<S, W, M> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.compare_quiet_with(*other, M::ENV).0
+        self.compare_quiet_with(*other, M::default()).0
     }
 }

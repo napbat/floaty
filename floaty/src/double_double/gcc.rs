@@ -16,6 +16,7 @@ use core::cmp::Ordering;
 
 use super::Pair;
 use super::steps::Steps;
+use crate::env::Behavior;
 use crate::float::F64;
 
 /// Positive infinity, the constant at `.toc`.
@@ -38,24 +39,24 @@ fn single(value: F64) -> Pair {
 
 /// Returns `true` when `bge` branches after `fcmpu` of `a` and `b`: unless
 /// `a` is less than `b`.
-fn not_less(steps: &mut Steps, a: F64, b: F64) -> bool {
+fn not_less<B: Behavior>(steps: &mut Steps<B>, a: F64, b: F64) -> bool {
     steps.compare_quiet(a, b) != Some(Ordering::Less)
 }
 
 /// Returns `true` when `ble` branches after `fcmpu` of `a` and `b`: unless
 /// `a` is greater than `b`.
-fn not_greater(steps: &mut Steps, a: F64, b: F64) -> bool {
+fn not_greater<B: Behavior>(steps: &mut Steps<B>, a: F64, b: F64) -> bool {
     steps.compare_quiet(a, b) != Some(Ordering::Greater)
 }
 
 /// Returns `true` when `z` is not finite, by `fcmpu` of `|z|` and infinity.
-fn nonfinite(steps: &mut Steps, z: F64) -> bool {
+fn nonfinite<B: Behavior>(steps: &mut Steps<B>, z: F64) -> bool {
     not_less(steps, z.abs(), F64::from_bits(INFINITY))
 }
 
 /// The common tail of `__gcc_qadd` (0x40 to 0x78) and `__gcc_qsub` (0x140 to
 /// 0x178): the high sum `z` and the sum `zz` of the low terms.
-fn finish(steps: &mut Steps, z: F64, zz: F64) -> Pair {
+fn finish<B: Behavior>(steps: &mut Steps<B>, z: F64, zz: F64) -> Pair {
     // 0x40: a zero `zz` returns `z` alone, which keeps a -0 result.
     if steps.compare_quiet(zz, F64::from_bits(0)) == Some(Ordering::Equal) {
         return single(z);
@@ -70,7 +71,7 @@ fn finish(steps: &mut Steps, z: F64, zz: F64) -> Pair {
 }
 
 /// `__gcc_qadd`: `(a, aa) + (c, cc)`.
-pub fn add(steps: &mut Steps, (a, aa): Pair, (c, cc): Pair) -> Pair {
+pub fn add<B: Behavior>(steps: &mut Steps<B>, (a, aa): Pair, (c, cc): Pair) -> Pair {
     let z = steps.add(a, c); // 0x0c fadd f0,f1,f3
     if nonfinite(steps, z) {
         return add_nonfinite(steps, (a, aa), (c, cc), z);
@@ -86,7 +87,7 @@ pub fn add(steps: &mut Steps, (a, aa): Pair, (c, cc): Pair) -> Pair {
 }
 
 /// `__gcc_qadd` from 0x80, where `z = a + c` is not finite.
-fn add_nonfinite(steps: &mut Steps, (a, aa): Pair, (c, cc): Pair, z: F64) -> Pair {
+fn add_nonfinite<B: Behavior>(steps: &mut Steps<B>, (a, aa): Pair, (c, cc): Pair, z: F64) -> Pair {
     // 0x80: a NaN `z` returns; an infinite `z` recomputes from every term.
     if not_greater(steps, z.abs(), F64::from_bits(LARGEST)) {
         return single(z);
@@ -111,7 +112,7 @@ fn add_nonfinite(steps: &mut Steps, (a, aa): Pair, (c, cc): Pair, z: F64) -> Pai
 }
 
 /// `__gcc_qsub`: `(a, aa) - (c, cc)`.
-pub fn sub(steps: &mut Steps, (a, aa): Pair, (c, cc): Pair) -> Pair {
+pub fn sub<B: Behavior>(steps: &mut Steps<B>, (a, aa): Pair, (c, cc): Pair) -> Pair {
     let z = steps.sub(a, c); // 0x10c fsub f0,f1,f3
     if nonfinite(steps, z) {
         return sub_nonfinite(steps, (a, aa), (c, cc), z);
@@ -127,7 +128,7 @@ pub fn sub(steps: &mut Steps, (a, aa): Pair, (c, cc): Pair) -> Pair {
 }
 
 /// `__gcc_qsub` from 0x180, where `z = a - c` is not finite.
-fn sub_nonfinite(steps: &mut Steps, (a, aa): Pair, (c, cc): Pair, z: F64) -> Pair {
+fn sub_nonfinite<B: Behavior>(steps: &mut Steps<B>, (a, aa): Pair, (c, cc): Pair, z: F64) -> Pair {
     if not_greater(steps, z.abs(), F64::from_bits(LARGEST)) {
         return single(z);
     }
@@ -153,7 +154,7 @@ fn sub_nonfinite(steps: &mut Steps, (a, aa): Pair, (c, cc): Pair, z: F64) -> Pai
 // The names are those of `ibm-ldouble.c`, so that each step reads against
 // the reference.
 #[allow(clippy::many_single_char_names)]
-pub fn mul(steps: &mut Steps, (a, b): Pair, (c, d): Pair) -> Pair {
+pub fn mul<B: Behavior>(steps: &mut Steps<B>, (a, b): Pair, (c, d): Pair) -> Pair {
     let t = steps.mul(a, c); // 0x208 fmul f0,f1,f3
     // 0x210: a zero product returns alone, which keeps -0.
     if steps.compare_quiet(t, F64::from_bits(0)) == Some(Ordering::Equal) || nonfinite(steps, t) {
@@ -176,7 +177,7 @@ pub fn mul(steps: &mut Steps, (a, b): Pair, (c, d): Pair) -> Pair {
 // The names are those of `ibm-ldouble.c`, so that each step reads against
 // the reference.
 #[allow(clippy::many_single_char_names)]
-pub fn div(steps: &mut Steps, (a, b): Pair, (c, d): Pair) -> Pair {
+pub fn div<B: Behavior>(steps: &mut Steps<B>, (a, b): Pair, (c, d): Pair) -> Pair {
     let t = steps.div(a, c); // 0x298 fdiv f0,f1,f3
     if steps.compare_quiet(t, F64::from_bits(0)) == Some(Ordering::Equal) || nonfinite(steps, t) {
         return single(t);

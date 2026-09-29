@@ -3,21 +3,21 @@
 
 use core::cmp::Ordering;
 
-use crate::env::{Env, Flags};
+use crate::env::{Behavior, Flags};
 use crate::float::F64;
 
 /// Runs binary64 operations under one behavior and collects their flags, as
 /// the status register of a processor does.
-pub struct Steps {
-    env: Env,
+pub struct Steps<B> {
+    behavior: B,
     flags: Flags,
 }
 
-impl Steps {
+impl<B: Behavior> Steps<B> {
     /// Starts with no flags.
-    pub fn new(env: Env) -> Self {
+    pub fn new(behavior: B) -> Self {
         Self {
-            env,
+            behavior,
             flags: Flags::NONE,
         }
     }
@@ -35,37 +35,37 @@ impl Steps {
 
     /// Returns `a + b`.
     pub fn add(&mut self, a: F64, b: F64) -> F64 {
-        let step = a.add_with(b, self.env);
+        let step = a.add_with(b, self.behavior);
         self.record(step)
     }
 
     /// Returns `a - b`.
     pub fn sub(&mut self, a: F64, b: F64) -> F64 {
-        let step = a.sub_with(b, self.env);
+        let step = a.sub_with(b, self.behavior);
         self.record(step)
     }
 
     /// Returns `a * b`.
     pub fn mul(&mut self, a: F64, b: F64) -> F64 {
-        let step = a.mul_with(b, self.env);
+        let step = a.mul_with(b, self.behavior);
         self.record(step)
     }
 
     /// Returns `a / b`.
     pub fn div(&mut self, a: F64, b: F64) -> F64 {
-        let step = a.div_with(b, self.env);
+        let step = a.div_with(b, self.behavior);
         self.record(step)
     }
 
     /// Returns the square root of `a`.
     pub fn sqrt(&mut self, a: F64) -> F64 {
-        let step = a.sqrt_with(self.env);
+        let step = a.sqrt_with(self.behavior);
         self.record(step)
     }
 
     /// Returns `a * c + b`, rounded once.
     pub fn fused_add(&mut self, a: F64, c: F64, b: F64) -> F64 {
-        let step = a.mul_add_with(c, b, self.env);
+        let step = a.mul_add_with(c, b, self.behavior);
         self.record(step)
     }
 
@@ -84,7 +84,7 @@ impl Steps {
     /// Returns the order of two values by a quiet comparison, which signals
     /// invalid only for a signaling NaN. `None` means unordered.
     pub fn compare_quiet(&mut self, a: F64, b: F64) -> Option<Ordering> {
-        let (order, flags) = a.compare_quiet_with(b, self.env);
+        let (order, flags) = a.compare_quiet_with(b, self.behavior);
         self.flags |= flags;
         order
     }
@@ -92,7 +92,7 @@ impl Steps {
     /// Returns the order of two values by a signaling comparison, which
     /// signals invalid for every NaN. `None` means unordered.
     pub fn compare_signaling(&mut self, a: F64, b: F64) -> Option<Ordering> {
-        let (order, flags) = a.compare_signaling_with(b, self.env);
+        let (order, flags) = a.compare_signaling_with(b, self.behavior);
         self.flags |= flags;
         order
     }

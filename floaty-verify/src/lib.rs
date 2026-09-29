@@ -15,6 +15,7 @@ pub mod dectest;
 pub mod encodings;
 pub mod ibm_ldouble;
 pub mod intel_decimal;
+pub mod modes;
 pub mod mpfr;
 pub mod operations;
 pub mod qd;
@@ -24,3 +25,8 @@ pub mod shape;
 pub mod testfloat;
 #[cfg(target_arch = "x86_64")]
 pub mod x86;
+
+/// The floaty crate, for the macros of [`modes`], so that a caller need not
+/// name floaty.
+#[doc(hidden)]
+pub use floaty as __floaty;

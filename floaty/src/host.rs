@@ -67,14 +67,19 @@ fn default_environment() -> bool {
     // The MXCSR fields that change a result: the rounding control, FTZ, and
     // DAZ. Each is zero in the default floating-point environment.
     const RESULT_FIELDS: u32 = (3 << 13) | (1 << 15) | (1 << 6);
-    let mut mxcsr = 0_u32;
-    // SAFETY: `STMXCSR` writes the four bytes of `mxcsr` and changes no other
-    // state.
+    let mxcsr: u32;
+    // SAFETY: the block stores MXCSR in eight bytes that it takes below the
+    // stack pointer, loads the value into a register, and restores the stack
+    // pointer. It changes no other state. Its own stack slot keeps the
+    // four-byte store apart from the stack frame of the caller.
     unsafe {
         core::arch::asm!(
-            "stmxcsr [{mxcsr}]",
-            mxcsr = in(reg) &raw mut mxcsr,
-            options(nostack, preserves_flags),
+            "sub rsp, 8",
+            "stmxcsr [rsp]",
+            "mov {mxcsr:e}, dword ptr [rsp]",
+            "add rsp, 8",
+            mxcsr = out(reg) mxcsr,
+            options(preserves_flags),
         );
     }
     mxcsr & RESULT_FIELDS == 0

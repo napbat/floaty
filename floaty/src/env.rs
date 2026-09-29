@@ -510,90 +510,87 @@ impl Debug for Flags {
     }
 }
 
+/// The behavior that an operation runs under.
+///
+/// An [`Env`] is a behavior that the program chooses at run time: the engine
+/// reads its fields. A mode, such as [`mode::X86Sse`], is a behavior fixed at
+/// compile time: its fields are constants. So each mode gets its own compiled
+/// copy of an operation, without the branches that the constants decide. The
+/// trait is sealed.
+pub trait Behavior: Sealed + Copy {
+    /// Returns the fields of the behavior.
+    #[doc(hidden)]
+    fn env(self) -> Env;
+}
+
+impl Sealed for Env {}
+impl Behavior for Env {
+    #[inline]
+    fn env(self) -> Env {
+        self
+    }
+}
+
+impl<M: Mode> Behavior for M {
+    #[inline]
+    fn env(self) -> Env {
+        M::ENV
+    }
+}
+
 /// A change to the behavior of one operation.
 ///
 /// A [`Rounding`] replaces the rounding direction and keeps every other field
-/// of the type's `Env`. An [`Env`] replaces the whole behavior. The trait is
-/// sealed.
+/// of the type's mode. A [`TotalOrder`] replaces the total order in the same
+/// way. A [`Behavior`], an [`Env`] or a mode, replaces the whole behavior. A
+/// mode keeps the operation fixed at compile time; the other changes give an
+/// `Env`. The trait is sealed.
 pub trait Override: Sealed {
-    /// Applies the change to the behavior of the type.
+    /// The behavior that the change gives.
     #[doc(hidden)]
-    fn apply(self, base: Env) -> Env;
+    type Behavior: Behavior;
+
+    /// Applies the change to the mode `M` of the type.
+    #[doc(hidden)]
+    fn apply<M: Mode>(self) -> Self::Behavior;
+}
+
+impl<B: Behavior> Override for B {
+    type Behavior = B;
+
+    #[inline]
+    fn apply<M: Mode>(self) -> B {
+        self
+    }
 }
 
 impl Sealed for Rounding {}
 impl Override for Rounding {
+    type Behavior = Env;
+
     #[inline]
-    fn apply(self, base: Env) -> Env {
-        base.with_rounding(self)
+    fn apply<M: Mode>(self) -> Env {
+        M::ENV.with_rounding(self)
     }
 }
 
 impl Sealed for TotalOrder {}
 impl Override for TotalOrder {
+    type Behavior = Env;
+
     #[inline]
-    fn apply(self, base: Env) -> Env {
-        base.with_total_order(self)
+    fn apply<M: Mode>(self) -> Env {
+        M::ENV.with_total_order(self)
     }
 }
 
-impl Sealed for Env {}
-impl Override for Env {
-    #[inline]
-    fn apply(self, _base: Env) -> Env {
-        self
-    }
-}
-
-/// A named, constant behavior that a [`Float`](crate::Float) type uses by
-/// default. The trait is sealed. The modes are in [`mode`].
-pub trait Mode: Sealed + 'static {
+/// A named, constant behavior. A [`Float`](crate::Float) type uses its mode
+/// when a call does not override the behavior. A mode is a type of size zero,
+/// and its value `M::default()` is a [`Behavior`] that a call can pass. The
+/// trait is sealed. The modes are in [`mode`].
+pub trait Mode: Sealed + Copy + Default + 'static {
     /// The behavior.
     const ENV: Env;
 }
 
-/// The modes: named behaviors for [`Float`](crate::Float) types.
-///
-/// The modes live in this module because the encodings already use the names
-/// [`Ieee`](crate::Ieee) and [`X87`](crate::X87) at the crate root. A preset
-/// mode gives a type the behavior of one processor unit:
-///
-/// ```
-/// use floaty::{Binary, Float, X87, mode};
-///
-/// // x87 extended precision with the behavior of the x87 unit after FNINIT.
-/// type Register = Float<Binary<15, X87>, 80, mode::X87>;
-///
-/// let infinity = Register::from_bits(0x7FFF_8000_0000_0000_0000);
-/// // inf - inf is invalid and gives the negative floating-point indefinite.
-/// assert_eq!((infinity - infinity).to_bits(), 0xFFFF_C000_0000_0000_0000);
-/// ```
-pub mod mode {
-    use super::{Env, Mode};
-    use crate::sealed::Sealed;
-
-    /// The IEEE 754 default behavior, [`Env::IEEE`]. It is the default mode of
-    /// every [`Float`](crate::Float) type.
-    pub enum Ieee {}
-
-    impl Sealed for Ieee {}
-    impl Mode for Ieee {
-        const ENV: Env = Env::IEEE;
-    }
-
-    /// The x86 SSE preset, [`Env::X86_SSE`].
-    pub enum X86Sse {}
-
-    impl Sealed for X86Sse {}
-    impl Mode for X86Sse {
-        const ENV: Env = Env::X86_SSE;
-    }
-
-    /// The x87 preset, [`Env::X87`].
-    pub enum X87 {}
-
-    impl Sealed for X87 {}
-    impl Mode for X87 {
-        const ENV: Env = Env::X87;
-    }
-}
+pub mod mode;

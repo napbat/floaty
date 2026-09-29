@@ -75,7 +75,7 @@ where
                         significand: significand.resize::<Wide>(),
                         sticky: false,
                     };
-                    Self::finish(&value, i64::from(exponent), env, Flags::NONE)
+                    Self::finish(&value, i64::from(exponent), *env, Flags::NONE)
                 } else {
                     Self::from_binary(negative, exponent, &significand, env)
                 }
@@ -135,7 +135,7 @@ where
                 significand: unit,
                 sticky: true,
             };
-            return Self::finish(&above, 0, env, Flags::NONE);
+            return Self::finish(&above, 0, *env, Flags::NONE);
         }
         if digits < lowest - 2 {
             let below = Unrounded {
@@ -144,7 +144,7 @@ where
                 significand: unit,
                 sticky: true,
             };
-            return Self::finish(&below, 0, env, Flags::NONE);
+            return Self::finish(&below, 0, *env, Flags::NONE);
         }
         let scale = digits - precision - 4;
         let magnitude = u32::try_from(scale.unsigned_abs()).expect("the scale is small");
@@ -163,7 +163,7 @@ where
             significand: coefficient,
             sticky,
         };
-        Self::finish(&value, 0, env, Flags::NONE)
+        Self::finish(&value, 0, *env, Flags::NONE)
     }
 }
 

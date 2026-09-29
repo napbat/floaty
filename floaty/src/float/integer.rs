@@ -17,7 +17,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// ```
     #[must_use]
     pub fn from_int<I: Integer>(value: I) -> Self {
-        Self::from_int_with(value, M::ENV).0
+        Self::from_int_with(value, M::default()).0
     }
 
     /// Converts an integer, and returns the result and the flags.
@@ -33,7 +33,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
             significand: parts.magnitude,
             sticky: false,
         };
-        let (bits, flags) = S::round(&exact, &behavior.apply(M::ENV));
+        let (bits, flags) = S::round(&exact, behavior.apply::<M>());
         (Self::from_masked(bits), flags)
     }
 
@@ -44,7 +44,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// to [`to_int_with`](Self::to_int_with) for that.
     #[must_use]
     pub fn to_int<I: Integer>(self) -> ToInt<I> {
-        self.to_int_with(M::ENV).0
+        self.to_int_with(M::default()).0
     }
 
     /// Converts to an integer of type `I`, in the rounding direction of the
@@ -66,6 +66,6 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// ```
     #[must_use]
     pub fn to_int_with<I: Integer>(self, behavior: impl Override) -> (ToInt<I>, Flags) {
-        S::to_int(self.bits, &behavior.apply(M::ENV))
+        S::to_int(self.bits, behavior.apply::<M>())
     }
 }

@@ -290,7 +290,7 @@ where
             flush_to_zero: false,
             ..*env
         };
-        let (result, round_flags) = Self::finish(value, preferred, &exact_behavior, flags);
+        let (result, round_flags) = Self::finish(value, preferred, exact_behavior, flags);
         debug_assert!(!round_flags.contains(Flags::INEXACT), "the result is exact");
         (result, round_flags)
     }

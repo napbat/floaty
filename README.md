@@ -47,7 +47,8 @@ type F32 = Float<Binary<8>, 32>; // default mode: mode::Ieee
 
 let sum = a + b;                                        // default mode, flags dropped
 let (sum, flags) = a.add_with(b, Rounding::TowardZero); // one-operation override
-let (sum, flags) = a.add_with(b, Env::X86_SSE);         // full platform behavior
+let (sum, flags) = a.add_with(b, Env::X86_SSE);         // behavior chosen at run time
+let (sum, flags) = a.add_with(b, mode::X86Sse);         // behavior fixed at compile time
 ```
 
 ## Workspace

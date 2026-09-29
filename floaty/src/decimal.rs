@@ -23,7 +23,7 @@ type Wide = [u64; 8];
 
 use self::digits::{digit_count_u128, power_of_ten_u128};
 use self::round::DecimalTarget;
-use crate::env::{Env, Flags, TotalOrder};
+use crate::env::{Behavior, Flags, TotalOrder};
 use crate::exact::Unrounded;
 use crate::float::Class;
 use crate::format::internal::{Host, LimbConversion, MinMax, Source, Step};
@@ -320,10 +320,21 @@ where
 
     /// Rounds an exact value to the format. The preferred exponent is the
     /// exponent of the value.
-    pub fn round<In: Limbs, Out: Limbs>(value: &Unrounded<In>, env: &Env) -> (Out, Flags) {
-        let (rounded, flags) = round::round::<In, Out>(value, value.exponent, &Self::TARGET, env);
+    #[inline]
+    pub fn round<In: Limbs, Out: Limbs, B: Behavior>(
+        value: &Unrounded<In>,
+        behavior: B,
+    ) -> (Out, Flags) {
+        let (rounded, flags) = round::round::<In, Out, Self, B>(value, value.exponent, behavior);
         (Self::encode(rounded), flags)
     }
+}
+
+impl<Enc: DecimalEncoding, const W: usize> round::DecimalRoundingTarget for DecimalLayout<Enc, W>
+where
+    Width<W>: Storage,
+{
+    const TARGET: DecimalTarget = DecimalLayout::<Enc, W>::TARGET;
 }
 
 impl<Enc: DecimalEncoding, const W: usize> Standard<W> for Decimal<Enc>
@@ -361,52 +372,60 @@ where
         bits.to_limbs().bit(DecimalLayout::<Enc, W>::WIDTH - 1)
     }
 
-    fn round<L: Limbs>(value: &Unrounded<L>, env: &Env) -> (Self::Bits, Flags) {
-        let (bits, flags) = DecimalLayout::<Enc, W>::round(value, env);
+    fn round<L: Limbs, B: Behavior>(value: &Unrounded<L>, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = DecimalLayout::<Enc, W>::round(value, behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn convert_from<L: Limbs>(
+    fn convert_from<L: Limbs, B: Behavior>(
         value: Unpacked<L>,
         source: Source,
-        env: &Env,
+        behavior: B,
     ) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) = DecimalLayout::<Enc, W>::convert_from(value, source, env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn add(left: Self::Bits, right: Self::Bits, subtract: bool, env: &Env) -> (Self::Bits, Flags) {
+    fn add<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        subtract: bool,
+        behavior: B,
+    ) -> (Self::Bits, Flags) {
         let (bits, flags) =
-            DecimalLayout::<Enc, W>::add(left.to_limbs(), right.to_limbs(), subtract, env);
+            DecimalLayout::<Enc, W>::add(left.to_limbs(), right.to_limbs(), subtract, behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn mul(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
-        let (bits, flags) = DecimalLayout::<Enc, W>::mul(left.to_limbs(), right.to_limbs(), env);
+    fn mul<B: Behavior>(left: Self::Bits, right: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) =
+            DecimalLayout::<Enc, W>::mul(left.to_limbs(), right.to_limbs(), behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn div(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
-        let (bits, flags) = DecimalLayout::<Enc, W>::div(left.to_limbs(), right.to_limbs(), env);
+    fn div<B: Behavior>(left: Self::Bits, right: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) =
+            DecimalLayout::<Enc, W>::div(left.to_limbs(), right.to_limbs(), behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn sqrt(value: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
-        let (bits, flags) = DecimalLayout::<Enc, W>::sqrt(value.to_limbs(), env);
+    fn sqrt<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = DecimalLayout::<Enc, W>::sqrt(value.to_limbs(), behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn mul_add(
+    fn mul_add<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,
         addend: Self::Bits,
-        env: &Env,
+        behavior: B,
     ) -> (Self::Bits, Flags) {
         let (bits, flags) = DecimalLayout::<Enc, W>::mul_add(
             left.to_limbs(),
             right.to_limbs(),
             addend.to_limbs(),
-            env,
+            behavior,
         );
         (Self::Bits::from_limbs(bits), flags)
     }
@@ -418,7 +437,12 @@ where
         ))
     }
 
-    fn compare(left: Self::Bits, right: Self::Bits, env: &Env) -> (Option<Ordering>, Flags) {
+    fn compare<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        behavior: B,
+    ) -> (Option<Ordering>, Flags) {
+        let env = &behavior.env();
         DecimalLayout::<Enc, W>::compare(left.to_limbs(), right.to_limbs(), env)
     }
 
@@ -426,38 +450,48 @@ where
         DecimalLayout::<Enc, W>::total_cmp(left.to_limbs(), right.to_limbs(), order)
     }
 
-    fn min_max(
+    fn min_max<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,
         operation: MinMax,
-        env: &Env,
+        behavior: B,
     ) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) =
             DecimalLayout::<Enc, W>::min_max(left.to_limbs(), right.to_limbs(), operation, env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn round_to_integral(value: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
+    fn round_to_integral<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) = DecimalLayout::<Enc, W>::round_to_integral(value.to_limbs(), env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn to_int<I: Integer>(value: Self::Bits, env: &Env) -> (ToInt<I>, Flags) {
+    fn to_int<I: Integer, B: Behavior>(value: Self::Bits, behavior: B) -> (ToInt<I>, Flags) {
+        let env = &behavior.env();
         DecimalLayout::<Enc, W>::to_int(value.to_limbs(), env)
     }
 
-    fn remainder(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
+    fn remainder<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        behavior: B,
+    ) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) =
             DecimalLayout::<Enc, W>::remainder(left.to_limbs(), right.to_limbs(), env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn scale_b(value: Self::Bits, scale: i32, env: &Env) -> (Self::Bits, Flags) {
+    fn scale_b<B: Behavior>(value: Self::Bits, scale: i32, behavior: B) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) = DecimalLayout::<Enc, W>::scale_b(value.to_limbs(), scale, env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn next(value: Self::Bits, step: Step, env: &Env) -> (Self::Bits, Flags) {
+    fn next<B: Behavior>(value: Self::Bits, step: Step, behavior: B) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) = DecimalLayout::<Enc, W>::next(value.to_limbs(), step, env);
         (Self::Bits::from_limbs(bits), flags)
     }

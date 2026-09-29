@@ -34,7 +34,7 @@ where
                     significand,
                     sticky: false,
                 };
-                let (rounded, round_flags) = exact::round::<L, L>(&scaled, &Self::TARGET, env);
+                let (rounded, round_flags) = exact::round::<L, L, Self, Env>(&scaled, *env);
                 (Self::encode(rounded), flags | round_flags)
             }
             Unpacked::Nan { .. } | Unpacked::Unsupported => {

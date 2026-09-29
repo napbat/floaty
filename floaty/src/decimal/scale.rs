@@ -57,7 +57,7 @@ where
                     significand: significand.resize::<Wide>(),
                     sticky: false,
                 };
-                Self::finish(&scaled, exponent, env, flags)
+                Self::finish(&scaled, exponent, *env, flags)
             }
             Unpacked::Infinity { .. } | Unpacked::Unsupported => Self::exact(value, flags),
         }

@@ -16,7 +16,7 @@ use floaty_verify::dectest::Operation;
 use super::operands::{Generator, Shape};
 use super::{
     Report, SHARED_ROUNDINGS, Tally, compared, describe, describe_operands, details, direction,
-    excluded, flags_of, keeps_encoding, noted, run_floaty, run_oracle,
+    excluded, flags_of, keeps_encoding, noted, run_floaty, run_floaty_static, run_oracle,
 };
 
 /// The arithmetic operations, which round.
@@ -77,6 +77,7 @@ where
 {
     let mut generator = Generator::<F>::new(seed, Shape::of::<F>());
     let mut tally = Tally::default();
+    let mut static_checks = 0_usize;
     for operation in operations {
         let report = Report::of(operation);
         for _ in 0..count {
@@ -99,6 +100,19 @@ where
                 }
                 let direction = direction(rounding).expect("a shared mode has a direction");
                 let (answer, flags) = run_floaty::<F, W>(operation, &operands, direction);
+                if let Some((fixed, fixed_flags)) =
+                    run_floaty_static::<F, W>(operation, &operands, direction)
+                {
+                    // The static mode must give the result and the flags of
+                    // its Env, which the comparison below checks.
+                    assert!(
+                        fixed == answer && fixed_flags == flags,
+                        "{operation:?} {rounding:?} [{}]: the static mode gives {} {fixed_flags:?}",
+                        describe_operands::<F>(&operands),
+                        describe::<F>(&fixed),
+                    );
+                    static_checks += 1;
+                }
                 let flags = compared(flags);
                 let expected_flags =
                     flags_of(status) | details::<F>(operation, (expected, status), toward_zero);
@@ -118,6 +132,13 @@ where
             }
         }
     }
+    let has_addition = operations
+        .iter()
+        .any(|operation| matches!(operation, Operation::Binary(Binary::Add)));
+    assert!(
+        static_checks > 0 || !has_addition,
+        "the static modes checked arithmetic cases"
+    );
     tally
 }
 

@@ -2,6 +2,10 @@
 //! processor: rounding, flush-to-zero (FTZ), denormals-are-zero (DAZ), the
 //! first-operand NaN rule, and the MXCSR flags. The test runs only on x86-64
 //! hosts.
+//!
+//! The arithmetic runs twice for each MXCSR setting: with the behavior as an
+//! `Env` at run time, and with the static mode of the setting, which
+//! `with_sse_mode!` selects as an emulator would.
 
 #![cfg(target_arch = "x86_64")]
 
@@ -216,6 +220,22 @@ macro_rules! arithmetic {
                     expected_flags,
                     "{context}: flags"
                 );
+                let (fixed, fixed_flags) = floaty_verify::with_sse_mode!(
+                    env.rounding,
+                    env.flush_to_zero,
+                    env.denormals_are_zero,
+                    Mode => {
+                        assert_eq!(<Mode as floaty::env::Mode>::ENV, env, "{context}: mode");
+                        let (x, y) = (x.with_mode::<Mode>(), y.with_mode::<Mode>());
+                        let (value, flags) = x.$method(y, Mode::default());
+                        (value.to_bits(), flags)
+                    }
+                );
+                assert_eq!(
+                    (fixed, mxcsr_flags(fixed_flags, daz, nan_operand)),
+                    (expected, expected_flags),
+                    "{context}: static mode"
+                );
             }
         }
     };
@@ -264,6 +284,21 @@ fn binary32_arithmetic_matches_in_every_mode() {
                 expected_flags,
                 "{context}: flags"
             );
+            let (fixed, fixed_flags) = floaty_verify::with_sse_mode!(
+                env.rounding,
+                env.flush_to_zero,
+                env.denormals_are_zero,
+                Mode => {
+                    assert_eq!(<Mode as floaty::env::Mode>::ENV, env, "{context}: mode");
+                    let (root, flags) = value.with_mode::<Mode>().sqrt_with(Mode::default());
+                    (root.to_bits(), flags)
+                }
+            );
+            assert_eq!(
+                (fixed, mxcsr_flags(fixed_flags, daz, value.is_nan())),
+                (expected, expected_flags),
+                "{context}: static mode"
+            );
         }
     }
 }
@@ -288,6 +323,21 @@ fn binary64_arithmetic_matches_in_every_mode() {
                 mxcsr_flags(flags, daz, value.is_nan()),
                 expected_flags,
                 "{context}: flags"
+            );
+            let (fixed, fixed_flags) = floaty_verify::with_sse_mode!(
+                env.rounding,
+                env.flush_to_zero,
+                env.denormals_are_zero,
+                Mode => {
+                    assert_eq!(<Mode as floaty::env::Mode>::ENV, env, "{context}: mode");
+                    let (root, flags) = value.with_mode::<Mode>().sqrt_with(Mode::default());
+                    (root.to_bits(), flags)
+                }
+            );
+            assert_eq!(
+                (fixed, mxcsr_flags(fixed_flags, daz, value.is_nan())),
+                (expected, expected_flags),
+                "{context}: static mode"
             );
         }
     }

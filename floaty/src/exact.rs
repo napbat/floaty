@@ -3,7 +3,7 @@
 use core::cmp::Ordering;
 
 use crate::binary::Unpacked;
-use crate::env::{Env, Flags, Rounding, Tininess};
+use crate::env::{Behavior, Env, Flags, Rounding, Tininess};
 use crate::limbs::Limbs;
 
 /// An exact value to round: `significand * RADIX^exponent`, plus a sticky
@@ -138,6 +138,7 @@ pub enum Dropped {
 impl Dropped {
     /// Returns the dropped part from the first dropped digit against half a
     /// unit, and `true` when a later dropped digit is nonzero.
+    #[inline]
     pub fn new(first: Ordering, rest: bool) -> Self {
         match (first, rest) {
             (Ordering::Less, false) => Self::Nothing,
@@ -148,6 +149,7 @@ impl Dropped {
     }
 
     /// Returns `true` when the dropped part is not zero.
+    #[inline]
     pub fn is_inexact(self) -> bool {
         self != Self::Nothing
     }
@@ -160,6 +162,7 @@ impl Dropped {
 /// `last_digit` is the last kept digit in `radix`. Round to odd adds one when
 /// that digit is 0, or 5 in radix 10. In radix 10, this rule is IBM's round
 /// to prepare for shorter precision.
+#[inline]
 pub fn rounds_up(
     rounding: Rounding,
     negative: bool,
@@ -182,6 +185,7 @@ pub fn rounds_up(
 
 /// Applies a rounding direction to a cut. Returns the rounded bits and `true`
 /// when the magnitude grew.
+#[inline]
 fn apply<L: Limbs>(cut: Cut<L>, negative: bool, rounding: Rounding) -> (L, bool) {
     let first = if cut.round {
         Ordering::Equal
@@ -196,22 +200,36 @@ fn apply<L: Limbs>(cut: Cut<L>, negative: bool, rounding: Rounding) -> (L, bool)
     }
 }
 
-/// Rounds an exact value to a format.
+/// A type whose constant is the target of the rounding routine.
+///
+/// Each binary format is its own target type. So each format gets its own
+/// copy of [`round`], with the parameters of the format as constants.
+pub trait RoundingTarget {
+    /// The parameters of the format.
+    const TARGET: Target;
+}
+
+/// Rounds an exact value to the format `F`.
 ///
 /// Returns the rounded value in the canonical form that the encoder takes,
 /// and the flags. `Out` must hold the format precision plus one bit, because
 /// a carry out of the rounded bits happens before the shift that removes it.
 /// Every storage type has at least two bits more than its precision.
-#[inline]
-pub fn round<In: Limbs, Out: Limbs>(
+// Every operation of a format shares this routine, so LLVM does not inline it
+// for `#[inline]`. Forced, it takes binary64 `add_with` with a mode from 20.5
+// to 15.9 ns and `round_to_integral` from 16.6 to 8.9 ns in the benchmark.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub fn round<In: Limbs, Out: Limbs, F: RoundingTarget, B: Behavior>(
     value: &Unrounded<In>,
-    target: &Target,
-    env: &Env,
+    behavior: B,
 ) -> (Unpacked<Out>, Flags) {
+    let target = &F::TARGET;
+    let env = &behavior.env();
     let width = value.significand.bit_length();
     let top = i64::from(value.exponent) + i64::from(width) - 1;
     if width != 0 && top >= i64::from(target.emin) {
-        return round_normal(value, width, top, target, env);
+        return round_normal::<In, Out, F, B>(value, width, top, behavior);
     }
     round_small(value, target, env)
 }
@@ -298,14 +316,19 @@ fn round_small<In: Limbs, Out: Limbs>(
 /// normal or overflows, and it is never tiny. So the routine keeps the top
 /// `precision` bits of the value, and a carry out of the kept bits moves the
 /// top up by one.
-#[inline]
-fn round_normal<In: Limbs, Out: Limbs>(
+// Every operation of a format shares this branch, so LLVM does not inline it
+// for `#[inline]`. It inlines with `round`, and the benchmark measures the
+// two together.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn round_normal<In: Limbs, Out: Limbs, F: RoundingTarget, B: Behavior>(
     value: &Unrounded<In>,
     width: u32,
     top: i64,
-    target: &Target,
-    env: &Env,
+    behavior: B,
 ) -> (Unpacked<Out>, Flags) {
+    let target = &F::TARGET;
+    let env = &behavior.env();
     let precision = target.precision_in(env);
     debug_assert!(
         !value.sticky || width >= precision + 2,
@@ -412,6 +435,7 @@ fn normalize<L: Limbs>(negative: bool, kept: L, lowest: i64, target: &Target) ->
 /// Returns `true` when rounded bits whose highest bit has the weight
 /// `result_top` are above the largest finite value: above `emax`, or the NaN
 /// encoding of a `NoInf` format.
+#[inline]
 fn overflows<L: Limbs>(kept: L, result_top: i64, precision: u32, target: &Target) -> bool {
     let emax = i64::from(target.emax);
     let nan_pattern = target.all_ones_is_nan

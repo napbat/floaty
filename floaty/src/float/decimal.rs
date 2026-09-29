@@ -3,7 +3,7 @@
 
 use super::Float;
 use crate::decimal::DecimalLayout;
-use crate::env::{Flags, Mode, Override};
+use crate::env::{Behavior, Flags, Mode, Override};
 use crate::format::internal::LimbConversion;
 use crate::format::{Decimal, DecimalEncoding, Standard, Storage, Width};
 
@@ -16,7 +16,7 @@ where
     /// default mode.
     #[must_use]
     pub fn quantize(self, exponent_of: Self) -> Self {
-        self.quantize_with(exponent_of, M::ENV).0
+        self.quantize_with(exponent_of, M::default()).0
     }
 
     /// Returns `self` with the exponent of `exponent_of`, as IEEE 754
@@ -43,7 +43,7 @@ where
         let (bits, flags) = DecimalLayout::<Enc, W>::quantize(
             self.bits.to_limbs(),
             exponent_of.bits.to_limbs(),
-            &behavior.apply(M::ENV),
+            &behavior.apply::<M>().env(),
         );
         (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
     }
@@ -60,7 +60,7 @@ where
     /// mode.
     #[must_use]
     pub fn quantum(self) -> Self {
-        self.quantum_with(M::ENV).0
+        self.quantum_with(M::default()).0
     }
 
     /// Returns the quantum of the value, `1 * 10^exponent`, as IEEE 754
@@ -68,14 +68,14 @@ where
     #[must_use]
     pub fn quantum_with(self, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) =
-            DecimalLayout::<Enc, W>::quantum(self.bits.to_limbs(), &behavior.apply(M::ENV));
+            DecimalLayout::<Enc, W>::quantum(self.bits.to_limbs(), &behavior.apply::<M>().env());
         (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
     }
 
     /// Returns the exponent of the leading digit, with the default mode.
     #[must_use]
     pub fn log_b(self) -> Self {
-        self.log_b_with(M::ENV).0
+        self.log_b_with(M::default()).0
     }
 
     /// Returns the exponent of the leading digit, as an integral value, as
@@ -84,7 +84,7 @@ where
     #[must_use]
     pub fn log_b_with(self, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) =
-            DecimalLayout::<Enc, W>::log_b(self.bits.to_limbs(), &behavior.apply(M::ENV));
+            DecimalLayout::<Enc, W>::log_b(self.bits.to_limbs(), &behavior.apply::<M>().env());
         (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
     }
 }

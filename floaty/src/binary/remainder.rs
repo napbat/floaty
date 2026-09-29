@@ -162,7 +162,7 @@ where
             ..*env
         };
         let (rounded, round_flags) =
-            exact::round::<L::Double, L>(&value, &Self::TARGET, &exact_behavior);
+            exact::round::<L::Double, L, Self, Env>(&value, exact_behavior);
         debug_assert!(
             !round_flags.contains(Flags::INEXACT),
             "the remainder is exact"

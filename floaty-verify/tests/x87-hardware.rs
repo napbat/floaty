@@ -254,7 +254,14 @@ fn settings() -> Vec<(u16, Env)> {
     settings
 }
 
-/// Compares one x87 arithmetic instruction with floaty in every setting.
+/// Returns the precision limit of an x87 setting in bits.
+fn precision(env: Env) -> u32 {
+    env.precision.map_or(64, NonZeroU32::get)
+}
+
+/// Compares one x87 arithmetic instruction with floaty in every setting: with
+/// the behavior as an `Env` at run time, and with the static mode of the
+/// setting, which `with_x87_mode!` selects as an emulator would.
 macro_rules! arithmetic {
     ($pairs:expr, $instruction:path, $method:ident) => {
         for (control, env) in settings() {
@@ -276,6 +283,18 @@ macro_rules! arithmetic {
                     x87_arithmetic_status(flags, nan_operand),
                     status & CHECKED,
                     "{context}: flags"
+                );
+                let (fixed, fixed_flags) =
+                    floaty_verify::with_x87_mode!(env.rounding, precision(env), Mode => {
+                        assert_eq!(<Mode as floaty::env::Mode>::ENV, env, "{context}: mode");
+                        let (x, y) = (x.with_mode::<Mode>(), y.with_mode::<Mode>());
+                        let (value, flags) = x.$method(y, Mode::default());
+                        (value.to_bits(), flags)
+                    });
+                assert_eq!(
+                    (fixed, x87_arithmetic_status(fixed_flags, nan_operand)),
+                    (expected & ((1 << 80) - 1), status & CHECKED),
+                    "{context}: static mode"
                 );
             }
         }
@@ -316,6 +335,16 @@ fn arithmetic_matches_at_every_rounding_and_precision() {
                 x87_arithmetic_status(flags, value.is_nan()),
                 status & CHECKED,
                 "{context}: flags"
+            );
+            let (fixed, fixed_flags) = floaty_verify::with_x87_mode!(env.rounding, precision(env), Mode => {
+                assert_eq!(<Mode as floaty::env::Mode>::ENV, env, "{context}: mode");
+                let (root, flags) = value.with_mode::<Mode>().sqrt_with(Mode::default());
+                (root.to_bits(), flags)
+            });
+            assert_eq!(
+                (fixed, x87_arithmetic_status(fixed_flags, value.is_nan())),
+                (expected & ((1 << 80) - 1), status & CHECKED),
+                "{context}: static mode"
             );
         }
     }

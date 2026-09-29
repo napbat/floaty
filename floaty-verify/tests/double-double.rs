@@ -224,6 +224,11 @@ fn value<Alg: floaty::Algorithm>(pair: Pair) -> DoubleDouble<Alg> {
     DoubleDouble::from_parts(F64::from_bits(pair.hi), F64::from_bits(pair.lo))
 }
 
+fn value_in<Alg: floaty::Algorithm, M: floaty::env::Mode>(pair: Pair) -> DoubleDouble<Alg, M> {
+    let half = |bits| F64::from_bits(bits).with_mode::<M>();
+    DoubleDouble::from_parts(half(pair.hi), half(pair.lo))
+}
+
 /// The note of a case with a malformed operand: a finite high half and a NaN
 /// low half. The fused NaN order of PowerPC decides its NaN.
 const MALFORMED: &str = "an operand with a finite high half and a NaN low half";
@@ -349,14 +354,36 @@ fn qd_matches_the_qd_library() {
                 ("div", x.div_with(y, env), qd::div(a, b, rounding)),
                 ("sqrt", x.sqrt_with(env), qd::sqrt(a, rounding)),
             ];
-            for (name, (result, flags), theirs) in binary {
+            // The same operations with the static mode of the direction.
+            let fixed = floaty_verify::with_rounding_mode!(
+                floaty::Rounding::from(rounding),
+                floaty::mode::X86Sse,
+                Mode => {
+                    let (x, y) = (value_in::<Qd, Mode>(a), value_in::<Qd, Mode>(b));
+                    [
+                        x.add_with(y, Mode::default()),
+                        x.sub_with(y, Mode::default()),
+                        x.mul_with(y, Mode::default()),
+                        x.div_with(y, Mode::default()),
+                        x.sqrt_with(Mode::default()),
+                    ]
+                    .map(|(result, flags)| {
+                        let (hi, lo) = (result.hi().with_mode(), result.lo().with_mode());
+                        outcome(hi, lo, flags)
+                    })
+                }
+            );
+            for ((name, (result, flags), theirs), fixed) in binary.into_iter().zip(fixed) {
                 let ours = outcome(result.hi(), result.lo(), flags);
                 tally.check(|| format!("{name} {a:?} {b:?} {rounding:?}"), ours, theirs);
+                let context = || format!("{name} {a:?} {b:?} {rounding:?} static mode");
+                tally.check(context, fixed, theirs);
             }
         }
     }
     tally.report("Qd against QD");
     assert_eq!(tally.failed, 0, "floaty matches QD");
-    // The generator is seeded, so the count is exact.
-    assert_eq!(tally.passed, 480_100);
+    // The generator is seeded, so the count is exact: each case runs with an
+    // Env and with a static mode.
+    assert_eq!(tally.passed, 960_200);
 }

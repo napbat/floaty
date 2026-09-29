@@ -9,7 +9,7 @@
 
 use super::digits::{digit_count, power_of_ten};
 use super::{DecimalLayout, Wide, round};
-use crate::env::{Env, Flags, Rounding};
+use crate::env::{Behavior, Env, Flags, Rounding};
 use crate::exact::Unrounded;
 use crate::format::{DecimalEncoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
@@ -164,14 +164,15 @@ where
     }
 
     /// Rounds an exact result with a preferred exponent, and encodes it.
-    pub(super) fn finish<L: Limbs>(
+    #[inline]
+    pub(super) fn finish<L: Limbs, B: Behavior>(
         value: &Unrounded<Wide>,
         preferred: i64,
-        env: &Env,
+        behavior: B,
         flags: Flags,
     ) -> (L, Flags) {
         let preferred = narrow(preferred.clamp(i64::from(i32::MIN), i64::from(i32::MAX)));
-        let (rounded, round_flags) = round::round::<Wide, L>(value, preferred, &Self::TARGET, env);
+        let (rounded, round_flags) = round::round::<Wide, L, Self, B>(value, preferred, behavior);
         (Self::encode(rounded), flags | round_flags)
     }
 
@@ -233,22 +234,29 @@ where
     }
 
     /// Rounds a sum with a preferred exponent, or encodes an exact zero sum.
-    fn finish_sum<L: Limbs>(
+    #[inline]
+    fn finish_sum<L: Limbs, B: Behavior>(
         sum: &Sum,
         negative_zero: bool,
         preferred: i64,
-        env: &Env,
+        behavior: B,
         flags: Flags,
     ) -> (L, Flags) {
         match sum {
-            Sum::Value(value) => Self::finish(value, preferred, env, flags),
+            Sum::Value(value) => Self::finish(value, preferred, behavior, flags),
             Sum::Zero => Self::exact(Self::zero(negative_zero, preferred), flags),
         }
     }
 
     /// Adds `left` and `right`, or subtracts `right` when `subtract` is set.
     /// The preferred exponent is the smaller exponent of the operands.
-    pub fn add<L: Limbs>(left: L, right: L, subtract: bool, env: &Env) -> (L, Flags) {
+    pub fn add<L: Limbs, B: Behavior>(
+        left: L,
+        right: L,
+        subtract: bool,
+        behavior: B,
+    ) -> (L, Flags) {
+        let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
@@ -273,14 +281,15 @@ where
                     zero_sum_sign(env)
                 };
                 let sum = sum(a, b, Self::PRECISION);
-                Self::finish_sum(&sum, zero_sign, preferred, env, flags)
+                Self::finish_sum(&sum, zero_sign, preferred, behavior, flags)
             }
         }
     }
 
     /// Multiplies `left` by `right`. The preferred exponent is the sum of the
     /// exponents.
-    pub fn mul<L: Limbs>(left: L, right: L, env: &Env) -> (L, Flags) {
+    pub fn mul<L: Limbs, B: Behavior>(left: L, right: L, behavior: B) -> (L, Flags) {
+        let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
@@ -305,14 +314,15 @@ where
                     significand: product,
                     sticky: false,
                 };
-                Self::finish(&value, exponent, env, flags)
+                Self::finish(&value, exponent, behavior, flags)
             }
         }
     }
 
     /// Divides `left` by `right`. The preferred exponent is the exponent of
     /// `left` less the exponent of `right`.
-    pub fn div<L: Limbs>(left: L, right: L, env: &Env) -> (L, Flags) {
+    pub fn div<L: Limbs, B: Behavior>(left: L, right: L, behavior: B) -> (L, Flags) {
+        let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
@@ -356,14 +366,15 @@ where
                     significand: quotient,
                     sticky: !remainder.is_zero(),
                 };
-                Self::finish(&value, preferred, env, flags)
+                Self::finish(&value, preferred, behavior, flags)
             }
         }
     }
 
     /// Returns the square root. The preferred exponent is half the exponent
     /// of the operand, rounded down.
-    pub fn sqrt<L: Limbs>(value: L, env: &Env) -> (L, Flags) {
+    pub fn sqrt<L: Limbs, B: Behavior>(value: L, behavior: B) -> (L, Flags) {
+        let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(value, env, &mut flags);
         if let Some((result, special)) = nan::special(&x, &Unpacked::zero(false), env) {
@@ -398,7 +409,7 @@ where
                     significand: root,
                     sticky: inexact,
                 };
-                Self::finish(&result, exponent.div_euclid(2), env, flags)
+                Self::finish(&result, exponent.div_euclid(2), behavior, flags)
             }
             Unpacked::Nan { .. } | Unpacked::Unsupported => {
                 unreachable!("the special cases handle every NaN")
@@ -409,7 +420,8 @@ where
     /// Returns `left * right + addend`, rounded once. The preferred exponent
     /// is the smaller of the product exponent and the addend exponent. The NaN
     /// cases follow the binary engine and the fused order of the NaN rule.
-    pub fn mul_add<L: Limbs>(left: L, right: L, addend: L, env: &Env) -> (L, Flags) {
+    pub fn mul_add<L: Limbs, B: Behavior>(left: L, right: L, addend: L, behavior: B) -> (L, Flags) {
+        let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
@@ -465,7 +477,7 @@ where
                     &sum(product, addend, Self::PRECISION),
                     zero_sign,
                     preferred,
-                    env,
+                    behavior,
                     flags,
                 )
             }

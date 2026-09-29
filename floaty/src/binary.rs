@@ -10,8 +10,8 @@ mod integral;
 mod remainder;
 mod scale;
 
-use crate::env::{Env, Flags, NanPropagation, TotalOrder};
-use crate::exact::{self, Target, Unrounded};
+use crate::env::{Behavior, Env, Flags, NanPropagation, TotalOrder};
+use crate::exact::{self, RoundingTarget, Target, Unrounded};
 use crate::float::Class;
 use crate::format::internal::{Host, LimbConversion, MinMax, Source, Step};
 use crate::format::{Binary, Encoding, Standard, Storage, Width};
@@ -125,6 +125,7 @@ where
     };
 
     /// Decodes an encoding.
+    #[inline]
     pub fn decode<L: Limbs>(bits: L) -> Unpacked<L> {
         let () = Self::VALID;
         let negative = bits.bit(Self::WIDTH - 1);
@@ -199,6 +200,7 @@ where
     }
 
     /// Decodes a number of a format with an implicit integer bit.
+    #[inline]
     fn decode_finite<L: Limbs>(negative: bool, field: u64, fraction: L) -> Unpacked<L> {
         if field != 0 {
             Unpacked::Finite {
@@ -295,9 +297,17 @@ where
         }
     }
 
+    #[inline]
     fn unbiased(field: u64) -> i32 {
         i32::try_from(field).expect("an exponent field has at most 28 bits") - Self::BIAS
     }
+}
+
+impl<const E: u32, Enc: Encoding, const W: usize> RoundingTarget for Layout<E, Enc, W>
+where
+    Width<W>: Storage,
+{
+    const TARGET: Target = Layout::<E, Enc, W>::TARGET;
 }
 
 impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
@@ -315,6 +325,7 @@ where
     /// The value must be representable in the format. A negative zero in
     /// [`Fnuz`](crate::Fnuz) encodes as positive zero, because the format has
     /// no negative zero.
+    #[inline]
     pub fn encode<L: Limbs>(value: Unpacked<L>) -> L {
         let () = Self::VALID;
         match value {
@@ -345,6 +356,7 @@ where
         }
     }
 
+    #[inline]
     fn encode_finite<L: Limbs>(negative: bool, exponent: i32, significand: L) -> L {
         debug_assert!(
             significand.low_bits(Self::PRECISION) == significand && !significand.is_zero(),
@@ -426,8 +438,12 @@ where
     }
 
     /// Rounds an exact value to the format and encodes it.
-    pub fn round<In: Limbs, Out: Limbs>(value: &Unrounded<In>, env: &Env) -> (Out, Flags) {
-        let (rounded, flags) = exact::round::<In, Out>(value, &Self::TARGET, env);
+    #[inline]
+    pub fn round<In: Limbs, Out: Limbs, B: Behavior>(
+        value: &Unrounded<In>,
+        behavior: B,
+    ) -> (Out, Flags) {
+        let (rounded, flags) = exact::round::<In, Out, Self, B>(value, behavior);
         (Self::encode(rounded), flags)
     }
 
@@ -436,11 +452,13 @@ where
     /// A NaN payload keeps its high-order bits. The payload of a decimal
     /// source is the value of its trailing significand field, as the Intel
     /// decimal library converts it.
-    pub fn convert_from<In: Limbs, Out: Limbs>(
+    #[inline]
+    pub fn convert_from<In: Limbs, Out: Limbs, B: Behavior>(
         value: Unpacked<In>,
         source: Source,
-        env: &Env,
+        behavior: B,
     ) -> (Out, Flags) {
+        let env = &behavior.env();
         match value {
             Unpacked::Zero { negative, .. } => {
                 (Self::encode(Unpacked::zero(negative)), Flags::NONE)
@@ -459,7 +477,7 @@ where
                 if source.radix == 10 {
                     Self::from_decimal(&value, env)
                 } else {
-                    Self::round(&value, env)
+                    Self::round(&value, behavior)
                 }
             }
             Unpacked::Infinity { negative } => Self::convert_infinity(negative, env),
@@ -467,34 +485,43 @@ where
                 negative,
                 signaling,
                 payload,
-            } => {
-                let flags = if signaling {
-                    Flags::INVALID
-                } else {
-                    Flags::NONE
-                };
-                let nan = match env.nan.propagation {
-                    NanPropagation::DefaultNan => Self::default_nan(env),
-                    NanPropagation::SignalingFirst
-                    | NanPropagation::FirstOperand
-                    | NanPropagation::LargerSignificand => Self::encode(Unpacked::Nan {
-                        negative,
-                        signaling: false,
-                        payload: nan::align_payload(
-                            payload,
-                            source.payload_bits(),
-                            Self::PAYLOAD_DIGITS,
-                        ),
-                    }),
-                };
-                (nan, flags)
-            }
+            } => Self::convert_nan(negative, signaling, payload, source, env),
             Unpacked::Unsupported => (Self::default_nan(env), Flags::INVALID),
         }
     }
 
+    /// Converts a NaN. The payload keeps its high-order bits. The function
+    /// stays out of line, so that the number path of
+    /// [`convert_from`](Self::convert_from) inlines into its caller.
+    #[inline(never)]
+    fn convert_nan<In: Limbs, Out: Limbs>(
+        negative: bool,
+        signaling: bool,
+        payload: In,
+        source: Source,
+        env: &Env,
+    ) -> (Out, Flags) {
+        let flags = if signaling {
+            Flags::INVALID
+        } else {
+            Flags::NONE
+        };
+        let nan = match env.nan.propagation {
+            NanPropagation::DefaultNan => Self::default_nan(env),
+            NanPropagation::SignalingFirst
+            | NanPropagation::FirstOperand
+            | NanPropagation::LargerSignificand => Self::encode(Unpacked::Nan {
+                negative,
+                signaling: false,
+                payload: nan::align_payload(payload, source.payload_bits(), Self::PAYLOAD_DIGITS),
+            }),
+        };
+        (nan, flags)
+    }
+
     /// Converts an infinity. A format without an infinity gives a NaN, or the
     /// largest finite value when `saturate` is set, and signals invalid.
+    #[inline(never)]
     fn convert_infinity<Out: Limbs>(negative: bool, env: &Env) -> (Out, Flags) {
         if Self::TARGET.has_infinity {
             return (Self::encode(Unpacked::Infinity { negative }), Flags::NONE);
@@ -521,13 +548,13 @@ where
     }
 
     /// Places the sign, the exponent field, and the fraction in an encoding.
+    #[inline]
     fn assemble<L: Limbs>(negative: bool, field: u64, fraction: L) -> L {
-        let bits = fraction.with_field(Self::FRACTION_BITS, E, field);
-        if negative {
-            bits.with_bit(Self::WIDTH - 1)
-        } else {
-            bits
-        }
+        // The sign is a field of one bit, so the encoder does not branch on
+        // it.
+        fraction
+            .with_field(Self::FRACTION_BITS, E, field)
+            .with_field(Self::WIDTH - 1, 1, u64::from(negative))
     }
 }
 
@@ -545,11 +572,13 @@ where
     const PAYLOAD_DIGITS: u32 = Layout::<E, Enc, W>::PAYLOAD_DIGITS;
     const HOST: Host = Layout::<E, Enc, W>::HOST;
 
+    #[inline]
     fn mask(bits: Self::Bits) -> Self::Bits {
         let () = Layout::<E, Enc, W>::VALID;
         Self::Bits::from_limbs(bits.to_limbs().low_bits(Layout::<E, Enc, W>::WIDTH))
     }
 
+    #[inline]
     fn unpack(bits: Self::Bits) -> Unpacked<<Self::Bits as LimbConversion>::Limbs> {
         Layout::<E, Enc, W>::decode(bits.to_limbs())
     }
@@ -566,49 +595,65 @@ where
         bits.to_limbs().bit(Layout::<E, Enc, W>::WIDTH - 1)
     }
 
-    fn round<L: Limbs>(value: &Unrounded<L>, env: &Env) -> (Self::Bits, Flags) {
-        let (bits, flags) = Layout::<E, Enc, W>::round(value, env);
+    #[inline]
+    fn round<L: Limbs, B: Behavior>(value: &Unrounded<L>, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::round(value, behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn convert_from<L: Limbs>(
+    #[inline]
+    fn convert_from<L: Limbs, B: Behavior>(
         value: Unpacked<L>,
         source: Source,
-        env: &Env,
+        behavior: B,
     ) -> (Self::Bits, Flags) {
-        let (bits, flags) = Layout::<E, Enc, W>::convert_from(value, source, env);
+        let (bits, flags) = Layout::<E, Enc, W>::convert_from(value, source, behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn add(left: Self::Bits, right: Self::Bits, subtract: bool, env: &Env) -> (Self::Bits, Flags) {
+    #[inline]
+    fn add<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        subtract: bool,
+        behavior: B,
+    ) -> (Self::Bits, Flags) {
         let (bits, flags) =
-            Layout::<E, Enc, W>::add(left.to_limbs(), right.to_limbs(), subtract, env);
+            Layout::<E, Enc, W>::add(left.to_limbs(), right.to_limbs(), subtract, behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn mul(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
-        let (bits, flags) = Layout::<E, Enc, W>::mul(left.to_limbs(), right.to_limbs(), env);
+    #[inline]
+    fn mul<B: Behavior>(left: Self::Bits, right: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::mul(left.to_limbs(), right.to_limbs(), behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn div(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
-        let (bits, flags) = Layout::<E, Enc, W>::div(left.to_limbs(), right.to_limbs(), env);
+    #[inline]
+    fn div<B: Behavior>(left: Self::Bits, right: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::div(left.to_limbs(), right.to_limbs(), behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn sqrt(value: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
-        let (bits, flags) = Layout::<E, Enc, W>::sqrt(value.to_limbs(), env);
+    #[inline]
+    fn sqrt<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::sqrt(value.to_limbs(), behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn mul_add(
+    #[inline]
+    fn mul_add<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,
         addend: Self::Bits,
-        env: &Env,
+        behavior: B,
     ) -> (Self::Bits, Flags) {
-        let (bits, flags) =
-            Layout::<E, Enc, W>::mul_add(left.to_limbs(), right.to_limbs(), addend.to_limbs(), env);
+        let (bits, flags) = Layout::<E, Enc, W>::mul_add(
+            left.to_limbs(),
+            right.to_limbs(),
+            addend.to_limbs(),
+            behavior,
+        );
         (Self::Bits::from_limbs(bits), flags)
     }
 
@@ -616,7 +661,12 @@ where
         Self::Bits::from_limbs(Layout::<E, Enc, W>::with_sign(bits.to_limbs(), negative))
     }
 
-    fn compare(left: Self::Bits, right: Self::Bits, env: &Env) -> (Option<Ordering>, Flags) {
+    fn compare<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        behavior: B,
+    ) -> (Option<Ordering>, Flags) {
+        let env = &behavior.env();
         Layout::<E, Enc, W>::compare(left.to_limbs(), right.to_limbs(), env)
     }
 
@@ -624,37 +674,47 @@ where
         Layout::<E, Enc, W>::total_cmp(left.to_limbs(), right.to_limbs(), order)
     }
 
-    fn min_max(
+    fn min_max<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,
         operation: MinMax,
-        env: &Env,
+        behavior: B,
     ) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) =
             Layout::<E, Enc, W>::min_max(left.to_limbs(), right.to_limbs(), operation, env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn round_to_integral(value: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
+    fn round_to_integral<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::round_to_integral(value.to_limbs(), env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn to_int<I: Integer>(value: Self::Bits, env: &Env) -> (ToInt<I>, Flags) {
+    fn to_int<I: Integer, B: Behavior>(value: Self::Bits, behavior: B) -> (ToInt<I>, Flags) {
+        let env = &behavior.env();
         Layout::<E, Enc, W>::to_int(value.to_limbs(), env)
     }
 
-    fn remainder(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags) {
+    fn remainder<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        behavior: B,
+    ) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::remainder(left.to_limbs(), right.to_limbs(), env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn scale_b(value: Self::Bits, scale: i32, env: &Env) -> (Self::Bits, Flags) {
+    fn scale_b<B: Behavior>(value: Self::Bits, scale: i32, behavior: B) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::scale_b(value.to_limbs(), scale, env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn next(value: Self::Bits, step: Step, env: &Env) -> (Self::Bits, Flags) {
+    fn next<B: Behavior>(value: Self::Bits, step: Step, behavior: B) -> (Self::Bits, Flags) {
+        let env = &behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::next(value.to_limbs(), step, env);
         (Self::Bits::from_limbs(bits), flags)
     }

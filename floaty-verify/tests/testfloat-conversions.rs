@@ -5,7 +5,8 @@
 //! Berkeley SoftFloat computes. Two SoftFloat builds give the expected
 //! results: the ARM NaN specialization, which follows the NaN rule of the
 //! default mode, and the ARM default-NaN specialization, which follows the
-//! `DefaultNan` rule.
+//! `DefaultNan` rule. A run with the default mode in one rounding direction
+//! also converts with the static mode `Rounded<Ieee, R>` as the behavior.
 
 use floaty::env::NanRule;
 use floaty::{Env, F16, F32, F64, F80, F128, Flags};
@@ -31,6 +32,7 @@ macro_rules! conversion_test {
     ($name:ident, $function:literal, $source:ty => $destination:ty) => {
         #[test]
         fn $name() {
+            let fixed_count = core::cell::Cell::new(0_usize);
             for (generator, nan) in GENERATORS {
                 let mut count = 0_usize;
                 for (rounding, rounding_option) in ROUNDINGS {
@@ -43,11 +45,25 @@ macro_rules! conversion_test {
                             let context = format!("{} {env:?} {line}", $function);
                             assert_eq!(ours, result, "{context}: result");
                             assert_eq!(flag_bits(ours_flags), flags, "{context}: flags {ours_flags:?}");
+                            if env == Env::IEEE.with_rounding(rounding) {
+                                let (fixed, fixed_flags) = floaty_verify::with_rounding_mode!(
+                                    rounding,
+                                    floaty::mode::Ieee,
+                                    Mode => convert!($source => $destination, operand, Mode::default())
+                                );
+                                assert_eq!(
+                                    (fixed, flag_bits(fixed_flags)),
+                                    (result, flags),
+                                    "{context}: static mode"
+                                );
+                                fixed_count.set(fixed_count.get() + 1);
+                            }
                         });
                     }
                 }
                 assert!(count > 0, "{generator} gave test cases");
             }
+            assert!(fixed_count.get() > 0, "the static modes converted test cases");
         }
     };
 }

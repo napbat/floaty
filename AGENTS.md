@@ -105,6 +105,11 @@ The workspace manifest denies these lint groups for every package:
 - A narrow `#[allow(...)]` is acceptable only when the lint makes the code
   less correct or less clear. Put it on the smallest item. Add a short comment
   that says why the lint is wrong here.
+- A function on the common path of the engine can allow
+  `clippy::inline_always` when LLVM does not inline it for `#[inline]`. Put
+  the allowance on that function only. `cargo bench -p floaty-verify --bench
+  operations` must show the gain, and `DESIGN.md` must record it. The comment
+  must state the measured gain.
 - `clippy.toml` lists product names for the `doc_markdown` lint. Add a name
   there only when it is a product name, not a code identifier.
 

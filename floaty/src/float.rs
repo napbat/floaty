@@ -4,7 +4,7 @@ use core::fmt::{self, Debug, Formatter};
 use core::marker::PhantomData;
 
 use crate::binary::Unpacked;
-use crate::env::{Env, Flags, Mode, Override, mode};
+use crate::env::{Behavior, Env, Flags, Mode, Override, mode};
 use crate::exact::{Exact, Unrounded};
 use crate::format::internal::{LimbConversion, Source};
 use crate::format::{Bid, Binary, Decimal, Dpd, Fnuz, NoInf, Standard, X87};
@@ -88,8 +88,9 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Rounds an exact value to this format.
     ///
     /// `behavior` is a [`Rounding`](crate::Rounding) that overrides only the
-    /// rounding direction, or an [`Env`] that replaces the whole behavior.
-    /// Pass [`Self::ENV`] to use the default mode.
+    /// rounding direction, or a behavior that replaces the whole behavior: an
+    /// [`Env`], or a mode. Pass the mode of the type, `M::default()`, to use
+    /// the default mode with its fields as constants.
     ///
     /// The exact value is in the radix of the format. A decimal result that
     /// is exact takes the member of its cohort whose exponent is nearest the
@@ -97,14 +98,14 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// exponent.
     #[must_use]
     pub fn round<const N: usize>(exact: Exact<N>, behavior: impl Override) -> (Self, Flags) {
-        let env = behavior.apply(M::ENV);
+        let behavior = behavior.apply::<M>();
         let value = Unrounded {
             negative: exact.negative,
             exponent: exact.exponent,
             significand: exact.significand,
             sticky: exact.sticky,
         };
-        let (bits, flags) = S::round(&value, &env);
+        let (bits, flags) = S::round(&value, behavior);
         (Self::from_masked(bits), flags)
     }
 
@@ -120,7 +121,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// ```
     #[must_use]
     pub fn convert<T: FloatType>(self) -> T {
-        self.convert_with(T::DEFAULT_ENV).0
+        self.convert_with(T::Mode::default()).0
     }
 
     /// Converts the value to another format, with an override of the
@@ -133,7 +134,8 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// and signals invalid.
     #[must_use]
     pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (T, Flags) {
-        let env = behavior.apply(T::DEFAULT_ENV);
+        let behavior = behavior.apply::<T::Mode>();
+        let env = behavior.env();
         let mut value = S::unpack(self.bits);
         let mut input = Flags::NONE;
         if S::classify(self.bits) == Class::Subnormal {
@@ -154,7 +156,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
             radix: S::RADIX,
             payload_digits: S::PAYLOAD_DIGITS,
         };
-        let (result, flags) = T::convert_from(value, source, &env);
+        let (result, flags) = T::convert_from(value, source, behavior);
         (result, flags | input)
     }
 
@@ -336,22 +338,31 @@ impl<S: Standard<W>, const W: usize, M: Mode> Debug for Float<S, W, M> {
 /// A [`Float`] type of any standard, width, and mode, as a conversion
 /// destination. The trait is sealed.
 pub trait FloatType: Sealed + Copy {
-    /// The behavior of the default mode of the type.
+    /// The default mode of the type.
     #[doc(hidden)]
-    const DEFAULT_ENV: Env;
+    type Mode: Mode;
 
     /// Converts a decoded value of another format, the source.
     #[doc(hidden)]
-    fn convert_from<L: Limbs>(value: Unpacked<L>, source: Source, env: &Env) -> (Self, Flags);
+    fn convert_from<L: Limbs, B: Behavior>(
+        value: Unpacked<L>,
+        source: Source,
+        behavior: B,
+    ) -> (Self, Flags);
 }
 
 impl<S: Standard<W>, const W: usize, M: Mode> Sealed for Float<S, W, M> {}
 
 impl<S: Standard<W>, const W: usize, M: Mode> FloatType for Float<S, W, M> {
-    const DEFAULT_ENV: Env = M::ENV;
+    type Mode = M;
 
-    fn convert_from<L: Limbs>(value: Unpacked<L>, source: Source, env: &Env) -> (Self, Flags) {
-        let (bits, flags) = S::convert_from(value, source, env);
+    #[inline]
+    fn convert_from<L: Limbs, B: Behavior>(
+        value: Unpacked<L>,
+        source: Source,
+        behavior: B,
+    ) -> (Self, Flags) {
+        let (bits, flags) = S::convert_from(value, source, behavior);
         (Self::from_masked(bits), flags)
     }
 }

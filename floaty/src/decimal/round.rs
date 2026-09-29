@@ -9,7 +9,7 @@
 use core::cmp::Ordering;
 
 use super::digits::{self, digit_count, last_digit, power_of_ten};
-use crate::env::{Env, Flags, Rounding};
+use crate::env::{Behavior, Env, Flags, Rounding};
 use crate::exact::{self, Dropped, Integral, Unrounded};
 use crate::limbs::{self, Limbs};
 use crate::unpacked::Unpacked;
@@ -44,6 +44,15 @@ impl DecimalTarget {
     }
 }
 
+/// A type whose constant is the target of the decimal rounding routine.
+///
+/// Each decimal format is its own target type. So each format gets its own
+/// copy of [`round`], with the parameters of the format as constants.
+pub trait DecimalRoundingTarget {
+    /// The parameters of the format.
+    const TARGET: DecimalTarget;
+}
+
 /// Returns an exponent that fits an `i32`.
 fn narrow(exponent: i64) -> i32 {
     i32::try_from(exponent).expect("a decimal exponent of a format fits an i32")
@@ -62,12 +71,14 @@ fn narrow(exponent: i64) -> i32 {
 /// nearest `preferred`. An inexact result has the least possible exponent,
 /// so it keeps every digit. An exponent above the range of a full
 /// coefficient clamps down when the coefficient has room for trailing zeros.
-pub fn round<In: Limbs, Out: Limbs>(
+#[inline]
+pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
     value: &Unrounded<In>,
     preferred: i32,
-    target: &DecimalTarget,
-    env: &Env,
+    behavior: B,
 ) -> (Unpacked<Out>, Flags) {
+    let target = &F::TARGET;
+    let env = &behavior.env();
     let negative = value.negative;
     let precision = target.precision_in(env);
     let (lowest, _) = target.exponents(precision);

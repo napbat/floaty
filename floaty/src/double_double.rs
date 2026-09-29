@@ -36,6 +36,9 @@ use crate::unpacked::Unpacked;
 /// The high half and the low half of a value.
 type Pair = (F64, F64);
 
+/// An algorithm with two operands, on binary64 steps under the behavior `B`.
+type TwoOperands<B> = fn(&mut Steps<B>, Pair, Pair) -> Pair;
+
 /// `|hi + lo| * 2^1074`. Every finite pair is a multiple of 2^-1074 below
 /// 2^1025, so 2,099 bits hold the exact value of every finite pair.
 type Magnitude = [u64; 33];
@@ -185,13 +188,13 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     }
 
     /// Runs the algorithm of an operation with two operands.
-    fn run(
+    fn run<O: Override>(
         self,
         other: Self,
-        behavior: impl Override,
-        operation: [fn(&mut Steps, Pair, Pair) -> Pair; 2],
+        behavior: O,
+        operation: [TwoOperands<O::Behavior>; 2],
     ) -> (Self, Flags) {
-        let mut steps = Steps::new(behavior.apply(M::ENV));
+        let mut steps = Steps::new(behavior.apply::<M>());
         let [gcc, qd] = operation;
         let algorithm = match Alg::KIND {
             AlgorithmKind::Gcc => gcc,
@@ -283,7 +286,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     /// default mode of that format.
     #[must_use]
     pub fn convert<T: FloatType>(self) -> T {
-        self.convert_with(T::DEFAULT_ENV).0
+        self.convert_with(T::Mode::default()).0
     }
 
     /// Converts the exact value to another format, rounded once, with an
@@ -295,7 +298,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
             radix: 2,
             payload_digits: <Binary<11> as Standard<64>>::PAYLOAD_DIGITS,
         };
-        T::convert_from(self.exact(), source, &behavior.apply(T::DEFAULT_ENV))
+        T::convert_from(self.exact(), source, behavior.apply::<T::Mode>())
     }
 
     /// Compares the exact values as the IEEE 754 quiet predicates do. `None`
@@ -356,7 +359,7 @@ impl<M: Mode> DoubleDouble<Qd, M> {
     /// Returns the square root with the default mode.
     #[must_use]
     pub fn sqrt(self) -> Self {
-        self.sqrt_with(M::ENV).0
+        self.sqrt_with(M::default()).0
     }
 
     /// Returns the square root by QD's `sqrt`, and the flags of every step.
@@ -364,7 +367,7 @@ impl<M: Mode> DoubleDouble<Qd, M> {
     /// as QD does.
     #[must_use]
     pub fn sqrt_with(self, behavior: impl Override) -> (Self, Flags) {
-        let mut steps = Steps::new(behavior.apply(M::ENV));
+        let mut steps = Steps::new(behavior.apply::<M>());
         let (hi, lo) = qd::sqrt(&mut steps, (self.hi, self.lo));
         (Self::new(hi, lo), steps.flags())
     }
@@ -490,7 +493,7 @@ macro_rules! operator {
             type Output = Self;
 
             fn $method(self, other: Self) -> Self {
-                self.$with(other, M::ENV).0
+                self.$with(other, M::default()).0
             }
         }
     };

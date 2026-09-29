@@ -92,6 +92,10 @@ fn check(
     limit: Option<usize>,
     compare: impl Fn(&str, Env),
 ) {
+    assert!(
+        runs.iter().any(|run| has_static_mode(run.env)),
+        "{function} has a run that checks a static mode"
+    );
     for run in runs {
         let mut arguments = vec!["-level", level];
         arguments.extend(&run.options);
@@ -101,6 +105,13 @@ fn check(
         });
         assert!(count > 0, "{function} {:?} gave test cases", run.options);
     }
+}
+
+/// Returns `true` when a run has the default mode with one rounding
+/// direction. The static mode `Rounded<Ieee, R>` then gives the same results,
+/// which the tests check against TestFloat too.
+fn has_static_mode(env: Env) -> bool {
+    env == Env::IEEE.with_rounding(env.rounding)
 }
 
 /// Compares one two-operand case.
@@ -141,6 +152,19 @@ macro_rules! two_operands {
                 flags,
                 "{context}: flags {ours_flags:?}"
             );
+            if has_static_mode(env) {
+                let (fixed, fixed_flags) =
+                    floaty_verify::with_rounding_mode!(env.rounding, mode::Ieee, Mode => {
+                        let (a, b) = (a.with_mode::<Mode>(), b.with_mode::<Mode>());
+                        let (value, flags) = a.$method(b, Mode::default());
+                        (u128::from(value.to_bits()), flags)
+                    });
+                assert_eq!(
+                    (fixed, flag_bits(fixed_flags)),
+                    (result, flags),
+                    "{context}: static mode"
+                );
+            }
         }
     };
 }
@@ -211,9 +235,8 @@ macro_rules! format_tests {
                     |line: &str, env: Env| {
                         let [a, result, flags] = fields::<3>(line);
                         let result = $expected(result);
-                        let (ours, ours_flags) =
-                            <$alias>::from_bits(a.try_into().expect("the operand fits"))
-                                .sqrt_with(env);
+                        let value = <$alias>::from_bits(a.try_into().expect("the operand fits"));
+                        let (ours, ours_flags) = value.sqrt_with(env);
                         let context = format!("{function} {env:?} {line}");
                         assert_eq!(u128::from(ours.to_bits()), result, "{context}: result");
                         assert_eq!(
@@ -221,6 +244,22 @@ macro_rules! format_tests {
                             flags,
                             "{context}: flags {ours_flags:?}"
                         );
+                        if has_static_mode(env) {
+                            let (fixed, fixed_flags) = floaty_verify::with_rounding_mode!(
+                                env.rounding,
+                                mode::Ieee,
+                                Mode => {
+                                    let (root, flags) =
+                                        value.with_mode::<Mode>().sqrt_with(Mode::default());
+                                    (u128::from(root.to_bits()), flags)
+                                }
+                            );
+                            assert_eq!(
+                                (fixed, flag_bits(fixed_flags)),
+                                (result, flags),
+                                "{context}: static mode"
+                            );
+                        }
                     },
                 );
             }
@@ -249,6 +288,19 @@ macro_rules! mul_add {
                 flags,
                 "{context}: flags {ours_flags:?}"
             );
+            if has_static_mode(env) {
+                let (fixed, fixed_flags) =
+                    floaty_verify::with_rounding_mode!(env.rounding, mode::Ieee, Mode => {
+                        let [a, b, c] = [a, b, c].map(|value| value.with_mode::<Mode>());
+                        let (value, flags) = a.mul_add_with(b, c, Mode::default());
+                        (u128::from(value.to_bits()), flags)
+                    });
+                assert_eq!(
+                    (fixed, flag_bits(fixed_flags)),
+                    (result, flags),
+                    "{context}: static mode"
+                );
+            }
         }
     };
 }

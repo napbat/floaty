@@ -73,8 +73,7 @@ where
             precision: None,
             ..*env
         };
-        let (rounded, overflow_flags) =
-            exact::round::<L, L>(&integer, &Self::TARGET, &full_precision);
+        let (rounded, overflow_flags) = exact::round::<L, L, Self, Env>(&integer, full_precision);
         Self::exact(rounded, flags | overflow_flags)
     }
 

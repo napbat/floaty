@@ -7,7 +7,7 @@ use core::hash::Hash;
 use core::marker::PhantomData;
 
 use crate::binary::{EncodingKind, Unpacked};
-use crate::env::{Env, Flags, TotalOrder};
+use crate::env::{Behavior, Flags, TotalOrder};
 use crate::exact::Unrounded;
 use crate::float::Class;
 use crate::integer::{Integer, ToInt};
@@ -76,36 +76,44 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
 
     /// Rounds an exact value to the format.
     #[doc(hidden)]
-    fn round<L: Limbs>(value: &Unrounded<L>, env: &Env) -> (Self::Bits, Flags);
+    fn round<L: Limbs, B: Behavior>(value: &Unrounded<L>, behavior: B) -> (Self::Bits, Flags);
 
     /// Converts a decoded value of another format, the source.
     #[doc(hidden)]
-    fn convert_from<L: Limbs>(value: Unpacked<L>, source: Source, env: &Env)
-    -> (Self::Bits, Flags);
+    fn convert_from<L: Limbs, B: Behavior>(
+        value: Unpacked<L>,
+        source: Source,
+        behavior: B,
+    ) -> (Self::Bits, Flags);
 
     /// Adds, or subtracts when `subtract` is set.
     #[doc(hidden)]
-    fn add(left: Self::Bits, right: Self::Bits, subtract: bool, env: &Env) -> (Self::Bits, Flags);
+    fn add<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        subtract: bool,
+        behavior: B,
+    ) -> (Self::Bits, Flags);
 
     /// Multiplies.
     #[doc(hidden)]
-    fn mul(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags);
+    fn mul<B: Behavior>(left: Self::Bits, right: Self::Bits, behavior: B) -> (Self::Bits, Flags);
 
     /// Divides.
     #[doc(hidden)]
-    fn div(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags);
+    fn div<B: Behavior>(left: Self::Bits, right: Self::Bits, behavior: B) -> (Self::Bits, Flags);
 
     /// Returns the square root.
     #[doc(hidden)]
-    fn sqrt(value: Self::Bits, env: &Env) -> (Self::Bits, Flags);
+    fn sqrt<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
 
     /// Returns `left * right + addend`, rounded once.
     #[doc(hidden)]
-    fn mul_add(
+    fn mul_add<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,
         addend: Self::Bits,
-        env: &Env,
+        behavior: B,
     ) -> (Self::Bits, Flags);
 
     /// Returns the encoding with its sign set to `negative`, where the format
@@ -115,7 +123,11 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
 
     /// Compares two values as the quiet predicates do. `None` means unordered.
     #[doc(hidden)]
-    fn compare(left: Self::Bits, right: Self::Bits, env: &Env) -> (Option<Ordering>, Flags);
+    fn compare<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        behavior: B,
+    ) -> (Option<Ordering>, Flags);
 
     /// Orders two encodings as IEEE 754 `totalOrder` does, with `order` for
     /// two encodings of one datum.
@@ -124,32 +136,36 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
 
     /// Returns the minimum or the maximum of one family.
     #[doc(hidden)]
-    fn min_max(
+    fn min_max<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,
         operation: MinMax,
-        env: &Env,
+        behavior: B,
     ) -> (Self::Bits, Flags);
 
     /// Rounds to an integral value in the format.
     #[doc(hidden)]
-    fn round_to_integral(value: Self::Bits, env: &Env) -> (Self::Bits, Flags);
+    fn round_to_integral<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
 
     /// Rounds to an integer of type `I`.
     #[doc(hidden)]
-    fn to_int<I: Integer>(value: Self::Bits, env: &Env) -> (ToInt<I>, Flags);
+    fn to_int<I: Integer, B: Behavior>(value: Self::Bits, behavior: B) -> (ToInt<I>, Flags);
 
     /// Returns the IEEE 754 remainder.
     #[doc(hidden)]
-    fn remainder(left: Self::Bits, right: Self::Bits, env: &Env) -> (Self::Bits, Flags);
+    fn remainder<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        behavior: B,
+    ) -> (Self::Bits, Flags);
 
     /// Returns `value * RADIX^scale`, rounded.
     #[doc(hidden)]
-    fn scale_b(value: Self::Bits, scale: i32, env: &Env) -> (Self::Bits, Flags);
+    fn scale_b<B: Behavior>(value: Self::Bits, scale: i32, behavior: B) -> (Self::Bits, Flags);
 
     /// Returns the next value up or down.
     #[doc(hidden)]
-    fn next(value: Self::Bits, step: Step, env: &Env) -> (Self::Bits, Flags);
+    fn next<B: Behavior>(value: Self::Bits, step: Step, behavior: B) -> (Self::Bits, Flags);
 }
 
 /// An integer type that stores the encoding of a format.

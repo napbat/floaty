@@ -10,7 +10,7 @@
 use core::cmp::Ordering;
 
 use super::{Layout, Number, Unpacked};
-use crate::env::{Env, Flags, Rounding};
+use crate::env::{Behavior, Env, Flags, Rounding};
 use crate::exact::{self, Unrounded};
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
@@ -26,6 +26,7 @@ struct Term<L> {
 
 impl<L: Limbs> Term<L> {
     /// Returns the weight of the highest significand bit.
+    #[inline]
     fn top(&self) -> i64 {
         self.exponent + i64::from(self.significand.bit_length()) - 1
     }
@@ -51,32 +52,34 @@ enum Sum<L> {
 /// jammed bit. It must also hold the rounding precision plus 5 bits. Then a
 /// jammed bit stays below the round bit and the bit below it, after a
 /// cancellation of one bit and a carry.
+// Every addition of every format shares this function, so LLVM does not
+// inline it for `#[inline]`. Forced with the rounding routine, it takes
+// binary128 addition with a mode from 25.8 to 19.7 ns in the benchmark.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 fn sum<L: Limbs>(first: Term<L>, second: Term<L>) -> Sum<L> {
-    // `high` has the larger lowest weight. The common weight is at or below
-    // it, so `high` only shifts left, and only `low` can shift right.
-    let (high, low) = if first.exponent >= second.exponent {
-        (first, second)
-    } else {
-        (second, first)
-    };
-    let highest = high.top().max(low.top());
+    let highest = first.top().max(second.top());
     let floor = highest - i64::from(L::BITS - 3);
-    let common = low.exponent.max(floor);
-    let left_shift =
-        u32::try_from(high.exponent - common).expect("the shift stays inside the width");
-    let left = high.significand.shl(left_shift);
-    let right = if common > low.exponent {
-        let shift = u32::try_from(common - low.exponent).unwrap_or(u32::MAX);
-        low.significand.shr_jam(shift)
-    } else {
-        low.significand
+    let common = first.exponent.min(second.exponent).max(floor);
+    // Both terms usually shift left, so the branch predicts well. An
+    // order of the terms by exponent would branch on random data.
+    let align = |term: Term<L>| {
+        if term.exponent >= common {
+            let shift =
+                u32::try_from(term.exponent - common).expect("the shift stays inside the width");
+            term.significand.shl(shift)
+        } else {
+            let shift = u32::try_from(common - term.exponent).unwrap_or(u32::MAX);
+            term.significand.shr_jam(shift)
+        }
     };
-    let (negative, significand) = if high.negative == low.negative {
-        (high.negative, left.add(right))
+    let (left, right) = (align(first), align(second));
+    let (negative, significand) = if first.negative == second.negative {
+        (first.negative, left.add(right))
     } else {
         match left.compare(&right) {
-            Ordering::Greater => (high.negative, left.sub(right)),
-            Ordering::Less => (low.negative, right.sub(left)),
+            Ordering::Greater => (first.negative, left.sub(right)),
+            Ordering::Less => (second.negative, right.sub(left)),
             Ordering::Equal => return Sum::Zero,
         }
     };
@@ -116,20 +119,31 @@ where
     }
 
     /// Rounds an exact value and encodes it.
-    fn finish<In: Limbs, L: Limbs>(value: &Unrounded<In>, env: &Env, flags: Flags) -> (L, Flags) {
-        let (rounded, round_flags) = exact::round::<In, L>(value, &Self::TARGET, env);
+    #[inline]
+    fn finish<In: Limbs, L: Limbs, B: Behavior>(
+        value: &Unrounded<In>,
+        behavior: B,
+        flags: Flags,
+    ) -> (L, Flags) {
+        let (rounded, round_flags) = exact::round::<In, L, Self, B>(value, behavior);
         (Self::encode(rounded), flags | round_flags)
     }
 
     /// Rounds a sum, or encodes an exact zero sum.
-    fn finish_sum<In: Limbs, L: Limbs>(sum: &Sum<In>, env: &Env, flags: Flags) -> (L, Flags) {
+    #[inline]
+    fn finish_sum<In: Limbs, L: Limbs, B: Behavior>(
+        sum: &Sum<In>,
+        behavior: B,
+        flags: Flags,
+    ) -> (L, Flags) {
         match sum {
-            Sum::Value(value) => Self::finish(value, env, flags),
-            Sum::Zero => Self::exact(Unpacked::zero(zero_sum_sign(env)), flags),
+            Sum::Value(value) => Self::finish(value, behavior, flags),
+            Sum::Zero => Self::exact(Unpacked::zero(zero_sum_sign(&behavior.env())), flags),
         }
     }
 
     /// Encodes a result that needs no rounding.
+    #[inline]
     pub(super) fn exact<L: Limbs>(value: Unpacked<L>, flags: Flags) -> (L, Flags) {
         (Self::encode(value), flags)
     }
@@ -151,6 +165,7 @@ where
     }
 
     /// Returns `significand * 2^exponent` of a finite operand, widened.
+    #[inline]
     fn term<L: Widen>(negative: bool, exponent: i32, significand: L) -> Term<L::Double> {
         Term {
             negative,
@@ -160,7 +175,12 @@ where
     }
 
     /// Returns the square root of a positive finite operand.
-    fn sqrt_finite<L: Widen>(number: Number<L>, env: &Env, flags: Flags) -> (L, Flags) {
+    #[inline]
+    fn sqrt_finite<L: Widen, B: Behavior>(
+        number: Number<L>,
+        behavior: B,
+        flags: Flags,
+    ) -> (L, Flags) {
         // Shift the radicand to an even exponent and to 2p + 3 or 2p + 4 bits,
         // so that the root has p + 2 bits.
         let mut shift = 2 * Self::PRECISION + 3 - number.significand.bit_length();
@@ -176,18 +196,34 @@ where
             significand: root,
             sticky: inexact,
         };
-        Self::finish(&value, env, flags)
+        Self::finish(&value, behavior, flags)
     }
 
     /// Adds `left` and `right`, or subtracts `right` when `subtract` is set.
-    pub fn add<L: Widen>(left: L, right: L, subtract: bool, env: &Env) -> (L, Flags) {
+    #[inline]
+    pub fn add<L: Widen, B: Behavior>(
+        left: L,
+        right: L,
+        subtract: bool,
+        behavior: B,
+    ) -> (L, Flags) {
         if let (Some(a), Some(b)) = (Self::normal(left), Self::normal(right)) {
             let b = Number {
                 negative: b.negative != subtract,
                 ..b
             };
-            return Self::add_finite(a, b, env, Flags::NONE);
+            return Self::add_finite(a, b, behavior, Flags::NONE);
         }
+        Self::add_special(left, right, subtract, &behavior.env())
+    }
+
+    /// Adds operands that are not both normal: a zero, a subnormal number, an
+    /// infinity, a NaN, or an unsupported encoding.
+    ///
+    /// The function stays out of line, so that the normal path of [`Self::add`]
+    /// inlines into its caller.
+    #[inline(never)]
+    fn add_special<L: Widen>(left: L, right: L, subtract: bool, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
@@ -196,7 +232,7 @@ where
         }
         let y = if subtract { y.negate() } else { y };
         if let (Some(a), Some(b)) = (x.number(), y.number()) {
-            return Self::add_finite(a, b, env, flags);
+            return Self::add_finite(a, b, *env, flags);
         }
         match (x, y) {
             (Unpacked::Infinity { negative: a }, Unpacked::Infinity { negative: b }) if a != b => {
@@ -230,7 +266,7 @@ where
                     significand,
                     sticky: false,
                 };
-                Self::finish(&value, env, flags)
+                Self::finish(&value, *env, flags)
             }
             _ => unreachable!(
                 "the earlier cases handle NaNs, unsupported operands, and finite pairs"
@@ -239,7 +275,13 @@ where
     }
 
     /// Adds two nonzero finite operands.
-    fn add_finite<L: Widen>(a: Number<L>, b: Number<L>, env: &Env, flags: Flags) -> (L, Flags) {
+    #[inline]
+    fn add_finite<L: Widen, B: Behavior>(
+        a: Number<L>,
+        b: Number<L>,
+        behavior: B,
+        flags: Flags,
+    ) -> (L, Flags) {
         if Self::PRECISION + 5 <= L::BITS {
             // The limb width of the storage holds the sum and its jammed bit.
             let term = |number: Number<L>| Term {
@@ -247,20 +289,30 @@ where
                 exponent: i64::from(number.exponent),
                 significand: number.significand,
             };
-            Self::finish_sum(&sum(term(a), term(b)), env, flags)
+            Self::finish_sum(&sum(term(a), term(b)), behavior, flags)
         } else {
             let term = |number: Number<L>| {
                 Self::term(number.negative, number.exponent, number.significand)
             };
-            Self::finish_sum(&sum(term(a), term(b)), env, flags)
+            Self::finish_sum(&sum(term(a), term(b)), behavior, flags)
         }
     }
 
     /// Multiplies `left` by `right`.
-    pub fn mul<L: Widen>(left: L, right: L, env: &Env) -> (L, Flags) {
+    #[inline]
+    pub fn mul<L: Widen, B: Behavior>(left: L, right: L, behavior: B) -> (L, Flags) {
         if let (Some(a), Some(b)) = (Self::normal(left), Self::normal(right)) {
-            return Self::mul_finite(a, b, env, Flags::NONE);
+            return Self::mul_finite(a, b, behavior, Flags::NONE);
         }
+        Self::mul_special(left, right, &behavior.env())
+    }
+
+    /// Multiplies operands that are not both normal.
+    ///
+    /// The function stays out of line, so that the normal path of [`Self::mul`]
+    /// inlines into its caller.
+    #[inline(never)]
+    fn mul_special<L: Widen>(left: L, right: L, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
@@ -268,7 +320,7 @@ where
             return Self::exact(value, flags | special);
         }
         if let (Some(a), Some(b)) = (x.number(), y.number()) {
-            return Self::mul_finite(a, b, env, flags);
+            return Self::mul_finite(a, b, *env, flags);
         }
         let negative = sign(&x) != sign(&y);
         match (x, y) {
@@ -289,21 +341,37 @@ where
     }
 
     /// Multiplies two nonzero finite operands.
-    fn mul_finite<L: Widen>(a: Number<L>, b: Number<L>, env: &Env, flags: Flags) -> (L, Flags) {
+    #[inline]
+    fn mul_finite<L: Widen, B: Behavior>(
+        a: Number<L>,
+        b: Number<L>,
+        behavior: B,
+        flags: Flags,
+    ) -> (L, Flags) {
         let product = Unrounded {
             negative: a.negative != b.negative,
             exponent: a.exponent + b.exponent,
             significand: a.significand.widening_mul(b.significand),
             sticky: false,
         };
-        Self::finish(&product, env, flags)
+        Self::finish(&product, behavior, flags)
     }
 
     /// Divides `left` by `right`.
-    pub fn div<L: Widen>(left: L, right: L, env: &Env) -> (L, Flags) {
+    #[inline]
+    pub fn div<L: Widen, B: Behavior>(left: L, right: L, behavior: B) -> (L, Flags) {
         if let (Some(a), Some(b)) = (Self::normal(left), Self::normal(right)) {
-            return Self::div_finite(a, b, env, Flags::NONE);
+            return Self::div_finite(a, b, behavior, Flags::NONE);
         }
+        Self::div_special(left, right, &behavior.env())
+    }
+
+    /// Divides operands that are not both normal.
+    ///
+    /// The function stays out of line, so that the normal path of [`Self::div`]
+    /// inlines into its caller.
+    #[inline(never)]
+    fn div_special<L: Widen>(left: L, right: L, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
@@ -311,7 +379,7 @@ where
             return Self::exact(value, flags | special);
         }
         if let (Some(a), Some(b)) = (x.number(), y.number()) {
-            return Self::div_finite(a, b, env, flags);
+            return Self::div_finite(a, b, *env, flags);
         }
         let negative = sign(&x) != sign(&y);
         match (x, y) {
@@ -333,7 +401,13 @@ where
     }
 
     /// Divides two nonzero finite operands.
-    fn div_finite<L: Widen>(a: Number<L>, b: Number<L>, env: &Env, flags: Flags) -> (L, Flags) {
+    #[inline]
+    fn div_finite<L: Widen, B: Behavior>(
+        a: Number<L>,
+        b: Number<L>,
+        behavior: B,
+        flags: Flags,
+    ) -> (L, Flags) {
         // Shift the dividend so that the quotient has at least p + 2 bits.
         // The numerator then has at most 2p + 2 bits.
         let shift = Self::PRECISION + 2 + b.significand.bit_length() - a.significand.bit_length();
@@ -346,14 +420,25 @@ where
             significand: quotient,
             sticky: !remainder.is_zero(),
         };
-        Self::finish(&value, env, flags)
+        Self::finish(&value, behavior, flags)
     }
 
     /// Returns the square root of `value`.
-    pub fn sqrt<L: Widen>(value: L, env: &Env) -> (L, Flags) {
+    #[inline]
+    pub fn sqrt<L: Widen, B: Behavior>(value: L, behavior: B) -> (L, Flags) {
         if let Some(number) = Self::normal(value).filter(|number| !number.negative) {
-            return Self::sqrt_finite(number, env, Flags::NONE);
+            return Self::sqrt_finite(number, behavior, Flags::NONE);
         }
+        Self::sqrt_special(value, &behavior.env())
+    }
+
+    /// Returns the square root of an operand that is not a positive normal
+    /// number.
+    ///
+    /// The function stays out of line, so that the normal path of [`Self::sqrt`]
+    /// inlines into its caller.
+    #[inline(never)]
+    fn sqrt_special<L: Widen>(value: L, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let x = Self::operand(value, env, &mut flags);
         // A one-operand NaN propagates as SoftFloat does, against a zero.
@@ -375,7 +460,7 @@ where
                     exponent,
                     significand,
                 };
-                Self::sqrt_finite(positive, env, flags)
+                Self::sqrt_finite(positive, *env, flags)
             }
             Unpacked::Nan { .. } | Unpacked::Unsupported => {
                 unreachable!("the special cases handle every NaN and unsupported operand")
@@ -387,7 +472,8 @@ where
     ///
     /// The `fused_order` field of the NaN rule orders the NaN operands, and
     /// the `invalid_product` field decides `0 * inf + NaN`.
-    pub fn mul_add<L: Widen>(left: L, right: L, addend: L, env: &Env) -> (L, Flags) {
+    #[inline]
+    pub fn mul_add<L: Widen, B: Behavior>(left: L, right: L, addend: L, behavior: B) -> (L, Flags) {
         if let (Some(a), Some(b), Some(c)) = (
             Self::normal(left),
             Self::normal(right),
@@ -395,8 +481,17 @@ where
         ) {
             let product = Self::product(a, b);
             let addend = Self::term(c.negative, c.exponent, c.significand);
-            return Self::finish_sum(&sum(product, addend), env, Flags::NONE);
+            return Self::finish_sum(&sum(product, addend), behavior, Flags::NONE);
         }
+        Self::mul_add_special(left, right, addend, &behavior.env())
+    }
+
+    /// Returns `left * right + addend` for operands that are not all normal.
+    ///
+    /// The function stays out of line, so that the normal path of [`Self::mul_add`]
+    /// inlines into its caller.
+    #[inline(never)]
+    fn mul_add_special<L: Widen>(left: L, right: L, addend: L, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
@@ -467,6 +562,7 @@ where
     }
 
     /// Returns the exact product of two nonzero finite operands.
+    #[inline]
     fn product<L: Widen>(a: Number<L>, b: Number<L>) -> Term<L::Double> {
         Term {
             negative: a.negative != b.negative,
@@ -507,11 +603,11 @@ where
                 },
             ) => Self::finish(
                 &Unrounded::from_term(Self::term(negative, exponent, significand)),
-                env,
+                *env,
                 flags,
             ),
             (Some(product), Unpacked::Zero { .. }) => {
-                Self::finish(&Unrounded::from_term(product), env, flags)
+                Self::finish(&Unrounded::from_term(product), *env, flags)
             }
             (
                 Some(product),
@@ -522,7 +618,7 @@ where
                 },
             ) => Self::finish_sum(
                 &sum(product, Self::term(negative, exponent, significand)),
-                env,
+                *env,
                 flags,
             ),
             _ => unreachable!("the addend is zero or finite"),

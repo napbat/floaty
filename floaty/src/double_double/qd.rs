@@ -23,20 +23,21 @@ use core::cmp::Ordering;
 
 use super::Pair;
 use super::steps::Steps;
+use crate::env::Behavior;
 use crate::float::F64;
 
 /// The NaN of QD, `std::numeric_limits<double>::quiet_NaN()`.
 const NAN: u64 = 0x7FF8_0000_0000_0000;
 
 /// The sum `s` of `two_sum(a, b)` and `bb = s - a`.
-fn sum_and_bb(steps: &mut Steps, a: F64, b: F64) -> (F64, F64) {
+fn sum_and_bb<B: Behavior>(steps: &mut Steps<B>, a: F64, b: F64) -> (F64, F64) {
     let s = steps.add(a, b);
     (s, steps.sub(s, a))
 }
 
 /// `two_diff(a, b)` as the compiler makes it: the difference and its error,
 /// `(a - (s - bb)) - (bb + b)`, with the operands of `b + bb` swapped.
-fn two_diff(steps: &mut Steps, a: F64, b: F64) -> Pair {
+fn two_diff<B: Behavior>(steps: &mut Steps<B>, a: F64, b: F64) -> Pair {
     let s = steps.sub(a, b);
     let bb = steps.sub(s, a);
     let left = steps.sub(s, bb);
@@ -47,7 +48,7 @@ fn two_diff(steps: &mut Steps, a: F64, b: F64) -> Pair {
 
 /// The tail of IEEE-style addition and subtraction from `s2 += t1`: the sum
 /// `s1 + s2` with the errors `t1` and `t2`, renormalized twice.
-fn renormalize(steps: &mut Steps, (s1, s2): Pair, (t1, t2): Pair) -> Pair {
+fn renormalize<B: Behavior>(steps: &mut Steps<B>, (s1, s2): Pair, (t1, t2): Pair) -> Pair {
     let s2 = steps.add(s2, t1);
     let s = steps.add(s1, s2);
     let bb = steps.sub(s, s1);
@@ -60,7 +61,7 @@ fn renormalize(steps: &mut Steps, (s1, s2): Pair, (t1, t2): Pair) -> Pair {
 
 /// The high half of [`renormalize`], with the last sum swapped. The division
 /// and the square root use only `r.x[0]`, so the compiler drops the error.
-fn renormalize_high(steps: &mut Steps, (s1, s2): Pair, (t1, t2): Pair) -> F64 {
+fn renormalize_high<B: Behavior>(steps: &mut Steps<B>, (s1, s2): Pair, (t1, t2): Pair) -> F64 {
     let s2 = steps.add(s2, t1);
     let s = steps.add(s1, s2);
     let bb = steps.sub(s, s1);
@@ -71,12 +72,12 @@ fn renormalize_high(steps: &mut Steps, (s1, s2): Pair, (t1, t2): Pair) -> F64 {
 
 /// The two `two_diff` calls of `dd_real - dd_real` with `QD_IEEE_ADD`: the
 /// differences of the high halves and of the low halves, with their errors.
-fn differences(steps: &mut Steps, (a0, a1): Pair, (b0, b1): Pair) -> (Pair, Pair) {
+fn differences<B: Behavior>(steps: &mut Steps<B>, (a0, a1): Pair, (b0, b1): Pair) -> (Pair, Pair) {
     (two_diff(steps, a0, b0), two_diff(steps, a1, b1))
 }
 
 /// `dd_real + dd_real`, the IEEE-style `ieee_add` (`run` from 0x280).
-pub fn add(steps: &mut Steps, (a0, a1): Pair, (b0, b1): Pair) -> Pair {
+pub fn add<B: Behavior>(steps: &mut Steps<B>, (a0, a1): Pair, (b0, b1): Pair) -> Pair {
     let (s1, bb) = sum_and_bb(steps, a0, b0); // 0x288, 0x29e
     let (t1, bb_t) = sum_and_bb(steps, a1, b1); // 0x28c, 0x2a3
     let left = steps.sub(s1, bb); // 0x2a7
@@ -91,13 +92,13 @@ pub fn add(steps: &mut Steps, (a0, a1): Pair, (b0, b1): Pair) -> Pair {
 }
 
 /// `dd_real - dd_real` with `QD_IEEE_ADD` (`run` from 0x310).
-pub fn sub(steps: &mut Steps, a: Pair, b: Pair) -> Pair {
+pub fn sub<B: Behavior>(steps: &mut Steps<B>, a: Pair, b: Pair) -> Pair {
     let (highs, lows) = differences(steps, a, b); // 0x318 to 0x36b
     renormalize(steps, highs, lows) // 0x353 and 0x363, then 0x2de
 }
 
 /// `dd_real * dd_real` (`run` from 0x119).
-pub fn mul(steps: &mut Steps, (a0, a1): Pair, (b0, b1): Pair) -> Pair {
+pub fn mul<B: Behavior>(steps: &mut Steps<B>, (a0, a1): Pair, (b0, b1): Pair) -> Pair {
     let p = steps.mul(a0, b0); // 0x127
     let e = steps.fused_add(b0, a0, -p); // 0x141 xorpd; 0x14f call fma(a0, b0, -p)
     let first = steps.mul(a0, b1); // 0x160
@@ -111,7 +112,7 @@ pub fn mul(steps: &mut Steps, (a0, a1): Pair, (b0, b1): Pair) -> Pair {
 
 /// `dd_real * double` for `b * q` in `accurate_div`: `two_prod(b0, q)` and
 /// `p2 += b1 * q`, renormalized.
-fn mul_double(steps: &mut Steps, (b0, b1): Pair, q: F64) -> Pair {
+fn mul_double<B: Behavior>(steps: &mut Steps<B>, (b0, b1): Pair, q: F64) -> Pair {
     let p = steps.mul(b0, q);
     let e = steps.fused_add(q, b0, -p); // fma(b0, q, -p)
     let low = steps.mul(b1, q);
@@ -122,7 +123,7 @@ fn mul_double(steps: &mut Steps, (b0, b1): Pair, q: F64) -> Pair {
 }
 
 /// `dd_real / dd_real`, the accurate `accurate_div`.
-pub fn div(steps: &mut Steps, a: Pair, b: Pair) -> Pair {
+pub fn div<B: Behavior>(steps: &mut Steps<B>, a: Pair, b: Pair) -> Pair {
     let q1 = steps.div(a.0, b.0); // 0x27
     let product = mul_double(steps, b, q1); // 0x3b to 0xc2
     let (highs, lows) = differences(steps, a, product); // 0xa0 to 0x10d
@@ -154,7 +155,7 @@ pub fn div(steps: &mut Steps, a: Pair, b: Pair) -> Pair {
 /// source: a zero gives `+0`, a negative value gives QD's NaN in both halves,
 /// and a NaN goes on to the arithmetic. QD also writes an error for a
 /// negative value.
-pub fn sqrt(steps: &mut Steps, a: Pair) -> Pair {
+pub fn sqrt<B: Behavior>(steps: &mut Steps<B>, a: Pair) -> Pair {
     let zero = F64::from_bits(0);
     match steps.compare_signaling(a.0, zero) {
         // 0x6c0 comisd; 0x6c6 je

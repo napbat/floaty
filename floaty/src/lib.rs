@@ -20,8 +20,9 @@
 //! ```
 //!
 //! The operators `+`, `-`, `*`, and `/` round with the default mode of the
-//! type. Each operation also has a `_with` form that takes a [`Rounding`] or
-//! an [`Env`] and returns the [`Flags`]:
+//! type. Each operation also has a `_with` form that returns the [`Flags`].
+//! It takes a [`Rounding`], an [`Env`] chosen at run time, or a mode fixed at
+//! compile time, such as [`mode::X86Sse`]:
 //!
 //! ```
 //! use floaty::{F32, Flags, Rounding};

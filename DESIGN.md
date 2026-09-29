@@ -2,8 +2,9 @@
 
 Status: design approved on 2026-09-27. Build steps 1, encoding, 2, rounding,
 3, arithmetic, 4, the other binary operations, 5, the x86 SSE and x87
-presets, 6, performance, 7, decimal, and 8, double-double, are complete. A
-speedup pass of the binary engine followed step 8.
+presets, 6, performance, 7, decimal, and 8, double-double, are complete. Two
+speedup passes of the binary engine followed step 8. The second made the
+behavior a type.
 
 This file is the source of truth for every design decision in floaty. Update
 it in the same change that alters a decision.
@@ -375,7 +376,8 @@ pub struct NanRule {
 ```
 
 `Env`, `NanRule`, `InvalidProduct`, `FusedNanOrder`, `TotalOrder`,
-`Tininess`, `Override`, and `Mode` live in the module `floaty::env`. The
+`Tininess`, `Behavior`, `Override`, and `Mode` live in the module
+`floaty::env`. The
 crate root re-exports `Env`, `Flags`, `Rounding`, `TotalOrder`, and the
 module `mode`.
 
@@ -446,12 +448,16 @@ module `mode`.
 ### Modes
 
 ```rust
-pub trait Mode: Sealed + 'static {
+pub trait Behavior: Sealed + Copy { fn env(self) -> Env; } // an Env, or a mode
+
+pub trait Mode: Sealed + Copy + Default + 'static {
     const ENV: Env;
 }
 ```
 
-A mode names one constant `Env`, so a type can carry a default behavior.
+A mode names one constant `Env`, so a type can carry a default behavior. A
+mode is a type of size zero, so its value `M::default()` is also a behavior
+that a call can pass.
 The modes live in the module `floaty::mode`, because the encoding markers
 `Ieee` and `X87` already use those names at the crate root. `mode::Ieee` is
 the default mode. It rounds to nearest even, does not flush, and detects
@@ -461,15 +467,30 @@ quiet NaN, then the earlier operand, and a positive default NaN. A conversion ke
 SoftFloat's ARM-VFPv2 specialization follows the same rule, so TestFloat
 checks the default mode directly.
 
+A combinator makes a mode from another mode and one changed field, at
+compile time. The fields that processors change at run time each have one:
+
+| Combinator | Field | Processor control |
+| --- | --- | --- |
+| `Rounded<M, R>` | `rounding`, from a type in `mode::direction` | MXCSR.RC, x87 RC, Arm FPCR.RMode |
+| `FlushToZero<M, S>` | `flush_to_zero`, from `mode::switch::On` or `Off` | MXCSR.FTZ, Arm FPCR.FZ |
+| `DenormalsAreZero<M, S>` | `denormals_are_zero` | MXCSR.DAZ |
+| `Precision<M, DIGITS>` | `precision` | x87 PC |
+| `FullPrecision<M>` | `precision` set to `None` | |
+
+`Precision<M, 0>` fails to compile where a program uses the behavior of the
+mode. A later combinator replaces the field that an earlier one set.
+
 ### Operations and Overrides
 
 ```rust
 type F32 = Float<Binary<8>, 32>; // default mode: mode::Ieee
 
-a + b                                // the type's mode; flags dropped
-a.add_with(b, Rounding::TowardZero)  // override the rounding only; returns (value, Flags)
-a.add_with(b, env)                   // replace the whole Env
-a.add_with(b, F32::ENV)              // no override; returns the flags
+a + b                                // the type's mode, fixed at compile time; flags dropped
+a.add_with(b, Rounding::TowardZero)  // override the rounding only: an Env; returns (value, Flags)
+a.add_with(b, env)                   // replace the whole behavior with an Env
+a.add_with(b, mode::X86Sse)          // replace it with a mode, fixed at compile time
+a.add_with(b, F32::ENV)              // the type's behavior as an Env; returns the flags
 a.with_mode::<Other>()               // same bits, new default mode, no cost
 ```
 
@@ -480,10 +501,24 @@ a.with_mode::<Other>()               // same bits, new default mode, no cost
 - A bare `Rounding` override keeps every other field of the type's `Env`.
   AVX-512 embedded rounding, the RISC-V rounding field of an instruction, and
   the x87 constant loads change only the rounding direction.
-- The engine is generic over the format only. A mode reaches the engine as a
-  constant `Env` argument. When the `Env` is constant, the compiler removes
-  the branches that it does not use. Every mode shares one compiled engine for
-  each format.
+- The engine is generic over the format and over the behavior. An `Env` is a
+  behavior that the program chooses at run time, and the engine reads its
+  fields. A mode is a behavior fixed at compile time. Each mode gets its own
+  compiled copy of the common path of an operation, with every field of the
+  mode as a constant. The rare paths, the special values and the tiny
+  results, take the `Env` by reference for every behavior.
+- A program changes the behavior in one of three ways:
+  1. It passes an `Env` at run time. This way is always available.
+  2. It maps a state that it reads at run time to one of a known set of
+     modes, with a `match`. Each arm runs a copy of the code for its mode.
+     An emulator does this for a control register: MXCSR has 16 states of
+     rounding, FTZ, and DAZ, and the x87 control word has 12 states of
+     rounding and precision control.
+  3. It calls `with_mode` at a point fixed in the source.
+- Stable Rust cannot use a struct as a const generic parameter. So a
+  behavior is a type with an associated constant, and a combinator derives
+  one mode from another. The unstable `adt_const_params` gives the same code
+  and needs the incomplete `generic_const_exprs` to derive a mode.
 
 ### Flags
 
@@ -893,6 +928,30 @@ The decimal formats follow the Intel decimal library:
     before it rounds.
   - These branches are not fast paths: they run the code of the general
     path on fewer steps.
+- A second pass specialized the common path for each format and each
+  behavior:
+  - Each binary format is a target type of the rounding routine,
+    `exact::Format`. So each format has its own copy of the routine, with
+    the precision, `emin`, and `emax` of the format as constants.
+  - The rare path of each operation, the special values and the subnormal
+    operands, stays out of line with `#[inline(never)]`. The common path is
+    then short enough to inline into the operation.
+  - The common path takes the behavior as a type, down to the rounding
+    routine. A mode makes every field a constant there, and the precision
+    limit matters most: without a limit, the rounding shifts are constant.
+  - LLVM does not inline three shared functions for `#[inline]`: the
+    rounding routine, its normal branch, and the sum of two terms. They carry
+    `#[inline(always)]` with a narrow allowance of `clippy::inline_always`,
+    and each one states the measured reason.
+  - The sum aligns both terms to their common exponent, so its branch
+    predicts well. An order of the terms by exponent branches on random
+    data. The encoder sets the sign as a field of one bit, without a branch.
+  - The decimal engine follows the same pattern. Each decimal format is a
+    target type of the decimal rounding routine, `DecimalRoundingTarget`,
+    and the operations carry the behavior as a type down to it. A mode gains
+    less than 1% there: the decimal engine computes every format on 512-bit
+    integers, and multiplication and digit counting of those integers take
+    about half of the time of an operation.
 - A fast path must pass the same oracle tests as the generic path, and this
   file must list it. There is one fast path.
   - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
@@ -901,7 +960,10 @@ The decimal formats follow the Intel decimal library:
     precision. MXCSR must also round to nearest even without FTZ or DAZ.
     Each call reads MXCSR with `STMXCSR`, because an emulator or a library
     built with `-ffast-math` can change it. That read is the one `unsafe`
-    block of `floaty`.
+    block of `floaty`. The block stores MXCSR in a stack slot of its own and
+    loads the value into a register. A store into a slot of the frame of the
+    caller made a later load of the frame wait on store forwarding, which
+    doubled the time of an operator.
   - The operators return no flags. A NaN result goes back to the engine,
     which selects the NaN by the rule of the mode. The `_with` methods never
     take the path, because portable Rust cannot read the host flags. `sqrt`
@@ -952,6 +1014,32 @@ The speedup pass, before and after, on the same host:
 | binary128 `sqrt` | 261 | 255 |
 | binary512 `add_with` | 99 | 71 |
 
+The specialization per format and behavior, before and after, in
+nanoseconds per operation. Other work loaded the host, so each figure is the
+lower of two interleaved runs; the `rustc_apfloat` rows did not change. The
+`Env` column passes an `Env`, and the mode column passes the mode of the
+type. Before the change, both took the path of an `Env`.
+
+| Operation | Before | After, `Env` | After, mode |
+| --- | --- | --- | --- |
+| binary64 add | 29 | 22 | 16 |
+| binary64 fused multiply-add | 36 | 26 | 25 |
+| binary64 divide | 46 | 37 | 35 |
+| binary64 square root | 65 | | 61 |
+| binary64 round to integral | 18 | | 9 |
+| binary64 to binary16 | 18 | | 9 |
+| binary16 add | 31 | 20 | 16 |
+| binary16 multiply | 22 | 15 | 13 |
+| OCP FP8 E4M3 add | 29 | 19 | 16 |
+| binary128 add | 36 | 25 | 20 |
+| binary512 add | 76 | 65 | 56 |
+| binary64 `+` operator, host path | 2 | | 2 |
+
+The three forced functions, measured against `#[inline]` on the same code:
+binary64 add with a mode takes 15.9 ns against 20.5 ns, round to integral
+takes 8.9 ns against 16.6 ns, and binary128 add with a mode takes 19.7 ns
+against 25.8 ns.
+
 ## Verification
 
 A bit-exact claim needs an independent reference. floaty tests against
@@ -990,6 +1078,7 @@ an oracle.
 | Conversion of every binary16 encoding to the FP8 formats, rounding to nearest even | A table that `ml_dtypes` generates, in `floaty-verify/data` | Result bits, and NaN and sign for a NaN result |
 | The `AddendFirst` fused NaN order | The `FPMulAdd` and `FPProcessNaNs3` pseudocode of the Arm Architecture Reference Manual, evaluated in the test; QEMU's `pickNaNMulAdd` for Arm agrees | Every triple of ten special values of binary32, binary64, and decimal64, with the default-NaN mode off and on: the NaN result and the flags. A case without a NaN result gives the result of the default order. |
 | `TotalOrder` of decimal encodings of one datum | decNumber's `canonical` and its arbitrary-precision total order | Random decimal64 and decimal128 encodings against their canonical twins and random operands, for the values and the magnitudes, under both rules |
+| Modes and mode combinators | TestFloat, QD, decNumber, and the host processor | Every run of the ARM generator with its NaN rule, tininess after rounding, and no precision limit, through `Rounded<Ieee, R>` in its rounding direction: add, sub, mul, div, and square root of binary16, binary32, binary64, x87 extended, and binary128, and the 20 conversions between those formats. The fused multiply-add at nearest even in the normal run, and in every direction in the ignored sweep. `Qd` in four directions through `Rounded<X86Sse, R>`. The random decimal32, decimal64, and decimal128 add, subtract, multiply, and divide of the decNumber test in the six shared directions through `Rounded<Ieee, R>`. The SSE arithmetic in the 16 MXCSR states of rounding, FTZ, and DAZ, and the x87 arithmetic in the 12 control word states of rounding and precision control, each through the mode that a `match` selects for the state, as an emulator does. Each test also checks that the selected mode has the `Env` of its run. |
 | x86 SSE and x87 presets | The host processor, through inline assembly on x86-64 | The MXCSR of the process and the control word after `FNINIT`, decoded to the preset fields. Products that only the tininess rule tells apart, in both units. NaN selection with one and two operands, the default NaN, the fused multiply-add NaN addend, DE, precision control, and C1. Every other SSE and x87 hardware test compares floaty under behaviors built from the presets. |
 | Decimal, DPD | The decTest 2.62 vectors, and the decNumber 3.68 library | Every decimal64 and decimal128 vector of an operation that floaty has. That includes the `canonical` vectors, for `is_canonical` and a conversion to the same format, and the `apply` vectors of an explicit encoding, for `decode`, which the decimal32 vectors also give. Random operands at the edges of decimal32, decimal64, and decimal128 for every such operation, square root, the conversions between widths, FTZ, and DAZ, in the six shared rounding directions: result bits, the five IEEE flags, `TINY`, and `ROUNDED_UP`. Add, subtract, multiply, divide, fused multiply-add, square root, and `scale_b` of decimal64 and decimal128 under precision limits of 1, 2, 3, 7, and `p - 1` digits. |
 | Decimal, BID, and conversions between decimal and binary32, binary64, x87 extended, and binary128 | The Intel Decimal Floating-Point Math Library 2.0 Update 2 and its `readtest.in` vectors | Every `readtest.in` vector of a function that floaty has: 65,300 operation lines and 41,505 conversion lines. About 22 million seeded random cases in the five directions of the library. They include exact square roots, values on both sides of every integer bound, binary ties at every sign of decimal exponent, and minimum and maximum operands that compare equal. The tests compare result bits with NaN payloads, the five IEEE flags, and the denormal flag of a conversion from binary. Each test asserts every rule and skip count. |
@@ -1114,7 +1203,8 @@ floaty/                  the workspace
 │   └── src/
 │       ├── float.rs     Float, Class, and the format aliases
 │       ├── format.rs    Standard, Binary<E, Enc>, the width-to-storage table
-│       ├── env.rs       Env, Rounding, NanRule, Flags, modes, presets
+│       ├── env.rs       Env, Rounding, NanRule, Flags, Behavior, presets
+│       ├── env/mode.rs  the modes and the mode combinators
 │       ├── limbs.rs     [u64; N] arithmetic
 │       ├── integer.rs   Int<BITS>, UInt<BITS>, Integer, ToInt
 │       ├── unpacked.rs  the decoded value that every engine computes on
@@ -1198,7 +1288,14 @@ Each step passes its oracle tests before the next step starts.
 - Decide whether a reciprocal square root estimate, as SoftFloat uses,
   replaces the integer square root and the wide division. The speedup pass
   left them slow: binary128 `sqrt` takes 255 ns.
-- Decide whether the decimal engine gets a speedup pass.
+- Decide whether each decimal format computes on its own working width, in
+  place of 512 bits for every format: about 57 bits for decimal32, 117 bits
+  for decimal64, and 236 bits for decimal128. A decimal64 addition runs about
+  3,150 instructions, ten times a binary64 addition.
+- Measure the specialization per format and behavior again on an idle host.
+  Other work loaded the host during the measurement in this file.
+- Add mode combinators for the NaN rule and the tininess rule with the Arm
+  preset: Arm FPCR.DN switches the NaN rule at run time.
 - Confirm the `Gcc` double-double results, and the PowerPC `fmadd` and
   `fmsub` NaN rules, on POWER hardware. QEMU stands in for it now.
 - `saturate` applies only to encodings without an infinity. OCP FP8

@@ -1,19 +1,25 @@
-//! Measures the time of floaty operations for each format, and of the host
-//! `f32` and `f64` types and `rustc_apfloat` as baselines.
+//! Measures the time of floaty operations for each binary and decimal format,
+//! and of the host `f32` and `f64` types and `rustc_apfloat` as baselines.
 //!
 //! Run it with `cargo bench -p floaty-verify --bench operations`. Each case
 //! runs a batch of 1,024 operations on seeded random normal operands near
 //! 1.0, many times, and reports the median of 11 samples in nanoseconds per
 //! operation. The operands avoid special values, so the numbers show the
 //! common path of each operation. The operator columns of binary32 and
-//! binary64 take the host fast path on x86-64. The `add_with` column always
-//! measures the engine, with the flags.
+//! binary64 take the host fast path on x86-64.
+//!
+//! The `_with` columns pass an `Env`, which the engine reads at run time. The
+//! `_mode` columns pass the mode of the type, `mode::Ieee`, a behavior fixed
+//! at compile time. The other floaty columns use the mode of the type too.
 
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use floaty::format::Standard;
-use floaty::{BF16, Binary, Env, Exact, F16, F32, F64, F80, F128, Float, Fnuz, NoInf, X87};
+use floaty::{
+    BF16, Bid, Binary, Decimal, Dpd, Env, Exact, F16, F32, F64, F80, F128, Float, Fnuz, NoInf, X87,
+    mode,
+};
 use floaty_verify::random::SplitMix64;
 use rustc_apfloat::ieee::{BFloat, Double, Half, Quad, Single, X87DoubleExtended};
 use rustc_apfloat::{Float as _, FloatConvert as _};
@@ -28,7 +34,7 @@ const SAMPLES: usize = 11;
 const SAMPLE_TIME: Duration = Duration::from_millis(4);
 
 /// The operations that each row measures, in column order.
-const COLUMNS: [&str; 11] = [
+const COLUMNS: [&str; 16] = [
     "add",
     "add_with",
     "mul",
@@ -40,6 +46,11 @@ const COLUMNS: [&str; 11] = [
     "to_i64",
     "round_int",
     "decode",
+    "add_mode",
+    "mul_with",
+    "mul_mode",
+    "div_mode",
+    "mul_add_with",
 ];
 
 /// Returns the median time of one operation of `batch`, which runs `COUNT`
@@ -73,11 +84,13 @@ fn measure(mut batch: impl FnMut()) -> f64 {
 /// Returns `COUNT` random normal values near 1.0 of a format, rounded from
 /// random 64-bit significands.
 fn operands<S: Standard<W>, const W: usize>(random: &mut SplitMix64) -> Vec<Float<S, W>> {
+    // A 64-bit significand is near 2^63, or near 10^19 in radix 10.
+    let base = if S::RADIX == 10 { -19 } else { -63 };
     (0..COUNT)
         .map(|_| {
             let exact = Exact {
                 negative: random.next_u64() % 2 == 0,
-                exponent: -63
+                exponent: base
                     + i32::try_from(random.next_u64() % 8).expect("a shift below 8 fits an i32"),
                 significand: [random.next_u64() | 1 << 63],
                 sticky: false,
@@ -153,6 +166,15 @@ fn floaty_row<S: Standard<W>, const W: usize>(name: &str, seed: u64) {
                 black_box(black_box(x).decode::<8>());
             }
         })),
+        Some(binary(|x, y| x.add_with(y, mode::Ieee).0)),
+        Some(binary(|x, y| x.mul_with(y, Env::IEEE).0)),
+        Some(binary(|x, y| x.mul_with(y, mode::Ieee).0)),
+        Some(binary(|x, y| x.div_with(y, mode::Ieee).0)),
+        Some(measure(|| {
+            for ((&x, &y), &z) in a.iter().zip(&b).zip(&c) {
+                black_box(black_box(x).mul_add_with(black_box(y), black_box(z), Env::IEEE));
+            }
+        })),
     ];
     row(name, &times);
 }
@@ -209,6 +231,11 @@ macro_rules! host_row {
                     black_box(black_box(x).round_ties_even());
                 }
             })),
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
         ];
         row($name, &times);
@@ -298,6 +325,11 @@ macro_rules! apfloat_row {
                 }
             })),
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
         ];
         row($name, &times);
     }};
@@ -318,6 +350,11 @@ fn main() {
     floaty_row::<Binary<15>, 128>("floaty F128", 7);
     floaty_row::<Binary<19>, 256>("floaty F256", 8);
     floaty_row::<Binary<23>, 512>("floaty F512", 9);
+    floaty_row::<Decimal<Bid>, 32>("floaty D32Bid", 11);
+    floaty_row::<Decimal<Bid>, 64>("floaty D64Bid", 12);
+    floaty_row::<Decimal<Bid>, 128>("floaty D128Bid", 13);
+    floaty_row::<Decimal<Dpd>, 64>("floaty D64Dpd", 14);
+    floaty_row::<Decimal<Dpd>, 128>("floaty D128Dpd", 15);
     host_row!("host f32", f32, 8, 32, 4);
     host_row!("host f64", f64, 11, 64, 5);
     apfloat_row!("apfloat Half", Half, F16, 2);

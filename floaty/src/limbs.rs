@@ -423,6 +423,7 @@ macro_rules! widen {
             impl Widen for [u64; $limbs] {
                 type Double = [u64; $double];
 
+                #[inline]
                 fn widening_mul(self, other: Self) -> [u64; $double] {
                     multiply(&self, &other)
                 }
@@ -434,6 +435,7 @@ macro_rules! widen {
 widen!(1 => 2, 2 => 4, 3 => 6, 4 => 8, 5 => 10, 6 => 12, 7 => 14, 8 => 16);
 
 /// Returns the full product of two limb arrays. `D` must be twice `N`.
+#[inline]
 fn multiply<const N: usize, const D: usize>(left: &[u64; N], right: &[u64; N]) -> [u64; D] {
     debug_assert!(D == 2 * N, "the product has twice the limbs");
     let mut product = [0_u64; D];
