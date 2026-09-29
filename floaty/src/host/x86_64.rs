@@ -3,6 +3,8 @@
 
 use super::Operation;
 
+pub mod packed;
+
 /// Returns `true` when the SSE unit rounds to nearest even without FTZ or DAZ,
 /// and masks every exception.
 ///

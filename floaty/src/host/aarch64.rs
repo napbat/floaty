@@ -3,6 +3,8 @@
 
 use super::Operation;
 
+pub mod packed;
+
 /// Returns `true` when the floating-point unit rounds to nearest even without
 /// flushing, and enables no exception trap.
 ///

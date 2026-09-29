@@ -29,6 +29,13 @@ pub use self::paths::{
     Ready, binary, convert, from_int, mul_add, ready, round_to_integral, sqrt, to_int,
 };
 
+#[cfg(not(floaty_engine_only))]
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "sse2"),
+    target_arch = "aarch64"
+))]
+pub mod packed;
+
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "sse2",
@@ -177,7 +184,7 @@ pub const fn convertible(from: Host, to: Host) -> bool {
     ))
 ))]
 pub use self::none::{
-    Ready, binary, convert, from_int, mul_add, ready, round_to_integral, sqrt, to_int,
+    Ready, binary, convert, from_int, mul_add, packed, ready, round_to_integral, sqrt, to_int,
 };
 
 /// The entry points of a build without a host path: each returns `None`.
@@ -275,5 +282,75 @@ mod none {
     #[inline]
     pub fn convert(_from: Host, _to: Host, _bits: [u64; 2], _env: &Env) -> Option<[u64; 2]> {
         None
+    }
+
+    /// The packed entry points of a build without a host path: each returns
+    /// `None`.
+    pub mod packed {
+        use crate::env::{Env, Mode};
+        use crate::float::Float;
+        use crate::format::Standard;
+        use crate::format::internal::Host;
+        use crate::host::Operation;
+
+        /// The lanes that a packed host path computes. No value exists in
+        /// this build.
+        #[derive(Clone, Copy, Debug)]
+        pub struct Packed<L, const N: usize> {
+            /// The lanes.
+            pub lanes: [L; N],
+            /// `true` when a lane is a NaN.
+            pub nan: bool,
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn binary<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+            _left: &[Float<S, W, M>; N],
+            _right: &[Float<S, W, M>; N],
+            _operation: Operation,
+            _env: &Env,
+        ) -> Option<Packed<Float<S, W, M>, N>> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+            _value: &[Float<S, W, M>; N],
+            _env: &Env,
+        ) -> Option<Packed<Float<S, W, M>, N>> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+            _value: &[Float<S, W, M>; N],
+            _env: &Env,
+        ) -> Option<Packed<Float<S, W, M>, N>> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn mul_add<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+            _left: &[Float<S, W, M>; N],
+            _right: &[Float<S, W, M>; N],
+            _addend: &[Float<S, W, M>; N],
+            _env: &Env,
+        ) -> Option<Packed<Float<S, W, M>, N>> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+            _value: &[Float<S, W, M>; N],
+            _to: Host,
+            _env: &Env,
+        ) -> Option<Packed<u64, N>> {
+            None
+        }
     }
 }

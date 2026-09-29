@@ -45,7 +45,7 @@ const fn compatible(env: &Env, precision: u32) -> bool {
 
 /// Returns `true` for the bits of a binary32 NaN.
 #[inline]
-const fn nan_32(bits: u32) -> bool {
+pub(super) const fn nan_32(bits: u32) -> bool {
     bits & 0x7FFF_FFFF > 0x7F80_0000
 }
 
@@ -57,13 +57,13 @@ const fn nan_16(bits: u16) -> bool {
 
 /// Returns `true` for the bits of a binary64 NaN.
 #[inline]
-const fn nan_64(bits: u64) -> bool {
+pub(super) const fn nan_64(bits: u64) -> bool {
     bits & 0x7FFF_FFFF_FFFF_FFFF > 0x7FF0_0000_0000_0000
 }
 
 /// Returns the host value of a binary32 encoding.
 #[inline]
-fn single<S: Standard<W>, const W: usize>(bits: S::Bits) -> f32 {
+pub(super) fn single<S: Standard<W>, const W: usize>(bits: S::Bits) -> f32 {
     let low = bits.to_limbs().limb(0);
     f32::from_bits(u32::try_from(low).expect("a binary32 encoding has 32 bits"))
 }
@@ -106,7 +106,7 @@ fn bfloat_encoding<S: Standard<W>, const W: usize>(result: f32) -> Option<S::Bit
 
 /// Returns the host value of a binary64 encoding.
 #[inline]
-fn double<S: Standard<W>, const W: usize>(bits: S::Bits) -> f64 {
+pub(super) fn double<S: Standard<W>, const W: usize>(bits: S::Bits) -> f64 {
     f64::from_bits(bits.to_limbs().limb(0))
 }
 
@@ -123,14 +123,14 @@ fn encoding<S: Standard<W>, const W: usize>(result: u64, nan: bool) -> Option<S:
 
 /// Returns the encoding of a binary32 result, or `None` for a NaN.
 #[inline]
-fn single_encoding<S: Standard<W>, const W: usize>(result: f32) -> Option<S::Bits> {
+pub(super) fn single_encoding<S: Standard<W>, const W: usize>(result: f32) -> Option<S::Bits> {
     let bits = result.to_bits();
     encoding::<S, W>(u64::from(bits), nan_32(bits))
 }
 
 /// Returns the encoding of a binary64 result, or `None` for a NaN.
 #[inline]
-fn double_encoding<S: Standard<W>, const W: usize>(result: f64) -> Option<S::Bits> {
+pub(super) fn double_encoding<S: Standard<W>, const W: usize>(result: f64) -> Option<S::Bits> {
     let bits = result.to_bits();
     encoding::<S, W>(bits, nan_64(bits))
 }
@@ -152,7 +152,7 @@ fn extended_encoding<S: Standard<W>, const W: usize>(result: [u64; 2]) -> S::Bit
 /// `precision` bits. The x87 unit computes x87 extended precision, and the
 /// SSE unit or the AArch64 unit computes the other kinds.
 #[inline]
-fn ready_for(host: Host, env: &Env, precision: u32) -> bool {
+pub(super) fn ready_for(host: Host, env: &Env, precision: u32) -> bool {
     let unit = match host {
         Host::Extended => environment::x87_environment(),
         Host::None | Host::Half | Host::BFloat | Host::Single | Host::Double => {
@@ -327,7 +327,7 @@ pub fn from_int<S: Standard<W>, const W: usize>(value: i64, env: &Env) -> Option
 }
 
 /// Returns the precision of a host kind.
-const fn precision_of(host: Host) -> u32 {
+pub(super) const fn precision_of(host: Host) -> u32 {
     match host {
         Host::None => 0,
         Host::BFloat => 8,

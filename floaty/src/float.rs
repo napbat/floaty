@@ -31,6 +31,9 @@ mod integer;
 /// assert_eq!(one.classify(), Class::Normal);
 /// assert_eq!(one.to_bits(), 0x3F80_0000);
 /// ```
+// The layout is that of the encoding, so the packed host paths of `Lanes`
+// read an array of values as an array of encodings.
+#[repr(transparent)]
 pub struct Float<S: Standard<W>, const W: usize, M: Mode = mode::Ieee> {
     bits: S::Bits,
     marker: PhantomData<(S, M)>,

@@ -51,6 +51,7 @@ mod exact;
 mod float;
 mod host;
 mod integer;
+mod lanes;
 mod limbs;
 mod nan;
 mod radix;
@@ -66,6 +67,7 @@ pub use float::{
 };
 pub use format::{Bid, Binary, Decimal, Dpd, Fnuz, Ieee, NoInf, X87};
 pub use integer::{Int, Integer, ToInt, UInt};
+pub use lanes::Lanes;
 
 mod sealed {
     /// Prevents implementations of a trait outside the crate.

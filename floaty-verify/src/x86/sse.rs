@@ -372,3 +372,159 @@ sse_round!(
     /// `ROUNDSD` with the immediate `IMMEDIATE`.
     roundsd, u64, "movq {x}, {a}\n roundsd {x}, {x}, {immediate}\n movq {result}, {x}"
 );
+
+/// Defines a function that runs a packed SSE instruction on two 128-bit
+/// chunks under an MXCSR value, and returns the result chunk and the flags.
+/// A one-operand instruction reads `x` and ignores `b`.
+macro_rules! sse_packed {
+    ($(#[$doc:meta])* $name:ident, $lane:ty, $lanes:literal, $operation:literal) => {
+        $(#[$doc])*
+        #[must_use]
+        pub fn $name(a: [$lane; $lanes], b: [$lane; $lanes], control: u32) -> ([$lane; $lanes], u32) {
+            let (mut saved, mut after) = (0_u32, 0_u32);
+            let mut result = [0; $lanes];
+            // SAFETY: the code saves MXCSR, loads both chunks from their
+            // arrays, runs one instruction under `control`, stores the result
+            // chunk into `result`, reads the flags, and restores MXCSR. Each
+            // array holds 16 bytes.
+            unsafe {
+                asm!(
+                    "stmxcsr [{saved}]",
+                    "ldmxcsr [{control}]",
+                    "movups {x}, [{a}]",
+                    "movups {y}, [{b}]",
+                    $operation,
+                    "movups [{result}], {x}",
+                    "stmxcsr [{after}]",
+                    "ldmxcsr [{saved}]",
+                    saved = in(reg) &raw mut saved,
+                    control = in(reg) &raw const control,
+                    after = in(reg) &raw mut after,
+                    a = in(reg) a.as_ptr(),
+                    b = in(reg) b.as_ptr(),
+                    result = in(reg) result.as_mut_ptr(),
+                    x = out(xmm_reg) _,
+                    y = out(xmm_reg) _,
+                    options(nostack),
+                );
+            }
+            (result, after & MXCSR_FLAGS)
+        }
+    };
+}
+
+sse_packed!(
+    /// `ADDPS`.
+    addps, u32, 4, "addps {x}, {y}"
+);
+sse_packed!(
+    /// `SUBPS`.
+    subps, u32, 4, "subps {x}, {y}"
+);
+sse_packed!(
+    /// `MULPS`.
+    mulps, u32, 4, "mulps {x}, {y}"
+);
+sse_packed!(
+    /// `DIVPS`.
+    divps, u32, 4, "divps {x}, {y}"
+);
+sse_packed!(
+    /// `SQRTPS` of `a`; `b` is unused.
+    sqrtps, u32, 4, "sqrtps {x}, {x}"
+);
+sse_packed!(
+    /// `ROUNDPS` of `a` in the rounding direction of MXCSR, immediate 4; `b`
+    /// is unused.
+    roundps, u32, 4, "roundps {x}, {x}, 4"
+);
+sse_packed!(
+    /// `ADDPD`.
+    addpd, u64, 2, "addpd {x}, {y}"
+);
+sse_packed!(
+    /// `SUBPD`.
+    subpd, u64, 2, "subpd {x}, {y}"
+);
+sse_packed!(
+    /// `MULPD`.
+    mulpd, u64, 2, "mulpd {x}, {y}"
+);
+sse_packed!(
+    /// `DIVPD`.
+    divpd, u64, 2, "divpd {x}, {y}"
+);
+sse_packed!(
+    /// `SQRTPD` of `a`; `b` is unused.
+    sqrtpd, u64, 2, "sqrtpd {x}, {x}"
+);
+sse_packed!(
+    /// `ROUNDPD` of `a` in the rounding direction of MXCSR, immediate 4; `b`
+    /// is unused.
+    roundpd, u64, 2, "roundpd {x}, {x}, 4"
+);
+sse_packed!(
+    /// `CVTPS2PD` of the two low binary32 lanes of `a` into two binary64
+    /// lanes, returned as four 32-bit halves, low half first; `b` is unused.
+    cvtps2pd, u32, 4, "cvtps2pd {x}, {x}"
+);
+sse_packed!(
+    /// `CVTPD2PS` of the two binary64 lanes of `a`, given as four 32-bit
+    /// halves, into the two low binary32 lanes of the result; `b` is unused.
+    cvtpd2ps, u32, 4, "cvtpd2ps {x}, {x}"
+);
+
+/// Defines a function that runs a packed three-operand FMA instruction on
+/// 128-bit chunks under an MXCSR value, and returns the result chunk and the
+/// flags.
+macro_rules! fma_packed {
+    ($(#[$doc:meta])* $name:ident, $lane:ty, $lanes:literal, $operation:literal) => {
+        $(#[$doc])*
+        #[must_use]
+        pub fn $name(
+            a: [$lane; $lanes],
+            b: [$lane; $lanes],
+            c: [$lane; $lanes],
+            control: u32,
+        ) -> ([$lane; $lanes], u32) {
+            let (mut saved, mut after) = (0_u32, 0_u32);
+            let mut result = [0; $lanes];
+            // SAFETY: as in `sse_packed!`, with a third chunk. The processor
+            // of the test host has FMA.
+            unsafe {
+                asm!(
+                    "stmxcsr [{saved}]",
+                    "ldmxcsr [{control}]",
+                    "vmovups {x}, [{a}]",
+                    "vmovups {y}, [{b}]",
+                    "vmovups {z}, [{c}]",
+                    $operation,
+                    "vmovups [{result}], {x}",
+                    "stmxcsr [{after}]",
+                    "ldmxcsr [{saved}]",
+                    saved = in(reg) &raw mut saved,
+                    control = in(reg) &raw const control,
+                    after = in(reg) &raw mut after,
+                    a = in(reg) a.as_ptr(),
+                    b = in(reg) b.as_ptr(),
+                    c = in(reg) c.as_ptr(),
+                    result = in(reg) result.as_mut_ptr(),
+                    x = out(xmm_reg) _,
+                    y = out(xmm_reg) _,
+                    z = out(xmm_reg) _,
+                    options(nostack),
+                );
+            }
+            (result, after & MXCSR_FLAGS)
+        }
+    };
+}
+
+fma_packed!(
+    /// `VFMADD213PS`: `a * b + c` in each lane.
+    vfmadd213ps, u32, 4, "vfmadd213ps {x}, {y}, {z}"
+);
+fma_packed!(
+    /// `VFMADD213PD`: `a * b + c` in each lane.
+    vfmadd213pd, u64, 2, "vfmadd213pd {x}, {y}, {z}"
+);

@@ -16,7 +16,8 @@
 //! the type: the remainder of close and of distant operands, conversions to
 //! binary32, binary16, x87 extended, and decimal64 and from `i64`, additions
 //! of subnormal operands and of a zero, and the comparison and the minimum of
-//! two operands. A third table measures the double-double types.
+//! two operands. A third table measures the double-double types, and a
+//! fourth the operations of `Lanes` in nanoseconds per lane.
 
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -24,7 +25,7 @@ use std::time::{Duration, Instant};
 use floaty::format::Standard;
 use floaty::{
     BF16, Bid, Binary, D64Bid, Decimal, DoubleDouble, Dpd, Env, Exact, F16, F32, F64, F80, F128,
-    Float, Fnuz, Gcc, NoInf, Qd, X87, mode,
+    Float, Fnuz, Gcc, Lanes, NoInf, Qd, X87, mode,
 };
 use floaty_verify::random::SplitMix64;
 use rustc_apfloat::ieee::{BFloat, Double, Half, Quad, Single, X87DoubleExtended};
@@ -67,6 +68,20 @@ const OTHER_COLUMNS: [&str; 11] = [
 
 /// The operations of the double-double table, in column order.
 const DOUBLE_DOUBLE_COLUMNS: [&str; 5] = ["add", "mul", "div", "sqrt", "add_zero"];
+
+/// The operations of the `Lanes` table, in column order. `scalar_add` adds the
+/// lanes one at a time with the operator of the type, for comparison.
+const LANES_COLUMNS: [&str; 9] = [
+    "add",
+    "mul",
+    "div",
+    "sqrt",
+    "mul_add",
+    "round_int",
+    "convert",
+    "add_with",
+    "scalar_add",
+];
 
 /// Returns the median time of one operation of `batch`, which runs `COUNT`
 /// operations, in nanoseconds.
@@ -293,6 +308,54 @@ fn other_row<S: Standard<W>, const W: usize>(name: &str, seed: u64) {
 
 /// Measures the double-double table for one algorithm. Only `Qd` has a
 /// square root.
+/// Measures `operation` on each pair of `left` and `right`.
+fn each_pair<T: Copy, R>(left: &[T], right: &[T], operation: impl Fn(T, T) -> R) -> f64 {
+    measure(|| {
+        for (&x, &y) in left.iter().zip(right) {
+            black_box(operation(black_box(x), black_box(y)));
+        }
+    })
+}
+
+/// Measures the `Lanes` table for one format and lane count, in nanoseconds
+/// per lane. `convert` converts the lanes to the other of binary32 and
+/// binary64.
+fn lanes_row<S: Standard<W>, const W: usize, const N: usize, T: Copy>(
+    name: &str,
+    seed: u64,
+    convert: fn(Lanes<Float<S, W>, N>) -> T,
+) {
+    let mut random = SplitMix64::new(seed);
+    let group = |values: &[Float<S, W>]| -> Vec<Lanes<Float<S, W>, N>> {
+        values
+            .chunks_exact(N)
+            .map(|chunk| Lanes::new(chunk.try_into().expect("a chunk holds N lanes")))
+            .collect()
+    };
+    let first = operands::<S, W>(&mut random);
+    let second = operands::<S, W>(&mut random);
+    let third = operands::<S, W>(&mut random);
+    let magnitudes: Vec<Float<S, W>> = first.iter().map(|value| value.abs()).collect();
+    let (left, right) = (group(&first), group(&second));
+    let (addends, roots) = (group(&third), group(&magnitudes));
+    let times = [
+        Some(each_pair(&left, &right, |x, y| x + y)),
+        Some(each_pair(&left, &right, |x, y| x * y)),
+        Some(each_pair(&left, &right, |x, y| x / y)),
+        Some(each_pair(&roots, &roots, |x, _| x.sqrt())),
+        Some(measure(|| {
+            for ((&x, &y), &addend) in left.iter().zip(&right).zip(&addends) {
+                black_box(black_box(x).mul_add(black_box(y), black_box(addend)));
+            }
+        })),
+        Some(each_pair(&left, &left, |x, _| x.round_to_integral())),
+        Some(each_pair(&left, &left, |x, _| convert(x))),
+        Some(each_pair(&left, &right, |x, y| x.add_with(y, Env::IEEE).0)),
+        Some(each_pair(&first, &second, |x, y| x + y)),
+    ];
+    row(name, &times);
+}
+
 fn double_double_row<Alg: floaty::Algorithm>(
     name: &str,
     seed: u64,
@@ -553,4 +616,13 @@ fn main() {
     println!("|---{}|", "|---".repeat(DOUBLE_DOUBLE_COLUMNS.len()));
     double_double_row::<Qd>("floaty Qd", 41, Some(DoubleDouble::sqrt));
     double_double_row::<Gcc>("floaty Gcc", 42, None);
+    println!();
+    println!("Lanes, nanoseconds per lane.");
+    println!();
+    println!("| Lanes | {} |", LANES_COLUMNS.join(" | "));
+    println!("|---{}|", "|---".repeat(LANES_COLUMNS.len()));
+    lanes_row::<Binary<8>, 32, 4, _>("F32 x 4", 51, Lanes::convert::<F64>);
+    lanes_row::<Binary<8>, 32, 8, _>("F32 x 8", 52, Lanes::convert::<F64>);
+    lanes_row::<Binary<11>, 64, 2, _>("F64 x 2", 53, Lanes::convert::<F32>);
+    lanes_row::<Binary<11>, 64, 4, _>("F64 x 4", 54, Lanes::convert::<F32>);
 }

@@ -6,7 +6,7 @@
 
 use core::hint::black_box;
 
-use floaty::{BF16, F16, F32, F64};
+use floaty::{BF16, F16, F32, F64, Lanes};
 use floaty_verify::aarch64::{FPCR_SETTINGS, with_fpcr};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
@@ -123,6 +123,111 @@ fn operators_read_fpcr_before_the_host_unit() {
             let expected = x.convert_with::<BF16>(BF16::ENV).0.to_bits();
             let ours = with_fpcr(control, || black_box(x).convert::<BF16>().to_bits());
             assert_eq!(ours, expected, "{x:?} to BF16 under FPCR {control:#x}");
+        }
+    }
+}
+
+/// Returns the results of the operations of `Lanes` without flags on five
+/// binary32 lanes and three binary64 lanes, which the packed host paths
+/// compute in chunks and single lanes.
+fn lanes_without_flags(
+    x: Lanes<F32, 5>,
+    y: Lanes<F32, 5>,
+    u: Lanes<F64, 3>,
+    v: Lanes<F64, 3>,
+) -> Vec<u64> {
+    let singles = [
+        x + y,
+        x - y,
+        x * y,
+        x / y,
+        x.sqrt(),
+        x.mul_add(y, x),
+        x.round_to_integral(),
+    ];
+    let doubles = [
+        u + v,
+        u - v,
+        u * v,
+        u / v,
+        u.sqrt(),
+        u.mul_add(v, u),
+        u.round_to_integral(),
+    ];
+    let widened: Lanes<F64, 5> = x.convert();
+    let narrowed: Lanes<F32, 3> = u.convert();
+    let mut bits: Vec<u64> = singles
+        .iter()
+        .flat_map(|lanes| lanes.to_bits().map(u64::from))
+        .collect();
+    bits.extend(doubles.iter().flat_map(|lanes| lanes.to_bits()));
+    bits.extend(widened.to_bits());
+    bits.extend(narrowed.to_bits().map(u64::from));
+    bits
+}
+
+/// Returns the results of `lanes_without_flags` from the `_with` methods of
+/// `Lanes` in the default mode, which run the engine on each lane.
+fn lanes_in_engine(
+    x: Lanes<F32, 5>,
+    y: Lanes<F32, 5>,
+    u: Lanes<F64, 3>,
+    v: Lanes<F64, 3>,
+) -> Vec<u64> {
+    let (single, double) = (F32::ENV, F64::ENV);
+    let singles = [
+        x.add_with(y, single).0,
+        x.sub_with(y, single).0,
+        x.mul_with(y, single).0,
+        x.div_with(y, single).0,
+        x.sqrt_with(single).0,
+        x.mul_add_with(y, x, single).0,
+        x.round_to_integral_with(single).0,
+    ];
+    let doubles = [
+        u.add_with(v, double).0,
+        u.sub_with(v, double).0,
+        u.mul_with(v, double).0,
+        u.div_with(v, double).0,
+        u.sqrt_with(double).0,
+        u.mul_add_with(v, u, double).0,
+        u.round_to_integral_with(double).0,
+    ];
+    let widened: Lanes<F64, 5> = x.convert_with(double).0;
+    let narrowed: Lanes<F32, 3> = u.convert_with(single).0;
+    let mut bits: Vec<u64> = singles
+        .iter()
+        .flat_map(|lanes| lanes.to_bits().map(u64::from))
+        .collect();
+    bits.extend(doubles.iter().flat_map(|lanes| lanes.to_bits()));
+    bits.extend(widened.to_bits());
+    bits.extend(narrowed.to_bits().map(u64::from));
+    bits
+}
+
+#[test]
+fn lanes_read_fpcr_before_the_vector_unit() {
+    // Under each setting of FPCR, and under the default, the operations of
+    // `Lanes` without flags give the engine results of the default mode.
+    let mut random = SplitMix64::new(0x00A6_1A4E);
+    let singles = encodings::<u32>(&pairs(&mut random, 32, 8));
+    let doubles = encodings::<u64>(&pairs(&mut random, 64, 11));
+    for control in core::iter::once(0).chain(FPCR_SETTINGS) {
+        for start in (0..singles.len()).step_by(3) {
+            let lane = |offset: usize| singles[(start + offset) % singles.len()];
+            let double = |offset: usize| doubles[(start + offset) % doubles.len()];
+            let x = Lanes::<F32, 5>::from_bits(core::array::from_fn(lane));
+            let y = Lanes::<F32, 5>::from_bits(core::array::from_fn(|offset| lane(offset + 7)));
+            let u = Lanes::<F64, 3>::from_bits(core::array::from_fn(double));
+            let v = Lanes::<F64, 3>::from_bits(core::array::from_fn(|offset| double(offset + 5)));
+            let ours = with_fpcr(control, || {
+                lanes_without_flags(black_box(x), black_box(y), u, v)
+            });
+            assert_eq!(
+                ours,
+                lanes_in_engine(x, y, u, v),
+                "lanes at {start} under FPCR {control:#x}"
+            );
         }
     }
 }

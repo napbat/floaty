@@ -88,6 +88,9 @@ a default for operations. It does not change the value.
   trait implementation. This gives static dispatch without specialization.
 - The storage layout is private. Step 6 kept packed bits for every format,
   by benchmark; see [Engine and Performance](#engine-and-performance).
+- `Float` is `repr(transparent)` over its storage, so an array of values has
+  the layout of an array of encodings. The packed host paths of `Lanes` read
+  the lanes in place.
 - `from_bits` ignores the storage bits above `W`. For example, TF32 in a
   `u32` ignores bits 19 to 31. `to_bits` returns those bits as zero.
 - `Float::PRECISION`, `Float::EMAX`, and `Float::EMIN` give the precision and
@@ -106,6 +109,34 @@ a default for operations. It does not change the value.
 - Generic conversion is a method, `convert` or `cast`. A blanket
   `From<Float<A, _>> for Float<B, _>` overlaps `impl<T> From<T> for T`. A
   lossless pair can add a concrete `From` implementation.
+
+### Lanes
+
+```rust
+pub struct Lanes<T, const N: usize> { /* private */ }
+```
+
+`Lanes<T, N>` holds `N` values of one float type as the lanes of a vector
+register. `Lanes<F32, 4>` is an SSE or NEON register of binary32 values, and
+`Lanes<F32, 8>` is an AVX register.
+
+- Each operation applies the operation of the type to every lane. So each
+  lane gives the bits of the scalar operation, on every host.
+- The operations are the operators `+`, `-`, `*`, and `/`, `sqrt`,
+  `mul_add`, `round_to_integral`, and `convert` to another float type with
+  the same lane count.
+- A `_with` method returns the lanes and the union of the flags of the
+  lanes. A vector unit accumulates its status flags the same way, so an
+  emulator takes the flags of a packed instruction from the union. The union
+  is the flags that the lanes raise, not a quirk of one instruction set.
+- The methods without flags take a packed host path where the build has one.
+  The path checks the environment once for all lanes, computes full chunks
+  of lanes with packed instructions and the other lanes with the scalar host
+  path, and sends each lane with a NaN result to the engine.
+- `Lanes` is a newtype. An operator on `[F32; 4]` would implement a foreign
+  trait for a foreign type, which Rust does not allow.
+- `new` and `into_array` convert from and to an array, lane 0 first.
+  `from_bits` and `to_bits` read and write the encodings of the lanes.
 
 ## Formats
 
@@ -1261,6 +1292,19 @@ interleaved runs.
 | bfloat16 to `i64` | 10.6 | 2.2 | 2.2 |
 | bfloat16 round to integral | 7.4 | 7.8 | 1.7 |
 
+The operations of `Lanes`, in nanoseconds per lane. The engine column
+group is the engine-only build. The last column adds the lanes one at a time
+with the scalar operator. Each figure is the lower of two interleaved runs.
+A call checks the environment once and tests the lanes for a NaN, so two
+binary64 lanes cost more than two scalar operations, and wider lanes gain.
+
+| Lanes | Engine `+` | Default `+` | Default `sqrt` | x86-64-v3 `+` | x86-64-v3 `mul_add` | Scalar `+` |
+| --- | --- | --- | --- | --- | --- | --- |
+| binary32 x 4 | 12.4 | 1.3 | 1.3 | 1.3 | 1.3 | 1.5 |
+| binary32 x 8 | 12.1 | 0.9 | 0.9 | 0.7 | 1.0 | 1.5 |
+| binary64 x 2 | 15.0 | 2.2 | 2.2 | 2.2 | 2.2 | 1.5 |
+| binary64 x 4 | 14.1 | 1.9 | 1.8 | 1.4 | 1.5 | 1.5 |
+
 The comparison and the minimum of two numbers by their bits, before and
 after, in nanoseconds per operation of `partial_cmp`, `minimum`, and the
 `Gcc` operators. Each
@@ -1357,11 +1401,12 @@ it sends every other input to the engine.
   before the check of MXCSR, and a signaling NaN trapped under an unmasked
   invalid-operation exception. LLVM does not move an inline assembly block
   above a branch.
-- A primitive that needs an optional feature of AArch64 runs its
-  instruction in a function with `#[target_feature]` for that feature. The
-  AArch64 assembler rejects an instruction of a feature that the caller was
-  not compiled with, and a doctest does not take `RUSTFLAGS`. The function
-  still inlines into a caller with the feature.
+- A primitive that a caller without an optional feature could not compile
+  runs in a function with `#[target_feature]` for that feature. The AArch64
+  assembler rejects an instruction of a feature that the caller was not
+  compiled with, and rustc rejects a 256-bit x86 register without AVX. A
+  doctest does not take `RUSTFLAGS`, so its code lacks the features of the
+  build. The function still inlines into a caller with the feature.
 - A host path is a direct instruction or a host algorithm. A direct
   instruction is the IEEE 754 operation, such as `SQRTSD`. A host algorithm
   composes exact host operations, such as binary16 arithmetic through
@@ -1402,6 +1447,8 @@ it sends every other input to the engine.
 | `FEAT_FP16` fused multiply-add | AArch64 with `FEAT_FP16` | `mul_add` of binary16, by `FMADD` on half-precision registers | As the AArch64 operators | Arm Architecture Reference Manual, DDI 0487: `FMADD` | Host paths and AArch64 hardware, in the AArch64 FP16 build |
 | `FEAT_BF16` bfloat16 | AArch64 with `FEAT_BF16` | `+`, `-`, `*`, `/`, and `sqrt` of bfloat16: a shift widens the operands exactly to binary32, the unit computes in binary32, and `BFCVT` rounds to nearest even. `convert` from binary32 to bfloat16 by `BFCVT`. | As the AArch64 operators. The fused multiply-add of bfloat16 always runs in the engine. | Arm Architecture Reference Manual, DDI 0487: `BFCVT`, which honors every control of FPCR that applies to single-precision arithmetic | Host paths with every square root and an ignored sweep of every pair, and AArch64 hardware, in the AArch64 FP16 build |
 | bfloat16 through a shift | x86-64 with SSE2, and SSE4.1 for the rounding; AArch64 | A shift widens bfloat16 exactly to binary32. `convert` to binary32 needs no other instruction, and `convert` to binary64 adds `CVTSS2SD` or `FCVT`. `to_int` by `CVTSS2SI` or `FCVTNS`, and `round_to_integral` by `ROUNDSS` or `FRINTN` and a shift back. | As the SSE or AArch64 paths. `from_int` of bfloat16 always runs in the engine, because two roundings through binary32 can differ from one. | Intel SDM Volume 2 and Arm Architecture Reference Manual, DDI 0487: the instructions of the binary32 paths | Host paths with every bfloat16 encoding, SSE hardware, and AArch64 hardware |
+| Packed SSE and AVX | x86-64 with SSE2; AVX for 256 bits, FMA for `mul_add`, and SSE4.1 for the rounding | The `Lanes` operators, `sqrt`, `mul_add`, and `round_to_integral` of binary32 and binary64, by `ADDPS`, `SUBPS`, `MULPS`, `DIVPS`, `SQRTPS`, `VFMADD213PS`, `ROUNDPS`, their `PD` forms, and their 256-bit forms. `convert` of lanes between binary32 and binary64, by `CVTPS2PD` and `CVTPD2PS` and their AVX forms. | As the SSE operators, for all lanes at once. A NaN lane runs in the engine. | Intel SDM Volume 2: the instructions | Lanes, and the packed instructions of the SSE unit with the union of the lane flags |
+| Packed AArch64 | AArch64 | As the packed SSE paths at 128 bits, by `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FMLA`, and `FRINTN` on `.4S` and `.2D`, and `FCVTL` and `FCVTN` | As the AArch64 operators, for all lanes at once. A NaN lane runs in the engine. | Arm Architecture Reference Manual, DDI 0487: the instructions | Lanes and AArch64 hardware, under `qemu-aarch64` |
 | Double-double operators | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`. One check of MXCSR or FPCR serves every step, and each binary64 step takes a binary64 path. | A step that its path declines runs in the engine | As the binary64 paths | Double-double, with the operators of the SSE mode against QD, and host paths |
 
 The binary16 path rounds twice: to binary32, and then to binary16. binary32
@@ -1464,6 +1511,31 @@ The x87 paths:
 - The x87 hardware test runs every entry point under each rounding control,
   each precision control, and each unmasked exception. The entry points
   must give the engine results of the default mode.
+
+The packed paths:
+
+- The paths read the lanes of a `Lanes` value in place and write the result
+  lanes in place. A copy of the lanes in parts made each load of a chunk wait
+  for the stores of the parts: two binary64 lanes took 58 cycles instead of
+  19.
+- Each block loads a chunk with an unaligned move and computes in
+  registers. A legacy SSE instruction with a 128-bit memory operand faults
+  on an address that is not a multiple of 16, and a `Lanes` value has the
+  alignment of one lane. A unit test runs every chunk at an address that is
+  not a multiple of 16.
+- A path computes full chunks with packed instructions, 256-bit chunks
+  first where the build has AVX, and the other lanes with the scalar host
+  path. It tests the results for a NaN, and the engine computes each NaN
+  lane.
+- The format, the operation, and the lane count are constants, so the
+  selection folds away. The operator of `Lanes<F32, 4>` compiles to the
+  check of MXCSR, two loads, `ADDPS`, a store, and a NaN test of four
+  integer instructions and one branch. The engine path and the NaN lanes
+  stay out of line.
+- The SSE packed test runs each packed instruction under every MXCSR
+  setting. The lanes match, and the MXCSR flags of the instruction equal the
+  union of the flags of the lanes, which `Lanes` returns from its `_with`
+  methods.
 
 The SSE and AArch64 operators:
 
@@ -1726,6 +1798,9 @@ Each step passes its oracle tests before the next step starts.
 7. Decimal: BID and DPD. Test against decTest and the Intel decimal library
    tests.
 8. Double-double: `Gcc` and `Qd`.
+9. Lanes: the lane-wise operations and their packed host paths. Test each
+   lane against the scalar operation, and the packed instructions against
+   the processor.
 
 ## Open Questions
 
