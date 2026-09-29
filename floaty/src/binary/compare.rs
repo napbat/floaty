@@ -41,6 +41,42 @@ fn compare_magnitudes<L: Limbs>(first: &Unpacked<L>, second: &Unpacked<L>) -> Or
         .then_with(|| first_significand.compare(&second_significand))
 }
 
+/// A number whose encoding orders as its value: the numbers of the formats
+/// with an implicit integer bit, and the canonical x87 numbers. The sign and
+/// the magnitude bits order such numbers without a decode.
+struct Ordered<L> {
+    /// `true` for a negative sign.
+    negative: bool,
+    /// The encoding without the sign bit.
+    magnitude: L,
+    /// `true` for a subnormal number, which reports a denormal input.
+    subnormal: bool,
+}
+
+impl<L: Limbs> Ordered<L> {
+    /// Orders two numbers by sign and magnitude, with `-0` below `+0`.
+    #[inline]
+    fn total(&self, other: &Self) -> Ordering {
+        match (self.negative, other.negative) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (false, false) => self.magnitude.compare(&other.magnitude),
+            (true, true) => other.magnitude.compare(&self.magnitude),
+        }
+    }
+
+    /// Orders two numbers as the comparison predicates do: zeros of either
+    /// sign are equal.
+    #[inline]
+    fn numeric(&self, other: &Self) -> Ordering {
+        if self.magnitude.is_zero() && other.magnitude.is_zero() {
+            Ordering::Equal
+        } else {
+            self.total(other)
+        }
+    }
+}
+
 /// Orders two numbers. Zeros of either sign are equal.
 fn compare_numbers<L: Limbs>(first: &Unpacked<L>, second: &Unpacked<L>) -> Ordering {
     let below_zero = |value: &Unpacked<L>| match *value {
@@ -59,13 +95,88 @@ impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
 where
     Width<W>: Storage,
 {
+    /// Returns a number whose encoding orders as its value, or `None` for a
+    /// NaN, an unsupported x87 encoding, and an x87 pseudo-denormal. The test
+    /// reads only the fields, so two such numbers compare without a decode.
+    #[inline]
+    fn ordered<L: Limbs>(bits: L) -> Option<Ordered<L>> {
+        let negative = bits.bit(Self::WIDTH - 1);
+        let magnitude = bits.low_bits(Self::WIDTH - 1);
+        let field = bits.field(Self::FRACTION_BITS, E);
+        let fraction = bits.low_bits(Self::FRACTION_BITS);
+        let number = match Enc::KIND {
+            // A NaN has the largest exponent field and a fraction other than
+            // zero.
+            EncodingKind::Ieee => field != Self::FIELD_MAX || fraction.is_zero(),
+            // The one NaN of each sign has every magnitude bit set.
+            EncodingKind::NoInf => magnitude != L::ones(Self::WIDTH - 1),
+            // The one NaN has the sign bit set and a zero magnitude.
+            EncodingKind::Fnuz => !negative || !magnitude.is_zero(),
+            // The integer bit, bit 63, is set exactly when the exponent field
+            // is not zero. An infinity has a zero fraction below it.
+            EncodingKind::X87 => {
+                if field == 0 {
+                    !fraction.bit(63)
+                } else if field == Self::FIELD_MAX {
+                    fraction.bit(63) && fraction.low_bits(63).is_zero()
+                } else {
+                    fraction.bit(63)
+                }
+            }
+        };
+        number.then(|| Ordered {
+            negative,
+            magnitude,
+            subnormal: field == 0 && !fraction.is_zero(),
+        })
+    }
+
+    /// Returns two numbers whose encodings order as their values, and the
+    /// flags of their decode, or `None` when the full decode must run. DAZ
+    /// makes a subnormal operand a zero, so that operand takes the decode.
+    ///
+    /// A format wider than 128 bits takes the decode too. Its magnitudes span
+    /// four or eight limbs, and their copies cost more than the decode saves.
+    #[inline]
+    fn ordered_pair<L: Limbs>(
+        left: L,
+        right: L,
+        env: &Env,
+    ) -> Option<(Ordered<L>, Ordered<L>, Flags)> {
+        if Self::WIDTH > 128 {
+            return None;
+        }
+        let (first, second) = (Self::ordered(left)?, Self::ordered(right)?);
+        let subnormal = first.subnormal || second.subnormal;
+        if subnormal && env.denormals_are_zero {
+            return None;
+        }
+        let flags = if subnormal {
+            Flags::DENORMAL_INPUT
+        } else {
+            Flags::NONE
+        };
+        Some((first, second, flags))
+    }
+
     /// Compares two values as the IEEE 754 quiet predicates do. `None` means
     /// that the values are unordered.
     ///
     /// A signaling NaN or an unsupported operand signals invalid. The
     /// signaling predicates also signal invalid for a quiet NaN; the caller
     /// adds that flag.
+    #[inline]
     pub fn compare<L: Limbs>(left: L, right: L, env: &Env) -> (Option<Ordering>, Flags) {
+        match Self::ordered_pair(left, right, env) {
+            Some((first, second, flags)) => (Some(first.numeric(&second)), flags),
+            None => Self::compare_decoded(left, right, env),
+        }
+    }
+
+    /// Compares two values after the full decode, for a pair that
+    /// `ordered_pair` does not order.
+    #[inline(never)]
+    fn compare_decoded<L: Limbs>(left: L, right: L, env: &Env) -> (Option<Ordering>, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
@@ -131,7 +242,25 @@ where
     /// invalid for a signaling NaN. `minNum` and `maxNum` return the number
     /// for a quiet NaN, and a NaN for a signaling NaN. The NaN rule selects a
     /// NaN result. Every family orders `-0` below `+0`.
+    #[inline]
     pub fn min_max<L: Limbs>(left: L, right: L, operation: MinMax, env: &Env) -> (L, Flags) {
+        let Some((first, second, flags)) = Self::ordered_pair(left, right, env) else {
+            return Self::min_max_decoded(left, right, operation, env);
+        };
+        // An ordered encoding is canonical, so the result is the operand.
+        let order = first.total(&second);
+        let take_first = if operation.is_minimum() {
+            order != Ordering::Greater
+        } else {
+            order != Ordering::Less
+        };
+        (if take_first { left } else { right }, flags)
+    }
+
+    /// Returns the minimum or the maximum after the full decode, for a pair
+    /// that `ordered_pair` does not order.
+    #[inline(never)]
+    fn min_max_decoded<L: Limbs>(left: L, right: L, operation: MinMax, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);

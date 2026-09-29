@@ -663,6 +663,7 @@ where
         Self::Bits::from_limbs(Layout::<E, Enc, W>::with_sign(bits.to_limbs(), negative))
     }
 
+    #[inline]
     fn compare<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,
@@ -676,6 +677,7 @@ where
         Layout::<E, Enc, W>::total_cmp(left.to_limbs(), right.to_limbs(), order)
     }
 
+    #[inline]
     fn min_max<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,

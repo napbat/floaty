@@ -1006,6 +1006,17 @@ The decimal formats follow the Intel decimal library:
     and 1 at a time, after a test of the last digit, and it appends zeros
     with one multiplication. Exact quotients, roots, and conversions of
     short binary values have many trailing zeros.
+  - The comparisons and the minimum and maximum operations of two binary
+    numbers of at most 128 bits read only the bits. The sign and the
+    magnitude bits order every number of a format with an implicit integer
+    bit, and every canonical x87 number. So the operation compares the bits
+    as integers, and returns an operand as the minimum or the maximum. A
+    NaN, an unsupported x87 encoding, a pseudo-denormal, and a subnormal
+    operand under DAZ take the full decode. The wider formats take it too,
+    because copies of their magnitudes cost more than the decode saves. A
+    host path of `UCOMISD` or `MINSD` would read MXCSR on each call, and
+    needs special cases for zeros and NaNs, so the integer comparison serves
+    every host.
 - The host paths, in their own section below, compute some operations on
   the floating-point unit of the host.
 - Step 6 rejected two fast paths:
@@ -1020,9 +1031,10 @@ The decimal formats follow the Intel decimal library:
   operations of each format against the host types and `rustc_apfloat`. A
   second table measures other operations and operands: the remainder of
   close and of distant operands, the conversions to binary32, binary16, x87
-  extended, and decimal64 and from `i64`, and additions of subnormal operands
-  and of a zero. A third table measures the double-double types. Results on
-  an Intel i9-9900K, in nanoseconds per operation, before and after step 6:
+  extended, and decimal64 and from `i64`, additions of subnormal operands and
+  of a zero, and the comparison and the minimum of two operands. A third
+  table measures the double-double types. Results on an Intel i9-9900K, in
+  nanoseconds per operation, before and after step 6:
 
 | Operation | Before | After |
 | --- | --- | --- |
@@ -1222,6 +1234,32 @@ figure is the lower of two interleaved runs.
 | x87 extended to binary32 | 17.6 | 1.7 |
 | binary64 to x87 extended | 10.7 | 2.3 |
 | binary32 to x87 extended | 10.6 | 2.9 |
+
+The comparison and the minimum of two numbers by their bits, before and
+after, in nanoseconds per operation of `partial_cmp`, `minimum`, and the
+`Gcc` operators. Each
+figure is the lower of two interleaved runs. The operands have random signs,
+which make the branches of a comparison hard to predict.
+
+| Operation | Before | After |
+| --- | --- | --- |
+| OCP FP8 E4M3 `partial_cmp` | 7.6 | 6.8 |
+| binary32 `partial_cmp` | 9.0 | 6.2 |
+| binary64 `partial_cmp` | 8.2 | 6.5 |
+| x87 extended `partial_cmp` | 9.8 | 4.6 |
+| binary128 `partial_cmp` | 9.1 | 3.7 |
+| OCP FP8 E4M3 `minimum` | 11.8 | 3.1 |
+| binary32 `minimum` | 14.2 | 3.9 |
+| binary64 `minimum` | 13.2 | 3.5 |
+| x87 extended `minimum` | 14.5 | 6.3 |
+| binary128 `minimum` | 14.8 | 6.2 |
+| binary512 `minimum` | 22.9 | 23.8 |
+| `Gcc` `+` | 31.0 | 15.4 |
+| `Gcc` `*` | 70.8 | 58.4 |
+| `Gcc` `/` | 84.2 | 65.4 |
+
+The `Gcc` operators compare binary64 values in their steps, so they gain
+too.
 
 The integer square root without a division, the 256-bit conversion width,
 and the DPD decoder on 64-bit groups, before and after, in nanoseconds per
