@@ -455,6 +455,9 @@ fn conversions_give_the_default_mode_results() {
     convert_matches!(floaty::F64, extended.iter().copied());
     convert_matches!(floaty::F32, extended.iter().copied());
     convert_matches!(floaty::F16, extended.iter().copied());
+    let bfloats: Vec<BF16> = (0..=u16::MAX).map(BF16::from_bits).collect();
+    convert_matches!(floaty::F32, bfloats.iter().copied());
+    convert_matches!(floaty::F64, bfloats.iter().copied());
     convert_matches!(F80, doubles.iter().copied());
     convert_matches!(F80, singles.iter().copied());
     convert_matches!(F80, halves.iter().copied());
@@ -479,7 +482,7 @@ macro_rules! to_int_matches {
 }
 
 #[test]
-fn integer_conversions_give_the_default_mode_results() {
+fn conversions_to_integers_give_the_default_mode_results() {
     use floaty::{Int, UInt};
     let mut random = SplitMix64::new(0x1A1A);
     let doubles = conversion_operands(&mut random);
@@ -503,6 +506,15 @@ fn integer_conversions_give_the_default_mode_results() {
     to_int_matches!(singles.iter().copied(), i8, i32, i64, u8, u32, u64, i128);
     to_int_matches!(halves.iter().copied(), i8, i16, i32, i64, u8, u16, u64);
     to_int_matches!(
+        (0..=u16::MAX).map(BF16::from_bits),
+        i8,
+        i32,
+        i64,
+        i128,
+        u32,
+        u64
+    );
+    to_int_matches!(
         extended_operands(&mut random).into_iter(),
         i8,
         i32,
@@ -513,6 +525,11 @@ fn integer_conversions_give_the_default_mode_results() {
         u128,
         Int<24>
     );
+}
+
+#[test]
+fn conversions_from_integers_give_the_default_mode_results() {
+    let mut random = SplitMix64::new(0x1B1B);
     // Integers of every magnitude, the bounds of each type, and the halfway
     // points and the overflow threshold of binary16.
     let mut integers: Vec<i128> = (0..20_000)
@@ -589,6 +606,12 @@ fn rounding_to_integral_gives_the_default_mode_result() {
         assert_eq!(
             value.round_to_integral().to_bits(),
             value.round_to_integral_with(floaty::F16::ENV).0.to_bits(),
+            "{value:?}"
+        );
+        let value = BF16::from_bits(bits);
+        assert_eq!(
+            value.round_to_integral().to_bits(),
+            value.round_to_integral_with(BF16::ENV).0.to_bits(),
             "{value:?}"
         );
     }

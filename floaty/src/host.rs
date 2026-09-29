@@ -107,21 +107,22 @@ pub const fn available(host: Host, kind: Kind) -> bool {
     let bf16 = cfg!(all(target_arch = "aarch64", target_feature = "bf16"));
     match (host, kind) {
         // The x87 unit has no fused multiply-add. Two roundings of a bfloat16
-        // fused multiply-add through binary32 can differ from one.
+        // fused multiply-add, or of an integer, through binary32 can differ
+        // from one.
         (Host::None, _)
         | (Host::Extended, Kind::FusedMultiplyAdd)
-        | (
-            Host::BFloat,
-            Kind::FusedMultiplyAdd | Kind::RoundToIntegral | Kind::ToInt | Kind::FromInt,
-        ) => false,
+        | (Host::BFloat, Kind::FusedMultiplyAdd | Kind::FromInt) => false,
         (Host::Half, Kind::FusedMultiplyAdd) => unit && fp16,
         (Host::BFloat, Kind::Arithmetic | Kind::SquareRoot) => unit && bf16,
+        // A bfloat16 value widens to binary32 by a shift, so its conversion to
+        // an integer and its rounding need no bfloat16 instruction.
         (
             Host::Single | Host::Double,
             Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt,
-        ) => unit,
+        )
+        | (Host::BFloat, Kind::ToInt) => unit,
         (Host::Single | Host::Double, Kind::FusedMultiplyAdd) => unit && fused,
-        (Host::Single | Host::Double, Kind::RoundToIntegral) => unit && rounding,
+        (Host::Single | Host::Double | Host::BFloat, Kind::RoundToIntegral) => unit && rounding,
         (Host::Half, Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt) => {
             unit && half
         }
@@ -154,7 +155,10 @@ pub const fn convertible(from: Host, to: Host) -> bool {
     let x87 = cfg!(target_arch = "x86_64");
     let bf16 = cfg!(all(target_arch = "aarch64", target_feature = "bf16"));
     match (from, to) {
-        (Host::Single, Host::Double) | (Host::Double, Host::Single) => unit,
+        // A shift widens bfloat16 to binary32 exactly.
+        (Host::Single, Host::Double)
+        | (Host::Double, Host::Single)
+        | (Host::BFloat, Host::Single | Host::Double) => unit,
         (Host::Half, Host::Single | Host::Double) | (Host::Single, Host::Half) => unit && half,
         // Only AArch64 rounds binary64 to binary16 once.
         (Host::Double, Host::Half) => unit && cfg!(target_arch = "aarch64"),

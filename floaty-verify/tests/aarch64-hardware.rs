@@ -116,6 +116,7 @@ fn operators_read_fpcr_before_the_host_unit() {
         operators_under!(F32, u32, control, &single);
         operators_under!(F64, u64, control, &double);
         conversions_under!(F16, control, &encodings::<u16>(&half));
+        conversions_under!(BF16, control, &encodings::<u16>(&bfloat));
         conversions_under!(F32, control, &encodings::<u32>(&single));
         conversions_under!(F64, control, &encodings::<u64>(&double));
         for x in encodings::<u32>(&single).into_iter().map(F32::from_bits) {

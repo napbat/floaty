@@ -11,7 +11,7 @@
 
 use std::hint::black_box;
 
-use floaty::{Env, F16, F32, F64, mode};
+use floaty::{BF16, Env, F16, F32, F64, mode};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
@@ -508,6 +508,15 @@ fn operators_read_mxcsr_before_the_host_unit() {
         (0..4_000)
             .map(|_| u16::try_from(random.next_u64() >> 48).expect("the shift keeps 16 bits")),
     );
+    // bfloat16 takes the paths that widen by a shift.
+    let mut bfloats: Vec<u16> = boundary_encodings_u128(16, 8, IntegerBit::Implicit)
+        .into_iter()
+        .map(|bits| u16::try_from(bits).expect("a bfloat16 encoding has 16 bits"))
+        .collect();
+    bfloats.extend(
+        (0..4_000)
+            .map(|_| u16::try_from(random.next_u64() >> 48).expect("the shift keeps 16 bits")),
+    );
     let half_pairs: Vec<(u16, u16)> = halves
         .iter()
         .zip(halves.iter().rev())
@@ -518,6 +527,7 @@ fn operators_read_mxcsr_before_the_host_unit() {
         operators_under!(F32, control, &single_pairs);
         operators_under!(F64, control, &double_pairs);
         conversions_under!(F16, control, &halves);
+        conversions_under!(BF16, control, &bfloats);
         conversions_under!(F32, control, &single);
         conversions_under!(F64, control, &double);
     }

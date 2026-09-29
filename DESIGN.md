@@ -1249,6 +1249,18 @@ on hardware. The engine column is the AArch64 build.
 | bfloat16 `sqrt` | 202 | 112 |
 | binary32 to bfloat16 | 191 | 99 |
 
+The bfloat16 paths through a shift, in nanoseconds per operation of the
+entry points without flags. The engine column is the engine-only build, and
+the x86-64-v3 build enables SSE4.1. Each figure is the lower of two
+interleaved runs.
+
+| Operation | Engine | Default build | x86-64-v3 build |
+| --- | --- | --- | --- |
+| bfloat16 to binary32 | 9.9 | 1.3 | 1.3 |
+| bfloat16 to binary64 | 9.4 | 1.5 | 1.9 |
+| bfloat16 to `i64` | 10.6 | 2.2 | 2.2 |
+| bfloat16 round to integral | 7.4 | 7.8 | 1.7 |
+
 The comparison and the minimum of two numbers by their bits, before and
 after, in nanoseconds per operation of `partial_cmp`, `minimum`, and the
 `Gcc` operators. Each
@@ -1389,6 +1401,7 @@ it sends every other input to the engine.
 | x87 extended | x86-64 | `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral`, `to_int`, and `from_int` of x87 extended precision, by `FADDP`, `FSUBP`, `FMULP`, `FDIVP`, `FSQRT`, `FRNDINT`, `FISTP`, and `FILD`. `convert` to and from binary32 and binary64, by `FLD` and `FSTP`. | A NaN result, a 64-bit result of 0x8000_0000_0000_0000, the integer indefinite, or an x87 control word other than round to nearest at the 64-bit precision with every exception masked | Intel SDM Volume 1, revision 253665-093US, section 8.1.5, Figure 8-6: the x87 control word; Volume 2: the instructions | TestFloat arithmetic, conversions, and operations, x87 hardware, host paths |
 | `FEAT_FP16` fused multiply-add | AArch64 with `FEAT_FP16` | `mul_add` of binary16, by `FMADD` on half-precision registers | As the AArch64 operators | Arm Architecture Reference Manual, DDI 0487: `FMADD` | Host paths and AArch64 hardware, in the AArch64 FP16 build |
 | `FEAT_BF16` bfloat16 | AArch64 with `FEAT_BF16` | `+`, `-`, `*`, `/`, and `sqrt` of bfloat16: a shift widens the operands exactly to binary32, the unit computes in binary32, and `BFCVT` rounds to nearest even. `convert` from binary32 to bfloat16 by `BFCVT`. | As the AArch64 operators. The fused multiply-add of bfloat16 always runs in the engine. | Arm Architecture Reference Manual, DDI 0487: `BFCVT`, which honors every control of FPCR that applies to single-precision arithmetic | Host paths with every square root and an ignored sweep of every pair, and AArch64 hardware, in the AArch64 FP16 build |
+| bfloat16 through a shift | x86-64 with SSE2, and SSE4.1 for the rounding; AArch64 | A shift widens bfloat16 exactly to binary32. `convert` to binary32 needs no other instruction, and `convert` to binary64 adds `CVTSS2SD` or `FCVT`. `to_int` by `CVTSS2SI` or `FCVTNS`, and `round_to_integral` by `ROUNDSS` or `FRINTN` and a shift back. | As the SSE or AArch64 paths. `from_int` of bfloat16 always runs in the engine, because two roundings through binary32 can differ from one. | Intel SDM Volume 2 and Arm Architecture Reference Manual, DDI 0487: the instructions of the binary32 paths | Host paths with every bfloat16 encoding, SSE hardware, and AArch64 hardware |
 | Double-double operators | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`. One check of MXCSR or FPCR serves every step, and each binary64 step takes a binary64 path. | A step that its path declines runs in the engine | As the binary64 paths | Double-double, with the operators of the SSE mode against QD, and host paths |
 
 The binary16 path rounds twice: to binary32, and then to binary16. binary32
@@ -1423,7 +1436,10 @@ for a NaN. Those results go back to the engine, and so does the exact value
 `-2^63` on x86-64.
 
 The integral value of a binary16 value is a binary16 value, so the rounding
-to an integral value through binary32 narrows exactly.
+to an integral value through binary32 narrows exactly. The same holds for
+bfloat16: a value of magnitude 2^7 or more is already integral, and a smaller
+integral value has at most 8 significant bits. So the low 16 bits of the
+binary32 result are zero, and a shift narrows it.
 
 The x87 paths:
 

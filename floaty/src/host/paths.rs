@@ -264,13 +264,18 @@ pub fn round_to_integral<S: Standard<W>, const W: usize>(
         return None;
     }
     match S::HOST {
-        // `available` gives bfloat16 no path to an integral value.
-        Host::None | Host::BFloat => None,
+        Host::None => None,
         Host::Single => single_encoding::<S, W>(environment::round_f32(single::<S, W>(value))?),
         Host::Double => double_encoding::<S, W>(environment::round_f64(double::<S, W>(value))?),
         // The integral value of a binary16 value is a binary16 value, so the
         // narrowing is exact.
         Host::Half => half_encoding::<S, W>(environment::round_f32(half::<S, W>(value)?)?),
+        // The integral value of a bfloat16 value is a bfloat16 value, so the
+        // low 16 bits of the binary32 result are zero, and a shift narrows it.
+        Host::BFloat => {
+            let bits = environment::round_f32(bfloat::<S, W>(value))?.to_bits();
+            encoding::<S, W>(u64::from(bits >> 16), nan_32(bits))
+        }
         // The precision control does not apply to `FRNDINT`, Intel SDM
         // Volume 1, section 8.1.5.2, so the integral value rounds once.
         Host::Extended => {
@@ -288,11 +293,11 @@ pub fn to_int<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Opti
         return None;
     }
     match S::HOST {
-        // `available` gives bfloat16 no path to an integer.
-        Host::None | Host::BFloat => None,
+        Host::None => None,
         Host::Single => environment::to_int_f32(single::<S, W>(value)),
         Host::Double => environment::to_int_f64(double::<S, W>(value)),
         Host::Half => environment::to_int_f32(half::<S, W>(value)?),
+        Host::BFloat => environment::to_int_f32(bfloat::<S, W>(value)),
         Host::Extended => environment::x87_to_int(&extended::<S, W>(value)),
     }
 }
@@ -305,7 +310,7 @@ pub fn from_int<S: Standard<W>, const W: usize>(value: i64, env: &Env) -> Option
         return None;
     }
     match S::HOST {
-        // `available` gives bfloat16 no path from an integer.
+        // An integer through binary32 to bfloat16 rounds twice.
         Host::None | Host::BFloat => None,
         Host::Single => {
             let result = environment::from_int_f32(value);
@@ -381,6 +386,15 @@ pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 
                 return None;
             }
             environment::narrow_double_to_half(f64::from_bits(low)).map(u64::from)
+        }
+        (Host::BFloat, Host::Single) => {
+            let bits = u32::try_from(low << 16).expect("a bfloat16 encoding has 16 bits");
+            (!nan_32(bits)).then_some(u64::from(bits))
+        }
+        (Host::BFloat, Host::Double) => {
+            let bits = u32::try_from(low << 16).expect("a bfloat16 encoding has 16 bits");
+            let value = f32::from_bits(bits);
+            (!nan_32(bits)).then(|| environment::widen_single(value).to_bits())
         }
         (Host::Single, Host::BFloat) => {
             let value = single(low);
