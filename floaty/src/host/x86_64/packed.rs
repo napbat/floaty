@@ -9,6 +9,8 @@
 //! from keeping values in registers across it. A function for a feature that
 //! the build does not have returns `None`.
 
+#[cfg(target_feature = "f16c")]
+use core::arch::x86_64::__m128i;
 use core::arch::x86_64::{__m128, __m128d};
 use core::mem::transmute;
 
@@ -18,6 +20,10 @@ use super::sse;
 /// `true` when the build has 256-bit registers, which hold eight binary32 or
 /// four binary64 lanes.
 pub const WIDE: bool = cfg!(target_feature = "avx");
+
+/// `true` when the build has F16C, which widens binary16 lanes to binary32
+/// and rounds binary32 lanes to binary16.
+pub const HALF: bool = cfg!(target_feature = "f16c");
 
 /// Returns four binary32 lanes as the value of an SSE register.
 #[inline]
@@ -275,6 +281,67 @@ pub fn narrow_x2(value: [f64; 2]) -> [f32; 2] {
     [low, high]
 }
 
+/// Returns four binary16 lanes widened exactly to binary32, by `VCVTPH2PS`.
+#[cfg(target_feature = "f16c")]
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // A build without F16C returns `None` from the same signature.
+pub fn widen_halves_x4(value: [u16; 4]) -> Option<[f32; 4]> {
+    let [a0, a1, a2, a3] = value;
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    let a = unsafe { transmute::<[u16; 8], __m128i>([a0, a1, a2, a3, 0, 0, 0, 0]) };
+    let result: __m128;
+    // SAFETY: VCVTPH2PS reads and writes SSE registers. The build enables
+    // F16C, and the widening is exact, so it changes no state.
+    unsafe {
+        core::arch::asm!(
+            "vcvtph2ps {result}, {a}",
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    Some(single_lanes(result))
+}
+
+/// Returns four binary32 lanes rounded to binary16 to nearest even, by
+/// `VCVTPS2PH` with the rounding control 0 in its immediate.
+#[cfg(target_feature = "f16c")]
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // A build without F16C returns `None` from the same signature.
+pub fn narrow_halves_x4(value: [f32; 4]) -> Option<[u16; 4]> {
+    let a = singles(value);
+    let result: __m128i;
+    // SAFETY: VCVTPS2PH reads and writes SSE registers. The build enables
+    // F16C, and the rounding changes only the status flags of MXCSR, which
+    // floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "vcvtps2ph {result}, {a}, 0",
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    // SAFETY: as in `widen_halves_x4`.
+    let [r0, r1, r2, r3, _, _, _, _] = unsafe { transmute::<__m128i, [u16; 8]>(result) };
+    Some([r0, r1, r2, r3])
+}
+
+/// Returns `None`: a build without F16C has no packed binary16 path.
+#[cfg(not(target_feature = "f16c"))]
+#[inline]
+pub fn widen_halves_x4(_value: [u16; 4]) -> Option<[f32; 4]> {
+    None
+}
+
+/// Returns `None`: a build without F16C has no packed binary16 path.
+#[cfg(not(target_feature = "f16c"))]
+#[inline]
+pub fn narrow_halves_x4(_value: [f32; 4]) -> Option<[u16; 4]> {
+    None
+}
+
 /// Defines a function for a 256-bit chunk, which runs its form in `wide`
 /// where the build has the features, and returns `None` otherwise.
 macro_rules! wide {
@@ -345,6 +412,16 @@ wide!(
     /// Returns four binary64 lanes rounded to binary32, by `VCVTPD2PS`.
     narrow_x4, target_feature = "avx", (value: [f64; 4]) -> [f32; 4]
 );
+wide!(
+    /// Returns eight binary16 lanes widened exactly to binary32, by
+    /// `VCVTPH2PS`.
+    widen_halves_x8, all(target_feature = "avx", target_feature = "f16c"), (value: [u16; 8]) -> [f32; 8]
+);
+wide!(
+    /// Returns eight binary32 lanes rounded to binary16 to nearest even, by
+    /// `VCVTPS2PH` with the rounding control 0 in its immediate.
+    narrow_halves_x8, all(target_feature = "avx", target_feature = "f16c"), (value: [f32; 8]) -> [u16; 8]
+);
 
 /// The 256-bit forms, in functions that enable their features for their own
 /// code. A caller compiled without AVX, such as a doctest, which does not
@@ -352,6 +429,8 @@ wide!(
 /// function inlines into a caller with the features.
 #[cfg(target_feature = "avx")]
 mod wide {
+    #[cfg(target_feature = "f16c")]
+    use core::arch::x86_64::__m128i;
     use core::arch::x86_64::{__m128, __m256, __m256d};
     use core::mem::transmute;
 
@@ -539,11 +618,63 @@ mod wide {
         }
         super::single_lanes(result)
     }
+
+    /// # Safety
+    ///
+    /// The processor must have AVX and F16C.
+    #[cfg(target_feature = "f16c")]
+    #[target_feature(enable = "avx,f16c")]
+    #[inline]
+    pub unsafe fn widen_halves_x8(value: [u16; 8]) -> [f32; 8] {
+        // SAFETY: both types hold 16 bytes, and every bit pattern is a value
+        // of each.
+        let a = unsafe { transmute::<[u16; 8], __m128i>(value) };
+        let result: __m256;
+        // SAFETY: VCVTPH2PS reads an SSE register and writes an AVX register.
+        // The caller guarantees AVX and F16C, and the widening is exact, so it
+        // changes no state.
+        unsafe {
+            core::arch::asm!(
+                "vcvtph2ps {result}, {a}",
+                a = in(xmm_reg) a,
+                result = lateout(ymm_reg) result,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+        single_lanes(result)
+    }
+
+    /// # Safety
+    ///
+    /// The processor must have AVX and F16C.
+    #[cfg(target_feature = "f16c")]
+    #[target_feature(enable = "avx,f16c")]
+    #[inline]
+    pub unsafe fn narrow_halves_x8(value: [f32; 8]) -> [u16; 8] {
+        let a = singles(value);
+        let result: __m128i;
+        // SAFETY: VCVTPS2PH reads an AVX register and writes an SSE register.
+        // The caller guarantees AVX and F16C, and the rounding changes only the
+        // status flags of MXCSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                "vcvtps2ph {result}, {a}, 0",
+                a = in(ymm_reg) a,
+                result = lateout(xmm_reg) result,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+        // SAFETY: as in `widen_halves_x8`.
+        unsafe { transmute::<__m128i, [u16; 8]>(result) }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{binary_f32, binary_f64, narrow_double, sqrt_f32, sqrt_f64, widen_single};
+    use super::super::{
+        binary_f32, binary_f64, narrow_double, narrow_half, sqrt_f32, sqrt_f64, widen_half,
+        widen_single,
+    };
     use super::Operation;
 
     /// Storage aligned to 32 bytes, so that the lanes at an offset of one lane
@@ -618,6 +749,50 @@ mod tests {
         if let Some(lanes) = super::round_f64x2(two) {
             let again = super::round_f64x2(lanes).expect("the build has ROUNDPD");
             assert_eq!(lanes.map(f64::to_bits), again.map(f64::to_bits), "ROUNDPD");
+        }
+    }
+
+    #[test]
+    fn every_binary16_chunk_gives_the_lanes_of_the_scalar_instructions() {
+        // 1.5, the smallest subnormal, the largest finite value, -0, 1.0, the
+        // largest subnormal, -infinity, and a signaling NaN.
+        let halves: [u16; 8] = [
+            0x3E00, 0x0001, 0x7BFF, 0x8000, 0x3C00, 0x03FF, 0xFC00, 0x7C01,
+        ];
+        // A tie below 1.0 + 2^-10, a tie at half the smallest subnormal, a
+        // value that overflows, the negative smallest subnormal, the smallest
+        // normal binary32 value, a value just above a tie, 65504.0, and a
+        // signaling NaN.
+        let singles = [
+            0x3F80_1000_u32,
+            0x3300_0000,
+            0x477F_F000,
+            0xB380_0000,
+            0x0080_0000,
+            0x3F80_1001,
+            0x477F_E000,
+            0x7F80_0001,
+        ]
+        .map(f32::from_bits);
+        let widen = |bits: u16| widen_half(bits).expect("the build has F16C").to_bits();
+        let narrow = |value: f32| narrow_half(value).expect("the build has F16C");
+        let first: [u16; 4] = halves[..4].try_into().expect("eight lanes");
+        let four: [f32; 4] = singles[..4].try_into().expect("eight lanes");
+        if let Some(lanes) = super::widen_halves_x4(first) {
+            assert_eq!(lanes.map(f32::to_bits), first.map(widen), "VCVTPH2PS");
+        }
+        if let Some(lanes) = super::narrow_halves_x4(four) {
+            assert_eq!(lanes, four.map(narrow), "VCVTPS2PH");
+        }
+        if let Some(lanes) = super::widen_halves_x8(halves) {
+            assert_eq!(
+                lanes.map(f32::to_bits),
+                halves.map(widen),
+                "VCVTPH2PS, 256 bits"
+            );
+        }
+        if let Some(lanes) = super::narrow_halves_x8(singles) {
+            assert_eq!(lanes, singles.map(narrow), "VCVTPS2PH, 256 bits");
         }
     }
 }

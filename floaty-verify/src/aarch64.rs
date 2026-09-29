@@ -3,14 +3,14 @@
 //!
 //! The fields are those of FPCR in the Arm Architecture Registers, DDI 0601:
 //! FIZ is bit 0, AH is bit 1, the trap enables IOE, DZE, OFE, UFE, and IXE are
-//! bits 8 to 12, IDE is bit 15, FZ16 is bit 19, `RMode` is bits 22 and 23, and
-//! FZ is bit 24.
+//! bits 8 to 12, IDE is bit 15, FZ16 is bit 19, `RMode` is bits 22 and 23, FZ
+//! is bit 24, and AHP is bit 26.
 
 use core::arch::asm;
 
 /// The values of FPCR that change a result of the host unit, or trap. Each
 /// has one field set.
-pub const FPCR_SETTINGS: [u64; 14] = [
+pub const FPCR_SETTINGS: [u64; 15] = [
     1 << 22,
     2 << 22,
     3 << 22,
@@ -25,6 +25,7 @@ pub const FPCR_SETTINGS: [u64; 14] = [
     1 << 12,
     1 << 15,
     (1 << 24) | (1 << 22),
+    1 << 26,
 ];
 
 /// Runs `body` with FPCR set to `control`, and restores FPCR afterward.

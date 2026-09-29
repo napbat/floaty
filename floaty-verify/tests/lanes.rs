@@ -3,8 +3,8 @@
 //! every target. The scalar operations pass the oracle tests.
 //!
 //! The lane counts take every path of the packed host paths: wide chunks,
-//! narrow chunks, and single lanes. binary32 and binary64 take the packed
-//! paths where the build has them; the other formats take the scalar
+//! narrow chunks, and single lanes. binary32, binary64, and binary16 take the
+//! packed paths where the build has them; the other formats take the scalar
 //! operation of each lane.
 
 use floaty::env::Rounding;
@@ -141,9 +141,21 @@ fn binary64_lanes_give_the_scalar_results() {
 }
 
 #[test]
+fn binary16_lanes_give_the_scalar_results() {
+    let mut random = SplitMix64::new(0x1A4E_0016);
+    let encodings = encodings(&mut random, 16, 5);
+    lanes_match!(F16, u16, 1, &encodings, behaviors());
+    lanes_match!(F16, u16, 3, &encodings, behaviors());
+    lanes_match!(F16, u16, 4, &encodings, behaviors());
+    lanes_match!(F16, u16, 5, &encodings, behaviors());
+    lanes_match!(F16, u16, 8, &encodings, behaviors());
+    lanes_match!(F16, u16, 13, &encodings, behaviors());
+    lanes_match!(F16, u16, 16, &encodings, behaviors());
+}
+
+#[test]
 fn lanes_of_the_other_formats_give_the_scalar_results() {
     let mut random = SplitMix64::new(0x1A4E_0000);
-    lanes_match!(F16, u16, 4, &encodings(&mut random, 16, 5), behaviors());
     lanes_match!(BF16, u16, 8, &encodings(&mut random, 16, 8), behaviors());
     lanes_match!(F80, u128, 2, &encodings(&mut random, 80, 15), behaviors());
     lanes_match!(F128, u128, 3, &encodings(&mut random, 128, 15), behaviors());
@@ -171,6 +183,7 @@ fn lanes_convert_as_their_lanes_do() {
     let mut random = SplitMix64::new(0x1A4E_C0F7);
     let singles = encodings(&mut random, 32, 8);
     let doubles = encodings(&mut random, 64, 11);
+    let binary16 = encodings(&mut random, 16, 5);
     for start in 0..singles.len().max(doubles.len()) {
         let x = Lanes::<F32, 9>::from_bits(window::<u32, 9>(&singles, start));
         let widened: Lanes<F64, 9> = x.convert();
@@ -190,6 +203,20 @@ fn lanes_convert_as_their_lanes_do() {
             halved.to_bits(),
             each_half,
             "binary32 at {start} to binary16"
+        );
+        let h = Lanes::<F16, 13>::from_bits(window::<u16, 13>(&binary16, start));
+        let (h_single, h_double): (Lanes<F32, 13>, Lanes<F64, 13>) = (h.convert(), h.convert());
+        assert_eq!(
+            h_single.to_bits(),
+            h.into_array()
+                .map(|h| h.convert_with::<F32>(F32::ENV).0.to_bits()),
+            "binary16 at {start} to binary32"
+        );
+        assert_eq!(
+            h_double.to_bits(),
+            h.into_array()
+                .map(|h| h.convert_with::<F64>(F64::ENV).0.to_bits()),
+            "binary16 at {start} to binary64"
         );
         let u = Lanes::<F64, 7>::from_bits(window::<u64, 7>(&doubles, start));
         let narrowed: Lanes<F32, 7> = u.convert();

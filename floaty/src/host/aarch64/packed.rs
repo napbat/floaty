@@ -7,7 +7,7 @@
 //! architecture has no wider registers, so each function for a 256-bit chunk
 //! returns `None`.
 
-use core::arch::aarch64::{float32x2_t, float32x4_t, float64x2_t};
+use core::arch::aarch64::{float32x2_t, float32x4_t, float64x2_t, uint16x4_t};
 use core::mem::transmute;
 
 use super::super::Operation;
@@ -15,6 +15,10 @@ use super::super::Operation;
 /// `false`: AArch64 has no vector registers wider than 128 bits in the base
 /// architecture.
 pub const WIDE: bool = false;
+
+/// `true`: every AArch64 target widens binary16 lanes to binary32 and
+/// rounds binary32 lanes to binary16.
+pub const HALF: bool = true;
 
 /// Returns four binary32 lanes as the value of a vector register.
 #[inline]
@@ -251,6 +255,49 @@ pub fn narrow_x2(value: [f64; 2]) -> [f32; 2] {
     unsafe { transmute::<float32x2_t, [f32; 2]>(result) }
 }
 
+/// Returns four binary16 lanes widened exactly to binary32, by `FCVTL`.
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack F16C.
+pub fn widen_halves_x4(value: [u16; 4]) -> Option<[f32; 4]> {
+    // SAFETY: both types hold 8 bytes, and every bit pattern is a value of
+    // each.
+    let a = unsafe { transmute::<[u16; 4], uint16x4_t>(value) };
+    let result: float32x4_t;
+    // SAFETY: FCVTL reads and writes SIMD and floating-point registers. Every
+    // AArch64 target has it. The path requires FPCR.AHP to be zero, so the
+    // lanes are IEEE binary16, and the widening is exact.
+    unsafe {
+        core::arch::asm!(
+            "fcvtl {result:v}.4s, {a:v}.4h",
+            a = in(vreg) a,
+            result = lateout(vreg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    Some(single_lanes(result))
+}
+
+/// Returns four binary32 lanes rounded to binary16 in the rounding direction
+/// of FPCR, by `FCVTN`.
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack F16C.
+pub fn narrow_halves_x4(value: [f32; 4]) -> Option<[u16; 4]> {
+    let a = singles(value);
+    let result: uint16x4_t;
+    // SAFETY: as in `widen_halves_x4`, with `FCVTN`, which changes only the
+    // status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "fcvtn {result:v}.4h, {a:v}.4s",
+            a = in(vreg) a,
+            result = lateout(vreg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    // SAFETY: as in `widen_halves_x4`.
+    Some(unsafe { transmute::<uint16x4_t, [u16; 4]>(result) })
+}
+
 /// Defines a function for a 256-bit chunk, which returns `None`.
 macro_rules! no_wide {
     ($name:ident, ($($type:ty),+) -> $result:ty) => {
@@ -272,3 +319,5 @@ no_wide!(mul_add_f32x8, ([f32; 8], [f32; 8], [f32; 8]) -> [f32; 8]);
 no_wide!(mul_add_f64x4, ([f64; 4], [f64; 4], [f64; 4]) -> [f64; 4]);
 no_wide!(widen_x4, ([f32; 4]) -> [f64; 4]);
 no_wide!(narrow_x4, ([f64; 4]) -> [f32; 4]);
+no_wide!(widen_halves_x8, ([u16; 8]) -> [f32; 8]);
+no_wide!(narrow_halves_x8, ([f32; 8]) -> [u16; 8]);

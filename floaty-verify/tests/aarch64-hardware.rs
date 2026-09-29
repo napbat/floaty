@@ -128,13 +128,15 @@ fn operators_read_fpcr_before_the_host_unit() {
 }
 
 /// Returns the results of the operations of `Lanes` without flags on five
-/// binary32 lanes and three binary64 lanes, which the packed host paths
-/// compute in chunks and single lanes.
+/// binary32 lanes, three binary64 lanes, and five binary16 lanes, which the
+/// packed host paths compute in chunks and single lanes.
 fn lanes_without_flags(
     x: Lanes<F32, 5>,
     y: Lanes<F32, 5>,
     u: Lanes<F64, 3>,
     v: Lanes<F64, 3>,
+    half_left: Lanes<F16, 5>,
+    half_right: Lanes<F16, 5>,
 ) -> Vec<u64> {
     let singles = [
         x + y,
@@ -154,8 +156,19 @@ fn lanes_without_flags(
         u.mul_add(v, u),
         u.round_to_integral(),
     ];
+    let halves = [
+        half_left + half_right,
+        half_left - half_right,
+        half_left * half_right,
+        half_left / half_right,
+        half_left.sqrt(),
+        half_left.round_to_integral(),
+        x.convert(),
+    ];
     let widened: Lanes<F64, 5> = x.convert();
     let narrowed: Lanes<F32, 3> = u.convert();
+    let (half_single, half_double): (Lanes<F32, 5>, Lanes<F64, 5>) =
+        (half_left.convert(), half_left.convert());
     let mut bits: Vec<u64> = singles
         .iter()
         .flat_map(|lanes| lanes.to_bits().map(u64::from))
@@ -163,6 +176,13 @@ fn lanes_without_flags(
     bits.extend(doubles.iter().flat_map(|lanes| lanes.to_bits()));
     bits.extend(widened.to_bits());
     bits.extend(narrowed.to_bits().map(u64::from));
+    bits.extend(
+        halves
+            .iter()
+            .flat_map(|lanes| lanes.to_bits().map(u64::from)),
+    );
+    bits.extend(half_single.to_bits().map(u64::from));
+    bits.extend(half_double.to_bits());
     bits
 }
 
@@ -173,8 +193,10 @@ fn lanes_in_engine(
     y: Lanes<F32, 5>,
     u: Lanes<F64, 3>,
     v: Lanes<F64, 3>,
+    half_left: Lanes<F16, 5>,
+    half_right: Lanes<F16, 5>,
 ) -> Vec<u64> {
-    let (single, double) = (F32::ENV, F64::ENV);
+    let (single, double, half) = (F32::ENV, F64::ENV, F16::ENV);
     let singles = [
         x.add_with(y, single).0,
         x.sub_with(y, single).0,
@@ -193,8 +215,19 @@ fn lanes_in_engine(
         u.mul_add_with(v, u, double).0,
         u.round_to_integral_with(double).0,
     ];
+    let halves = [
+        half_left.add_with(half_right, half).0,
+        half_left.sub_with(half_right, half).0,
+        half_left.mul_with(half_right, half).0,
+        half_left.div_with(half_right, half).0,
+        half_left.sqrt_with(half).0,
+        half_left.round_to_integral_with(half).0,
+        x.convert_with(half).0,
+    ];
     let widened: Lanes<F64, 5> = x.convert_with(double).0;
     let narrowed: Lanes<F32, 3> = u.convert_with(single).0;
+    let half_single: Lanes<F32, 5> = half_left.convert_with(single).0;
+    let half_double: Lanes<F64, 5> = half_left.convert_with(double).0;
     let mut bits: Vec<u64> = singles
         .iter()
         .flat_map(|lanes| lanes.to_bits().map(u64::from))
@@ -202,6 +235,13 @@ fn lanes_in_engine(
     bits.extend(doubles.iter().flat_map(|lanes| lanes.to_bits()));
     bits.extend(widened.to_bits());
     bits.extend(narrowed.to_bits().map(u64::from));
+    bits.extend(
+        halves
+            .iter()
+            .flat_map(|lanes| lanes.to_bits().map(u64::from)),
+    );
+    bits.extend(half_single.to_bits().map(u64::from));
+    bits.extend(half_double.to_bits());
     bits
 }
 
@@ -212,20 +252,25 @@ fn lanes_read_fpcr_before_the_vector_unit() {
     let mut random = SplitMix64::new(0x00A6_1A4E);
     let singles = encodings::<u32>(&pairs(&mut random, 32, 8));
     let doubles = encodings::<u64>(&pairs(&mut random, 64, 11));
+    let halves = encodings::<u16>(&pairs(&mut random, 16, 5));
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
         for start in (0..singles.len()).step_by(3) {
             let lane = |offset: usize| singles[(start + offset) % singles.len()];
             let double = |offset: usize| doubles[(start + offset) % doubles.len()];
+            let half_lane = |offset: usize| halves[(start + offset) % halves.len()];
             let x = Lanes::<F32, 5>::from_bits(core::array::from_fn(lane));
             let y = Lanes::<F32, 5>::from_bits(core::array::from_fn(|offset| lane(offset + 7)));
             let u = Lanes::<F64, 3>::from_bits(core::array::from_fn(double));
             let v = Lanes::<F64, 3>::from_bits(core::array::from_fn(|offset| double(offset + 5)));
+            let half_left = Lanes::<F16, 5>::from_bits(core::array::from_fn(half_lane));
+            let half_right =
+                Lanes::<F16, 5>::from_bits(core::array::from_fn(|offset| half_lane(offset + 11)));
             let ours = with_fpcr(control, || {
-                lanes_without_flags(black_box(x), black_box(y), u, v)
+                lanes_without_flags(black_box(x), black_box(y), u, v, half_left, half_right)
             });
             assert_eq!(
                 ours,
-                lanes_in_engine(x, y, u, v),
+                lanes_in_engine(x, y, u, v, half_left, half_right),
                 "lanes at {start} under FPCR {control:#x}"
             );
         }

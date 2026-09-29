@@ -15,29 +15,41 @@
 //! of the lanes in smaller parts made each load of a chunk wait for the
 //! stores, which took more time than the arithmetic.
 
-use super::Operation;
+mod half;
+
 use super::environment::{self, packed};
-use super::paths::{nan_32, nan_64, precision_of, ready_for};
+use super::paths::{nan_16, nan_32, nan_64, precision_of, ready_for};
+use super::{Kind, Operation};
 use crate::env::{Env, Mode};
 use crate::float::Float;
 use crate::format::Standard;
 use crate::format::internal::Host;
 
-/// Returns `true` when the packed paths compute lanes of the host kind
-/// `host`. The answer is a constant.
+/// Returns `true` when the packed paths compute the operations of `kind` on
+/// lanes of the host kind `host`. binary16 lanes compute in binary32 where
+/// the build widens and narrows them, except the fused multiply-add: two
+/// roundings of it through binary32 can differ from one. The answer is a
+/// constant.
 #[must_use]
-pub const fn lanes_of(host: Host) -> bool {
-    matches!(host, Host::Single | Host::Double)
+pub const fn lanes_of(host: Host, kind: Kind) -> bool {
+    match (host, kind) {
+        (Host::Single | Host::Double, _) => true,
+        (Host::Half, Kind::Arithmetic | Kind::SquareRoot | Kind::RoundToIntegral) => packed::HALF,
+        _ => false,
+    }
 }
 
 /// Returns `true` when the packed paths convert lanes from the host kind
-/// `from` to the host kind `to`. The answer is a constant.
+/// `from` to the host kind `to`. The answer is a constant. binary64 lanes do
+/// not round to binary16: two roundings through binary32 can differ from
+/// one.
 #[must_use]
 pub const fn converts(from: Host, to: Host) -> bool {
-    matches!(
-        (from, to),
-        (Host::Single, Host::Double) | (Host::Double, Host::Single)
-    )
+    match (from, to) {
+        (Host::Single, Host::Double) | (Host::Double, Host::Single) => true,
+        (Host::Half, Host::Single | Host::Double) | (Host::Single, Host::Half) => packed::HALF,
+        _ => false,
+    }
 }
 
 /// Returns `true` when a value of the float type has the size and at least
@@ -99,6 +111,32 @@ fn doubles_mut<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     }
     // SAFETY: as in `singles_mut`, with an `f64`.
     Some(unsafe { &mut *lanes.as_mut_ptr().cast::<[f64; N]>() })
+}
+
+/// Returns an array of values of a format with 16-bit storage as an array
+/// of `u16`, or `None` for another format.
+#[inline]
+fn halves<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    lanes: &[Float<S, W, M>; N],
+) -> Option<&[u16; N]> {
+    if !fits::<S, W, M, u16>() {
+        return None;
+    }
+    // SAFETY: as in `singles`, with a `u16`.
+    Some(unsafe { &*lanes.as_ptr().cast::<[u16; N]>() })
+}
+
+/// Returns an array of values of a format with 16-bit storage as a mutable
+/// array of `u16`, or `None` for another format.
+#[inline]
+fn halves_mut<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    lanes: &mut [Float<S, W, M>; N],
+) -> Option<&mut [u16; N]> {
+    if !fits::<S, W, M, u16>() {
+        return None;
+    }
+    // SAFETY: as in `singles_mut`, with a `u16`.
+    Some(unsafe { &mut *lanes.as_mut_ptr().cast::<[u16; N]>() })
 }
 
 /// Returns the chunk of `C` lanes of `values` from lane `start`.
@@ -176,6 +214,21 @@ fn double_lanes<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     (!nan).then_some(lanes)
 }
 
+/// Computes binary16 lanes into a copy of `first` with `compute`, which
+/// writes the encodings of the lanes. Returns `None` when a lane is a NaN.
+#[inline]
+fn half_lanes<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    first: &[Float<S, W, M>; N],
+    compute: impl FnOnce(&mut [u16; N]) -> Option<()>,
+) -> Option<[Float<S, W, M>; N]> {
+    let mut lanes = *first;
+    let values = halves_mut(&mut lanes)?;
+    compute(values)?;
+    // A fold without a branch lets LLVM test all lanes at once.
+    let nan = values.iter().fold(false, |nan, &bits| nan | nan_16(bits));
+    (!nan).then_some(lanes)
+}
+
 /// Returns `operation` of each pair of lanes from the host unit.
 #[inline]
 pub fn binary<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
@@ -222,7 +275,8 @@ pub fn binary<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 )
             })
         }
-        Host::None | Host::Half | Host::BFloat | Host::Extended => None,
+        Host::Half => half::binary(left, right, operation),
+        Host::None | Host::BFloat | Host::Extended => None,
     }
 }
 
@@ -258,7 +312,8 @@ pub fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 )
             })
         }
-        Host::None | Host::Half | Host::BFloat | Host::Extended => None,
+        Host::Half => half::sqrt(value),
+        Host::None | Host::BFloat | Host::Extended => None,
     }
 }
 
@@ -295,7 +350,8 @@ pub fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N: usize
                 )
             })
         }
-        Host::None | Host::Half | Host::BFloat | Host::Extended => None,
+        Host::Half => half::round_to_integral(value),
+        Host::None | Host::BFloat | Host::Extended => None,
     }
 }
 
@@ -342,14 +398,16 @@ pub fn mul_add<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 )
             })
         }
+        // Two roundings of a fused multiply-add through binary32 can differ
+        // from one.
         Host::None | Host::Half | Host::BFloat | Host::Extended => None,
     }
 }
 
 /// Returns the encoding of each lane converted to the host kind `to` by the
-/// host unit. The packed paths convert between binary32 and binary64. A
-/// conversion gives a NaN only for a NaN lane, so the result is `None` for
-/// a NaN lane.
+/// host unit. The packed paths convert between binary32 and binary64, from
+/// binary16 to both, and from binary32 to binary16. A conversion gives a NaN
+/// only for a NaN lane, so the result is `None` for a NaN lane.
 #[inline]
 pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
@@ -384,6 +442,21 @@ pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             )?;
             let bits = lanes.map(f32::to_bits);
             let nan = bits.iter().fold(false, |nan, &bits| nan | nan_32(bits));
+            (!nan).then_some(bits.map(u64::from))
+        }
+        (Host::Half, Host::Single) => {
+            let bits = half::to_singles(value)?.map(f32::to_bits);
+            let nan = bits.iter().fold(false, |nan, &bits| nan | nan_32(bits));
+            (!nan).then_some(bits.map(u64::from))
+        }
+        (Host::Half, Host::Double) => {
+            let lanes = half::to_doubles(value)?.map(f64::to_bits);
+            let nan = lanes.iter().fold(false, |nan, &bits| nan | nan_64(bits));
+            (!nan).then_some(lanes)
+        }
+        (Host::Single, Host::Half) => {
+            let bits = half::from_singles(value)?;
+            let nan = bits.iter().fold(false, |nan, &bits| nan | nan_16(bits));
             (!nan).then_some(bits.map(u64::from))
         }
         _ => None,

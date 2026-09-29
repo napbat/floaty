@@ -133,7 +133,8 @@ register. `Lanes<F32, 4>` is an SSE or NEON register of binary32 values, and
   The path checks the environment once for all lanes, and computes full
   chunks of lanes with packed instructions and the other lanes with the
   scalar host path. When a lane gives a NaN, each lane takes its scalar
-  operation, which sends the NaN to the engine.
+  operation, which sends the NaN to the engine. binary16 lanes compute in
+  binary32, as the scalar binary16 path does.
 - `Lanes` is a newtype. An operator on `[F32; 4]` would implement a foreign
   trait for a foreign type, which Rust does not allow.
 - `new` and `into_array` convert from and to an array, lane 0 first.
@@ -1461,8 +1462,8 @@ it sends every other input to the engine.
 | `FEAT_FP16` fused multiply-add | AArch64 with `FEAT_FP16` | `mul_add` of binary16, by `FMADD` on half-precision registers | As the AArch64 operators | Arm Architecture Reference Manual, DDI 0487: `FMADD` | Host paths and AArch64 hardware, in the AArch64 FP16 build |
 | `FEAT_BF16` bfloat16 | AArch64 with `FEAT_BF16` | `+`, `-`, `*`, `/`, and `sqrt` of bfloat16: a shift widens the operands exactly to binary32, the unit computes in binary32, and `BFCVT` rounds to nearest even. `convert` from binary32 to bfloat16 by `BFCVT`. | As the AArch64 operators. The fused multiply-add of bfloat16 always runs in the engine. | Arm Architecture Reference Manual, DDI 0487: `BFCVT`, which honors every control of FPCR that applies to single-precision arithmetic | Host paths with every square root and an ignored sweep of every pair, and AArch64 hardware, in the AArch64 FP16 build |
 | bfloat16 through a shift | x86-64 with SSE2, and SSE4.1 for the rounding; AArch64 | A shift widens bfloat16 exactly to binary32. `convert` to binary32 needs no other instruction, and `convert` to binary64 adds `CVTSS2SD` or `FCVT`. `to_int` by `CVTSS2SI` or `FCVTNS`, and `round_to_integral` by `ROUNDSS` or `FRINTN` and a shift back. | As the SSE or AArch64 paths. `from_int` of bfloat16 always runs in the engine, because two roundings through binary32 can differ from one. | Intel SDM Volume 2 and Arm Architecture Reference Manual, DDI 0487: the instructions of the binary32 paths | Host paths with every bfloat16 encoding, SSE hardware, and AArch64 hardware |
-| Packed SSE and AVX | x86-64 with SSE2; AVX for 256 bits, FMA for `mul_add`, and SSE4.1 for the rounding | The `Lanes` operators, `sqrt`, `mul_add`, and `round_to_integral` of binary32 and binary64, by `ADDPS`, `SUBPS`, `MULPS`, `DIVPS`, `SQRTPS`, `VFMADD213PS`, `ROUNDPS`, their `PD` forms, and their 256-bit forms. `convert` of lanes between binary32 and binary64, by `CVTPS2PD` and `CVTPD2PS` and their AVX forms. | As the SSE operators, for all lanes at once. A NaN lane sends each lane to its scalar operation. | Intel SDM Volume 2: the instructions | Lanes, and the packed instructions of the SSE unit with the union of the lane flags |
-| Packed AArch64 | AArch64 | As the packed SSE paths at 128 bits, by `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FMLA`, and `FRINTN` on `.4S` and `.2D`, and `FCVTL` and `FCVTN` | As the AArch64 operators, for all lanes at once. A NaN lane sends each lane to its scalar operation. | Arm Architecture Reference Manual, DDI 0487: the instructions | Lanes and AArch64 hardware, under `qemu-aarch64` |
+| Packed SSE and AVX | x86-64 with SSE2; AVX for 256 bits, FMA for `mul_add`, SSE4.1 for the rounding, and F16C for binary16 | The `Lanes` operators, `sqrt`, `mul_add`, and `round_to_integral` of binary32 and binary64, by `ADDPS`, `SUBPS`, `MULPS`, `DIVPS`, `SQRTPS`, `VFMADD213PS`, `ROUNDPS`, their `PD` forms, and their 256-bit forms. `convert` of lanes between binary32 and binary64, by `CVTPS2PD` and `CVTPD2PS` and their AVX forms. The operators, `sqrt`, and `round_to_integral` of binary16 in binary32, and `convert` of lanes from binary16 to binary32 and binary64 and from binary32 to binary16, by `VCVTPH2PS` and `VCVTPS2PH` with immediate 0. | As the SSE operators, for all lanes at once. A NaN lane sends each lane to its scalar operation. | Intel SDM Volume 2: the instructions | Lanes, and the packed instructions of the SSE unit with the union of the lane flags |
+| Packed AArch64 | AArch64 | As the packed SSE paths at 128 bits, by `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FMLA`, and `FRINTN` on `.4S` and `.2D`, and `FCVTL` and `FCVTN` between `.2S` and `.2D` and between `.4H` and `.4S` | As the AArch64 operators, for all lanes at once. A NaN lane sends each lane to its scalar operation. | Arm Architecture Reference Manual, DDI 0487: the instructions | Lanes and AArch64 hardware, under `qemu-aarch64` |
 | Double-double operators | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`. One check of MXCSR or FPCR serves every step, and each binary64 step takes a binary64 path. | A step that its path declines runs in the engine | As the binary64 paths | Double-double, with the operators of the SSE mode against QD, and host paths |
 
 The binary16 path rounds twice: to binary32, and then to binary16. binary32
@@ -1543,6 +1544,14 @@ The packed paths:
   first where the build has AVX, and the other lanes with the scalar host
   path. It tests the results for a NaN. When a lane is a NaN, the path
   returns nothing, and each lane takes its scalar operation.
+- A chunk of binary16 lanes widens to binary32 with `VCVTPH2PS` or `FCVTL`,
+  computes in the packed binary32 instructions, and rounds with
+  `VCVTPS2PH` with immediate 0 or `FCVTN`. Each lane runs the instructions
+  of the scalar binary16 path, so the proof of that path holds for each
+  lane. The fused multiply-add of binary16 lanes takes the scalar path of
+  each lane, because two roundings through binary32 can differ from one.
+  The AArch64 hardware test runs the binary16 lanes under each field of
+  FPCR, AHP among them, and the SSE packed test under each MXCSR setting.
 - The lane-by-lane operation after a path returns nothing reads only the
   operands. A NaN path that read the result lanes kept the result in memory:
   in the default build, the operator of `Lanes<F32, 4>` took 19.7 cycles in

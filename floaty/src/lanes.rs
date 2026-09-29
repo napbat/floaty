@@ -129,7 +129,9 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn sqrt(self) -> Self {
-        if !host::available(S::HOST, Kind::SquareRoot) || !host::packed::lanes_of(S::HOST) {
+        if !host::available(S::HOST, Kind::SquareRoot)
+            || !host::packed::lanes_of(S::HOST, Kind::SquareRoot)
+        {
             return self.map(Float::sqrt);
         }
         match host::packed::sqrt(&self.lanes, &M::ENV) {
@@ -156,7 +158,9 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn mul_add(self, multiplier: Self, addend: Self) -> Self {
-        if !host::available(S::HOST, Kind::FusedMultiplyAdd) || !host::packed::lanes_of(S::HOST) {
+        if !host::available(S::HOST, Kind::FusedMultiplyAdd)
+            || !host::packed::lanes_of(S::HOST, Kind::FusedMultiplyAdd)
+        {
             return self.mul_add_lane_wise(multiplier, addend);
         }
         match host::packed::mul_add(&self.lanes, &multiplier.lanes, &addend.lanes, &M::ENV) {
@@ -192,7 +196,9 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn round_to_integral(self) -> Self {
-        if !host::available(S::HOST, Kind::RoundToIntegral) || !host::packed::lanes_of(S::HOST) {
+        if !host::available(S::HOST, Kind::RoundToIntegral)
+            || !host::packed::lanes_of(S::HOST, Kind::RoundToIntegral)
+        {
             return self.map(Float::round_to_integral);
         }
         match host::packed::round_to_integral(&self.lanes, &M::ENV) {
@@ -265,7 +271,9 @@ macro_rules! operator {
 
             #[inline]
             fn $method(self, other: Self) -> Self {
-                if !host::available(S::HOST, Kind::Arithmetic) || !host::packed::lanes_of(S::HOST) {
+                if !host::available(S::HOST, Kind::Arithmetic)
+                    || !host::packed::lanes_of(S::HOST, Kind::Arithmetic)
+                {
                     return self.zip(other, ops::$trait::$method);
                 }
                 match host::packed::binary(&self.lanes, &other.lanes, Operation::$trait, &M::ENV) {

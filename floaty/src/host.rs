@@ -291,11 +291,11 @@ mod none {
         use crate::float::Float;
         use crate::format::Standard;
         use crate::format::internal::Host;
-        use crate::host::Operation;
+        use crate::host::{Kind, Operation};
 
         /// Returns `false`: this build has no host path.
         #[must_use]
-        pub const fn lanes_of(_host: Host) -> bool {
+        pub const fn lanes_of(_host: Host, _kind: Kind) -> bool {
             false
         }
 

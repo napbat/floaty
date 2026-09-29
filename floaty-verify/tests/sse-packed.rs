@@ -8,7 +8,7 @@
 
 use std::hint::black_box;
 
-use floaty::{Env, F32, F64, Flags, Lanes};
+use floaty::{Env, F16, F32, F64, Flags, Lanes};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
@@ -343,12 +343,12 @@ fn engine_results(singles: [[u32; 8]; 2], doubles: [[u64; 5]; 2]) -> Vec<u64> {
     bits
 }
 
-#[test]
-fn lanes_read_mxcsr_before_the_packed_unit() {
-    // FTZ, DAZ, and each directed rounding change the packed results, and an
-    // unmasked exception traps. Under each, the operations of `Lanes` without
-    // flags still give the engine results of the default mode. The masks IM,
-    // DM, ZM, OM, UM, and PM are bits 7 to 12.
+/// Returns the MXCSR values under which the paths of `Lanes` must give the
+/// engine results: the default, FTZ, DAZ, each directed rounding, and each
+/// unmasked exception. FTZ, DAZ, and each directed rounding change the packed
+/// results, and an unmasked exception traps. The masks IM, DM, ZM, OM, UM,
+/// and PM are bits 7 to 12.
+fn controls() -> Vec<u32> {
     let directions = [
         MXCSR_MASKED,
         MXCSR_MASKED | MXCSR_FTZ,
@@ -358,7 +358,14 @@ fn lanes_read_mxcsr_before_the_packed_unit() {
         MXCSR_MASKED | (3 << 13),
     ];
     let unmasked = (7..=12).map(|mask| MXCSR_MASKED & !(1 << mask));
-    let controls: Vec<u32> = directions.into_iter().chain(unmasked).collect();
+    directions.into_iter().chain(unmasked).collect()
+}
+
+#[test]
+fn lanes_read_mxcsr_before_the_packed_unit() {
+    // Under each control, the operations of `Lanes` without flags give the
+    // engine results of the default mode.
+    let controls = controls();
     let mut random = SplitMix64::new(0x00C5_4EAD);
     let singles = single_chunks(&mut random);
     let doubles = chunks::<5>(&mut random, 64, 11);
@@ -372,6 +379,95 @@ fn lanes_read_mxcsr_before_the_packed_unit() {
                 ours,
                 engine_results(lanes, wide),
                 "{lanes:x?} {wide:x?} under {control:#x}"
+            );
+        }
+    }
+}
+
+/// Returns the results of the operations of `Lanes` without flags on 13
+/// binary16 lanes, which the packed paths compute in binary32 chunks and
+/// single lanes, and of the conversions of the lanes.
+fn binary16_lanes_without_flags(halves: [[u16; 13]; 2], singles: [u32; 13]) -> Vec<u64> {
+    let [x, y] = halves.map(Lanes::<F16, 13>::from_bits);
+    let lanes = [
+        x + y,
+        x - y,
+        x * y,
+        x / y,
+        x.sqrt(),
+        x.round_to_integral(),
+        Lanes::<F32, 13>::from_bits(singles).convert(),
+    ];
+    let (widened, doubled): (Lanes<F32, 13>, Lanes<F64, 13>) = (x.convert(), x.convert());
+    let mut bits: Vec<u64> = lanes
+        .iter()
+        .flat_map(|lanes| lanes.to_bits().map(u64::from))
+        .collect();
+    bits.extend(widened.to_bits().map(u64::from));
+    bits.extend(doubled.to_bits());
+    bits
+}
+
+/// Returns the results of `binary16_lanes_without_flags` from the `_with`
+/// methods of each lane in the default mode, which always run the engine.
+fn binary16_engine_results(halves: [[u16; 13]; 2], singles: [u32; 13]) -> Vec<u64> {
+    let [x, y] = halves.map(|lanes| lanes.map(F16::from_bits));
+    let operations: [fn(F16, F16) -> F16; 6] = [
+        |x, y| x.add_with(y, F16::ENV).0,
+        |x, y| x.sub_with(y, F16::ENV).0,
+        |x, y| x.mul_with(y, F16::ENV).0,
+        |x, y| x.div_with(y, F16::ENV).0,
+        |x, _| x.sqrt_with(F16::ENV).0,
+        |x, _| x.round_to_integral_with(F16::ENV).0,
+    ];
+    let mut bits = Vec::new();
+    for operation in operations {
+        bits.extend(
+            x.iter()
+                .zip(&y)
+                .map(|(&x, &y)| u64::from(operation(x, y).to_bits())),
+        );
+    }
+    bits.extend(singles.iter().map(|&bits| {
+        u64::from(
+            F32::from_bits(bits)
+                .convert_with::<F16>(F16::ENV)
+                .0
+                .to_bits(),
+        )
+    }));
+    bits.extend(
+        x.iter()
+            .map(|&x| u64::from(x.convert_with::<F32>(F32::ENV).0.to_bits())),
+    );
+    bits.extend(
+        x.iter()
+            .map(|&x| x.convert_with::<F64>(F64::ENV).0.to_bits()),
+    );
+    bits
+}
+
+#[test]
+fn binary16_lanes_read_mxcsr_before_the_packed_unit() {
+    // Under each control, the binary16 operations of `Lanes` without flags
+    // give the engine results of the default mode.
+    let mut random = SplitMix64::new(0x00C5_4E16);
+    let halves = chunks::<13>(&mut random, 16, 5);
+    let singles = chunks::<13>(&mut random, 32, 8);
+    for control in controls() {
+        for (index, pair) in halves.windows(2).enumerate().step_by(3) {
+            let lanes: [[u16; 13]; 2] = [0, 1].map(|first| {
+                pair[first].map(|bits| u16::try_from(bits).expect("a binary16 encoding"))
+            });
+            let narrow = singles[index % singles.len()]
+                .map(|bits| u32::try_from(bits).expect("a binary32 encoding"));
+            let ours = x86::with_mxcsr(control, || {
+                binary16_lanes_without_flags(black_box(lanes), narrow)
+            });
+            assert_eq!(
+                ours,
+                binary16_engine_results(lanes, narrow),
+                "{lanes:x?} {narrow:x?} under {control:#x}"
             );
         }
     }
