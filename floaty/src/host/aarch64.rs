@@ -537,6 +537,24 @@ pub fn x87_from_double(_bits: u64) -> Option<[u64; 2]> {
 
 /// Returns `None`: AArch64 has no x87 unit.
 #[inline]
+pub fn x87_remainder(_dividend: &[u64; 2], _divisor: &[u64; 2]) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit and no remainder instruction.
+#[inline]
+pub fn x87_remainder_single(_dividend: u32, _divisor: u32) -> Option<u32> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit and no remainder instruction.
+#[inline]
+pub fn x87_remainder_double(_dividend: u64, _divisor: u64) -> Option<u64> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit.
+#[inline]
 pub fn x87_to_int(_value: &[u64; 2]) -> Option<i64> {
     None
 }

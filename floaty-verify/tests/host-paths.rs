@@ -802,3 +802,79 @@ fn comparisons_give_the_default_mode_results() {
         .collect();
     comparisons_match!(floaty::F32, &equal);
 }
+
+/// Returns pairs of normal encodings of a binary format with `exponent_bits`
+/// exponent bits and `fraction_bits` bits below them, whose exponent fields
+/// differ by up to `spread`, with random signs. A set integer bit at
+/// `fraction_bits - 1` makes x87 extended encodings canonical when
+/// `integer_bit` is set.
+fn close_pairs(
+    random: &mut SplitMix64,
+    exponent_bits: u32,
+    fraction_bits: u32,
+    integer_bit: bool,
+    spread: u64,
+) -> Vec<(u128, u128)> {
+    let largest = (1_u128 << exponent_bits) - 2;
+    let encoding = |random: &mut SplitMix64, exponent: u128| {
+        let sign = u128::from(random.next_u64() >> 63) << (exponent_bits + fraction_bits);
+        let mut fraction = random.next_u128() >> (128 - fraction_bits);
+        if integer_bit {
+            fraction |= 1 << (fraction_bits - 1);
+        }
+        sign | (exponent << fraction_bits) | fraction
+    };
+    (0..4_000)
+        .map(|_| {
+            let exponent = 1 + u128::from(random.next_u64()) % largest;
+            let gap = u128::from(random.next_u64() % (spread + 1));
+            let divisor = exponent.saturating_sub(gap).max(1);
+            (encoding(random, exponent), encoding(random, divisor))
+        })
+        .collect()
+}
+
+#[test]
+fn remainders_give_the_default_mode_results() {
+    // The x87 path takes operands whose exponents differ by up to 630, and
+    // the pairs reach past that bound.
+    let mut random = SplitMix64::new(0xE3E3);
+    let mut singles = close_pairs(&mut random, 8, 23, false, 300);
+    singles.extend(random_pairs::<u128>(&mut random, 32, 8, 4_000));
+    for (a, b) in singles {
+        let bits = |value: u128| u32::try_from(value).expect("a binary32 encoding");
+        let (x, y) = (
+            floaty::F32::from_bits(bits(a)),
+            floaty::F32::from_bits(bits(b)),
+        );
+        let expected = x.remainder_with(y, floaty::F32::ENV).0;
+        assert_eq!(
+            x.remainder(y).to_bits(),
+            expected.to_bits(),
+            "{a:#x} {b:#x}"
+        );
+    }
+    let mut doubles = close_pairs(&mut random, 11, 52, false, 900);
+    doubles.extend(random_pairs::<u128>(&mut random, 64, 11, 4_000));
+    for (a, b) in doubles {
+        let bits = |value: u128| u64::try_from(value).expect("a binary64 encoding");
+        let (x, y) = (F64::from_bits(bits(a)), F64::from_bits(bits(b)));
+        let expected = x.remainder_with(y, F64::ENV).0;
+        assert_eq!(
+            x.remainder(y).to_bits(),
+            expected.to_bits(),
+            "{a:#x} {b:#x}"
+        );
+    }
+    let mut extended = close_pairs(&mut random, 15, 64, true, 900);
+    extended.extend(random_pairs::<u128>(&mut random, 80, 15, 4_000));
+    for (a, b) in extended {
+        let (x, y) = (F80::from_bits(a), F80::from_bits(b));
+        let expected = x.remainder_with(y, F80::ENV).0;
+        assert_eq!(
+            x.remainder(y).to_bits(),
+            expected.to_bits(),
+            "{a:#x} {b:#x}"
+        );
+    }
+}

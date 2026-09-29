@@ -136,8 +136,15 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
 
     /// Returns the IEEE 754 remainder, with the default mode.
     #[must_use]
+    #[inline]
     pub fn remainder(self, divisor: Self) -> Self {
-        self.remainder_with(divisor, M::default()).0
+        if !host::available(S::HOST, Kind::Remainder) {
+            return self.remainder_with(divisor, M::default()).0;
+        }
+        match host::remainder::<S, W>(self.bits, divisor.bits, &M::ENV) {
+            Some(bits) => Self::from_masked(bits),
+            None => remainder_in_engine(self, divisor),
+        }
     }
 
     /// Returns the IEEE 754 remainder `self - n * divisor`, and the flags.
@@ -256,6 +263,17 @@ fn sqrt_in_engine<S: Standard<W>, const W: usize, M: Mode>(
     value: Float<S, W, M>,
 ) -> Float<S, W, M> {
     value.sqrt_with(M::default()).0
+}
+
+/// Returns the remainder in the engine, for operands whose host path does
+/// not apply.
+#[cold]
+#[inline(never)]
+fn remainder_in_engine<S: Standard<W>, const W: usize, M: Mode>(
+    dividend: Float<S, W, M>,
+    divisor: Float<S, W, M>,
+) -> Float<S, W, M> {
+    dividend.remainder_with(divisor, M::default()).0
 }
 
 /// Runs the rounding to an integral value in the engine, for a format whose

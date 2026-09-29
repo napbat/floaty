@@ -28,8 +28,8 @@ mod paths;
     target_arch = "aarch64"
 ))]
 pub use self::paths::{
-    Ready, binary, compare, convert, from_int, min_max, mul_add, ready, round_to_integral, sqrt,
-    to_int,
+    Ready, binary, compare, convert, from_int, min_max, mul_add, ready, remainder,
+    round_to_integral, sqrt, to_int,
 };
 
 #[cfg(not(floaty_engine_only))]
@@ -87,6 +87,8 @@ pub enum Kind {
     FromInt,
     /// The comparison, and the minimum and maximum operations.
     Comparison,
+    /// The IEEE 754 remainder.
+    Remainder,
 }
 
 /// Returns `true` when this build has a host path of `kind` for a format of
@@ -120,8 +122,10 @@ pub const fn available(host: Host, kind: Kind) -> bool {
     match (host, kind) {
         // The x87 unit has no fused multiply-add. Two roundings of a bfloat16
         // fused multiply-add, or of an integer, through binary32 can differ
-        // from one.
-        (Host::None, _)
+        // from one. Only the x87 unit has a remainder instruction, and it
+        // loads binary32, binary64, and x87 extended values.
+        (Host::None | Host::Half | Host::BFloat, Kind::Remainder)
+        | (Host::None, _)
         | (Host::Extended, Kind::FusedMultiplyAdd | Kind::Comparison)
         | (Host::BFloat, Kind::FusedMultiplyAdd | Kind::FromInt) => false,
         (Host::Half, Kind::FusedMultiplyAdd) => unit && fp16,
@@ -146,8 +150,10 @@ pub const fn available(host: Host, kind: Kind) -> bool {
             | Kind::SquareRoot
             | Kind::RoundToIntegral
             | Kind::ToInt
-            | Kind::FromInt,
-        ) => unit && x87,
+            | Kind::FromInt
+            | Kind::Remainder,
+        )
+        | (Host::Single | Host::Double, Kind::Remainder) => unit && x87,
     }
 }
 
@@ -190,8 +196,8 @@ pub const fn convertible(from: Host, to: Host) -> bool {
     ))
 ))]
 pub use self::none::{
-    Ready, binary, compare, convert, from_int, min_max, mul_add, packed, ready, round_to_integral,
-    sqrt, to_int,
+    Ready, binary, compare, convert, from_int, min_max, mul_add, packed, ready, remainder,
+    round_to_integral, sqrt, to_int,
 };
 
 /// The entry points of a build without a host path: each returns `None`.
@@ -217,6 +223,16 @@ mod none {
         _right: S::Bits,
         _env: &Env,
     ) -> Option<Ordering> {
+        None
+    }
+
+    /// Returns `None`: this build has no host path.
+    #[inline]
+    pub fn remainder<S: Standard<W>, const W: usize>(
+        _dividend: S::Bits,
+        _divisor: S::Bits,
+        _env: &Env,
+    ) -> Option<S::Bits> {
         None
     }
 

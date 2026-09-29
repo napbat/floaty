@@ -464,3 +464,64 @@ fn entry_points_read_the_control_word_before_the_x87_unit() {
         }
     }
 }
+
+#[test]
+fn remainders_read_the_control_word_before_the_x87_unit() {
+    // `FPREM1` rounds its quotient to nearest even whatever the control word
+    // holds, but an unmasked exception traps, so the path reads the control
+    // word. Under each control, the remainders of binary32, binary64, and x87
+    // extended values give the engine results of the default mode. The
+    // divisors lie near the dividends, where the path applies.
+    let full = X87_MASKED | (3 << 8);
+    let directed = X87_ROUNDINGS.into_iter().map(|(_, field)| full | field);
+    let precisions = X87_PRECISIONS
+        .into_iter()
+        .map(|(_, field)| X87_MASKED | field);
+    let unmasked = (0..=5).map(|mask| full & !(1 << mask));
+    let controls: Vec<u16> = directed.chain(precisions).chain(unmasked).collect();
+    let mut random = SplitMix64::new(0x0087_E3E3);
+    let dividends = operands(&mut random, 2_000);
+    for control in controls {
+        for &dividend in &dividends {
+            // A divisor with a nearby exponent: the dividend shifted right by
+            // up to 31 exponent steps, with a changed significand.
+            let shift = u128::from(random.next_u64() % 32) << 64;
+            let divisor = (dividend.wrapping_sub(shift) ^ u128::from(random.next_u64() >> 1))
+                & ((1 << 80) - 1);
+            let (x, y) = (F80::from_bits(dividend), F80::from_bits(divisor));
+            let (u, v) = (
+                F64::from_bits(narrow(dividend >> 16)),
+                F64::from_bits(narrow(divisor >> 16)),
+            );
+            let single = |value: u128| u32::try_from(value & 0xFFFF_FFFF).expect("32 bits");
+            let (single_left, single_right) = (
+                F32::from_bits(single(dividend)),
+                F32::from_bits(single(divisor >> 4)),
+            );
+            let ours = x86::with_control_word(control, || {
+                (
+                    x.remainder(y).to_bits(),
+                    u.remainder(v).to_bits(),
+                    single_left.remainder(single_right).to_bits(),
+                )
+            });
+            let engine = (
+                x.remainder_with(y, F80::ENV).0.to_bits(),
+                u.remainder_with(v, F64::ENV).0.to_bits(),
+                single_left
+                    .remainder_with(single_right, F32::ENV)
+                    .0
+                    .to_bits(),
+            );
+            assert_eq!(
+                ours, engine,
+                "{dividend:#x} {divisor:#x} under {control:#06x}"
+            );
+        }
+    }
+}
+
+/// Returns the low 64 bits of `value`.
+fn narrow(value: u128) -> u64 {
+    u64::try_from(value & u128::from(u64::MAX)).expect("the mask keeps 64 bits")
+}

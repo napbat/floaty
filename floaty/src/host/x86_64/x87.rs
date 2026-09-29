@@ -199,3 +199,104 @@ pub fn x87_to_double(value: &[u64; 2]) -> Option<u64> {
     let nan = result & 0x7FFF_FFFF_FFFF_FFFF > 0x7FF0_0000_0000_0000;
     (!nan).then_some(result)
 }
+
+/// Computes the IEEE remainder of the value at `dividend` and the value at
+/// `divisor`, both of the width `$width`, by `FPREM1`, and stores it through
+/// `result`, of type `$result` and the same width.
+///
+/// Each `FPREM1` reduces the exponent difference of its operands by up to 63,
+/// and sets C2, bit 2 of the high byte of the status word, while the
+/// remainder is partial. The quotient rounds to nearest even whatever the
+/// control word holds, and the remainder is exact, Intel SDM Volume 2:
+/// `FPREM1`. A remainder of binary32 or binary64 operands is a value of
+/// their format, so the store is exact.
+macro_rules! x87_remainder {
+    ($result:ty, $width:literal; $dividend:expr, $divisor:expr) => {{
+        let mut result: $result = 0;
+        // SAFETY: the instructions read the operands through the pointers and
+        // write one result of the width to `result`. FNSTSW writes AX, which
+        // is a clobber, and TEST writes the arithmetic flags. Every x87
+        // register is a clobber, so the x87 stack is empty on entry, and
+        // `FSTP ST(1)` and the store pop both values, so it is empty on exit.
+        // The x87 unit changes only its status word, which floaty does not
+        // read.
+        unsafe {
+            core::arch::asm!(
+                concat!("fld ", $width, " ptr [{divisor}]"),
+                concat!("fld ", $width, " ptr [{dividend}]"),
+                "2:",
+                "fprem1",
+                "fnstsw ax",
+                "test ah, 4",
+                "jnz 2b",
+                "fstp st(1)",
+                concat!("fstp ", $width, " ptr [{result}]"),
+                dividend = in(reg) $dividend,
+                divisor = in(reg) $divisor,
+                result = in(reg) &raw mut result,
+                out("ax") _,
+                out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+                options(nostack),
+            );
+        }
+        result
+    }};
+}
+
+/// Returns the IEEE remainder of two binary32 encodings from the x87 unit, by
+/// `FPREM1`, or `None` for a NaN.
+#[inline]
+pub fn x87_remainder_single(dividend: u32, divisor: u32) -> Option<u32> {
+    let result = x87_remainder!(u32, "dword"; &raw const dividend, &raw const divisor);
+    // The NaN test uses integer instructions, as the paths do.
+    let nan = result & 0x7FFF_FFFF > 0x7F80_0000;
+    (!nan).then_some(result)
+}
+
+/// Returns the IEEE remainder of two binary64 encodings from the x87 unit, by
+/// `FPREM1`, or `None` for a NaN.
+#[inline]
+pub fn x87_remainder_double(dividend: u64, divisor: u64) -> Option<u64> {
+    let result = x87_remainder!(u64, "qword"; &raw const dividend, &raw const divisor);
+    // The NaN test uses integer instructions, as the paths do.
+    let nan = result & 0x7FFF_FFFF_FFFF_FFFF > 0x7FF0_0000_0000_0000;
+    (!nan).then_some(result)
+}
+
+/// Returns the IEEE remainder of two 80-bit encodings from the x87 unit, by
+/// `FPREM1`, or `None` for a NaN. The block reads the stored encoding back
+/// as `x87_extended!` does.
+#[inline]
+pub fn x87_remainder(dividend: &[u64; 2], divisor: &[u64; 2]) -> Option<[u64; 2]> {
+    let mut scratch = [0_u64; 2];
+    let (low, high): (u64, u64);
+    // SAFETY: as in `x87_remainder!`, with the 80-bit loads and store of
+    // `x87_extended!`. `FSTP` writes 10 bytes to `scratch`, which holds 16,
+    // and the block reads them back.
+    unsafe {
+        core::arch::asm!(
+            "fld tbyte ptr [{divisor}]",
+            "fld tbyte ptr [{dividend}]",
+            "2:",
+            "fprem1",
+            "fnstsw ax",
+            "test ah, 4",
+            "jnz 2b",
+            "fstp st(1)",
+            "fstp tbyte ptr [{scratch}]",
+            "mov {low}, qword ptr [{scratch}]",
+            "movzx {high:e}, word ptr [{scratch} + 8]",
+            dividend = in(reg) dividend.as_ptr(),
+            divisor = in(reg) divisor.as_ptr(),
+            scratch = in(reg) scratch.as_mut_ptr(),
+            low = out(reg) low,
+            high = lateout(reg) high,
+            out("ax") _,
+            out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+            out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+            options(nostack),
+        );
+    }
+    extended_result([low, high])
+}

@@ -10,8 +10,9 @@ pub mod packed;
 mod x87;
 
 pub use self::x87::{
-    x87_binary, x87_environment, x87_from_double, x87_from_int, x87_from_single, x87_round,
-    x87_sqrt, x87_to_double, x87_to_int, x87_to_single,
+    x87_binary, x87_environment, x87_from_double, x87_from_int, x87_from_single, x87_remainder,
+    x87_remainder_double, x87_remainder_single, x87_round, x87_sqrt, x87_to_double, x87_to_int,
+    x87_to_single,
 };
 
 /// Returns `true` when the SSE unit rounds to nearest even without FTZ or DAZ,

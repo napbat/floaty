@@ -452,6 +452,54 @@ pub fn min_max<S: Standard<W>, const W: usize>(
     }
 }
 
+/// The largest difference of the exponent fields of a dividend and a divisor
+/// that the remainder path takes: ten steps of `FPREM1`, each of which
+/// reduces the difference by up to 63. Each step takes about 12 nanoseconds,
+/// and the engine grows more slowly. At a difference of 700, binary64 took 175
+/// nanoseconds on the path and 181 in the engine, and at 1,000, 252 and 182.
+const REMAINDER_REACH: u64 = 630;
+
+/// Returns the IEEE remainder of two values from the x87 unit, or `None` when
+/// the path does not apply, the exponents of the operands lie farther apart
+/// than the path reaches, or the result is a NaN. The x87 unit loads binary32
+/// and binary64 values exactly, and the remainder is exact, so it stores
+/// exactly in the format of the operands.
+#[inline]
+pub fn remainder<S: Standard<W>, const W: usize>(
+    dividend: S::Bits,
+    divisor: S::Bits,
+    env: &Env,
+) -> Option<S::Bits> {
+    if !ready_for(Host::Extended, env, S::PRECISION) {
+        return None;
+    }
+    let (x, y) = (dividend.to_limbs().limb(0), divisor.to_limbs().limb(0));
+    match S::HOST {
+        Host::None | Host::Half | Host::BFloat => None,
+        Host::Single => {
+            if ((x >> 23) & 0xFF).saturating_sub((y >> 23) & 0xFF) > REMAINDER_REACH {
+                return None;
+            }
+            let bits = |value: u64| u32::try_from(value).expect("a binary32 encoding has 32 bits");
+            let result = environment::x87_remainder_single(bits(x), bits(y))?;
+            encoding::<S, W>(u64::from(result), false)
+        }
+        Host::Double => {
+            if ((x >> 52) & 0x7FF).saturating_sub((y >> 52) & 0x7FF) > REMAINDER_REACH {
+                return None;
+            }
+            encoding::<S, W>(environment::x87_remainder_double(x, y)?, false)
+        }
+        Host::Extended => {
+            let (x, y) = (extended::<S, W>(dividend), extended::<S, W>(divisor));
+            if (x[1] & 0x7FFF).saturating_sub(y[1] & 0x7FFF) > REMAINDER_REACH {
+                return None;
+            }
+            environment::x87_remainder(&x, &y).map(extended_encoding::<S, W>)
+        }
+    }
+}
+
 /// Returns the precision of a host kind.
 pub(super) const fn precision_of(host: Host) -> u32 {
     match host {
