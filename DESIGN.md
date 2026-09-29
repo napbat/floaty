@@ -982,6 +982,16 @@ The decimal formats follow the Intel decimal library:
     divisor, gives 11 bits. Three Newton steps give the reciprocal less at
     most 1, and a last step corrects it. The same function builds the table
     of powers of 10 at compile time.
+  - The integer square root of a value of at most 16 bits takes the square
+    root of `core`, which is faster there. A value of at most 128 bits takes
+    no division. A table of 384 entries and two Newton steps give `1 / sqrt(x)`
+    to about 35 bits. The product with `x` gives a root below the true root,
+    and one step with the remainder brings it within one. A wider value
+    takes Newton's steps on the root from the root of its top 128 bits. Each
+    step takes one long division, and the value takes as many steps as its
+    bit count needs. Every path ends with a correction by squaring, so the
+    root is exact for every estimate. Debug assertions check that the
+    correction takes at most one step.
   - A conversion between binary and decimal computes in 256 bits when its
     numbers fit, as they do for most values within about 10^60 of 1. It
     computes in 1,024 or 16,384 bits otherwise.
@@ -1156,6 +1166,25 @@ interleaved runs.
 | binary512 divide | 283 | 283 |
 | decimal128 BID divide | 138 | 124 |
 | decimal128 BID square root | 292 | 262 |
+
+The integer square root without a division, the 256-bit conversion width,
+and the DPD decoder on 64-bit groups, before and after, in nanoseconds per
+operation with an `Env`. Each figure is the lower of two interleaved runs.
+
+| Operation | Before | After |
+| --- | --- | --- |
+| binary32 square root | 39 | 30 |
+| binary64 square root | 59 | 30 |
+| binary80 square root | 161 | 103 |
+| binary128 square root | 179 | 109 |
+| binary256 square root | 401 | 325 |
+| binary512 square root | 1,151 | 975 |
+| decimal64 BID square root | 97 | 70 |
+| decimal128 BID square root | 263 | 180 |
+| decimal32 BID to binary64 | 109 | 58 |
+| decimal64 BID to binary64 | 139 | 75 |
+| decimal128 DPD to binary64 | 155 | 86 |
+| decimal128 DPD add | 123 | 117 |
 
 ## Verification
 
@@ -1402,9 +1431,9 @@ Each step passes its oracle tests before the next step starts.
 - The details of the `Unsigned` and `Finite` encodings.
 - Presets for ARM, RISC-V, and Direct3D.
 - An optional layer that carries flags on values through a computation.
-- Decide whether a reciprocal square root estimate, as SoftFloat uses,
-  replaces the integer square root and the wide division. They stay slow:
-  binary128 `sqrt` takes 183 ns after the long division by a reciprocal.
+- Decide whether the square root of a value wider than 128 bits iterates
+  on the reciprocal square root with multiplications only. Each Newton step
+  of such a value takes one long division: binary512 `sqrt` takes 975 ns.
 - Measure the specialization per format and behavior again on an idle host.
   Other work loaded the host during the measurement in this file.
 - Add mode combinators for the NaN rule and the tininess rule with the Arm

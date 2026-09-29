@@ -7,6 +7,10 @@ use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::hash::Hash;
 
+mod root;
+
+pub use self::root::square_root;
+
 /// An unsigned integer of `64 * N` bits, stored as little-endian limbs.
 ///
 /// Every `[u64; N]` implements this trait.
@@ -825,40 +829,6 @@ fn long_divide<L: Limbs, const BUFFER: usize>(numerator: L, divisor: L) -> (L, L
             value.with_limb(index, limb)
         });
     (quotient, normalized.shr(shift))
-}
-
-/// Returns the integer square root of `value`, rounded down, and `true` when
-/// the root is not exact.
-///
-/// Values of at most 64 bits use the native `u64` square root, and values of
-/// at most 128 bits the native `u128` square root. For a wider value,
-/// Newton's iteration starts above the root, from the root of the top 128
-/// bits, and decreases to it.
-pub fn square_root<L: Limbs>(value: L) -> (L, bool) {
-    let length = value.bit_length();
-    if length <= 64 {
-        let narrow = value.limb(0);
-        let root = narrow.isqrt();
-        return (L::ZERO.with_limb(0, root), root * root != narrow);
-    }
-    if length <= 128 {
-        let wide = to_u128(&value);
-        let root = wide.isqrt();
-        return (from_u128(root), root * root != wide);
-    }
-    // An even shift keeps the root of the shifted value at half the shift.
-    let shift = (length - 127) & !1;
-    let top = to_u128(&value.shr(shift));
-    let mut root = from_u128::<L>(top.isqrt() + 1).shl(shift / 2);
-    loop {
-        let (quotient, rest) = divide(value, root);
-        let next = root.add(quotient).shr(1);
-        if next.compare(&root) != Ordering::Less {
-            // The root is exact when the value divides into it evenly.
-            return (root, quotient != root || !rest.is_zero());
-        }
-        root = next;
-    }
 }
 
 /// Splits a bit position into a limb index and a bit offset in that limb.
