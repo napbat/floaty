@@ -299,3 +299,28 @@ fn long_division_returns_the_known_quotient_and_remainder() {
         );
     }
 }
+
+#[test]
+fn the_reciprocal_matches_its_definition() {
+    let definition = |d: u64| super::low_u64(u128::MAX / u128::from(d));
+    // Each entry of the table changes at a multiple of 2^55. Test each
+    // boundary, its neighbors, and a divisor with every lower bit set.
+    for top in 256_u64..512 {
+        let base = top << 55;
+        for d in [base, base + 1, base | ((1 << 55) - 1), base - 1] {
+            if d >> 63 == 1 {
+                assert_eq!(Divisor::reciprocal(d), definition(d), "{d:#x}");
+            }
+        }
+    }
+    // A seeded xorshift generator gives random normalized divisors.
+    let mut state = 0x853C_49E6_748F_EA9B_u64;
+    for _ in 0..100_000 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let d = state | (1 << 63);
+        assert_eq!(Divisor::reciprocal(d), definition(d), "{d:#x}");
+    }
+    assert_eq!(Divisor::reciprocal(u64::MAX), definition(u64::MAX));
+}

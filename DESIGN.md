@@ -974,9 +974,14 @@ The decimal formats follow the Intel decimal library:
     division by 1000 compiles to a multiplication.
   - The long division of values wider than 128 bits, Knuth's Algorithm D,
     divides each estimate of a quotient limb by the reciprocal of the top
-    limb of the divisor. The division computes the reciprocal once, with
-    one 128-bit division. The division and square root of the wide binary
-    formats and of decimal128 use the long division.
+    limb of the divisor. The division computes the reciprocal once. The
+    division and square root of the wide binary formats and of decimal128
+    use the long division.
+  - A reciprocal takes no division, by Algorithm 3 of Möller and Granlund.
+    A table of 256 entries, indexed by the top 9 bits of the normalized
+    divisor, gives 11 bits. Three Newton steps give the reciprocal less at
+    most 1, and a last step corrects it. The same function builds the table
+    of powers of 10 at compile time.
 - A fast path must pass the same oracle tests as the generic path, and this
   file must list it. There is one fast path.
   - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
@@ -1132,6 +1137,20 @@ interleaved runs.
 | binary512 square root | 1,626 | 1,174 |
 | decimal128 BID divide | 145 | 138 |
 | decimal128 BID square root | 316 | 291 |
+
+The reciprocal by a table and Newton steps, against one 128-bit division,
+in nanoseconds per operation with an `Env`. Each figure is the lower of two
+interleaved runs.
+
+| Operation | Division | Table and Newton steps |
+| --- | --- | --- |
+| binary80 divide | 69 | 58 |
+| binary128 divide | 86 | 70 |
+| binary128 square root | 208 | 183 |
+| binary256 divide | 147 | 131 |
+| binary512 divide | 283 | 283 |
+| decimal128 BID divide | 138 | 124 |
+| decimal128 BID square root | 292 | 262 |
 
 ## Verification
 
@@ -1380,7 +1399,7 @@ Each step passes its oracle tests before the next step starts.
 - An optional layer that carries flags on values through a computation.
 - Decide whether a reciprocal square root estimate, as SoftFloat uses,
   replaces the integer square root and the wide division. They stay slow:
-  binary128 `sqrt` takes 209 ns after the long division by a reciprocal.
+  binary128 `sqrt` takes 183 ns after the long division by a reciprocal.
 - Measure the specialization per format and behavior again on an idle host.
   Other work loaded the host during the measurement in this file.
 - Add mode combinators for the NaN rule and the tininess rule with the Arm

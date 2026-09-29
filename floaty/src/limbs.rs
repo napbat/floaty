@@ -483,6 +483,12 @@ const fn low_u64(value: u128) -> u64 {
     value as u64
 }
 
+/// Returns the high 64 bits of a `u128`.
+#[inline]
+const fn high_u64(value: u128) -> u64 {
+    low_u64(value >> 64)
+}
+
 /// Returns a value of at most 128 bits as a `u128`.
 #[inline]
 pub fn to_u128<L: Limbs>(value: &L) -> u128 {
@@ -561,6 +567,23 @@ pub struct Divisor {
     reciprocal: u64,
 }
 
+/// The first approximation of the reciprocal of a normalized divisor,
+/// `floor((2^19 - 3 * 2^8) / d9)`, for each value `d9` of its top 9 bits, from
+/// 256 to 511.
+const RECIPROCAL_TABLE: [u16; 256] = {
+    let mut table = [0; 256];
+    let (mut index, mut top) = (0, 256_u32);
+    while top < 512 {
+        // The quotient is from 1024 to 2045. `u16::try_from` is not callable
+        // in a constant, so the two low bytes give the value.
+        let [low, high, ..] = (((1 << 19) - 3 * (1 << 8)) / top).to_le_bytes();
+        table[index] = u16::from_le_bytes([low, high]);
+        index += 1;
+        top += 1;
+    }
+    table
+};
+
 impl Divisor {
     /// Returns a nonzero divisor with its reciprocal.
     #[must_use]
@@ -568,16 +591,34 @@ impl Divisor {
         assert!(divisor != 0, "a divisor is not zero");
         let shift = divisor.leading_zeros();
         let normalized = divisor << shift;
-        // `2^128 - 1 - 2^64 * normalized` has the high limb `!normalized`,
-        // which is below `normalized`. So the quotient fits a limb, and the
-        // library division takes its path for a quotient of one limb.
-        // `u128::from` is not callable in a constant; the casts widen.
-        let numerator = ((!normalized as u128) << 64) | u64::MAX as u128;
         Self {
             normalized,
             shift,
-            reciprocal: low_u64(numerator / normalized as u128),
+            reciprocal: Self::reciprocal(normalized),
         }
+    }
+
+    /// Returns `floor((2^128 - 1) / d) - 2^64` for a normalized `d`, without a
+    /// division, by Algorithm 3 of Möller and Granlund. The table gives 11
+    /// bits. Two Newton steps give 22 and then 35 bits, a third step gives
+    /// the reciprocal less at most 1, and the last step corrects it.
+    const fn reciprocal(d: u64) -> u64 {
+        let d0 = d & 1;
+        let d40 = (d >> 24) + 1;
+        let d63 = (d >> 1) + d0;
+        // The top bit of `d` is set, so the next 8 bits index the table.
+        // `usize::from` and `u64::from` are not callable in a constant; the
+        // casts widen.
+        let index = (d << 1).to_be_bytes()[0];
+        let v0 = RECIPROCAL_TABLE[index as usize] as u64;
+        let v1 = (v0 << 11) - ((v0 * v0 * d40) >> 40) - 1;
+        let v2 = (v1 << 13) + ((v1 * ((1 << 60) - v1 * d40)) >> 47);
+        // e = 2^96 - v2 * d63 + floor(v2 / 2) * d0, modulo 2^64.
+        let e = ((v2 >> 1) & 0_u64.wrapping_sub(d0)).wrapping_sub(v2.wrapping_mul(d63));
+        let v3 = (v2 << 31).wrapping_add(high_u64(v2 as u128 * e as u128) >> 1);
+        // v4 = v3 - floor((v3 + 2^64 + 1) * d / 2^64), modulo 2^64.
+        let product = v3 as u128 * d as u128 + d as u128;
+        v3.wrapping_sub(high_u64(product)).wrapping_sub(d)
     }
 
     /// Divides `high * 2^64 + low` by `normalized`. `high` must be below
