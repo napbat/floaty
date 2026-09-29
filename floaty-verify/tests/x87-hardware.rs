@@ -5,7 +5,7 @@
 
 use core::num::NonZeroU32;
 
-use floaty::{Class, Env, F32, F64, F80};
+use floaty::{Class, Env, F32, F64, F80, ToInt};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
@@ -345,6 +345,121 @@ fn arithmetic_matches_at_every_rounding_and_precision() {
                 (fixed, x87_arithmetic_status(fixed_flags, value.is_nan())),
                 (expected & ((1 << 80) - 1), status & CHECKED),
                 "{context}: static mode"
+            );
+        }
+    }
+}
+
+/// The results of the x87 extended entry points for one pair of operands.
+#[derive(Debug, PartialEq)]
+struct Results {
+    /// The operators, `sqrt`, `round_to_integral`, `from_int`, and the
+    /// conversions to and from binary32 and binary64, as encodings.
+    encodings: [u128; 11],
+    /// `to_int` to `i64`.
+    signed: ToInt<i64>,
+    /// `to_int` to `u32`.
+    unsigned: ToInt<u32>,
+}
+
+/// Returns the other operands of the entry points for a pair: an `i64` from
+/// the low 64 bits of `a`, a binary64 value from bits 16 to 79 of `b`, and a
+/// binary32 value from the low 32 bits of `b`.
+fn other_operands(a: u128, b: u128) -> (i64, F64, F32) {
+    let integer = i64::from_le_bytes(
+        a.to_le_bytes()[..8]
+            .try_into()
+            .expect("the slice holds 8 bytes"),
+    );
+    let double = u64::try_from(b >> 16).expect("an 80-bit encoding holds 64 bits above bit 15");
+    let single = u32::from_le_bytes(
+        b.to_le_bytes()[..4]
+            .try_into()
+            .expect("the slice holds 4 bytes"),
+    );
+    (integer, F64::from_bits(double), F32::from_bits(single))
+}
+
+/// Returns the results of the entry points without flags, which run on the
+/// x87 unit where the build has a host path.
+fn entry_points(a: u128, b: u128) -> Results {
+    let (x, y) = (F80::from_bits(a), F80::from_bits(b));
+    let (integer, double, single) = other_operands(a, b);
+    Results {
+        encodings: [
+            (x + y).to_bits(),
+            (x - y).to_bits(),
+            (x * y).to_bits(),
+            (x / y).to_bits(),
+            x.sqrt().to_bits(),
+            x.round_to_integral().to_bits(),
+            F80::from_int(integer).to_bits(),
+            u128::from(x.convert::<F64>().to_bits()),
+            u128::from(x.convert::<F32>().to_bits()),
+            double.convert::<F80>().to_bits(),
+            single.convert::<F80>().to_bits(),
+        ],
+        signed: x.to_int(),
+        unsigned: x.to_int(),
+    }
+}
+
+/// Returns the results of the `_with` methods under the default modes, which
+/// always run the engine.
+fn engine_results(a: u128, b: u128) -> Results {
+    let (x, y) = (F80::from_bits(a), F80::from_bits(b));
+    let (integer, double, single) = other_operands(a, b);
+    let env = F80::ENV;
+    let to_double: F64 = x.convert_with(F64::ENV).0;
+    let to_single: F32 = x.convert_with(F32::ENV).0;
+    let from_double: F80 = double.convert_with(env).0;
+    let from_single: F80 = single.convert_with(env).0;
+    Results {
+        encodings: [
+            x.add_with(y, env).0.to_bits(),
+            x.sub_with(y, env).0.to_bits(),
+            x.mul_with(y, env).0.to_bits(),
+            x.div_with(y, env).0.to_bits(),
+            x.sqrt_with(env).0.to_bits(),
+            x.round_to_integral_with(env).0.to_bits(),
+            F80::from_int_with(integer, env).0.to_bits(),
+            u128::from(to_double.to_bits()),
+            u128::from(to_single.to_bits()),
+            from_double.to_bits(),
+            from_single.to_bits(),
+        ],
+        signed: x.to_int_with(env).0,
+        unsigned: x.to_int_with(env).0,
+    }
+}
+
+#[test]
+fn entry_points_read_the_control_word_before_the_x87_unit() {
+    // Each directed rounding and each precision below 64 bits changes the
+    // x87 results, and an unmasked exception traps. Under each, the entry
+    // points still give the engine results of the default mode. The masks
+    // IM, DM, ZM, OM, UM, and PM are bits 0 to 5.
+    let full = X87_MASKED | (3 << 8);
+    let directed = X87_ROUNDINGS.into_iter().map(|(_, field)| full | field);
+    let precisions = X87_PRECISIONS
+        .into_iter()
+        .map(|(_, field)| X87_MASKED | field);
+    let unmasked = (0..=5).map(|mask| full & !(1 << mask));
+    let controls: Vec<u16> = directed.chain(precisions).chain(unmasked).collect();
+    let mut random = SplitMix64::new(0x0087_C0DE);
+    let operands = operands(&mut random, 4_000);
+    let pairs: Vec<(u128, u128)> = operands
+        .iter()
+        .zip(operands.iter().rev())
+        .map(|(&a, &b)| (a, b))
+        .collect();
+    for control in controls {
+        for &(a, b) in &pairs {
+            let ours = x86::with_control_word(control, || entry_points(a, b));
+            assert_eq!(
+                ours,
+                engine_results(a, b),
+                "{a:#x} {b:#x} under {control:#06x}"
             );
         }
     }

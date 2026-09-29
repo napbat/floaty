@@ -1019,10 +1019,10 @@ The decimal formats follow the Intel decimal library:
 - `cargo bench -p floaty-verify --bench operations` measures the main
   operations of each format against the host types and `rustc_apfloat`. A
   second table measures other operations and operands: the remainder of
-  close and of distant operands, the conversions to binary32, binary16, and
-  decimal64 and from `i64`, and additions of subnormal operands and of a
-  zero. A third table measures the double-double types. Results on an Intel
-  i9-9900K, in nanoseconds per operation, before and after step 6:
+  close and of distant operands, the conversions to binary32, binary16, x87
+  extended, and decimal64 and from `i64`, and additions of subnormal operands
+  and of a zero. A third table measures the double-double types. Results on
+  an Intel i9-9900K, in nanoseconds per operation, before and after step 6:
 
 | Operation | Before | After |
 | --- | --- | --- |
@@ -1205,6 +1205,24 @@ which makes the engine conversion from `i64` faster in every format. Against
 the code before that change, binary16 takes 13 ns against 20 ns, and
 binary128 takes 7.4 ns against 16 ns.
 
+The host paths on the x87 unit, in nanoseconds per operation of the entry
+points without flags. The engine column is the engine-only build. Each
+figure is the lower of two interleaved runs.
+
+| Operation | Engine | Host path |
+| --- | --- | --- |
+| x87 extended `+` | 21.3 | 4.3 |
+| x87 extended `*` | 14.7 | 4.3 |
+| x87 extended `/` | 52.1 | 4.6 |
+| x87 extended `sqrt` | 104.9 | 3.1 |
+| x87 extended round to integral | 18.5 | 5.7 |
+| x87 extended to `i64` | 13.3 | 3.0 |
+| x87 extended from `i64` | 13.7 | 2.8 |
+| x87 extended to binary64 | 16.8 | 1.8 |
+| x87 extended to binary32 | 17.6 | 1.7 |
+| binary64 to x87 extended | 10.7 | 2.3 |
+| binary32 to x87 extended | 10.6 | 2.9 |
+
 The integer square root without a division, the 256-bit conversion width,
 and the DPD decoder on 64-bit groups, before and after, in nanoseconds per
 operation with an `Env`. Each figure is the lower of two interleaved runs.
@@ -1251,8 +1269,9 @@ it sends every other input to the engine.
   has the SSE2 paths only. Cargo compiles `floaty` with the flags of the
   consumer, so the selection follows the build of the consumer.
 - The only test at run time reads the floating-point environment of the
-  host, which an emulator or a library can change: MXCSR on x86-64, and
-  FPCR on AArch64. An algorithm of many steps reads it once.
+  host, which an emulator or a library can change: MXCSR or the x87 control
+  word on x86-64, and FPCR on AArch64. An algorithm of many steps reads it
+  once.
 - A host path serves only the entry points that return no flags: the
   operators, the methods that drop the flags of the default mode, and the
   double-double operators. The `_with` methods always run the engine,
@@ -1264,8 +1283,9 @@ it sends every other input to the engine.
 - A NaN result goes back to the engine, which selects the NaN by the rule
   of the mode. An input that a path does not model goes back to the engine
   too.
-- A host path can set the status flags of the host unit: those of MXCSR on
-  x86-64, and FPSR on AArch64. floaty never reads them.
+- A host path can set the status flags of the host unit: those of MXCSR and
+  the x87 status word on x86-64, and FPSR on AArch64. floaty never reads
+  them.
 - A host path runs every floating-point instruction in inline assembly, and
   tests a NaN with integer instructions on the bits. LLVM assumes the
   default floating-point environment, so it can move a Rust float operation
@@ -1309,6 +1329,7 @@ it sends every other input to the engine.
 | SSE integer conversions | x86-64 with SSE2 | `to_int` of binary32 and binary64 by `CVTSS2SI` and `CVTSD2SI` to a 64-bit integer. `from_int` of binary32 and binary64 by `CVTSI2SS` and `CVTSI2SD`, for an integer in the range of `i64`. binary16 through binary32 with F16C. | As the SSE operators, and a 64-bit result of 0x8000_0000_0000_0000, the integer indefinite | Intel SDM Volume 2: `CVTSS2SI`, `CVTSD2SI`, `CVTSI2SS`, `CVTSI2SD` | TestFloat operations, SSE hardware, host paths |
 | SSE4.1 rounding to an integral value | x86-64 with SSE4.1 | `round_to_integral` of binary32 and binary64 by `ROUNDSS` and `ROUNDSD` with immediate 0, and binary16 through binary32 with F16C | As the SSE operators | Intel SDM Volume 2: `ROUNDSS`, `ROUNDSD` | TestFloat operations, SSE hardware, and host paths, in the x86-64-v3 build |
 | AArch64 conversions, integer conversions, and rounding | AArch64 | `convert` among binary16, binary32, and binary64 by `FCVT`, which also rounds binary64 to binary16 once. `to_int` by `FCVTNS`, `from_int` by `SCVTF`, and `round_to_integral` by `FRINTN`, for the formats of the SSE paths. | As the AArch64 operators, and a 64-bit result of `i64::MIN` or `i64::MAX`, where `FCVTNS` saturates | Arm Architecture Reference Manual, DDI 0487: `FCVT`, `FCVTNS`, `SCVTF`, `FRINTN` | Host paths and AArch64 hardware, under `qemu-aarch64` |
+| x87 extended | x86-64 | `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral`, `to_int`, and `from_int` of x87 extended precision, by `FADDP`, `FSUBP`, `FMULP`, `FDIVP`, `FSQRT`, `FRNDINT`, `FISTP`, and `FILD`. `convert` to and from binary32 and binary64, by `FLD` and `FSTP`. | A NaN result, a 64-bit result of 0x8000_0000_0000_0000, the integer indefinite, or an x87 control word other than round to nearest at the 64-bit precision with every exception masked | Intel SDM Volume 1, revision 253665-093US, section 8.1.5, Figure 8-6: the x87 control word; Volume 2: the instructions | TestFloat arithmetic, conversions, and operations, x87 hardware, host paths |
 | Double-double operators | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`. One check of MXCSR or FPCR serves every step, and each binary64 step takes a binary64 path. | A step that its path declines runs in the engine | As the binary64 paths | Double-double, with the operators of the SSE mode against QD, and host paths |
 
 The binary16 path rounds twice: to binary32, and then to binary16. binary32
@@ -1336,6 +1357,30 @@ for a NaN. Those results go back to the engine, and so does the exact value
 
 The integral value of a binary16 value is a binary16 value, so the rounding
 to an integral value through binary32 narrows exactly.
+
+The x87 paths:
+
+- The x87 unit computes in registers with the exponent range of x87
+  extended precision. At the 64-bit precision, each arithmetic operation and
+  square root rounds once, subnormal results included. The precision control
+  applies to no other instruction of the paths, Intel SDM Volume 1, section
+  8.1.5.2. `FRNDINT`, `FISTP`, and `FSTP` round once in the rounding
+  direction of the control word, and `FILD` and `FLD` are exact.
+- The control word must round to nearest at the 64-bit precision and mask
+  every exception. Linux starts a process with 037FH, but another system or
+  a library can select a precision of 53 bits. An unmasked x87 exception
+  traps at the next x87 instruction. Each call reads the control word with
+  `FNSTCW`, and the conversions read it too.
+- The unit treats an unsupported encoding as an invalid operand and gives a
+  NaN, which goes back to the engine. A pseudo-denormal operand has the
+  value that the engine gives it, the value of the normal encoding with
+  exponent field 1.
+- The block reads a stored 80-bit result as 8 bytes and 2 bytes, the parts
+  that `FSTP` writes. An 8-byte load of the last 2 bytes waited on the store,
+  and an addition took 31 cycles instead of 19.
+- The x87 hardware test runs every entry point under each rounding control,
+  each precision control, and each unmasked exception. The entry points
+  must give the engine results of the default mode.
 
 The SSE and AArch64 operators:
 

@@ -126,8 +126,8 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
         if !host::convertible(S::HOST, T::HOST) {
             return self.convert_with(T::Mode::default()).0;
         }
-        let low = self.bits.to_limbs().limb(0);
-        match host::convert(S::HOST, T::HOST, low, &<T::Mode as Mode>::ENV) {
+        let bits = self.bits.to_limbs().resize();
+        match host::convert(S::HOST, T::HOST, bits, &<T::Mode as Mode>::ENV) {
             Some(bits) => T::from_host(bits),
             None => convert_in_engine(self),
         }
@@ -355,10 +355,10 @@ pub trait FloatType: Sealed + Copy {
     #[doc(hidden)]
     const HOST: Host;
 
-    /// Returns the value of an encoding of the host format. The type must
-    /// have a host format.
+    /// Returns the value of an encoding of the host format, in limbs from the
+    /// low bits up. The type must have a host format.
     #[doc(hidden)]
-    fn from_host(bits: u64) -> Self;
+    fn from_host(bits: [u64; 2]) -> Self;
 
     /// Converts a decoded value of another format, the source.
     #[doc(hidden)]
@@ -387,9 +387,8 @@ impl<S: Standard<W>, const W: usize, M: Mode> FloatType for Float<S, W, M> {
     const HOST: Host = S::HOST;
 
     #[inline]
-    fn from_host(bits: u64) -> Self {
-        let limbs = <S::Bits as LimbConversion>::Limbs::ZERO.with_limb(0, bits);
-        Self::from_masked(S::Bits::from_limbs(limbs))
+    fn from_host(bits: [u64; 2]) -> Self {
+        Self::from_masked(S::Bits::from_limbs(bits.resize()))
     }
 
     #[inline]

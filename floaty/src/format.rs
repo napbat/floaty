@@ -242,6 +242,9 @@ pub(crate) mod internal {
         /// two roundings of add, subtract, multiply, divide, and square root
         /// give the correctly rounded result.
         Half,
+        /// x87 extended precision, which computes on the x87 unit of x86-64
+        /// at the 64-bit precision.
+        Extended,
     }
 
     /// The direction of `next_up` and `next_down`.

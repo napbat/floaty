@@ -370,3 +370,63 @@ pub fn from_int_f64(value: i64) -> f64 {
     }
     result
 }
+
+/// Returns `false`: AArch64 has no x87 unit, so no x87 extended path applies.
+#[inline]
+pub fn x87_environment() -> bool {
+    false
+}
+
+/// Returns `None`: AArch64 has no x87 unit.
+#[inline]
+pub fn x87_binary(_left: &[u64; 2], _right: &[u64; 2], _operation: Operation) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit.
+#[inline]
+pub fn x87_sqrt(_value: &[u64; 2]) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit.
+#[inline]
+pub fn x87_round(_value: &[u64; 2]) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit.
+#[inline]
+pub fn x87_from_int(_value: i64) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit.
+#[inline]
+pub fn x87_from_single(_bits: u32) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit.
+#[inline]
+pub fn x87_from_double(_bits: u64) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit.
+#[inline]
+pub fn x87_to_int(_value: &[u64; 2]) -> Option<i64> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit.
+#[inline]
+pub fn x87_to_single(_value: &[u64; 2]) -> Option<u32> {
+    None
+}
+
+/// Returns `None`: AArch64 has no x87 unit.
+#[inline]
+pub fn x87_to_double(_value: &[u64; 2]) -> Option<u64> {
+    None
+}

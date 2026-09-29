@@ -14,9 +14,9 @@
 //!
 //! A second table measures other operations and operands with the mode of
 //! the type: the remainder of close and of distant operands, conversions to
-//! binary32, binary16, and decimal64 and from `i64`, and additions of
-//! subnormal operands and of a zero. A third table measures the double-double
-//! types.
+//! binary32, binary16, x87 extended, and decimal64 and from `i64`, and
+//! additions of subnormal operands and of a zero. A third table measures the
+//! double-double types.
 
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -60,8 +60,8 @@ const COLUMNS: [&str; 16] = [
 ];
 
 /// The operations of the second table, in column order.
-const OTHER_COLUMNS: [&str; 8] = [
-    "rem", "rem_far", "to_f32", "to_f16", "to_d64", "from_i64", "add_tiny", "add_zero",
+const OTHER_COLUMNS: [&str; 9] = [
+    "rem", "rem_far", "to_f32", "to_f16", "to_f80", "to_d64", "from_i64", "add_tiny", "add_zero",
 ];
 
 /// The operations of the double-double table, in column order.
@@ -257,6 +257,11 @@ fn other_row<S: Standard<W>, const W: usize>(name: &str, seed: u64) {
         Some(measure(|| {
             for &x in &a {
                 black_box(black_box(x).convert::<F16>());
+            }
+        })),
+        Some(measure(|| {
+            for &x in &a {
+                black_box(black_box(x).convert::<F80>());
             }
         })),
         Some(measure(|| {

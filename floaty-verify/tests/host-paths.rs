@@ -322,6 +322,44 @@ fn conversion_operands(random: &mut SplitMix64) -> Vec<F64> {
     values
 }
 
+/// Returns x87 extended operands: boundary and random encodings, with
+/// unsupported encodings and pseudo-denormals among them, values near the
+/// halfway points of binary64 and binary32, and integers and halves near the
+/// bounds of 32- and 64-bit integers.
+fn extended_operands(random: &mut SplitMix64) -> Vec<F80> {
+    let mut bits = boundary_encodings_u128(80, 15, IntegerBit::Explicit);
+    bits.extend((0..20_000).map(|_| random.next_u128() >> 48));
+    // An x87 significand holds 11 bits below binary64 and 40 below binary32:
+    // the halfway point, and one unit on each side of it, at exponents near
+    // 1.0 and near the bounds of 64-bit integers.
+    for shift in [10, 39] {
+        for _ in 0..5_000 {
+            let exponent = u128::from(0x3FFF - 70 + random.next_u64() % 140);
+            let high = (random.next_u64() | 1 << 63) & !((1 << (shift + 1)) - 1);
+            let half = u128::from(high | 1 << shift);
+            bits.extend([half - 1, half, half + 1].map(|significand| exponent << 64 | significand));
+        }
+    }
+    let mut values: Vec<F80> = bits.into_iter().map(F80::from_bits).collect();
+    let one = F80::from_bits(0x3FFF_8000_0000_0000_0000);
+    let half = F80::from_bits(0x3FFE_8000_0000_0000_0000);
+    for exponent in [31, 32, 63, 64] {
+        let bound = one.scale_b(exponent);
+        for value in [
+            bound,
+            -bound,
+            bound.next_up(),
+            bound.next_down(),
+            -bound.next_down(),
+        ] {
+            values.push(value);
+            values.push(value.add_with(half, floaty::Env::IEEE).0);
+            values.push(value.sub_with(half, floaty::Env::IEEE).0);
+        }
+    }
+    values
+}
+
 /// Checks that `convert` gives the result of `convert_with` under the mode of
 /// the destination.
 macro_rules! convert_matches {
@@ -361,6 +399,13 @@ fn conversions_give_the_default_mode_results() {
     convert_matches!(floaty::F32, halves.iter().copied());
     convert_matches!(floaty::F64, halves.iter().copied());
     convert_matches!(floaty::F128, halves.iter().copied());
+    let extended = extended_operands(&mut random);
+    convert_matches!(floaty::F64, extended.iter().copied());
+    convert_matches!(floaty::F32, extended.iter().copied());
+    convert_matches!(floaty::F16, extended.iter().copied());
+    convert_matches!(F80, doubles.iter().copied());
+    convert_matches!(F80, singles.iter().copied());
+    convert_matches!(F80, halves.iter().copied());
 }
 
 /// Checks that `to_int` gives the result of `to_int_with` under the default
@@ -405,6 +450,17 @@ fn integer_conversions_give_the_default_mode_results() {
     );
     to_int_matches!(singles.iter().copied(), i8, i32, i64, u8, u32, u64, i128);
     to_int_matches!(halves.iter().copied(), i8, i16, i32, i64, u8, u16, u64);
+    to_int_matches!(
+        extended_operands(&mut random).into_iter(),
+        i8,
+        i32,
+        i64,
+        i128,
+        u32,
+        u64,
+        u128,
+        Int<24>
+    );
     // Integers of every magnitude, the bounds of each type, and the halfway
     // points and the overflow threshold of binary16.
     let mut integers: Vec<i128> = (0..20_000)
@@ -450,6 +506,11 @@ fn integer_conversions_give_the_default_mode_results() {
             floaty::F16::from_int(integer).to_bits().into(),
             floaty::F16::from_int_with(integer, env).0.to_bits().into(),
             "binary16",
+        );
+        check(
+            F80::from_int(integer).to_bits(),
+            F80::from_int_with(integer, env).0.to_bits(),
+            "x87 extended",
         );
         if let Ok(narrow) = i64::try_from(integer) {
             check(
@@ -500,6 +561,13 @@ fn rounding_to_integral_gives_the_default_mode_result() {
             single.round_to_integral().to_bits(),
             single.round_to_integral_with(floaty::F32::ENV).0.to_bits(),
             "{single:?}"
+        );
+    }
+    for value in extended_operands(&mut random) {
+        assert_eq!(
+            value.round_to_integral().to_bits(),
+            value.round_to_integral_with(F80::ENV).0.to_bits(),
+            "{value:?}"
         );
     }
 }

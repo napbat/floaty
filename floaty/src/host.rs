@@ -99,9 +99,12 @@ pub const fn available(host: Host, kind: Kind) -> bool {
         all(target_arch = "x86_64", target_feature = "sse4.1"),
         target_arch = "aarch64"
     ));
+    // Every x86-64 processor has the x87 unit.
+    let x87 = cfg!(target_arch = "x86_64");
     match (host, kind) {
-        // Two roundings of a binary16 fused multiply-add can differ from one.
-        (Host::None, _) | (Host::Half, Kind::FusedMultiplyAdd) => false,
+        // Two roundings of a binary16 fused multiply-add can differ from one,
+        // and the x87 unit has no fused multiply-add.
+        (Host::None, _) | (Host::Half | Host::Extended, Kind::FusedMultiplyAdd) => false,
         (
             Host::Single | Host::Double,
             Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt,
@@ -112,6 +115,14 @@ pub const fn available(host: Host, kind: Kind) -> bool {
             unit && half
         }
         (Host::Half, Kind::RoundToIntegral) => unit && half && rounding,
+        (
+            Host::Extended,
+            Kind::Arithmetic
+            | Kind::SquareRoot
+            | Kind::RoundToIntegral
+            | Kind::ToInt
+            | Kind::FromInt,
+        ) => unit && x87,
     }
 }
 
@@ -129,11 +140,14 @@ pub const fn convertible(from: Host, to: Host) -> bool {
         all(target_arch = "x86_64", target_feature = "f16c"),
         target_arch = "aarch64"
     ));
+    let x87 = cfg!(target_arch = "x86_64");
     match (from, to) {
         (Host::Single, Host::Double) | (Host::Double, Host::Single) => unit,
         (Host::Half, Host::Single | Host::Double) | (Host::Single, Host::Half) => unit && half,
         // Only AArch64 rounds binary64 to binary16 once.
         (Host::Double, Host::Half) => unit && cfg!(target_arch = "aarch64"),
+        (Host::Single | Host::Double, Host::Extended)
+        | (Host::Extended, Host::Single | Host::Double) => unit && x87,
         _ => false,
     }
 }
@@ -242,7 +256,7 @@ mod none {
 
     /// Returns `None`: this build has no host path.
     #[inline]
-    pub fn convert(_from: Host, _to: Host, _bits: u64, _env: &Env) -> Option<u64> {
+    pub fn convert(_from: Host, _to: Host, _bits: [u64; 2], _env: &Env) -> Option<[u64; 2]> {
         None
     }
 }

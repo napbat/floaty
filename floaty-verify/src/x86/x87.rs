@@ -40,6 +40,38 @@ pub fn control_word() -> u16 {
     word
 }
 
+/// Runs `body` with the x87 control word set to `control`, and restores the
+/// control word afterward.
+///
+/// `FNCLEX` clears the exception flags before each load, so a flag that an
+/// earlier instruction set cannot trap under a control word that unmasks it.
+/// The tests use the function to show that floaty reads the control word
+/// before its host paths on the x87 unit.
+pub fn with_control_word<T>(control: u16, body: impl FnOnce() -> T) -> T {
+    let saved = control_word();
+    // SAFETY: `FNCLEX` clears the exception flags, and `FLDCW` loads the
+    // control word from `control`. Neither uses the x87 stack.
+    unsafe {
+        asm!(
+            "fnclex",
+            "fldcw word ptr [{control}]",
+            control = in(reg) &raw const control,
+            options(nostack),
+        );
+    }
+    let result = body();
+    // SAFETY: as above, with the saved control word.
+    unsafe {
+        asm!(
+            "fnclex",
+            "fldcw word ptr [{saved}]",
+            saved = in(reg) &raw const saved,
+            options(nostack),
+        );
+    }
+    result
+}
+
 /// Runs `FNINIT` and returns the control word that it sets. `FNINIT` also
 /// clears the status word and empties the x87 stack. The previous control
 /// word is restored afterward.

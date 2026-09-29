@@ -115,6 +115,7 @@ where
         (5, 16, EncodingKind::Ieee) => Host::Half,
         (8, 32, EncodingKind::Ieee) => Host::Single,
         (11, 64, EncodingKind::Ieee) => Host::Double,
+        (15, 80, EncodingKind::X87) => Host::Extended,
         _ => Host::None,
     };
 
