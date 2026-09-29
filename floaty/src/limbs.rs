@@ -568,14 +568,15 @@ impl Divisor {
         assert!(divisor != 0, "a divisor is not zero");
         let shift = divisor.leading_zeros();
         let normalized = divisor << shift;
-        // `u128::from` is not callable in a constant; the cast widens. The
-        // quotient is above 2^64 and below 2^65, because `normalized` is at
-        // least 2^63, so its low 64 bits are the quotient less 2^64.
-        let quotient = u128::MAX / normalized as u128;
+        // `2^128 - 1 - 2^64 * normalized` has the high limb `!normalized`,
+        // which is below `normalized`. So the quotient fits a limb, and the
+        // library division takes its path for a quotient of one limb.
+        // `u128::from` is not callable in a constant; the casts widen.
+        let numerator = ((!normalized as u128) << 64) | u64::MAX as u128;
         Self {
             normalized,
             shift,
-            reciprocal: low_u64(quotient),
+            reciprocal: low_u64(numerator / normalized as u128),
         }
     }
 
@@ -686,6 +687,8 @@ pub fn divide<L: Limbs>(numerator: L, divisor: L) -> (L, L) {
 /// Divides by Knuth's Algorithm D (The Art of Computer Programming, Volume 2,
 /// section 4.3.1). The divisor is normalized so that its top limb has its
 /// high bit set; each quotient limb estimate is then at most two too large.
+/// The estimates divide by the reciprocal of the top limb, which the
+/// division computes once.
 ///
 /// `BUFFER` holds the numerator and one limb more.
 fn long_divide<L: Limbs, const BUFFER: usize>(numerator: L, divisor: L) -> (L, L) {
@@ -699,16 +702,8 @@ fn long_divide<L: Limbs, const BUFFER: usize>(numerator: L, divisor: L) -> (L, L
         return (L::ZERO, numerator);
     }
     if length == 1 {
-        // One 128-by-64-bit division for each limb.
-        let by = u128::from(divisor.limb(0));
-        let mut quotient = L::ZERO;
-        let mut rest = 0_u128;
-        for index in (0..total).rev() {
-            let current = (rest << 64) | u128::from(numerator.limb(index));
-            quotient = quotient.with_limb(index, low_u64(current / by));
-            rest = current % by;
-        }
-        return (quotient, from_u128(rest));
+        let (quotient, rest) = divide_small(numerator, Divisor::new(divisor.limb(0)));
+        return (quotient, L::ZERO.with_limb(0, rest));
     }
     let shift = divisor.limb(length - 1).leading_zeros();
     let shifted = |value: &L, index: usize| {
@@ -727,23 +722,32 @@ fn long_divide<L: Limbs, const BUFFER: usize>(numerator: L, divisor: L) -> (L, L
     for (index, limb) in rest.iter_mut().enumerate().take(total + 1) {
         *limb = shifted(&numerator, index);
     }
-    let (top, next) = (u128::from(by[length - 1]), u128::from(by[length - 2]));
+    let (top, next) = (by[length - 1], u128::from(by[length - 2]));
+    let top_divisor = Divisor::new(top);
     let mut quotient = L::ZERO;
     // Each step divides the top limbs of the rest and subtracts the estimate
     // times the divisor. The loops carry between limbs, so they index.
     for step in (0..=total - length).rev() {
-        let leading = (u128::from(rest[step + length]) << 64) | u128::from(rest[step + length - 1]);
-        let mut estimate = leading / top;
-        let mut remainder = leading % top;
-        while estimate >> 64 != 0
-            || estimate * next > ((remainder << 64) | u128::from(rest[step + length - 2]))
+        let (high, low) = (rest[step + length], rest[step + length - 1]);
+        debug_assert!(high <= top, "the rest is below the divisor");
+        let (mut estimate, mut remainder) = if high == top {
+            // The quotient of the top limbs is 2^64 or more, so the estimate
+            // is 2^64 - 1, and its remainder is `low + top`.
+            (u64::MAX, u128::from(low) + u128::from(top))
+        } else {
+            let (estimate, remainder) = top_divisor.divide_limb(high, low);
+            (estimate, u128::from(remainder))
+        };
+        // The next limb of the divisor corrects the estimate. A remainder of
+        // 2^64 or more ends the test, as Knuth's step D3 states.
+        while remainder >> 64 == 0
+            && u128::from(estimate) * next
+                > ((remainder << 64) | u128::from(rest[step + length - 2]))
         {
             estimate -= 1;
-            remainder += top;
-            if remainder >> 64 != 0 {
-                break;
-            }
+            remainder += u128::from(top);
         }
+        let estimate = u128::from(estimate);
         let mut carry = 0_u64;
         let mut borrow = false;
         for index in 0..length {

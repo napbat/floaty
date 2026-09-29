@@ -972,6 +972,11 @@ The decimal formats follow the Intel decimal library:
   - The DPD encoder divides a coefficient once by 10^18. It takes each
     group of three digits from the two 64-bit parts, because a 64-bit
     division by 1000 compiles to a multiplication.
+  - The long division of values wider than 128 bits, Knuth's Algorithm D,
+    divides each estimate of a quotient limb by the reciprocal of the top
+    limb of the divisor. The division computes the reciprocal once, with
+    one 128-bit division. The division and square root of the wide binary
+    formats and of decimal128 use the long division.
 - A fast path must pass the same oracle tests as the generic path, and this
   file must list it. There is one fast path.
   - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
@@ -1111,6 +1116,22 @@ figure is the lower of two interleaved runs.
 | decimal64 DPD multiply | 199 | 78 |
 | decimal128 DPD add | 506 | 122 |
 | decimal128 DPD multiply | 617 | 116 |
+
+The long division by the reciprocal of the top limb, before and after, in
+nanoseconds per operation with an `Env`. Each figure is the lower of two
+interleaved runs.
+
+| Operation | Before | After |
+| --- | --- | --- |
+| binary80 square root | 212 | 190 |
+| binary128 divide | 100 | 85 |
+| binary128 square root | 233 | 209 |
+| binary256 divide | 196 | 147 |
+| binary256 square root | 599 | 447 |
+| binary512 divide | 401 | 286 |
+| binary512 square root | 1,626 | 1,174 |
+| decimal128 BID divide | 145 | 138 |
+| decimal128 BID square root | 316 | 291 |
 
 ## Verification
 
@@ -1358,12 +1379,8 @@ Each step passes its oracle tests before the next step starts.
 - Presets for ARM, RISC-V, and Direct3D.
 - An optional layer that carries flags on values through a computation.
 - Decide whether a reciprocal square root estimate, as SoftFloat uses,
-  replaces the integer square root and the wide division. The speedup pass
-  left them slow: binary128 `sqrt` takes 255 ns.
-- Decide whether the long division of values wider than 128 bits,
-  `limbs::divide`, divides by the reciprocal of the top limb of the divisor.
-  Each quotient limb now calls the 128-bit library division, which takes
-  28% of a decimal128 division and of a decimal128 square root.
+  replaces the integer square root and the wide division. They stay slow:
+  binary128 `sqrt` takes 209 ns after the long division by a reciprocal.
 - Measure the specialization per format and behavior again on an idle host.
   Other work loaded the host during the measurement in this file.
 - Add mode combinators for the NaN rule and the tininess rule with the Arm

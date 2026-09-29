@@ -249,3 +249,53 @@ fn a_divisor_divides_as_the_native_division_does() {
     let (expected, rest) = super::divide(value, [1_000_000_007, 0, 0, 0]);
     assert_eq!((quotient, [remainder, 0, 0, 0]), (expected, rest));
 }
+
+#[test]
+fn long_division_returns_the_known_quotient_and_remainder() {
+    // A seeded xorshift generator gives the random limbs.
+    let mut state = 0x2545_F491_4F6C_DD1D_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    // Limbs of all ones make the top limbs of the rest equal to the top limb
+    // of the divisor, so the estimate starts at 2^64 - 1.
+    let mut limb = move |kind: u64| match kind % 4 {
+        0 => u64::MAX,
+        1 => 1 << 63,
+        2 => next() >> (next() % 64),
+        _ => next(),
+    };
+    let index_u64 = |index: usize| u64::try_from(index).expect("an index fits a u64");
+    for case in 0_usize..3000 {
+        // Divisors of 2 to 4 limbs and quotients of 1 to 4 limbs, so the
+        // product fits 8 limbs.
+        let divisor_length = 2 + case % 3;
+        let quotient_length = 1 + case / 3 % 4;
+        let mut divisor = [0_u64; 8];
+        for (index, slot) in divisor.iter_mut().take(divisor_length).enumerate() {
+            *slot = limb(index_u64(case / 12 + index));
+        }
+        divisor[divisor_length - 1] = divisor[divisor_length - 1].max(1);
+        let mut quotient = [0_u64; 8];
+        for (index, slot) in quotient.iter_mut().take(quotient_length).enumerate() {
+            *slot = limb(index_u64(case + index));
+        }
+        // A remainder below the divisor: the divisor less one, zero, or the
+        // limbs of the divisor below its top limb.
+        let lower = 64 * u32::try_from(divisor_length - 1).expect("a bit count fits a u32");
+        let remainder = match case % 3 {
+            0 => divisor.sub([1, 0, 0, 0, 0, 0, 0, 0]),
+            1 => [0; 8],
+            _ => divisor.low_bits(lower),
+        };
+        let numerator = super::multiply_fit(quotient, divisor).add(remainder);
+        assert_eq!(
+            super::divide(numerator, divisor),
+            (quotient, remainder),
+            "{numerator:x?} / {divisor:x?}"
+        );
+    }
+}
