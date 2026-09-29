@@ -540,3 +540,72 @@ fn directed_rounding_reads_mxcsr_before_the_unit() {
         }
     }
 }
+
+/// Checks the comparison and the minimum and maximum operations of lanes of
+/// one type under one MXCSR value against the scalar results of the engine.
+macro_rules! orders_under {
+    ($alias:ty, $control:expr, $lanes:expr) => {
+        for pair in $lanes.windows(2) {
+            let (x, y) = (
+                Lanes::<$alias, 5>::from_bits(pair[0]),
+                Lanes::<$alias, 5>::from_bits(pair[1]),
+            );
+            let ours = x86::with_mxcsr($control, || {
+                let (x, y) = (black_box(x), black_box(y));
+                (
+                    x.compare_quiet(y),
+                    [
+                        x.minimum(y).to_bits(),
+                        x.maximum(y).to_bits(),
+                        x.minimum_number(y).to_bits(),
+                        x.maximum_number(y).to_bits(),
+                        x.min_num(y).to_bits(),
+                        x.max_num(y).to_bits(),
+                    ],
+                )
+            });
+            let (a, b) = (x.into_array(), y.into_array());
+            let env = <$alias>::ENV;
+            let each = |operation: &dyn Fn($alias, $alias) -> $alias| {
+                core::array::from_fn::<_, 5, _>(|lane| operation(a[lane], b[lane]).to_bits())
+            };
+            let engine = (
+                core::array::from_fn::<_, 5, _>(|lane| a[lane].compare_quiet_with(b[lane], env).0),
+                [
+                    each(&|x, y| x.minimum_with(y, env).0),
+                    each(&|x, y| x.maximum_with(y, env).0),
+                    each(&|x, y| x.minimum_number_with(y, env).0),
+                    each(&|x, y| x.maximum_number_with(y, env).0),
+                    each(&|x, y| x.min_num_with(y, env).0),
+                    each(&|x, y| x.max_num_with(y, env).0),
+                ],
+            );
+            assert_eq!(ours, engine, "{:x?} under {:#x}", pair, $control);
+        }
+    };
+}
+
+#[test]
+fn lane_orders_read_mxcsr_before_the_packed_unit() {
+    // DAZ changes the order of a subnormal lane, and an unmasked invalid or
+    // denormal exception traps. Under each control, the packed comparison and
+    // the minimum and maximum operations give the engine results.
+    let mut random = SplitMix64::new(0x00C5_0AD5);
+    let singles: Vec<[u32; 5]> = chunks::<5>(&mut random, 32, 8)
+        .into_iter()
+        .map(|chunk| chunk.map(|bits| u32::try_from(bits).expect("a binary32 encoding")))
+        .collect();
+    let doubles = chunks::<5>(&mut random, 64, 11);
+    for control in controls() {
+        orders_under!(
+            F32,
+            control,
+            singles.iter().step_by(5).copied().collect::<Vec<_>>()
+        );
+        orders_under!(
+            F64,
+            control,
+            doubles.iter().step_by(5).copied().collect::<Vec<_>>()
+        );
+    }
+}

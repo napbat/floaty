@@ -124,7 +124,17 @@ register. `Lanes<F32, 4>` is an SSE or NEON register of binary32 values, and
   lane gives the bits of the scalar operation, on every host.
 - The operations are the operators `+`, `-`, `*`, and `/`, `sqrt`,
   `mul_add`, `round_to_integral`, and `convert` to another float type with
-  the same lane count.
+  the same lane count. The other operations of `Float` apply lane by lane
+  too: `abs`, `copy_sign`, and negation, `classify` and the `is_`
+  predicates, `to_int` and `from_int`, `next_up` and `next_down`, `scale_b`
+  with a scale for each lane, `remainder`, `compare_quiet` and the
+  comparisons with flags, `total_cmp`, and the three families of minimum
+  and maximum.
+- A result that is not a value of the type is an array with one element for
+  each lane: `[bool; N]`, `[Class; N]`, `[ToInt<I>; N]`,
+  `[Option<Ordering>; N]`, or `[Ordering; N]`. `compare_quiet` is the
+  lane-wise `PartialOrd` of the default mode: `None` in a lane means
+  unordered.
 - A `_with` method returns the lanes and the union of the flags of the
   lanes. A vector unit accumulates its status flags the same way, so an
   emulator takes the flags of a packed instruction from the union. The union
@@ -1475,8 +1485,8 @@ it sends every other input to the engine.
 | bfloat16 through a shift | x86-64 with SSE2, and SSE4.1 for the rounding; AArch64 | A shift widens bfloat16 exactly to binary32. `convert` to binary32 needs no other instruction, and `convert` to binary64 adds `CVTSS2SD` or `FCVT`. `to_int` by `CVTSS2SI` or `FCVTNS`, and `round_to_integral` by `ROUNDSS` or an `FRINT` instruction in the direction of the mode and a shift back. | As the SSE or AArch64 paths. `from_int` of bfloat16 always runs in the engine, because two roundings through binary32 can differ from one. | Intel SDM Volume 2 and Arm Architecture Reference Manual, DDI 0487: the instructions of the binary32 paths | Host paths with every bfloat16 encoding, SSE hardware, and AArch64 hardware |
 | x87 remainder | x86-64 | `remainder` of binary32, binary64, and x87 extended by `FPREM1`, for a dividend whose exponent field lies at most 630 above that of the divisor | A NaN result, a control word as for the x87 paths, or operands farther apart | Intel SDM Volume 2: `FPREM1` | Host paths with close and distant pairs, and x87 hardware under each control word |
 | Comparison, minimum, and maximum | x86-64 with SSE2, and F16C for binary16; AArch64 | `PartialOrd` and `PartialEq` of binary32, binary64, binary16, and bfloat16, by `UCOMISS`, `UCOMISD`, or `FCMP`, on the exact binary32 values of binary16 and bfloat16. `minimum`, `maximum`, `minimum_number`, `maximum_number`, `min_num`, and `max_num` of those formats, by `MINSS`, `MAXSS`, `MINSD`, `MAXSD`, `FMIN`, or `FMAX`. | As the SSE or AArch64 operators, an unordered pair, and for the minimum and maximum a NaN operand or two zeros | Intel SDM Volume 2: `UCOMISS`, `MINSS`, and their other forms; Arm Architecture Reference Manual, DDI 0487: `FCMP`, `FMIN`, `FMAX` | Host paths with every pair of special values, SSE hardware, and AArch64 hardware |
-| Packed SSE and AVX | x86-64 with SSE2; AVX for 256 bits, FMA for `mul_add`, SSE4.1 for the rounding, and F16C for binary16 | The `Lanes` operators, `sqrt`, `mul_add`, and `round_to_integral` of binary32 and binary64, by `ADDPS`, `SUBPS`, `MULPS`, `DIVPS`, `SQRTPS`, `VFMADD213PS`, `ROUNDPS`, their `PD` forms, and their 256-bit forms. `convert` of lanes between binary32 and binary64, by `CVTPS2PD` and `CVTPD2PS` and their AVX forms. The operators, `sqrt`, and `round_to_integral` of binary16 in binary32, and `convert` of lanes from binary16 to binary32 and binary64 and from binary32 to binary16, by `VCVTPH2PS` and `VCVTPS2PH` with immediate 0. `round_to_integral` of bfloat16 by a shift, `ROUNDPS`, and a shift back, and `convert` of lanes from bfloat16 to binary32 by a shift and to binary64 by a shift and `CVTPS2PD`. | As the SSE operators, for all lanes at once. A NaN lane sends each lane to its scalar operation. | Intel SDM Volume 2: the instructions | Lanes, and the packed instructions of the SSE unit with the union of the lane flags |
-| Packed AArch64 | AArch64 | As the packed SSE paths at 128 bits, by `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FMLA`, and `FRINTN` on `.4S` and `.2D`, and `FCVTL` and `FCVTN` between `.2S` and `.2D` and between `.4H` and `.4S`. bfloat16 as the packed SSE paths give it. | As the AArch64 operators, for all lanes at once. A NaN lane sends each lane to its scalar operation. | Arm Architecture Reference Manual, DDI 0487: the instructions | Lanes and AArch64 hardware, under `qemu-aarch64` |
+| Packed SSE and AVX | x86-64 with SSE2; AVX for 256 bits, FMA for `mul_add`, SSE4.1 for the rounding, and F16C for binary16 | The `Lanes` operators, `sqrt`, `mul_add`, and `round_to_integral` of binary32 and binary64, by `ADDPS`, `SUBPS`, `MULPS`, `DIVPS`, `SQRTPS`, `VFMADD213PS`, `ROUNDPS`, their `PD` forms, and their 256-bit forms. `convert` of lanes between binary32 and binary64, by `CVTPS2PD` and `CVTPD2PS` and their AVX forms. The operators, `sqrt`, and `round_to_integral` of binary16 in binary32, and `convert` of lanes from binary16 to binary32 and binary64 and from binary32 to binary16, by `VCVTPH2PS` and `VCVTPS2PH` with immediate 0. `round_to_integral` of bfloat16 by a shift, `ROUNDPS`, and a shift back, and `convert` of lanes from bfloat16 to binary32 by a shift and to binary64 by a shift and `CVTPS2PD`. `compare_quiet` of binary32 and binary64 by `CMPLTPS` and `CMPUNORDPS`, and the minimum and maximum families by `MINPS` and `MAXPS`, with their `PD` and 256-bit forms. | As the SSE operators, for all lanes at once. A NaN lane sends each lane to its scalar operation. | Intel SDM Volume 2: the instructions | Lanes, and the packed instructions of the SSE unit with the union of the lane flags |
+| Packed AArch64 | AArch64 | As the packed SSE paths at 128 bits, by `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FMLA`, and `FRINTN` on `.4S` and `.2D`, and `FCVTL` and `FCVTN` between `.2S` and `.2D` and between `.4H` and `.4S`. bfloat16 as the packed SSE paths give it. `compare_quiet` by `FCMGT` and `FCMEQ`, and the minimum and maximum families by `FMIN` and `FMAX`. | As the AArch64 operators, for all lanes at once. A NaN lane sends each lane to its scalar operation. | Arm Architecture Reference Manual, DDI 0487: the instructions | Lanes and AArch64 hardware, under `qemu-aarch64` |
 | Double-double operators | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`. One check of MXCSR or FPCR serves every step, and each binary64 step takes a binary64 path. | A step that its path declines runs in the engine | As the binary64 paths | Double-double, with the operators of the SSE mode against QD, and host paths |
 
 The binary16 path rounds twice: to binary32, and then to binary16. binary32
@@ -1591,6 +1601,13 @@ The packed paths:
   each lane, because two roundings through binary32 can differ from one.
   The AArch64 hardware test runs the binary16 lanes under each field of
   FPCR, AHP among them, and the SSE packed test under each MXCSR setting.
+- The packed comparison gives a mask of each order in each lane, and an
+  unordered lane gives `None`, so every lane gives the engine result. A
+  chunk of the minimum and maximum with a NaN or two zeros in a pair of
+  lanes takes the scalar path of each lane, as the scalar paths send such a
+  pair to the engine. The test on the lanes has no branch, so LLVM tests all
+  lanes at once. The other operations of `Lanes` without flags take the
+  scalar path of each lane.
 - A bfloat16 encoding is the high half of a binary32 encoding, so a shift
   widens a bfloat16 lane exactly, with no floating-point instruction.
   `round_to_integral` rounds the widened lanes with `ROUNDPS` or `FRINTN`.

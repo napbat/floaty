@@ -7,11 +7,15 @@
 //! architecture has no wider registers, so each function for a 256-bit chunk
 //! returns `None`.
 
-use core::arch::aarch64::{float32x2_t, float32x4_t, float64x2_t, uint16x4_t};
+use core::arch::aarch64::{
+    float32x2_t, float32x4_t, float64x2_t, uint16x4_t, uint32x4_t, uint64x2_t,
+};
 use core::mem::transmute;
 
 use super::super::Operation;
+use super::super::packed::Masks;
 use crate::env::Rounding;
+use crate::format::internal::MinMax;
 
 /// `false`: AArch64 has no vector registers wider than 128 bits in the base
 /// architecture.
@@ -344,6 +348,91 @@ pub fn narrow_halves_x4(value: [f32; 4]) -> Option<[u16; 4]> {
     Some(unsafe { transmute::<uint16x4_t, [u16; 4]>(result) })
 }
 
+/// Returns the masks of a comparison of each pair of lanes, by `FCMGT` in
+/// both orders and `FCMEQ` of each operand with itself, on the arrangement
+/// `$arrangement`. A lane is unordered when an operand is not equal to
+/// itself.
+macro_rules! compare_vector {
+    ($arrangement:literal, $mask:ty, $x:ident, $y:ident) => {{
+        let (less, greater, ordered): ($mask, $mask, $mask);
+        // SAFETY: the instructions read and write SIMD and floating-point
+        // registers. Every AArch64 target has them, and they change only the
+        // status flags of FPSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                concat!("fcmgt {greater:v}", $arrangement, ", {x:v}", $arrangement, ", {y:v}", $arrangement),
+                concat!("fcmgt {less:v}", $arrangement, ", {y:v}", $arrangement, ", {x:v}", $arrangement),
+                concat!("fcmeq {ordered:v}", $arrangement, ", {x:v}", $arrangement, ", {x:v}", $arrangement),
+                concat!("fcmeq {other:v}", $arrangement, ", {y:v}", $arrangement, ", {y:v}", $arrangement),
+                "and {ordered:v}.16b, {ordered:v}.16b, {other:v}.16b",
+                x = in(vreg) $x,
+                y = in(vreg) $y,
+                less = out(vreg) less,
+                greater = out(vreg) greater,
+                ordered = out(vreg) ordered,
+                other = out(vreg) _,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+        (less, greater, ordered)
+    }};
+}
+
+/// Returns the masks of a comparison of each pair of binary32 lanes.
+#[inline]
+pub fn compare_f32x4(left: [f32; 4], right: [f32; 4]) -> Masks<u32, 4> {
+    let (x, y) = (singles(left), singles(right));
+    let (less, greater, ordered) = compare_vector!(".4s", uint32x4_t, x, y);
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    let bits = |value: uint32x4_t| unsafe { transmute::<uint32x4_t, [u32; 4]>(value) };
+    Masks {
+        less: bits(less),
+        greater: bits(greater),
+        unordered: bits(ordered).map(|mask| !mask),
+    }
+}
+
+/// Returns the masks of a comparison of each pair of binary64 lanes.
+#[inline]
+pub fn compare_f64x2(left: [f64; 2], right: [f64; 2]) -> Masks<u64, 2> {
+    let (x, y) = (doubles(left), doubles(right));
+    let (less, greater, ordered) = compare_vector!(".2d", uint64x2_t, x, y);
+    // SAFETY: as in `compare_f32x4`.
+    let bits = |value: uint64x2_t| unsafe { transmute::<uint64x2_t, [u64; 2]>(value) };
+    Masks {
+        less: bits(less),
+        greater: bits(greater),
+        unordered: bits(ordered).map(|mask| !mask),
+    }
+}
+
+/// Returns the smaller or the larger of each pair of binary32 lanes, as
+/// `operation` selects, by `FMIN` or `FMAX`.
+#[inline]
+pub fn min_max_f32x4(left: [f32; 4], right: [f32; 4], operation: MinMax) -> [f32; 4] {
+    let (mut a, b) = (singles(left), singles(right));
+    if operation.is_minimum() {
+        vector!("fmin {a:v}.4s, {a:v}.4s, {b:v}.4s", a, b);
+    } else {
+        vector!("fmax {a:v}.4s, {a:v}.4s, {b:v}.4s", a, b);
+    }
+    single_lanes(a)
+}
+
+/// Returns the smaller or the larger of each pair of binary64 lanes, as
+/// `operation` selects, by `FMIN` or `FMAX`.
+#[inline]
+pub fn min_max_f64x2(left: [f64; 2], right: [f64; 2], operation: MinMax) -> [f64; 2] {
+    let (mut a, b) = (doubles(left), doubles(right));
+    if operation.is_minimum() {
+        vector!("fmin {a:v}.2d, {a:v}.2d, {b:v}.2d", a, b);
+    } else {
+        vector!("fmax {a:v}.2d, {a:v}.2d, {b:v}.2d", a, b);
+    }
+    double_lanes(a)
+}
+
 /// Defines a function for a 256-bit chunk, which returns `None`.
 macro_rules! no_wide {
     ($name:ident, ($($type:ty),+) -> $result:ty) => {
@@ -367,3 +456,7 @@ no_wide!(widen_x4, ([f32; 4]) -> [f64; 4]);
 no_wide!(narrow_x4, ([f64; 4]) -> [f32; 4]);
 no_wide!(widen_halves_x8, ([u16; 8]) -> [f32; 8]);
 no_wide!(narrow_halves_x8, ([f32; 8]) -> [u16; 8]);
+no_wide!(compare_f32x8, ([f32; 8], [f32; 8]) -> Masks<u32, 8>);
+no_wide!(compare_f64x4, ([f64; 4], [f64; 4]) -> Masks<u64, 4>);
+no_wide!(min_max_f32x8, ([f32; 8], [f32; 8], MinMax) -> [f32; 8]);
+no_wide!(min_max_f64x4, ([f64; 4], [f64; 4], MinMax) -> [f64; 4]);

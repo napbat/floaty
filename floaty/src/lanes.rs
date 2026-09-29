@@ -1,11 +1,14 @@
 //! Values of one float type as the lanes of a vector register.
 
+mod order;
+
 use core::ops;
 
 use crate::env::{Flags, Mode, Override};
-use crate::float::{Float, FloatType};
+use crate::float::{Class, Float, FloatType};
 use crate::format::Standard;
 use crate::host::{self, Kind, Operation};
+use crate::integer::{Integer, ToInt};
 
 /// `N` values of one float type, as the lanes of a vector register.
 ///
@@ -304,6 +307,210 @@ operator!(Add, add, add_with, "the sum");
 operator!(Sub, sub, sub_with, "the difference");
 operator!(Mul, mul, mul_with, "the product");
 operator!(Div, div, div_with, "the quotient");
+
+impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> ops::Neg
+    for Lanes<Float<S, W, M>, N>
+{
+    type Output = Self;
+
+    /// Negates each lane. Only the sign bit changes.
+    fn neg(self) -> Self {
+        self.map(ops::Neg::neg)
+    }
+}
+
+/// Defines a method that applies a predicate of `Float` to each lane.
+macro_rules! predicates {
+    ($($name:ident: $summary:literal),* $(,)?) => {
+        impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {
+            $(
+                #[doc = concat!("Returns `true` in each lane that holds ", $summary, ".")]
+                #[must_use]
+                pub fn $name(self) -> [bool; N] {
+                    self.lanes.map(Float::$name)
+                }
+            )*
+        }
+    };
+}
+
+predicates!(
+    is_sign_negative: "a value with the sign bit set",
+    is_sign_positive: "a value with the sign bit clear",
+    is_nan: "a quiet or a signaling NaN",
+    is_signaling_nan: "a signaling NaN",
+    is_infinite: "a positive or a negative infinity",
+    is_finite: "a zero, a subnormal, or a normal value",
+    is_zero: "a positive or a negative zero",
+    is_subnormal: "a subnormal encoding",
+    is_normal: "a normal value",
+    is_canonical: "a canonical encoding",
+);
+
+impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {
+    /// Applies `operation`, which returns flags, to each lane, and returns
+    /// the lanes and the union of the flags.
+    fn map_with(
+        self,
+        mut operation: impl FnMut(Float<S, W, M>) -> (Float<S, W, M>, Flags),
+    ) -> (Self, Flags) {
+        let mut flags = Flags::NONE;
+        let lanes = self.map(|lane| {
+            let (value, lane_flags) = operation(lane);
+            flags |= lane_flags;
+            value
+        });
+        (lanes, flags)
+    }
+
+    /// Applies `operation`, which returns flags, to each pair of lanes, and
+    /// returns the lanes and the union of the flags.
+    fn zip_with(
+        self,
+        other: Self,
+        mut operation: impl FnMut(Float<S, W, M>, Float<S, W, M>) -> (Float<S, W, M>, Flags),
+    ) -> (Self, Flags) {
+        let mut flags = Flags::NONE;
+        let lanes = self.zip(other, |left, right| {
+            let (value, lane_flags) = operation(left, right);
+            flags |= lane_flags;
+            value
+        });
+        (lanes, flags)
+    }
+
+    /// Returns the absolute value of each lane. Only the sign bit changes.
+    #[must_use]
+    pub fn abs(self) -> Self {
+        self.map(Float::abs)
+    }
+
+    /// Returns each lane with the sign of the lane of `sign`. Only the sign
+    /// bit changes.
+    #[must_use]
+    pub fn copy_sign(self, sign: Self) -> Self {
+        self.zip(sign, Float::copy_sign)
+    }
+
+    /// Returns the class of each lane.
+    #[must_use]
+    pub fn classify(self) -> [Class; N] {
+        self.lanes.map(Float::classify)
+    }
+
+    /// Converts each lane to the integer type `I`, rounding with the default
+    /// mode. Each lane takes the scalar conversion.
+    #[must_use]
+    pub fn to_int<I: Integer>(self) -> [ToInt<I>; N] {
+        self.lanes.map(Float::to_int::<I>)
+    }
+
+    /// Converts each lane to the integer type `I` with the behavior, and
+    /// returns the union of the flags.
+    #[must_use]
+    pub fn to_int_with<I: Integer>(self, behavior: impl Override) -> ([ToInt<I>; N], Flags) {
+        let behavior = behavior.apply::<M>();
+        let mut flags = Flags::NONE;
+        let results = self.lanes.map(|lane| {
+            let (result, lane_flags) = lane.to_int_with::<I>(behavior);
+            flags |= lane_flags;
+            result
+        });
+        (results, flags)
+    }
+
+    /// Makes lanes from integers, each rounded with the default mode, lane 0
+    /// first. Each lane takes the scalar conversion.
+    #[must_use]
+    pub fn from_int<I: Integer>(values: [I; N]) -> Self {
+        Self::new(values.map(Float::from_int))
+    }
+
+    /// Makes lanes from integers, each rounded with the behavior, and returns
+    /// the union of the flags.
+    #[must_use]
+    pub fn from_int_with<I: Integer>(values: [I; N], behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        let mut flags = Flags::NONE;
+        let lanes = values.map(|value| {
+            let (lane, lane_flags) = Float::from_int_with(value, behavior);
+            flags |= lane_flags;
+            lane
+        });
+        (Self::new(lanes), flags)
+    }
+
+    /// Returns the least value above each lane, with the default mode.
+    #[must_use]
+    pub fn next_up(self) -> Self {
+        self.map(Float::next_up)
+    }
+
+    /// Returns the least value above each lane, and the union of the flags.
+    #[must_use]
+    pub fn next_up_with(self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.map_with(|lane| lane.next_up_with(behavior))
+    }
+
+    /// Returns the greatest value below each lane, with the default mode.
+    #[must_use]
+    pub fn next_down(self) -> Self {
+        self.map(Float::next_down)
+    }
+
+    /// Returns the greatest value below each lane, and the union of the
+    /// flags.
+    #[must_use]
+    pub fn next_down_with(self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.map_with(|lane| lane.next_down_with(behavior))
+    }
+
+    /// Returns each lane times `RADIX` to the power of the scale of its lane,
+    /// rounded with the default mode.
+    #[must_use]
+    pub fn scale_b(self, scales: [i32; N]) -> Self {
+        let mut lanes = self.lanes;
+        lanes
+            .iter_mut()
+            .zip(scales)
+            .for_each(|(lane, scale)| *lane = lane.scale_b(scale));
+        Self::new(lanes)
+    }
+
+    /// Returns each lane times `RADIX` to the power of the scale of its lane,
+    /// rounded with the behavior, and the union of the flags.
+    #[must_use]
+    pub fn scale_b_with(self, scales: [i32; N], behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        let mut flags = Flags::NONE;
+        let mut lanes = self.lanes;
+        lanes.iter_mut().zip(scales).for_each(|(lane, scale)| {
+            let (value, lane_flags) = lane.scale_b_with(scale, behavior);
+            flags |= lane_flags;
+            *lane = value;
+        });
+        (Self::new(lanes), flags)
+    }
+
+    /// Returns the IEEE 754 remainder of each pair of lanes, with the default
+    /// mode. Each lane takes the scalar remainder.
+    #[must_use]
+    pub fn remainder(self, divisor: Self) -> Self {
+        self.zip(divisor, Float::remainder)
+    }
+
+    /// Returns the IEEE 754 remainder of each pair of lanes, and the union of
+    /// the flags.
+    #[must_use]
+    pub fn remainder_with(self, divisor: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(divisor, |dividend, divisor| {
+            dividend.remainder_with(divisor, behavior)
+        })
+    }
+}
 
 /// Converts each lane to the float type `T`, for lanes whose packed host
 /// path declines, as `Lanes::map_out_of_line` does.

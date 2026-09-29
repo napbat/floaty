@@ -405,3 +405,49 @@ fn comparisons_read_fpcr_before_the_host_unit() {
         comparisons_under!(BF16, u16, control, &half_pairs);
     }
 }
+
+#[test]
+fn lane_orders_read_fpcr_before_the_vector_unit() {
+    // Under each setting of FPCR, and under the default, the packed
+    // comparison and the minimum and maximum operations of lanes give the
+    // engine results of the default mode.
+    let mut random = SplitMix64::new(0x00A6_0AD5);
+    let singles = encodings::<u32>(&pairs(&mut random, 32, 8));
+    for control in core::iter::once(0).chain(FPCR_SETTINGS) {
+        for start in (0..singles.len()).step_by(5) {
+            let lane = |offset: usize| singles[(start + offset) % singles.len()];
+            let x = Lanes::<F32, 5>::from_bits(core::array::from_fn(lane));
+            let y = Lanes::<F32, 5>::from_bits(core::array::from_fn(|offset| lane(offset + 3)));
+            let ours = with_fpcr(control, || {
+                let (x, y) = (black_box(x), black_box(y));
+                (
+                    x.compare_quiet(y),
+                    [
+                        x.minimum(y).to_bits(),
+                        x.maximum_number(y).to_bits(),
+                        x.min_num(y).to_bits(),
+                    ],
+                )
+            });
+            let (a, b) = (x.into_array(), y.into_array());
+            let env = F32::ENV;
+            let engine = (
+                core::array::from_fn::<_, 5, _>(|index| {
+                    a[index].compare_quiet_with(b[index], env).0
+                }),
+                [
+                    core::array::from_fn::<_, 5, _>(|index| {
+                        a[index].minimum_with(b[index], env).0.to_bits()
+                    }),
+                    core::array::from_fn::<_, 5, _>(|index| {
+                        a[index].maximum_number_with(b[index], env).0.to_bits()
+                    }),
+                    core::array::from_fn::<_, 5, _>(|index| {
+                        a[index].min_num_with(b[index], env).0.to_bits()
+                    }),
+                ],
+            );
+            assert_eq!(ours, engine, "lanes at {start} under FPCR {control:#x}");
+        }
+    }
+}

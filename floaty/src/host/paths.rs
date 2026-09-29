@@ -391,14 +391,33 @@ fn min_max_differs(left: u32, right: u32) -> bool {
     nan_32(left) || nan_32(right) || (left | right) << 1 == 0
 }
 
+/// Returns `true` for two binary64 encodings where the minimum and maximum
+/// instructions of the host differ from the operations, as
+/// `min_max_differs` does for binary32.
+#[inline]
+fn min_max_differs_64(left: u64, right: u64) -> bool {
+    nan_64(left) || nan_64(right) || (left | right) << 1 == 0
+}
+
 /// Returns the smaller or the larger of two binary32 values from the host
 /// unit, as `operation` selects.
 #[inline]
-fn min_max_f32(left: f32, right: f32, operation: MinMax) -> f32 {
+pub(super) fn min_max_f32(left: f32, right: f32, operation: MinMax) -> f32 {
     if operation.is_minimum() {
         environment::min_f32(left, right)
     } else {
         environment::max_f32(left, right)
+    }
+}
+
+/// Returns the smaller or the larger of two binary64 values from the host
+/// unit, as `operation` selects.
+#[inline]
+pub(super) fn min_max_f64(left: f64, right: f64, operation: MinMax) -> f64 {
+    if operation.is_minimum() {
+        environment::min_f64(left, right)
+    } else {
+        environment::max_f64(left, right)
     }
 }
 
@@ -436,16 +455,10 @@ pub fn min_max<S: Standard<W>, const W: usize>(
         Host::Single => select(single::<S, W>(left), single::<S, W>(right)),
         Host::Double => {
             let (a, b) = (double::<S, W>(left), double::<S, W>(right));
-            let (x, y) = (a.to_bits(), b.to_bits());
-            if nan_64(x) || nan_64(y) || (x | y) << 1 == 0 {
+            if min_max_differs_64(a.to_bits(), b.to_bits()) {
                 return None;
             }
-            let result = if operation.is_minimum() {
-                environment::min_f64(a, b)
-            } else {
-                environment::max_f64(a, b)
-            };
-            encoding::<S, W>(result.to_bits(), false)
+            encoding::<S, W>(min_max_f64(a, b, operation).to_bits(), false)
         }
         Host::Half => select(half::<S, W>(left)?, half::<S, W>(right)?),
         Host::BFloat => select(bfloat::<S, W>(left), bfloat::<S, W>(right)),

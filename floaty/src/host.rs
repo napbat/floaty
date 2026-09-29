@@ -333,16 +333,39 @@ mod none {
     /// The packed entry points of a build without a host path: each returns
     /// `None`.
     pub mod packed {
+        use core::cmp::Ordering;
+
         use crate::env::{Env, Mode};
         use crate::float::Float;
         use crate::format::Standard;
-        use crate::format::internal::Host;
+        use crate::format::internal::{Host, MinMax};
         use crate::host::{Kind, Operation};
 
         /// Returns `false`: this build has no host path.
         #[must_use]
         pub const fn lanes_of(_host: Host, _kind: Kind) -> bool {
             false
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn compare<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+            _left: &[Float<S, W, M>; N],
+            _right: &[Float<S, W, M>; N],
+            _env: &Env,
+        ) -> Option<[Option<Ordering>; N]> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn min_max<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+            _left: &[Float<S, W, M>; N],
+            _right: &[Float<S, W, M>; N],
+            _operation: MinMax,
+            _env: &Env,
+        ) -> Option<[Float<S, W, M>; N]> {
+            None
         }
 
         /// Returns `false`: this build has no host path.

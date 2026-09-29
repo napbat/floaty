@@ -17,6 +17,9 @@
 
 mod bfloat;
 mod half;
+mod order;
+
+use core::cmp::Ordering;
 
 use super::environment::{self, packed};
 use super::paths::{nan_16, nan_32, nan_64, precision_of, ready_for, ready_for_integral};
@@ -24,7 +27,7 @@ use super::{Kind, Operation};
 use crate::env::{Env, Mode};
 use crate::float::Float;
 use crate::format::Standard;
-use crate::format::internal::Host;
+use crate::format::internal::{Host, MinMax};
 
 /// Returns `true` when the packed paths compute the operations of `kind` on
 /// lanes of the host kind `host`. binary16 lanes compute in binary32 where
@@ -52,6 +55,39 @@ pub const fn converts(from: Host, to: Host) -> bool {
         | (Host::BFloat, Host::Single | Host::Double) => true,
         (Host::Half, Host::Single | Host::Double) | (Host::Single, Host::Half) => packed::HALF,
         _ => false,
+    }
+}
+
+/// The masks of a packed comparison. A lane of `less` is not zero when the
+/// left lane is less, a lane of `greater` when the left lane is greater, and
+/// a lane of `unordered` when the pair is unordered.
+#[derive(Clone, Copy, Debug)]
+pub struct Masks<T, const N: usize> {
+    /// The lanes where the left lane is less.
+    pub less: [T; N],
+    /// The lanes where the left lane is greater.
+    pub greater: [T; N],
+    /// The lanes where the pair is unordered.
+    pub unordered: [T; N],
+}
+
+impl<T: Copy + Default + PartialEq, const N: usize> Masks<T, N> {
+    /// Returns the order of each pair of lanes: `None` for an unordered
+    /// pair.
+    #[must_use]
+    #[inline]
+    pub fn orders(self) -> [Option<Ordering>; N] {
+        let zero = T::default();
+        let mut orders = [None; N];
+        orders
+            .iter_mut()
+            .zip(self.less.iter().zip(&self.greater).zip(&self.unordered))
+            .for_each(|(order, ((&less, &greater), &unordered))| {
+                // A clear `less` orders after a set one, so the comparison of
+                // the two tests gives the order without a branch.
+                *order = (unordered == zero).then(|| (less == zero).cmp(&(greater == zero)));
+            });
+        orders
     }
 }
 
@@ -479,4 +515,34 @@ pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
         }
         _ => None,
     }
+}
+
+/// Returns the order of each pair of lanes from the host unit, as the quiet
+/// predicates give it: `None` in a lane for an unordered pair. A comparison
+/// gives no NaN, so every lane gives the result of the engine.
+#[inline]
+pub fn compare<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    left: &[Float<S, W, M>; N],
+    right: &[Float<S, W, M>; N],
+    env: &Env,
+) -> Option<[Option<Ordering>; N]> {
+    if !ready_for(S::HOST, env, S::PRECISION) {
+        return None;
+    }
+    order::compare(left, right)
+}
+
+/// Returns the minimum or maximum operation `operation` of each pair of
+/// lanes from the host unit, or `None` when a pair holds a NaN or two zeros.
+#[inline]
+pub fn min_max<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    left: &[Float<S, W, M>; N],
+    right: &[Float<S, W, M>; N],
+    operation: MinMax,
+    env: &Env,
+) -> Option<[Float<S, W, M>; N]> {
+    if !ready_for(S::HOST, env, S::PRECISION) {
+        return None;
+    }
+    order::min_max(left, right, operation)
 }
