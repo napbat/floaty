@@ -1,6 +1,8 @@
 //! The floating-point environment of x86-64, MXCSR of the SSE unit, and the
 //! scalar SSE instructions of the host paths. `x87` holds the x87 unit.
 
+use core::cmp::Ordering;
+
 use super::Operation;
 use crate::env::Rounding;
 
@@ -543,4 +545,111 @@ pub fn from_int_f64(value: i64) -> f64 {
         );
     }
     result
+}
+
+/// Runs one unordered comparison of `$left` with `$right`, `UCOMISS` or
+/// `UCOMISD`, and returns the order, or `None` for an unordered pair.
+macro_rules! compare {
+    ($instruction:expr, $left:ident, $right:ident) => {{
+        let (unordered, greater, less): (u8, u8, u8);
+        // SAFETY: the comparison reads two SSE registers and writes the
+        // arithmetic flags, which SETP, SETA, and SETB copy into three byte
+        // registers. SSE2 is part of every x86-64 target, and `sse!` selects a
+        // VEX form only in a build with AVX. The comparison changes only the
+        // status flags of MXCSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                $instruction,
+                "setp {unordered}",
+                "seta {greater}",
+                "setb {less}",
+                left = in(xmm_reg) $left,
+                right = in(xmm_reg) $right,
+                unordered = out(reg_byte) unordered,
+                greater = out(reg_byte) greater,
+                less = out(reg_byte) less,
+                options(pure, nomem, nostack),
+            );
+        }
+        // An unordered pair also sets the flags that SETB reads.
+        if unordered != 0 {
+            None
+        } else if greater != 0 {
+            Some(Ordering::Greater)
+        } else if less != 0 {
+            Some(Ordering::Less)
+        } else {
+            Some(Ordering::Equal)
+        }
+    }};
+}
+
+/// Returns the order of two binary32 values by `UCOMISS`, which signals
+/// invalid only for a signaling NaN, or `None` when they are unordered.
+#[inline]
+pub fn compare_f32(left: f32, right: f32) -> Option<Ordering> {
+    compare!(
+        sse!("ucomiss {left}, {right}", "vucomiss {left}, {right}"),
+        left,
+        right
+    )
+}
+
+/// Returns the order of two binary64 values by `UCOMISD`, which signals
+/// invalid only for a signaling NaN, or `None` when they are unordered.
+#[inline]
+pub fn compare_f64(left: f64, right: f64) -> Option<Ordering> {
+    compare!(
+        sse!("ucomisd {left}, {right}", "vucomisd {left}, {right}"),
+        left,
+        right
+    )
+}
+
+/// Returns the smaller of two binary32 values by `MINSS`, which gives `right`
+/// when an operand is a NaN or both are zeros.
+#[inline]
+pub fn min_f32(mut left: f32, right: f32) -> f32 {
+    sse_scalar!(
+        sse!("minss {left}, {right}", "vminss {left}, {left}, {right}"),
+        left,
+        right
+    );
+    left
+}
+
+/// Returns the larger of two binary32 values by `MAXSS`, which gives `right`
+/// when an operand is a NaN or both are zeros.
+#[inline]
+pub fn max_f32(mut left: f32, right: f32) -> f32 {
+    sse_scalar!(
+        sse!("maxss {left}, {right}", "vmaxss {left}, {left}, {right}"),
+        left,
+        right
+    );
+    left
+}
+
+/// Returns the smaller of two binary64 values by `MINSD`, which gives `right`
+/// when an operand is a NaN or both are zeros.
+#[inline]
+pub fn min_f64(mut left: f64, right: f64) -> f64 {
+    sse_scalar!(
+        sse!("minsd {left}, {right}", "vminsd {left}, {left}, {right}"),
+        left,
+        right
+    );
+    left
+}
+
+/// Returns the larger of two binary64 values by `MAXSD`, which gives `right`
+/// when an operand is a NaN or both are zeros.
+#[inline]
+pub fn max_f64(mut left: f64, right: f64) -> f64 {
+    sse_scalar!(
+        sse!("maxsd {left}, {right}", "vmaxsd {left}, {left}, {right}"),
+        left,
+        right
+    );
+    left
 }

@@ -532,3 +532,80 @@ fn operators_read_mxcsr_before_the_host_unit() {
         conversions_under!(F64, control, &double);
     }
 }
+
+/// Checks the comparison and the minimum and maximum operations of one type
+/// under one MXCSR value against the engine results of the default mode.
+macro_rules! comparisons_under {
+    ($alias:ty, $control:expr, $pairs:expr) => {
+        for &(a, b) in $pairs {
+            let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
+            let env = <$alias>::ENV;
+            let expected = (
+                x.compare_quiet_with(y, env).0,
+                [
+                    x.minimum_with(y, env).0.to_bits(),
+                    x.maximum_with(y, env).0.to_bits(),
+                    x.minimum_number_with(y, env).0.to_bits(),
+                    x.maximum_number_with(y, env).0.to_bits(),
+                    x.min_num_with(y, env).0.to_bits(),
+                    x.max_num_with(y, env).0.to_bits(),
+                ],
+            );
+            let ours = x86::with_mxcsr($control, || {
+                let (x, y) = (black_box(x), black_box(y));
+                (
+                    x.partial_cmp(&y),
+                    [
+                        x.minimum(y).to_bits(),
+                        x.maximum(y).to_bits(),
+                        x.minimum_number(y).to_bits(),
+                        x.maximum_number(y).to_bits(),
+                        x.min_num(y).to_bits(),
+                        x.max_num(y).to_bits(),
+                    ],
+                )
+            });
+            assert_eq!(ours, expected, "{a:#x} {b:#x} under MXCSR {:#x}", $control);
+        }
+    };
+}
+
+#[test]
+fn comparisons_read_mxcsr_before_the_host_unit() {
+    // DAZ changes the order of a subnormal operand, and an unmasked invalid
+    // or denormal exception traps. Under each control, the comparison and the
+    // minimum and maximum operations give the engine results of the default
+    // mode.
+    let directions = [
+        MXCSR_MASKED,
+        MXCSR_MASKED | MXCSR_FTZ,
+        MXCSR_MASKED | MXCSR_DAZ,
+        MXCSR_MASKED | (1 << 13),
+    ];
+    let unmasked = (7..=12).map(|mask| MXCSR_MASKED & !(1 << mask));
+    let controls: Vec<u32> = directions.into_iter().chain(unmasked).collect();
+    let mut random = SplitMix64::new(0x00C5_C0AA);
+    let single = single_operands(&mut random, 2_000);
+    let single_pairs = pairs(&single, SINGLE_SPECIALS.len(), 1 << 31, 1);
+    let double = double_operands(&mut random, 2_000);
+    let double_pairs = pairs(&double, 10, 1 << 63, 1);
+    let sixteen = |exponent_bits: u32, random: &mut SplitMix64| -> Vec<(u16, u16)> {
+        let mut encodings: Vec<u16> =
+            boundary_encodings_u128(16, exponent_bits, IntegerBit::Implicit)
+                .into_iter()
+                .map(|bits| u16::try_from(bits).expect("a 16-bit encoding"))
+                .collect();
+        let specials = encodings.len();
+        encodings
+            .extend((0..2_000).map(|_| u16::try_from(random.next_u64() >> 48).expect("16 bits")));
+        pairs(&encodings, specials, 1 << 15, 1)
+    };
+    let half_pairs = sixteen(5, &mut random);
+    let bfloat_pairs = sixteen(8, &mut random);
+    for control in controls {
+        comparisons_under!(F16, control, &half_pairs);
+        comparisons_under!(BF16, control, &bfloat_pairs);
+        comparisons_under!(F32, control, &single_pairs);
+        comparisons_under!(F64, control, &double_pairs);
+    }
+}

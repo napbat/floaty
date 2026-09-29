@@ -1,6 +1,8 @@
 //! The floating-point environment of AArch64, FPCR, and the instructions of
 //! the host paths.
 
+use core::cmp::Ordering;
+
 use super::Operation;
 use crate::env::Rounding;
 
@@ -549,4 +551,81 @@ pub fn x87_to_single(_value: &[u64; 2]) -> Option<u32> {
 #[inline]
 pub fn x87_to_double(_value: &[u64; 2]) -> Option<u64> {
     None
+}
+
+/// Runs one quiet comparison of `$left` with `$right`, `FCMP`, and returns
+/// the order, or `None` for an unordered pair.
+macro_rules! compare {
+    ($instruction:literal, $left:ident, $right:ident) => {{
+        let (unordered, greater, less): (u32, u32, u32);
+        // SAFETY: FCMP reads two SIMD and floating-point registers and writes
+        // the condition flags, which CSET copies into three general registers.
+        // Every AArch64 target has them, and FCMP changes only the status
+        // flags of FPSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                $instruction,
+                "cset {unordered:w}, vs",
+                "cset {greater:w}, gt",
+                "cset {less:w}, mi",
+                left = in(vreg) $left,
+                right = in(vreg) $right,
+                unordered = out(reg) unordered,
+                greater = out(reg) greater,
+                less = out(reg) less,
+                options(pure, nomem, nostack),
+            );
+        }
+        if unordered != 0 {
+            None
+        } else if greater != 0 {
+            Some(Ordering::Greater)
+        } else if less != 0 {
+            Some(Ordering::Less)
+        } else {
+            Some(Ordering::Equal)
+        }
+    }};
+}
+
+/// Returns the order of two binary32 values by `FCMP`, which signals
+/// invalid only for a signaling NaN, or `None` when they are unordered.
+#[inline]
+pub fn compare_f32(left: f32, right: f32) -> Option<Ordering> {
+    compare!("fcmp {left:s}, {right:s}", left, right)
+}
+
+/// Returns the order of two binary64 values by `FCMP`, which signals
+/// invalid only for a signaling NaN, or `None` when they are unordered.
+#[inline]
+pub fn compare_f64(left: f64, right: f64) -> Option<Ordering> {
+    compare!("fcmp {left:d}, {right:d}", left, right)
+}
+
+/// Returns the smaller of two binary32 values by `FMIN`.
+#[inline]
+pub fn min_f32(mut left: f32, right: f32) -> f32 {
+    scalar!("fmin {left:s}, {left:s}, {right:s}", left, right);
+    left
+}
+
+/// Returns the larger of two binary32 values by `FMAX`.
+#[inline]
+pub fn max_f32(mut left: f32, right: f32) -> f32 {
+    scalar!("fmax {left:s}, {left:s}, {right:s}", left, right);
+    left
+}
+
+/// Returns the smaller of two binary64 values by `FMIN`.
+#[inline]
+pub fn min_f64(mut left: f64, right: f64) -> f64 {
+    scalar!("fmin {left:d}, {left:d}, {right:d}", left, right);
+    left
+}
+
+/// Returns the larger of two binary64 values by `FMAX`.
+#[inline]
+pub fn max_f64(mut left: f64, right: f64) -> f64 {
+    scalar!("fmax {left:d}, {left:d}, {right:d}", left, right);
+    left
 }

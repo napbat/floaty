@@ -28,7 +28,8 @@ mod paths;
     target_arch = "aarch64"
 ))]
 pub use self::paths::{
-    Ready, binary, convert, from_int, mul_add, ready, round_to_integral, sqrt, to_int,
+    Ready, binary, compare, convert, from_int, min_max, mul_add, ready, round_to_integral, sqrt,
+    to_int,
 };
 
 #[cfg(not(floaty_engine_only))]
@@ -84,6 +85,8 @@ pub enum Kind {
     ToInt,
     /// The conversion from an integer.
     FromInt,
+    /// The comparison, and the minimum and maximum operations.
+    Comparison,
 }
 
 /// Returns `true` when this build has a host path of `kind` for a format of
@@ -119,7 +122,7 @@ pub const fn available(host: Host, kind: Kind) -> bool {
         // fused multiply-add, or of an integer, through binary32 can differ
         // from one.
         (Host::None, _)
-        | (Host::Extended, Kind::FusedMultiplyAdd)
+        | (Host::Extended, Kind::FusedMultiplyAdd | Kind::Comparison)
         | (Host::BFloat, Kind::FusedMultiplyAdd | Kind::FromInt) => false,
         (Host::Half, Kind::FusedMultiplyAdd) => unit && fp16,
         (Host::BFloat, Kind::Arithmetic | Kind::SquareRoot) => unit && bf16,
@@ -127,14 +130,15 @@ pub const fn available(host: Host, kind: Kind) -> bool {
         // an integer and its rounding need no bfloat16 instruction.
         (
             Host::Single | Host::Double,
-            Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt,
+            Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt | Kind::Comparison,
         )
-        | (Host::BFloat, Kind::ToInt) => unit,
+        | (Host::BFloat, Kind::ToInt | Kind::Comparison) => unit,
         (Host::Single | Host::Double, Kind::FusedMultiplyAdd) => unit && fused,
         (Host::Single | Host::Double | Host::BFloat, Kind::RoundToIntegral) => unit && rounding,
-        (Host::Half, Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt) => {
-            unit && half
-        }
+        (
+            Host::Half,
+            Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt | Kind::Comparison,
+        ) => unit && half,
         (Host::Half, Kind::RoundToIntegral) => unit && half && rounding,
         (
             Host::Extended,
@@ -186,7 +190,8 @@ pub const fn convertible(from: Host, to: Host) -> bool {
     ))
 ))]
 pub use self::none::{
-    Ready, binary, convert, from_int, mul_add, packed, ready, round_to_integral, sqrt, to_int,
+    Ready, binary, compare, convert, from_int, min_max, mul_add, packed, ready, round_to_integral,
+    sqrt, to_int,
 };
 
 /// The entry points of a build without a host path: each returns `None`.
@@ -198,10 +203,33 @@ pub use self::none::{
     ))
 ))]
 mod none {
+    use core::cmp::Ordering;
+
     use super::Operation;
     use crate::env::Env;
     use crate::format::Standard;
-    use crate::format::internal::Host;
+    use crate::format::internal::{Host, MinMax};
+
+    /// Returns `None`: this build has no host path.
+    #[inline]
+    pub fn compare<S: Standard<W>, const W: usize>(
+        _left: S::Bits,
+        _right: S::Bits,
+        _env: &Env,
+    ) -> Option<Ordering> {
+        None
+    }
+
+    /// Returns `None`: this build has no host path.
+    #[inline]
+    pub fn min_max<S: Standard<W>, const W: usize>(
+        _left: S::Bits,
+        _right: S::Bits,
+        _operation: MinMax,
+        _env: &Env,
+    ) -> Option<S::Bits> {
+        None
+    }
 
     /// Returns `None`: this build has no host path.
     #[inline]

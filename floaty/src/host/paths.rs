@@ -8,11 +8,13 @@
 //! comparison, above the check of the environment. There an unmasked
 //! exception traps.
 
+use core::cmp::Ordering;
+
 use super::Operation;
 use super::environment::{self, default_environment};
 use crate::env::{Env, Rounding};
 use crate::format::Standard;
-use crate::format::internal::{Host, LimbConversion};
+use crate::format::internal::{Host, LimbConversion, MinMax};
 use crate::limbs::Limbs;
 
 /// Returns `true` when the host unit gives the results of `env` for a format
@@ -353,6 +355,100 @@ pub fn from_int<S: Standard<W>, const W: usize>(value: i64, env: &Env) -> Option
         Host::Half => half_encoding::<S, W>(environment::from_int_f32(value)),
         // x87 extended precision holds every 64-bit integer exactly.
         Host::Extended => environment::x87_from_int(value).map(extended_encoding::<S, W>),
+    }
+}
+
+/// Returns the order of two values from the host unit, as the quiet
+/// predicates give it, or `None` when the path does not apply or the values
+/// are unordered. An unordered pair holds a NaN, whose flags the engine
+/// computes.
+#[inline]
+pub fn compare<S: Standard<W>, const W: usize>(
+    left: S::Bits,
+    right: S::Bits,
+    env: &Env,
+) -> Option<Ordering> {
+    if !ready_for(S::HOST, env, S::PRECISION) {
+        return None;
+    }
+    match S::HOST {
+        Host::None | Host::Extended => None,
+        Host::Single => environment::compare_f32(single::<S, W>(left), single::<S, W>(right)),
+        Host::Double => environment::compare_f64(double::<S, W>(left), double::<S, W>(right)),
+        // The widenings are exact, so the order is the order of the values.
+        Host::Half => environment::compare_f32(half::<S, W>(left)?, half::<S, W>(right)?),
+        Host::BFloat => environment::compare_f32(bfloat::<S, W>(left), bfloat::<S, W>(right)),
+    }
+}
+
+/// Returns `true` for two binary32 encodings where the minimum and maximum
+/// instructions of the host differ from the operations: a NaN operand, or two
+/// zeros. `MINSS` then gives the second operand, and every operation orders
+/// `-0` below `+0`.
+#[inline]
+fn min_max_differs(left: u32, right: u32) -> bool {
+    // The shift drops the sign bits, so the result is zero for two zeros.
+    nan_32(left) || nan_32(right) || (left | right) << 1 == 0
+}
+
+/// Returns the smaller or the larger of two binary32 values from the host
+/// unit, as `operation` selects.
+#[inline]
+fn min_max_f32(left: f32, right: f32, operation: MinMax) -> f32 {
+    if operation.is_minimum() {
+        environment::min_f32(left, right)
+    } else {
+        environment::max_f32(left, right)
+    }
+}
+
+/// Returns the result of the minimum or maximum operation `operation` from
+/// the host unit, or `None` when the path does not apply, an operand is a
+/// NaN, or both operands are zeros. For every other pair, each operation of
+/// the families selects the smaller or the larger operand, as the host
+/// instructions do. The result is an operand, so no rounding occurs.
+#[inline]
+pub fn min_max<S: Standard<W>, const W: usize>(
+    left: S::Bits,
+    right: S::Bits,
+    operation: MinMax,
+    env: &Env,
+) -> Option<S::Bits> {
+    if !ready_for(S::HOST, env, S::PRECISION) {
+        return None;
+    }
+    // The widened values of binary16 and bfloat16 are exact, and the
+    // instruction returns one of them, so the result is the operand that the
+    // instruction returns.
+    let select = |a: f32, b: f32| -> Option<S::Bits> {
+        if min_max_differs(a.to_bits(), b.to_bits()) {
+            return None;
+        }
+        let result = min_max_f32(a, b, operation);
+        Some(if result.to_bits() == a.to_bits() {
+            left
+        } else {
+            right
+        })
+    };
+    match S::HOST {
+        Host::None | Host::Extended => None,
+        Host::Single => select(single::<S, W>(left), single::<S, W>(right)),
+        Host::Double => {
+            let (a, b) = (double::<S, W>(left), double::<S, W>(right));
+            let (x, y) = (a.to_bits(), b.to_bits());
+            if nan_64(x) || nan_64(y) || (x | y) << 1 == 0 {
+                return None;
+            }
+            let result = if operation.is_minimum() {
+                environment::min_f64(a, b)
+            } else {
+                environment::max_f64(a, b)
+            };
+            encoding::<S, W>(result.to_bits(), false)
+        }
+        Host::Half => select(half::<S, W>(left)?, half::<S, W>(right)?),
+        Host::BFloat => select(bfloat::<S, W>(left), bfloat::<S, W>(right)),
     }
 }
 

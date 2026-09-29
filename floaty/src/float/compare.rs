@@ -6,6 +6,7 @@ use super::Float;
 use crate::env::{Behavior, Flags, Mode, Override};
 use crate::format::Standard;
 use crate::format::internal::MinMax;
+use crate::host::{self, Kind};
 
 /// Defines a minimum or maximum operation: a method with the default mode and
 /// a `_with` method that returns the flags.
@@ -13,8 +14,15 @@ macro_rules! min_max {
     ($name:ident, $with:ident, $operation:ident, $summary:literal) => {
         #[doc = concat!("Returns ", $summary, ", with the default mode.")]
         #[must_use]
+        #[inline]
         pub fn $name(self, other: Self) -> Self {
-            self.$with(other, M::default()).0
+            if !host::available(S::HOST, Kind::Comparison) {
+                return self.$with(other, M::default()).0;
+            }
+            match host::min_max::<S, W>(self.bits, other.bits, MinMax::$operation, &M::ENV) {
+                Some(bits) => Self::from_masked(bits),
+                None => min_max_in_engine(self, other, MinMax::$operation),
+            }
         }
 
         #[doc = concat!("Returns ", $summary, ", and the flags.")]
@@ -171,7 +179,38 @@ impl<S: Standard<W>, const W: usize, M: Mode> PartialEq for Float<S, W, M> {
 /// Order as the IEEE 754 quiet predicates, with the default mode. A NaN is
 /// unordered.
 impl<S: Standard<W>, const W: usize, M: Mode> PartialOrd for Float<S, W, M> {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.compare_quiet_with(*other, M::default()).0
+        if !host::available(S::HOST, Kind::Comparison) {
+            return self.compare_quiet_with(*other, M::default()).0;
+        }
+        match host::compare::<S, W>(self.bits, other.bits, &M::ENV) {
+            Some(order) => Some(order),
+            None => compare_in_engine(*self, *other),
+        }
     }
+}
+
+/// Compares two values in the engine, for an unordered pair or a pair whose
+/// host path does not apply.
+#[cold]
+#[inline(never)]
+fn compare_in_engine<S: Standard<W>, const W: usize, M: Mode>(
+    left: Float<S, W, M>,
+    right: Float<S, W, M>,
+) -> Option<Ordering> {
+    left.compare_quiet_with(right, M::default()).0
+}
+
+/// Returns the minimum or maximum operation `operation` of two values in the
+/// engine, for a pair whose host path does not apply.
+#[cold]
+#[inline(never)]
+fn min_max_in_engine<S: Standard<W>, const W: usize, M: Mode>(
+    left: Float<S, W, M>,
+    right: Float<S, W, M>,
+    operation: MinMax,
+) -> Float<S, W, M> {
+    let (bits, _) = S::min_max(left.bits, right.bits, operation, M::default());
+    Float::from_masked(bits)
 }

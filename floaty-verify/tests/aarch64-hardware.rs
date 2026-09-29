@@ -127,6 +127,47 @@ fn operators_read_fpcr_before_the_host_unit() {
     }
 }
 
+/// Checks the comparison and the minimum and maximum operations of one type
+/// under one FPCR value against the engine results of the default mode.
+macro_rules! comparisons_under {
+    ($alias:ty, $bits:ty, $control:expr, $pairs:expr) => {
+        for &(a, b) in $pairs {
+            let convert = |bits: u128| <$bits>::try_from(bits).expect("the encoding fits");
+            let (x, y) = (
+                <$alias>::from_bits(convert(a)),
+                <$alias>::from_bits(convert(b)),
+            );
+            let env = <$alias>::ENV;
+            let expected = (
+                x.compare_quiet_with(y, env).0,
+                [
+                    x.minimum_with(y, env).0.to_bits(),
+                    x.maximum_with(y, env).0.to_bits(),
+                    x.minimum_number_with(y, env).0.to_bits(),
+                    x.maximum_number_with(y, env).0.to_bits(),
+                    x.min_num_with(y, env).0.to_bits(),
+                    x.max_num_with(y, env).0.to_bits(),
+                ],
+            );
+            let ours = with_fpcr($control, || {
+                let (x, y) = (black_box(x), black_box(y));
+                (
+                    x.partial_cmp(&y),
+                    [
+                        x.minimum(y).to_bits(),
+                        x.maximum(y).to_bits(),
+                        x.minimum_number(y).to_bits(),
+                        x.maximum_number(y).to_bits(),
+                        x.min_num(y).to_bits(),
+                        x.max_num(y).to_bits(),
+                    ],
+                )
+            });
+            assert_eq!(ours, expected, "{a:#x} {b:#x} under FPCR {:#x}", $control);
+        }
+    };
+}
+
 /// Returns the results of the operations of `Lanes` without flags on five
 /// binary32 lanes, three binary64 lanes, and five binary16 lanes, which the
 /// packed host paths compute in chunks and single lanes.
@@ -345,5 +386,22 @@ fn directed_rounding_reads_fpcr_before_the_vector_unit() {
             });
             assert_eq!(ours, (engine, engine), "{bits:x?} under FPCR {control:#x}");
         }
+    }
+}
+
+#[test]
+fn comparisons_read_fpcr_before_the_host_unit() {
+    // Under each setting of FPCR, and under the default, the comparison and
+    // the minimum and maximum operations give the engine results of the
+    // default mode.
+    let mut random = SplitMix64::new(0x00A6_C0AA);
+    let single_pairs = pairs(&mut random, 32, 8);
+    let double_pairs = pairs(&mut random, 64, 11);
+    let half_pairs = pairs(&mut random, 16, 5);
+    for control in core::iter::once(0).chain(FPCR_SETTINGS) {
+        comparisons_under!(F32, u32, control, &single_pairs);
+        comparisons_under!(F64, u64, control, &double_pairs);
+        comparisons_under!(F16, u16, control, &half_pairs);
+        comparisons_under!(BF16, u16, control, &half_pairs);
     }
 }
