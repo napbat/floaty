@@ -1317,6 +1317,12 @@ time per lane falls as the lane count grows.
 | binary32 x 8 | 12.1 | 0.4 | 0.5 | 0.3 | 0.3 | 1.5 |
 | binary64 x 2 | 15.0 | 1.3 | 1.4 | 0.9 | 1.2 | 1.5 |
 | binary64 x 4 | 14.1 | 0.9 | 1.1 | 0.7 | 0.6 | 1.5 |
+| binary16 x 8 | 11.9 | 11.9 | 28.1 | 0.3 | 21.0 | 2.1 |
+
+binary16 lanes take the packed paths with F16C, so the default build runs
+them in the engine, and its figure fills the engine column. The operator of
+binary16 x 8 took 2.2 nanoseconds per lane in the x86-64-v3 build when each
+lane took the scalar F16C path.
 
 The register operands, the lane-by-lane operation after a NaN, and the VEX
 forms halved the time of each packed path. Before them, the operator of
@@ -1575,6 +1581,10 @@ The comparison and the minimum and maximum paths:
 - A mode with DAZ reads a subnormal operand as zero, so the path needs the
   mode and the environment of the other paths. An unmasked invalid or
   denormal exception traps in the host unit.
+- In the default build, `partial_cmp` of binary32 took 6.8 nanoseconds in
+  the engine and 2.4 on the path, and `minimum` 3.9 and 2.3. The minimum
+  and maximum methods carry no inline hint: with the hint, the engine
+  minimum of x87 extended took 7.6 nanoseconds instead of 6.6.
 
 The packed paths:
 
