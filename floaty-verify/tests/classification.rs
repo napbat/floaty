@@ -159,9 +159,13 @@ fn x87_canonical(bits: u128) -> bool {
 }
 
 /// `rustc_apfloat` follows LLVM, not the processor, for the non-canonical x87
-/// encodings (`docs/anomalies/x87-noncanonical-rustc-apfloat.md`). The value
-/// comparison covers the canonical encodings only. `x87-hardware.rs` checks
-/// the class of every encoding against the processor.
+/// encodings. `rustc_apfloat` reads an unnormal, a pseudo-NaN, and a
+/// pseudo-infinity as NaNs, and a pseudo-denormal as a normal value. The
+/// Intel SDM, Volume 1, revision 253665-093US, section 8.2.2 and Table 8-3 on
+/// page 8-14, makes the first three invalid operands. The processor reads a
+/// pseudo-denormal with the biased exponent 1. So the value comparison covers the canonical encodings
+/// only. `x87-hardware.rs` checks the class of every encoding against the
+/// processor.
 #[test]
 fn x87_encodings() {
     let mask = (1_u128 << 80) - 1;

@@ -359,7 +359,10 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         (Some(order), false)
     }
 
-    /// Returns the exact value of the pair, as `DESIGN.md` defines it.
+    /// Returns the exact value of the pair. A NaN or infinite high half makes
+    /// the value that half. With a finite high half, a NaN or infinite low half
+    /// makes the value that low half. Otherwise the value is the exact sum,
+    /// and a zero sum takes the sign of the high half.
     fn exact(self) -> Unpacked<Magnitude> {
         let (hi, lo) = (self.hi.decode::<1>(), self.lo.decode::<1>());
         match (hi, lo) {

@@ -5,9 +5,9 @@
 //! Each case compares both halves of the result bit for bit, with the sign
 //! and payload of a NaN half, and the five IEEE flags, in each of the four
 //! rounding directions. floaty runs `Gcc` under the behavior of PowerPC,
-//! `ibm_ldouble::behavior`, and `Qd` under `Env::X86_SSE`, as `DESIGN.md`
-//! states. The test counts the cases with a malformed operand, a finite high
-//! half and a NaN low half, whose NaN the fused NaN order decides.
+//! `ibm_ldouble::behavior`, and `Qd` under `Env::X86_SSE`. The test counts
+//! the cases with a malformed operand, a finite high half and a NaN low half,
+//! whose NaN the fused NaN order decides.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -326,8 +326,8 @@ fn check_host_fma() {
                     theirs,
                     ours.to_bits(),
                     "the C library fma({x:#x}, {y:#x}, {z:#x}) of this host is not y * x + z under \
-                     Env::X86_SSE. The Qd tests need the FMA3 fma of glibc; see the Verification \
-                     section of DESIGN.md"
+                     Env::X86_SSE. The Qd tests need a processor on which glibc's fma is the FMA3 \
+                     instruction"
                 );
             }
         }

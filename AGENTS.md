@@ -6,13 +6,13 @@ here. Put every rule in this file.
 
 ## Project
 
-floaty is bit-exact, platform-independent software floating point.
-[DESIGN.md](DESIGN.md) is the source of truth for every design decision.
+floaty is bit-exact, platform-independent software floating point. The
+crate documentation records each rule of its behavior. The
+[README](README.md) lists the formats, the host paths, and the oracles.
 
-- Read `DESIGN.md` before you change the crate.
-- When a change alters a decision, update `DESIGN.md` in the same change.
-- Follow the build order in `DESIGN.md`. Do not start a step before the
-  previous step passes its oracle tests.
+- Read the documentation of an item before you change the item.
+- When a change alters a rule, update its documentation in the same change.
+  Update the README too when the README states the rule.
 
 ## Priorities
 
@@ -29,7 +29,7 @@ floaty is bit-exact, platform-independent software floating point.
 
 - Give the same bits on every host. Do not use host floating-point arithmetic
   in `floaty`: no `f32` or `f64` operations and no math library calls. A host
-  path is the only exception. `DESIGN.md` defines host paths and must list
+  path is the only exception. The host path table of the README must list
   each one.
 - Make a host path give the bits of the engine for every input it accepts.
   Send every other input, and every NaN result, to the engine.
@@ -55,9 +55,9 @@ floaty is bit-exact, platform-independent software floating point.
 - Test every behavior against an established oracle: TestFloat, MPFR,
   `rustc_apfloat`, `ml_dtypes`, the host processor, decTest and decNumber,
   the Intel decimal library and its tests, QD, or libgcc. Where no
-  implementation exists, evaluate the published definition from IEEE 754, a
-  vendor manual, or `DESIGN.md` with MPFR or decNumber. A behavior without an
-  oracle test is not finished.
+  implementation exists, evaluate the published definition from IEEE 754 or
+  a vendor manual, or the documented rule of floaty, with MPFR or decNumber.
+  A behavior without an oracle test is not finished.
 - A preset field is a claim about hardware. Cite the vendor manual, volume,
   and section beside the field. Confirm the field on hardware in
   `floaty-verify`.
@@ -78,9 +78,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
 ```
 
-Then run the clippy and test gates in the other builds of `DESIGN.md`: the
-x86-64-v3 build, the engine-only build, and the two AArch64 builds under
-QEMU. Each build with its own flags keeps its own target directory.
+Then run the clippy and test gates in the other builds: the x86-64-v3
+build, the engine-only build, and the two AArch64 builds under QEMU. Each
+build with its own flags keeps its own target directory.
 
 ```text
 export V3="-C target-cpu=x86-64-v3" ENGINE="--cfg floaty_engine_only" FP16="-C target-feature=+fp16,+bf16"
@@ -120,8 +120,8 @@ RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo +1.85 clippy -p flo
   another host, run the gates with `-p floaty` instead of `--workspace`.
 - Keep the submodules under `floaty-verify/reference/`, the pinned archives
   in `floaty-verify/build.rs`, the pinned compilers, and the pinned QEMU at
-  their pinned releases. A change of release is a design change: record it
-  in `DESIGN.md`.
+  their pinned releases. Make a change of release in its own commit, and
+  state the reason in the commit message.
 - Run the long exhaustive sweeps with
   `cargo test -p floaty-verify --release -- --ignored`.
 - Measure performance with `cargo bench -p floaty-verify --bench operations`
@@ -152,8 +152,7 @@ The workspace manifest denies these lint groups for every package:
 - A function on the common path of the engine can allow
   `clippy::inline_always` when LLVM does not inline it for `#[inline]`. Put
   the allowance on that function only. `cargo bench -p floaty-verify --bench
-  operations` must show the gain, and `DESIGN.md` must record it. The comment
-  must state the measured gain.
+  operations` must show the gain. The comment must state the measured gain.
 - `clippy.toml` lists product names for the `doc_markdown` lint. Add a name
   there only when it is a product name, not a code identifier.
 
@@ -241,11 +240,11 @@ error messages, commit messages, and handoff notes.
 - Write a comment to explain intent, an invariant, a tradeoff, or safety
   reasoning. Do not write a comment that repeats the code.
 - Do not use decorative section-divider comments.
-- Write a `docs/anomalies/` record when a vendor manual, a reference
-  implementation, or an oracle disagrees with itself or with silicon. Start
-  with a `Status:` line. Use the sections `Affected rule`, `Conflicting
-  reference evidence`, `Resolution`, and `Regression evidence`. Cite the
-  manual, revision, volume, and page.
+- Record a conflict when a vendor manual, a reference implementation, or an
+  oracle disagrees with itself or with silicon. Write the record as a
+  comment beside the test or the oracle code that handles the conflict. State the affected
+  rule, the conflicting evidence, and the resolution. Cite the manual,
+  revision, volume, and page, or the source file, release, and line.
 
 ## Generated Files
 

@@ -798,12 +798,12 @@ pub enum Extremum {
     Maximum,
 }
 
-/// Returns the result that `DESIGN.md` gives the minimum or the maximum of
+/// Returns the result that floaty gives the minimum or the maximum of
 /// two operands that compare equal.
 ///
 /// IEEE 754-2008 section 5.3.1 lets `minNum` and `maxNum` return either
 /// operand when the operands compare equal, and `readtest.c` accepts either
-/// one. `DESIGN.md` fixes the choice: `-0` is below `+0`, and the members of
+/// one. floaty fixes the choice: `-0` is below `+0`, and the members of
 /// a cohort order as `totalOrder` of IEEE 754-2019 section 5.10 orders them.
 /// The library's `totalOrder` decides the order here, and the result is the
 /// canonical encoding of the operand that it puts first for the minimum, or

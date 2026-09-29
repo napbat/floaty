@@ -2,8 +2,8 @@
 //!
 //! `floaty` emulates binary, decimal, and double-double floating-point formats
 //! in software. Every operation gives the same bits on every host. The
-//! binary32 and binary64 operators use the host unit on x86-64 only where it
-//! gives those bits.
+//! operations without flags use the floating-point unit of the host only
+//! where the unit gives those bits.
 //!
 //! A value has the type [`Float<S, W>`](Float): a standard `S` at a width of
 //! `W` bits. Type aliases name the common formats, for example [`F32`],
@@ -36,8 +36,6 @@
 //!
 //! [`Float::round`] rounds an exact value to a format, and
 //! [`Float::convert`] converts between formats.
-//!
-//! The crate follows the build order in `DESIGN.md` at the repository root.
 
 #![no_std]
 
@@ -73,3 +71,8 @@ mod sealed {
     /// Prevents implementations of a trait outside the crate.
     pub trait Sealed {}
 }
+
+/// Runs the examples of the README as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../../README.md")]
+pub struct ReadmeDoctests;

@@ -24,8 +24,8 @@
 //! - Where `bid*_quantum` is wrong, the IEEE 754 definition decides; see
 //!   [`quantum`].
 //! - Where `minnum` or `maxnum` has operands that compare equal, the library
-//!   decides the value and the flags, and the rule of `DESIGN.md` decides
-//!   which operand the result is; see [`min_max`].
+//!   decides the value and the flags, and floaty's rule decides which
+//!   operand the result is; see [`min_max`].
 //!
 //! The report counts the cases that each rule decides. The generators are
 //! seeded, so each test asserts the counts exactly.
@@ -393,8 +393,7 @@ fn fused<F: Format>(
 
 /// The reason for an `fma` case whose NaN order floaty cannot follow.
 const FMA_NAN_ORDER: &str = "fma with NaN x and z and a number y: the library returns the NaN \
-     of z, floaty the NaN of the factors first (DESIGN.md: mul_add selects a NaN in SoftFloat's \
-     order)";
+     of z, floaty the NaN of the factors first (FusedNanOrder::ProductFirst, SoftFloat's order)";
 
 /// Returns a scale for `scalbn`: small, across the exponent range, or
 /// extreme.
@@ -650,8 +649,8 @@ where
 }
 
 /// The rule for `minnum` and `maxnum` of operands that compare equal.
-const EQUAL_OPERANDS: &str = "DESIGN.md for operands that compare equal: -0 below +0, and the \
-     members of a cohort in totalOrder";
+const EQUAL_OPERANDS: &str = "floaty's rule for operands that compare equal: -0 below +0, and \
+     the members of a cohort in totalOrder";
 
 /// Returns the expected `minnum` or `maxnum` outcome, and the rule that gives
 /// it when the choice of the library differs.
@@ -659,8 +658,8 @@ const EQUAL_OPERANDS: &str = "DESIGN.md for operands that compare equal: -0 belo
 /// The library is the oracle for the value and the flags. When the operands
 /// compare equal and the library returns a value equal to them, IEEE 754
 /// lets either operand be the result, and `readtest.c` accepts either. There
-/// the rule of `DESIGN.md`, with the order of the library's `totalOrder`,
-/// decides the encoding; see [`intel_decimal::equal_operand_choice`].
+/// floaty's rule, with the order of the library's `totalOrder`, decides the
+/// encoding; see [`intel_decimal::equal_operand_choice`].
 fn min_max<F: Format>(
     x: F::Bits,
     y: F::Bits,

@@ -213,7 +213,8 @@ pub enum TotalOrder {
 pub struct Env {
     /// The rounding direction.
     pub rounding: Rounding,
-    /// FTZ: a tiny result becomes a zero with the same sign.
+    /// FTZ: a tiny result becomes a zero with the same sign, and reports
+    /// underflow, inexact, and tiny, as the SSE unit does.
     pub flush_to_zero: bool,
     /// DAZ: a subnormal input reads as a zero with the same sign.
     pub denormals_are_zero: bool,
@@ -223,9 +224,10 @@ pub struct Env {
     /// Which NaN an operation returns.
     pub nan: NanRule,
     /// Rounds the significand to this many digits of the radix and keeps the
-    /// exponent range of the format, as x87 precision control does. `None`
-    /// uses the precision of the format. A value above the format precision
-    /// has no effect.
+    /// exponent range of the format, as x87 precision control does. A tiny
+    /// result then rounds at the quantum `RADIX^(EMIN - precision + 1)`.
+    /// `None` uses the precision of the format. A value above the format
+    /// precision has no effect.
     pub precision: Option<NonZeroU32>,
     /// An overflow in an encoding without infinity gives the largest finite
     /// value instead of a NaN.
@@ -423,14 +425,20 @@ impl Flags {
     pub const UNDERFLOW: Self = Self(1 << 3);
     /// IEEE inexact.
     pub const INEXACT: Self = Self(1 << 4);
-    /// The result is tiny, even when exact. A consumer needs this flag to
-    /// emulate an unmasked underflow exception.
+    /// The result is tiny, even when exact: nonzero and below the smallest
+    /// normal magnitude, by the tininess rule of the behavior. A rounded
+    /// result and a remainder report it. The operations that return an
+    /// operand or its neighbor, such as the minimum and maximum operations
+    /// and `next_up`, do not. A consumer needs this flag to emulate an
+    /// unmasked underflow exception.
     pub const TINY: Self = Self(1 << 5);
     /// The magnitude of the result is larger than the magnitude of the exact
     /// value. The x87 unit reports this in status bit C1.
     pub const ROUNDED_UP: Self = Self(1 << 6);
-    /// An input was subnormal, before denormals-are-zero. x86 reports this as
-    /// DE, and ARM reports a flushed input as IDC.
+    /// An input was subnormal, before denormals-are-zero. Every operation that
+    /// takes a behavior reports it. x86 reports this as DE, and ARM reports a
+    /// flushed input as IDC. Each instruction has its own rules for DE, which
+    /// a consumer maps from this flag.
     pub const DENORMAL_INPUT: Self = Self(1 << 7);
 
     const NAMES: [(Self, &'static str); 8] = [

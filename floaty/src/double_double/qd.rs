@@ -1,6 +1,7 @@
-//! The double-double arithmetic of QD 2.3.24, `dd_real`, in the
-//! configuration of `DESIGN.md`: IEEE-style addition, accurate division, and
-//! a `two_prod` with `fma(a, b, -p)`.
+//! The double-double arithmetic of QD 2.3.24, `dd_real`, configured with
+//! `--enable-ieee-add`, `--disable-sloppy-div`, and `--enable-fma=c99`:
+//! IEEE-style addition, accurate division, and a `two_prod` with
+//! `fma(a, b, -p)`.
 //!
 //! Each function follows the machine code that g++ 15.2.0 makes of QD with
 //! `-O2 -ffp-contract=off` for x86-64: addition, subtraction, and

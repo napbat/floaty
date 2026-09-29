@@ -325,7 +325,10 @@ pub fn align(payload: Integer, from: u32, to: u32) -> Integer {
 }
 
 /// Returns the payload of a decimal NaN converted from a binary NaN with
-/// `payload`, a field of `bits` bits, by the rule in `DESIGN.md`.
+/// `payload`, a field of `bits` bits. The payload bits align with the
+/// trailing significand field of the decimal format, and a payload above
+/// `10^(p - 1) - 1` is non-canonical and becomes zero, as the Intel decimal
+/// library does.
 #[must_use]
 pub fn decimal_payload(payload: Integer, bits: u32, format: DecimalFormat) -> Integer {
     let aligned = align(payload, bits, format.trailing_bits());

@@ -135,7 +135,7 @@ const COMPILER_VARIABLES: [&str; 6] = ["CFLAGS", "CPPFLAGS", "LDFLAGS", "CC", "C
 /// The cross compiler of the libgcc reference.
 const POWERPC_GCC: &str = "powerpc64le-linux-gnu-gcc";
 
-/// The pinned GCC release of the libgcc reference. `DESIGN.md` pins it.
+/// The pinned GCC release of the libgcc reference.
 const POWERPC_GCC_VERSION: &str = "15.2.0";
 
 /// The SHA-256 of `ibm-ldouble.o` in the pinned libgcc: its machine code,
@@ -145,7 +145,7 @@ const POWERPC_GCC_VERSION: &str = "15.2.0";
 const IBM_LDOUBLE_SHA256: &str = "c484948ee6c0e1a9b7b4a54f31820707afbbb90ce33564aee121e0f1082d154c";
 
 /// The pinned QEMU release, which executes the libgcc reference and gives
-/// its flags. `DESIGN.md` pins it.
+/// its flags.
 const QEMU_VERSION: &str = "10.2.1";
 
 /// The emulator that runs the libgcc reference.
@@ -167,7 +167,8 @@ const QD: Archive = Archive {
     sha256: "a47b6c73f86e6421e86a883568dd08e299b20e36c11a99bdfbe50e01bde60e38",
 };
 
-/// The `configure` options of QD. `DESIGN.md` pins the first three.
+/// The `configure` options of QD. The first three select the arithmetic
+/// that floaty's `Qd` follows.
 ///
 /// - `--enable-ieee-add` selects the addition with the IEEE-style error
 ///   bound, and `--disable-sloppy-div` selects the accurate division.
@@ -187,11 +188,12 @@ const QD_CONFIGURE: [&str; 6] = [
 /// The C++ compiler of QD and of its shim.
 const QD_CXX: &str = "g++";
 
-/// The pinned GCC release of the C++ compiler of QD. `DESIGN.md` pins it.
+/// The pinned GCC release of the C++ compiler of QD.
 const QD_CXX_VERSION: &str = "15.2.0";
 
-/// The C++ compiler options of QD. `DESIGN.md` pins them. The shim compiles
-/// the inline operators of QD, so it uses the same options.
+/// The C++ compiler options of QD, whose machine code floaty's `Qd`
+/// follows. The shim compiles the inline operators of QD, so it uses the
+/// same options.
 const QD_CXXFLAGS: [&str; 2] = ["-O2", "-ffp-contract=off"];
 
 /// The lines of `include/qd/qd_config.h` that the pinned configuration
@@ -349,8 +351,8 @@ fn build_ibm_ldouble(manifest: &Path, out: &Path) {
     let version = tool_output(POWERPC_GCC, &["-dumpfullversion"], cross_advice);
     assert!(
         version.trim() == POWERPC_GCC_VERSION,
-        "{POWERPC_GCC} is GCC {}, not the pinned GCC {POWERPC_GCC_VERSION}. The libgcc reference \
-         is a design decision; see the Double-Double Family section of DESIGN.md",
+        "{POWERPC_GCC} is GCC {}, not the pinned GCC {POWERPC_GCC_VERSION}. floaty's Gcc \
+         algorithm follows the machine code of the pinned compiler",
         version.trim()
     );
     // The first line of `--version` names the distribution build of GCC.
@@ -368,8 +370,8 @@ fn build_ibm_ldouble(manifest: &Path, out: &Path) {
     let emulator = emulator.lines().next().unwrap_or_default();
     assert!(
         emulator.starts_with(&format!("qemu-ppc64le version {QEMU_VERSION} ")),
-        "{emulator:?} is not the pinned QEMU {QEMU_VERSION}. QEMU executes the libgcc reference; \
-         see the Verification section of DESIGN.md"
+        "{emulator:?} is not the pinned QEMU {QEMU_VERSION}. QEMU executes the libgcc reference \
+         and gives its flags"
     );
     // The tests check the release again, because QEMU can change after the
     // build.
@@ -411,8 +413,7 @@ fn check_ibm_ldouble(libgcc: &Path, out: &Path, advice: &str) {
     assert!(
         digest == IBM_LDOUBLE_SHA256,
         "ibm-ldouble.o in {} has SHA-256 {digest}, not the pinned {IBM_LDOUBLE_SHA256}. floaty's \
-         Gcc algorithm follows the pinned object; see the Double-Double Family section of \
-         DESIGN.md",
+         Gcc algorithm follows the pinned object",
         libgcc.display()
     );
 }
@@ -427,8 +428,8 @@ fn build_qd(manifest: &Path, out: &Path) {
     let version = tool_output(QD_CXX, &["-dumpfullversion"], advice);
     assert!(
         version.trim() == QD_CXX_VERSION,
-        "{QD_CXX} is GCC {}, not the pinned GCC {QD_CXX_VERSION}. The QD reference is a design \
-         decision; see the Double-Double Family section of DESIGN.md",
+        "{QD_CXX} is GCC {}, not the pinned GCC {QD_CXX_VERSION}. floaty's Qd algorithm \
+         follows the machine code of the pinned compiler",
         version.trim()
     );
     let compiler = tool_output(QD_CXX, &["--version"], advice);
@@ -548,8 +549,7 @@ fn check_machine_code(object: &Path, sections: &[&str], expected: &str) {
         let bytes = fs::read(&dump).expect("objcopy writes the section");
         assert!(
             !bytes.is_empty(),
-            "{} has no section {section}. floaty's Qd algorithm follows the pinned machine code; \
-             see the Double-Double Family section of DESIGN.md",
+            "{} has no section {section}. floaty's Qd algorithm follows the pinned machine code",
             object.display()
         );
         content.extend(bytes);
@@ -560,7 +560,7 @@ fn check_machine_code(object: &Path, sections: &[&str], expected: &str) {
         digest == expected,
         "the sections {sections:?} of {} have SHA-256 {digest}, not the pinned {expected}. \
          floaty's Qd algorithm follows the pinned machine code. A change to the shim or to the \
-         compiler needs a new transcription; see the Double-Double Family section of DESIGN.md",
+         compiler needs a new transcription",
         object.display()
     );
 }

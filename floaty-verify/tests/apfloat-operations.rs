@@ -1,4 +1,4 @@
-//! Compares operations of build step 4 with `rustc_apfloat`, the Rust port of
+//! Compares operations beyond arithmetic with `rustc_apfloat`, the Rust port of
 //! LLVM APFloat: `next_up` and `next_down`, the IEEE remainder, rounding to an
 //! integral value, conversion to and from integers of several widths, and
 //! scaling. Every FP8 operand pair of the formats that `rustc_apfloat` has
@@ -10,8 +10,8 @@
 //! restricted to those five. It selects the first NaN operand, made quiet,
 //! and its default NaN is positive, so the tests use that NaN rule.
 //!
-//! `rustc_apfloat` differs from IEEE 754 and `DESIGN.md` in these cases, which
-//! the tests exclude:
+//! `rustc_apfloat` 0.2.3 differs from IEEE 754 and floaty in these cases,
+//! which the tests exclude:
 //!
 //! - `next_up` of a signaling NaN gives the default NaN with the sign of the
 //!   operand. IEEE 754-2019 section 6.2 recommends the operand NaN made
@@ -19,7 +19,7 @@
 //!   with the sign of the operand, and signal invalid.
 //! - `scalbn` reports no flags, so the tests compare only its value.
 //! - A rounding to the largest finite value reports inexact and not
-//!   overflow: `overflow_result` in `src/ieee.rs` follows LLVM
+//!   overflow: `overflow_result` in `src/ieee.rs`, line 2003, follows LLVM
 //!   `handleOverflow`. IEEE 754-2019 section 7.4 signals overflow in every
 //!   rounding direction, as floaty does. The tests remove the overflow flag
 //!   of floaty's finite results.
@@ -28,10 +28,16 @@
 //!   negative value. A negative value whose magnitude rounds past the largest
 //!   finite value, below `2^(emax + 1)`, then gives the NaN toward positive
 //!   and the largest finite value toward negative, the reverse of IEEE 754.
+//!   The calls are at lines 2101 and 2149 of `src/ieee.rs`.
 //!   The tests skip those `scale_b` results; the MPFR tests check them.
 //! - It follows LLVM, not the processor, for the non-canonical x87
-//!   encodings (`docs/anomalies/x87-noncanonical-rustc-apfloat.md`), so the
-//!   x87 operands are canonical.
+//!   encodings, so the x87 operands are canonical. As the comment on
+//!   `X87DoubleExtendedS::from_bits` states, `rustc_apfloat` reads an
+//!   unnormal, a pseudo-NaN, and a pseudo-infinity as NaNs, and a
+//!   pseudo-denormal as a normal value. The Intel SDM, Volume 1, revision
+//!   253665-093US, section 8.2.2 and Table 8-3 on page 8-14, makes the first
+//!   three invalid operands. The processor reads a pseudo-denormal with the
+//!   biased exponent 1. `FXAM` agrees.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -72,8 +78,7 @@ fn status(flags: Flags) -> Status {
 
 /// Returns the `rustc_apfloat` status of the five IEEE 754 flags of a
 /// rounded result. `rustc_apfloat` does not report overflow when the result
-/// is the largest finite value; see
-/// `docs/anomalies/rustc-apfloat-directed-overflow-flag.md`.
+/// is the largest finite value, as the module documentation states.
 fn rounded_status(flags: Flags, largest_finite: bool) -> Status {
     status_of(flags, largest_finite)
 }
@@ -177,11 +182,10 @@ where
     }
 
     /// Returns `true` for a `scale_b` result that the `rustc_apfloat` sign
-    /// error of a format without an infinity changes
-    /// (`docs/anomalies/rustc-apfloat-no-infinity-overflow-sign.md`): a
-    /// negative value that scales exactly to the magnitude of the NaN
-    /// encoding, in a directed rounding. The format parameters decide the
-    /// case, not the result of floaty.
+    /// error of a format without an infinity changes, as the module
+    /// documentation states: a negative value that scales exactly to the
+    /// magnitude of the NaN encoding, in a directed rounding. The format
+    /// parameters decide the case, not the result of floaty.
     fn negative_overflow_without_infinity(x: Float<S, W>, scale: i32, rounding: Rounding) -> bool {
         let Decoded::Finite {
             negative: true,

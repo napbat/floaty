@@ -4,7 +4,7 @@
 //! range. The oracle composes those operations to give the IEEE 754 result
 //! of rounding an exact value to a binary format: the value, and the flags.
 //! Round to nearest with ties away from zero, and round to odd, come from the
-//! two directed results, as `DESIGN.md` describes.
+//! two directed results.
 
 use core::cmp::Ordering;
 
@@ -297,12 +297,12 @@ fn is_odd(value: &BigFloat, precision: u32, emin: Option<i32>) -> bool {
 }
 
 /// Returns the expected result and flags of converting a decoded value to
-/// `format`, by the conversion rules in `DESIGN.md`. MPFR rounds the finite
+/// `format`, by floaty's conversion rules. MPFR rounds the finite
 /// values. `subnormal` says that the source encoding is subnormal.
 ///
 /// The caller decodes the source with floaty's own `decode` and `classify`,
-/// which the step 1 oracles check. The special-value rules are the rules of
-/// the design, not an independent reference.
+/// which `tests/classification.rs` checks. The special-value rules are
+/// floaty's own rules, not an independent reference.
 ///
 /// # Panics
 ///

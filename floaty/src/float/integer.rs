@@ -79,8 +79,10 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// a rounded value outside the range of `I`, gives
     /// [`ToInt::OutOfRange`]. Both signal invalid and not inexact. A value
     /// that fits signals [`Flags::INEXACT`] when it rounds, as the IEEE 754
-    /// `convertToIntegerExact` operations do. The other IEEE 754 conversions
-    /// are this operation with that flag ignored.
+    /// `convertToIntegerExact` operations do, and [`Flags::ROUNDED_UP`] when
+    /// the magnitude grows. The other IEEE 754 conversions are this operation
+    /// with that flag ignored. The value rounds to an integer, not to the
+    /// format, so the precision limit does not apply.
     ///
     /// ```
     /// use floaty::{F32, Flags, Rounding, ToInt};

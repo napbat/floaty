@@ -7,6 +7,18 @@
 //! floating-point environment, so it can move a Rust float operation, even a
 //! comparison, above the check of the environment. There an unmasked
 //! exception traps.
+//!
+//! The binary16 and bfloat16 paths compute in binary32 and round twice.
+//! binary32 holds `2p + 2` bits of each format, so the two roundings of add,
+//! subtract, multiply, divide, and square root give the correctly rounded
+//! result: Figueroa, "When is double rounding innocuous?", ACM SIGNUM
+//! Newsletter 30(3), 1995. Every binary32 result of binary16 operands is
+//! normal. A binary32 result of bfloat16 operands can be subnormal, but it
+//! still holds 16 bits more than a bfloat16 subnormal, which has at most 7
+//! bits. The theorem does not hold for the fused multiply-add, or for a
+//! conversion from binary64 to binary16 through binary32: `1 + 2^-11 +
+//! 2^-40` rounds to `1 + 2^-11` in binary32, and then to 1, not to
+//! `1 + 2^-10`. So those operations take no path through binary32.
 
 use core::cmp::Ordering;
 

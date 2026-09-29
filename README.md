@@ -2,83 +2,466 @@
 
 Bit-exact, platform-independent software floating point for Rust.
 
-floaty emulates floating-point formats and the behavior of the hardware that
-uses them. Every operation gives the same bits on every host. It is a base
-layer for binary lifters, constant folders, and software FPU emulators.
+floaty emulates binary, decimal, and double-double floating-point formats,
+and the behavior of the hardware that computes them. Every operation gives
+the same bits and the same flags on every host. floaty is a base layer for
+binary lifters, decompilers, constant folders, and FPU emulators.
 
-> **Status:** build steps 1 to 8 of 8 are complete: every binary format
-> decodes, classifies, rounds, converts, and computes `+ - * /`, square root,
-> and fused multiply-add, correctly rounded in every rounding direction, and
-> has comparisons and a total order, the minimum and maximum families,
-> integer conversions, rounding to an integral value, the IEEE remainder,
-> `scale_b`, `next_up` and `next_down`, and the sign operations. The x86
-> SSE and x87 presets give the behavior of those units. The binary32 and
-> binary64 operators use the host unit on x86-64 where it gives the same
-> bits. decimal32, decimal64, and decimal128, in BID and DPD, have the same
-> operations with the IEEE 754 preferred exponents, the quantum operations,
-> and correctly rounded conversions to and from every binary format.
-> Double-double values match libgcc's IBM `long double` under QEMU, or QD's
-> `dd_real`, bit for bit under the behavior of each platform, NaN payloads
-> included.
-> [DESIGN.md](DESIGN.md) holds the approved design and the build order.
+- **Formats.** Every IEEE 754 binary interchange format from 16 to 512
+  bits, bfloat16, TF32, OCP FP8 E4M3 and E5M2, the FNUZ FP8 variants, x87
+  80-bit extended precision, and custom binary layouts up to 512 bits.
+  decimal32, decimal64, and decimal128 in the BID and DPD encodings. Double-double values that match
+  the IBM `long double` of libgcc or the `dd_real` of QD, bit for bit.
+- **Correct rounding.** Addition, subtraction, multiplication, division,
+  square root, fused multiply-add, and every conversion round correctly in
+  six directions, round to odd included.
+- **The IEEE 754 operations.** Comparisons, total order, the IEEE 754-2019
+  and IEEE 754-2008 minimum and maximum operations, the remainder, rounding
+  to an integral value, integer conversions up to 512 bits, `scale_b`,
+  `next_up` and `next_down`, the sign operations, and the decimal quantum
+  operations.
+- **Hardware behavior as data.** Flush-to-zero, denormals-are-zero, tininess
+  detection, NaN propagation rules, x87 precision control, and FP8
+  saturation. Presets give the x86 SSE and x87 behavior.
+- **Flags.** The five IEEE 754 flags, and `TINY`, `ROUNDED_UP`, and
+  `DENORMAL_INPUT`, which emulators need.
+- **Vector lanes.** `Lanes<T, N>` applies each operation to the lanes of a
+  vector register and returns the union of the flags of the lanes.
+- **Fast where possible.** Where the build targets a floating-point unit
+  that gives the same bits, the operations without flags use it.
+- **Small.** `no_std`, no `alloc`, no dependencies, and no `unsafe` code
+  outside the host paths.
 
-## Planned Scope
+## Installation
 
-- **Binary formats** described by parameters: every IEEE 754 binary width up
-  to 512 bits, bfloat16, TF32, the FP8 variants (OCP E4M3 and E5M2, and the
-  FNUZ variants), and x87 80-bit extended precision.
-- **Decimal formats**: decimal32, decimal64, and decimal128, in both the BID
-  and the DPD encodings.
-- **Double-double**: bit-compatible with GCC's PowerPC `long double`, or with
-  the QD library.
-- **Correct rounding** for add, subtract, multiply, divide, square root,
-  fused multiply-add, and conversions.
-- **Platform behavior as data**: rounding direction, flush-to-zero,
-  denormals-are-zero, tininess detection, NaN rules, and x87 precision
-  control, with presets for x86 SSE and x87.
+floaty is not on crates.io. Add it as a Git dependency, and pin a revision:
 
-## Planned API
-
-Each type carries a default mode. A single operation can override it and get
-the flags back.
-
-```rust
-type F32 = Float<Binary<8>, 32>; // default mode: mode::Ieee
-
-let sum = a + b;                                        // default mode, flags dropped
-let (sum, flags) = a.add_with(b, Rounding::TowardZero); // one-operation override
-let (sum, flags) = a.add_with(b, Env::X86_SSE);         // behavior chosen at run time
-let (sum, flags) = a.add_with(b, mode::X86Sse);         // behavior fixed at compile time
+```toml
+[dependencies]
+floaty = { git = "https://github.com/napbat/floaty", rev = "<commit>" }
 ```
 
-## Workspace
+floaty needs Rust 1.85 or later.
+
+## Quick start
+
+Operators round with the default mode of the type and drop the flags. Each
+operation also has a `_with` form that takes a behavior and returns the
+flags.
+
+```rust
+use floaty::{F32, Flags, Rounding};
+
+let one = F32::from_bits(0x3F80_0000); // 1.0
+let tiny = F32::from_bits(0x3380_0000); // 2^-24, half an ulp of 1.0
+
+// The default mode rounds to nearest even, so the tie goes to 1.0.
+assert_eq!((one + tiny).to_bits(), 0x3F80_0000);
+
+// Override the rounding direction for one operation, and read the flags.
+let (sum, flags) = one.add_with(tiny, Rounding::TowardPositive);
+assert_eq!(sum.to_bits(), 0x3F80_0001);
+assert_eq!(flags, Flags::INEXACT | Flags::ROUNDED_UP);
+```
+
+## Formats
+
+A value has the type `Float<S, W, M>`: a standard `S`, a width of `W` bits,
+and a default mode `M`. A value is only its bits, like a value in a
+register. Type aliases name the common formats.
+
+| Alias | Format | Precision |
+| --- | --- | --- |
+| `F16`, `F32`, `F64`, `F128` | IEEE 754 binary16, binary32, binary64, binary128 | 11, 24, 53, 113 bits |
+| `F160` to `F512` | IEEE 754 binary formats in steps of 32 bits | 144 to 489 bits |
+| `BF16` | bfloat16 | 8 bits |
+| `TF32` | NVIDIA TensorFloat-32, 19 bits | 11 bits |
+| `F8E4M3`, `F8E5M2` | OCP FP8. E4M3 has no infinity. | 4, 3 bits |
+| `F8E4M3Fnuz`, `F8E5M2Fnuz` | FP8 with one NaN and no negative zero | 4, 3 bits |
+| `F80` | x87 extended precision, with an explicit integer bit | 64 bits |
+| `D32Bid`, `D64Bid`, `D128Bid` | IEEE 754 decimal formats, BID encoding | 7, 16, 34 digits |
+| `D32Dpd`, `D64Dpd`, `D128Dpd` | IEEE 754 decimal formats, DPD encoding | 7, 16, 34 digits |
+
+`Binary<E, Enc>` describes other binary layouts: 2 to 28 exponent bits `E`,
+at least one fraction bit, a width up to 512 bits, and an encoding of the
+special values, `Ieee`, `NoInf`, `Fnuz`, or `X87`. An invalid layout fails
+to compile.
+
+```rust
+use floaty::{Binary, Decoded, Float};
+
+// An 8-bit format with 4 exponent bits and IEEE special values.
+type Minifloat = Float<Binary<4>, 8>;
+
+assert_eq!((Minifloat::PRECISION, Minifloat::EMAX, Minifloat::EMIN), (4, 7, -6));
+let largest = Minifloat::from_bits(0x77).decode::<1>();
+assert_eq!(largest, Decoded::Finite { negative: false, exponent: 4, significand: [15] });
+```
+
+The formats without an infinity overflow to the NaN, or to the largest
+finite value when the behavior saturates:
+
+```rust
+use floaty::{F8E4M3, Flags};
+
+let largest = F8E4M3::from_bits(0x7E); // 448
+let (nan, flags) = largest.add_with(largest, F8E4M3::ENV);
+assert_eq!((nan.to_bits(), flags), (0x7F, Flags::OVERFLOW | Flags::INEXACT));
+
+let (saturated, _) = largest.add_with(largest, F8E4M3::ENV.with_saturate(true));
+assert_eq!(saturated.to_bits(), 0x7E);
+```
+
+## Behavior
+
+`Env` holds every setting that changes the bits of a result:
+
+| Field | Meaning |
+| --- | --- |
+| `rounding` | `NearestEven`, `NearestAway`, `TowardPositive`, `TowardNegative`, `TowardZero`, or `ToOdd` |
+| `flush_to_zero` | A tiny result becomes a zero (FTZ). |
+| `denormals_are_zero` | A subnormal operand reads as a zero (DAZ). |
+| `tininess` | Tininess detection before or after rounding. |
+| `nan` | The NaN that an operation returns: the propagation rule, the sign of the default NaN, and the fused multiply-add rules. |
+| `precision` | A precision limit below the format precision, as x87 precision control gives it. |
+| `saturate` | An overflow gives the largest finite value in a format without an infinity. |
+| `total_order` | How `total_cmp` orders two encodings of one value. |
+
+`Env::IEEE` is the IEEE 754 default. `Env::X86_SSE` and `Env::X87` give the
+behavior of those units after reset: for example, the negative default NaN.
+The builder methods change one field.
+
+```rust
+use floaty::{Env, F64, Flags};
+
+let zero = F64::from_bits(0);
+let (nan, flags) = zero.div_with(zero, F64::ENV);
+assert_eq!((nan.to_bits(), flags), (0x7FF8_0000_0000_0000, Flags::INVALID));
+
+// The SSE unit gives the negative QNaN floating-point indefinite.
+let (nan, _) = zero.div_with(zero, Env::X86_SSE);
+assert_eq!(nan.to_bits(), 0xFFF8_0000_0000_0000);
+
+// With FTZ, a tiny result becomes a zero and signals underflow.
+let smallest_normal = F64::from_bits(0x0010_0000_0000_0000);
+let half = F64::from_bits(0x3FE0_0000_0000_0000);
+let (flushed, flags) = smallest_normal.mul_with(half, Env::X86_SSE.with_flush_to_zero(true));
+assert_eq!(flushed.to_bits(), 0);
+assert_eq!(flags, Flags::UNDERFLOW | Flags::INEXACT | Flags::TINY);
+```
+
+An emulator builds an `Env` from the control register of each
+instruction:
+
+```rust
+use floaty::{Env, F32, Flags, Rounding};
+
+/// Runs `ADDSS` under an MXCSR value.
+fn addss(left: F32, right: F32, mxcsr: u32) -> (F32, Flags) {
+    let rounding = match (mxcsr >> 13) & 3 {
+        0 => Rounding::NearestEven,
+        1 => Rounding::TowardNegative,
+        2 => Rounding::TowardPositive,
+        _ => Rounding::TowardZero,
+    };
+    let env = Env::X86_SSE
+        .with_rounding(rounding)
+        .with_flush_to_zero(mxcsr & (1 << 15) != 0)
+        .with_denormals_are_zero(mxcsr & (1 << 6) != 0);
+    left.add_with(right, env)
+}
+
+let (one, tiny) = (F32::from_bits(0x3F80_0000), F32::from_bits(0x3380_0000));
+let (sum, _) = addss(one, tiny, 0x1F80 | (2 << 13));
+assert_eq!(sum.to_bits(), 0x3F80_0001);
+```
+
+floaty models the rules of a unit, not the quirks of one instruction. For
+example, `MINSS` returns its second operand for a NaN, and `CVTSS2SI`
+returns `0x8000_0000` for an out-of-range value. An emulator builds such an
+instruction from a comparison, or from the `ToInt` result.
+
+### Modes
+
+A mode is a behavior fixed at compile time. Each type carries a default
+mode, `mode::Ieee` unless the type names another. The engine compiles the
+common path of each operation once for each mode, with every field as a
+constant.
+
+```rust
+use floaty::mode::direction::TowardZero;
+use floaty::mode::switch::On;
+use floaty::mode::{FlushToZero, Rounded, X86Sse};
+use floaty::{Binary, Float, Rounding};
+
+// MXCSR with round toward zero and FTZ set.
+type Truncating = FlushToZero<Rounded<X86Sse, TowardZero>, On>;
+type Double = Float<Binary<11>, 64, Truncating>;
+
+assert_eq!(Double::ENV.rounding, Rounding::TowardZero);
+assert!(Double::ENV.flush_to_zero);
+```
+
+A `_with` method takes a `Rounding`, which changes only the direction, an
+`Env` chosen at run time, or a mode such as `mode::X86Sse`. `with_mode`
+gives the same bits with another default mode, at no cost.
+
+### Flags
+
+| Flag | Meaning |
+| --- | --- |
+| `INVALID`, `DIVIDE_BY_ZERO`, `OVERFLOW`, `UNDERFLOW`, `INEXACT` | The IEEE 754 exceptions. |
+| `TINY` | A rounded result or a remainder is tiny, even when exact. x86 needs this flag when the underflow exception is unmasked. |
+| `ROUNDED_UP` | The magnitude of the result is larger than the magnitude of the exact value. x87 reports this in C1. |
+| `DENORMAL_INPUT` | An operand was subnormal, before denormals-are-zero. x86 reports this as DE, and ARM as IDC. |
+
+## Conversions and integers
+
+`convert` rounds with the mode of the destination type. `to_int` and
+`from_int` convert to and from the primitive integers, and to and from
+`Int<BITS>` and `UInt<BITS>` of up to 512 bits.
+
+```rust
+use floaty::{BF16, D64Bid, Decoded, F32, F64, Flags, Rounding, ToInt};
+
+let pi = F32::from_bits(0x4049_0FDB);
+let rounded: BF16 = pi.convert();
+assert_eq!(rounded.to_bits(), 0x4049);
+
+assert_eq!(pi.to_int::<i32>(), ToInt::Value(3));
+let three_hundred = F32::from_bits(0x4396_0000);
+assert_eq!(three_hundred.to_int::<i8>(), ToInt::OutOfRange { negative: false });
+
+// binary64 0.1 is not 1/10. Its conversion to decimal64 rounds.
+let tenth = F64::from_bits(0x3FB9_9999_9999_999A);
+let (decimal, flags) = tenth.convert_with::<D64Bid>(Rounding::NearestEven);
+let expected = Decoded::Finite {
+    negative: false,
+    exponent: -16,
+    significand: [1_000_000_000_000_000],
+};
+assert_eq!((decimal.decode::<1>(), flags), (expected, Flags::INEXACT));
+```
+
+## Decimal formats
+
+A decimal value keeps its exponent: 3.30 and 3.3 are different encodings of
+one value. Every result takes the exponent that the IEEE 754 preferred
+exponent rules give.
+
+```rust
+use floaty::{D64Bid, D64Dpd, Decoded, Exact, Rounding};
+
+// Exact values round to a format. Here each price is exact.
+let price = |cents: u64| {
+    let exact = Exact { negative: false, exponent: -2, significand: [cents], sticky: false };
+    D64Bid::round(exact, Rounding::NearestEven).0
+};
+let total = price(110) + price(220);
+let expected = Decoded::Finite { negative: false, exponent: -2, significand: [330] };
+assert_eq!(total.decode::<1>(), expected);
+
+// The same value in the DPD encoding.
+let dpd: D64Dpd = total.convert();
+assert_eq!(dpd.decode::<1>(), expected);
+```
+
+## Double-double
+
+`DoubleDouble<Gcc>` matches the IBM `long double` of libgcc on PowerPC.
+`DoubleDouble<Qd>` matches `dd_real` of QD 2.3.24 on x86-64. Each follows
+the machine code of its reference, so the low halves, the NaN payloads, and
+the flags match too.
+
+```rust
+use floaty::{DoubleDouble, F64, Gcc};
+
+let one = DoubleDouble::<Gcc>::from_f64(F64::from_bits(0x3FF0_0000_0000_0000));
+let ulp = DoubleDouble::<Gcc>::from_f64(F64::from_bits(0x3CA0_0000_0000_0000)); // 2^-53
+
+// binary64 cannot hold 1 + 2^-53. The pair keeps it in the low half.
+let sum = one + ulp;
+assert_eq!(sum.hi().to_bits(), 0x3FF0_0000_0000_0000);
+assert_eq!(sum.lo().to_bits(), 0x3CA0_0000_0000_0000);
+let rounded: F64 = sum.convert();
+assert_eq!(rounded.to_bits(), 0x3FF0_0000_0000_0000);
+```
+
+## Lanes
+
+`Lanes<T, N>` holds the lanes of a vector register. Each lane gives the bits
+of the scalar operation. A `_with` method returns the union of the flags of
+the lanes, as a vector unit accumulates them.
+
+```rust
+use floaty::{Env, F32, Flags, Lanes};
+
+let x = Lanes::<F32, 4>::from_bits([0x3F80_0000, 0x7F7F_FFFF, 0x4000_0000, 0x4040_0000]);
+let y = Lanes::<F32, 4>::from_bits([0x3380_0000, 0x7F7F_FFFF, 0x4000_0000, 0x4040_0000]);
+let (sum, flags) = x.add_with(y, Env::X86_SSE);
+assert_eq!(sum.to_bits(), [0x3F80_0000, 0x7F80_0000, 0x4080_0000, 0x40C0_0000]);
+assert_eq!(flags, Flags::OVERFLOW | Flags::INEXACT | Flags::ROUNDED_UP);
+```
+
+## Hardware acceleration
+
+The engine computes every result in integer arithmetic. A host path
+computes an operation on the floating-point unit of the host instead, only
+where the unit gives the bits of the engine. The oracle tests check each
+path.
+
+- The build selects the host paths at compile time, from `target_arch` and
+  `target_feature`. floaty does not detect the processor at run time.
+  Enable more paths with `-C target-cpu` or `-C target-feature`, for
+  example `RUSTFLAGS="-C target-cpu=x86-64-v3"`.
+- Only the entry points without flags use a host path: the operators, and
+  the methods that drop the flags of the default mode. The `_with` methods
+  always run the engine.
+- The mode must round to nearest even without FTZ, DAZ, or a precision
+  limit below the format precision. `round_to_integral` also takes the
+  other directions that its instructions encode.
+- Each call reads MXCSR, the x87 control word, or FPCR. Another setting, or
+  an unmasked exception, sends the operation to the engine. So does a NaN
+  result: the engine selects the NaN by the rule of the mode.
+- Build with `RUSTFLAGS="--cfg floaty_engine_only"` to remove every host
+  path and all `unsafe` code.
+
+| Host path | Target feature | Formats and operations | Also goes to the engine |
+| --- | --- | --- | --- |
+| SSE | x86-64 with SSE2 | binary32 and binary64: `+`, `-`, `*`, `/`, `sqrt`, `convert` between them, `to_int`, `from_int`, comparisons, and the minimum and maximum operations | The integer indefinite; an unordered comparison; a minimum or maximum of a NaN or of two zeros |
+| SSE4.1 rounding | x86-64 with SSE4.1 | `round_to_integral` of binary32 and binary64, and through binary32 of bfloat16 and of binary16 with F16C, in every direction but `NearestAway` and `ToOdd` | |
+| FMA | x86-64 with FMA | `mul_add` of binary32 and binary64 | |
+| F16C | x86-64 with F16C | binary16 through binary32: `+`, `-`, `*`, `/`, `sqrt`, `to_int`, `from_int`, comparisons, and the minimum and maximum operations. `convert` from binary16 to binary32 and binary64, and from binary32 to binary16. | `mul_add`, and `convert` from binary64, which two roundings can get wrong |
+| bfloat16 | x86-64 with SSE2, or AArch64 | bfloat16 widened by a shift: `convert` to binary32 and binary64, `to_int`, `round_to_integral` with SSE4.1 on x86-64, comparisons, and the minimum and maximum operations | `from_int`, and the arithmetic without `FEAT_BF16` |
+| x87 | x86-64 | x87 extended: `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral` to nearest even, `to_int`, `from_int`, and `convert` to and from binary32 and binary64 | A control word other than round to nearest at 64-bit precision; the integer indefinite |
+| x87 remainder | x86-64 | `remainder` of binary32, binary64, and x87 extended, by `FPREM1` | A dividend exponent more than 630 above the divisor exponent; a subnormal dividend, or a divisor small enough to give a subnormal result |
+| Packed SSE and AVX | x86-64 with SSE2, and AVX for 256 bits | `Lanes` of binary32 and binary64: the operators, `sqrt`, `mul_add` with FMA, `round_to_integral` with SSE4.1, `convert` between them, `compare_quiet`, and the minimum and maximum operations. binary16 lanes with F16C, and bfloat16 `round_to_integral` and `convert`. | A NaN in any lane, or for the minimum and maximum a NaN or two zeros in any pair of lanes, sends each lane to its scalar path |
+| AArch64 | AArch64 | binary32, binary64, and binary16: `+`, `-`, `*`, `/`, `sqrt`, `convert`, `to_int`, `from_int`, `round_to_integral` in every direction but `ToOdd`, comparisons, and the minimum and maximum operations. `mul_add` of binary32 and binary64. | FPCR with a nonzero `RMode`, FZ, FZ16, FIZ, AH, AHP, or a trap enable; a saturated integer |
+| `FEAT_FP16` | AArch64 with `+fp16` | `mul_add` of binary16 | |
+| `FEAT_BF16` | AArch64 with `+bf16` | bfloat16 through binary32: `+`, `-`, `*`, `/`, `sqrt`, and `convert` from binary32 | `mul_add` |
+| Packed AArch64 | AArch64 | As the packed SSE paths, at 128 bits | As the packed SSE paths |
+| Double-double | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`, with one check of the environment for all steps | |
+
+[docs/x86-64-acceleration.md](docs/x86-64-acceleration.md) lists the x86-64
+instructions that could give more paths, and what blocks each one.
+
+## Performance
+
+Nanoseconds per operation on an Intel Core i9-9900K, from
+`cargo bench -p floaty-verify --bench operations`: the median of 11 samples
+of 1,024 operations on random normal operands. Figures change from run to
+run and from host to host.
+
+The engine, through the `_with` methods with an `Env` chosen at run time.
+Each cell gives floaty, then `rustc_apfloat` 0.2.3 where it has the format.
+
+| Format | add | mul | div | mul_add |
+| --- | --- | --- | --- | --- |
+| binary16 | 19.0 / 38.8 | 15.1 / 31.3 | 18.7 / 56.7 | 27.5 / 48.2 |
+| bfloat16 | 18.5 / 39.0 | 14.7 / 31.7 | 19.0 / 77.5 | 28.1 / 48.0 |
+| binary32 | 20.4 / 37.7 | 15.1 / 31.5 | 20.4 / 48.7 | 25.8 / 48.2 |
+| binary64 | 18.5 / 38.2 | 17.8 / 31.6 | 35.5 / 232.5 | 27.3 / 49.8 |
+| x87 extended | 28.1 / 36.2 | 19.8 / 31.8 | 55.5 / 279.5 | 39.0 / 47.1 |
+| binary128 | 24.3 / 33.3 | 22.9 / 31.4 | 68.8 / 460.6 | 39.9 / 49.0 |
+| binary256 | 45.0 | 43.2 | 132.8 | 69.8 |
+| binary512 | 64.2 | 91.0 | 269.2 | 153.5 |
+| decimal64, BID | 80.1 | 56.7 | 84.7 | 88.2 |
+| decimal128, BID | 82.8 | 75.0 | 120.5 | 129.5 |
+| decimal64, DPD | 102.4 | 77.3 | 111.6 | 109.3 |
+| decimal128, DPD | 123.1 | 115.3 | 163.2 | 172.9 |
+
+The entry points without flags, which take a host path where the build has
+one. A `Lanes` figure is per lane.
+
+| Operation | Engine | Default build | x86-64-v3 build | Host `f32` or `f64`, x86-64-v3 |
+| --- | --- | --- | --- | --- |
+| binary32 `+` | 20.4 | 1.9 | 1.9 | 0.8 |
+| binary64 `/` | 35.5 | 1.9 | 1.9 | 0.9 |
+| binary32 `mul_add` | 25.8 | 24.4 | 1.8 | 1.1 |
+| binary16 `+` | 19.0 | 16.7 | 2.4 | |
+| x87 extended `/` | 55.5 | 4.4 | 4.0 | |
+| `Lanes<F32, 8>` `+` | 17.0 | 0.4 | 0.2 | |
+| `Lanes<F16, 8>` `+` | 14.3 | 12.0 | 0.3 | |
+
+## Verification
+
+Every behavior has a test against an established reference. Where no
+implementation exists, a test evaluates the published definition from
+IEEE 754 or a vendor manual with MPFR or decNumber.
+
+| Reference | What it checks |
+| --- | --- |
+| Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in every direction, under four NaN rules |
+| MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of the formats that TestFloat lacks. Conversions between those formats and the decimal formats. |
+| `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, and `scale_b` |
+| `ml_dtypes` 0.6.0 | Every FP8 encoding and operand pair, as generated tables |
+| The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 tests run under QEMU 10.2.1. |
+| decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations, with FTZ, DAZ, and precision limits |
+| Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
+| libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
+| QD 2.3.24 | `DoubleDouble<Qd>` |
+
+The normal test run tests every FP8 operand pair of every operation. Ignored
+sweeps test every binary16 and bfloat16 operand pair of the host paths,
+every binary32 encoding, and all 318 million TestFloat `mulAdd` cases.
+A reference that disagrees with IEEE 754 or with the processor has a comment
+beside its test with the evidence and the resolution.
+
+## Platform support
+
+| Target | Status |
+| --- | --- |
+| `x86_64-unknown-linux-gnu` | Tested, in the baseline build and with `-C target-cpu=x86-64-v3` |
+| `aarch64-unknown-linux-gnu` | Tested under QEMU, without and with `+fp16,+bf16` |
+| Other targets | The engine has no target-specific code. The gates do not test these targets. |
+
+The minimum supported Rust version is 1.85. The crate uses edition 2024.
+
+## Limitations
+
+- No transcendental functions, such as `sin`, `exp`, and `log`.
+- No decimal text parsing or printing.
+- No `const fn` evaluation. The engine uses traits, which a `const fn` on
+  stable Rust cannot call.
+- No traps. floaty reports flags and never traps.
+- Presets for x86 SSE and x87 only.
+- QEMU stands in for POWER hardware in the `Gcc` tests.
+
+## Development
+
+The workspace has two packages:
 
 | Package | Purpose |
 | --- | --- |
 | `floaty` | The library. `no_std`, no dependencies. |
-| `floaty-verify` | The verification harness against TestFloat, MPFR, the host processor, and other references. Not a default member. |
+| `floaty-verify` | The oracle tests and the benchmark. Not a default member. |
 
-## Development
-
-Rust 1.85 or later, edition 2024. The verification harness runs on Linux
-x86-64 hosts and also needs the reference sources, `make`, `gcc`, `g++`
-15.2.0, `objcopy`, `m4`, `curl`, `tar`, `sha256sum`, `python3`,
-`powerpc64le-linux-gnu-gcc` 15.2.0, and `qemu-ppc64le` 10.2.1. The QD
-tests need a processor with FMA3. The first build downloads the decimal
-and QD references, so it needs network access once:
+`floaty-verify` builds its C references on Linux x86-64 only. It needs the
+submodules, a C and C++ toolchain, the PowerPC cross compiler, and QEMU.
+The first build downloads the decimal and QD archives. The AArch64 gates
+also need the AArch64 cross compiler.
 
 ```text
 git submodule update --init
+cargo test --workspace
+cargo bench -p floaty-verify --bench operations
 ```
 
-Run the quality gates from the workspace root:
+[AGENTS.md](AGENTS.md) lists the tools with their pinned releases, the
+quality gates of each build, and the contributor rules.
 
-```text
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
-cargo test --workspace --no-fail-fast
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
-```
+## License
 
-[AGENTS.md](AGENTS.md) holds the full contributor rules.
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or
+  <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.

@@ -1,5 +1,5 @@
 //! The host paths: operations on the floating-point unit of the host that give
-//! the bits of the engine. `DESIGN.md` lists each path and its rules.
+//! the bits of the engine. The README lists each path.
 //!
 //! The build selects the paths at compile time, from the target architecture
 //! and its features. One module in `host/` reads the floating-point

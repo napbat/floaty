@@ -36,6 +36,10 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     }
 
     /// Divides by `other`. Returns the quotient and the flags.
+    ///
+    /// A division by zero in a format without an infinity gives the NaN, or
+    /// the largest finite value when the behavior saturates, and signals
+    /// divide-by-zero.
     #[must_use]
     pub fn div_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) = S::div(self.bits, other.bits, behavior.apply::<M>());
@@ -153,8 +157,9 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     ///
     /// The remainder is exact, so the rounding direction, the precision limit,
     /// and flush-to-zero do not apply. A zero remainder has the sign of
-    /// `self`. An infinite `self` or a zero `divisor` is invalid. This is not
-    /// the Rust `%` operator, which truncates the quotient.
+    /// `self`. An infinite `self` or a zero `divisor` is invalid. A subnormal
+    /// remainder reports [`Flags::TINY`]. This is not the Rust `%` operator,
+    /// which truncates the quotient.
     #[must_use]
     pub fn remainder_with(self, divisor: Self, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) = S::remainder(self.bits, divisor.bits, behavior.apply::<M>());
@@ -168,7 +173,8 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     }
 
     /// Returns `self * RADIX^scale`, rounded, as IEEE 754 `scaleB` does.
-    /// Returns the result and the flags.
+    /// Returns the result and the flags. A scale beyond `2^30` in magnitude
+    /// acts as `2^30`, which overflows or underflows every format.
     #[must_use]
     pub fn scale_b_with(self, scale: i32, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) = S::scale_b(self.bits, scale, behavior.apply::<M>());
@@ -187,9 +193,10 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// The next value above a zero of either sign is the smallest positive
     /// subnormal value. In a format without an infinity, the value above the
     /// largest finite value is the NaN. When the behavior saturates, it is
-    /// the largest finite value itself. The step does not round, so the precision
-    /// limit and flush-to-zero do not apply. Only a signaling NaN or an unsupported encoding
-    /// signals invalid. A subnormal input reports
+    /// the largest finite value itself. The step does not round, so the
+    /// precision limit and flush-to-zero do not apply, and a subnormal result
+    /// reports no [`Flags::TINY`]. Only a signaling NaN or an unsupported
+    /// encoding signals invalid. A subnormal input reports
     /// [`Flags::DENORMAL_INPUT`], as for every operation.
     #[must_use]
     pub fn next_up_with(self, behavior: impl Override) -> (Self, Flags) {

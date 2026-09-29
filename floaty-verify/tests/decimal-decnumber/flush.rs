@@ -1,6 +1,6 @@
 //! Flush-to-zero and denormals-are-zero in the decimal formats. No decimal
-//! library has them, so the test applies each definition, from `DESIGN.md`,
-//! to decNumber's results.
+//! library has them, so the test applies each definition of floaty to
+//! decNumber's results.
 //!
 //! - DAZ reads a subnormal operand as a zero with its sign and its exponent.
 //!   The expected result is decNumber's result for the operands with each

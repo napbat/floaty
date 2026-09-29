@@ -16,13 +16,13 @@
 //!   signaling NaN stays signaling and signals nothing, and the DPD to BID
 //!   direction keeps the bits between the signaling bit and the payload.
 //!   floaty's `convert` is IEEE 754 `convertFormat`, which quiets a signaling
-//!   NaN and signals invalid, and returns a canonical encoding, as
-//!   `DESIGN.md` states. For a NaN result the test expects the result of the
-//!   library made quiet and canonical, and invalid for a signaling NaN.
+//!   NaN and signals invalid, and returns a canonical encoding. For a NaN
+//!   result the test expects the result of the library made quiet and
+//!   canonical, and invalid for a signaling NaN.
 //! - The library converts an x87 unnormal, pseudo-infinity, or pseudo-NaN as
 //!   the value of its bits. floaty follows the 387 and later processors,
-//!   which treat such an operand as invalid, as `DESIGN.md` states: the test
-//!   expects the default NaN and invalid.
+//!   which treat such an operand as invalid, as the Intel SDM, Volume 1,
+//!   section 8.2.2 states: the test expects the default NaN and invalid.
 //!
 //! The counts show how many cases each rule decides. The archive is pinned
 //! and the generators are seeded, so each test asserts the counts exactly.
@@ -586,11 +586,11 @@ fn conversions() -> Vec<Conversion> {
 }
 
 /// The rule for a NaN in a conversion between BID and DPD.
-const REENCODED_NAN: &str = "a quiet canonical NaN, and invalid for a signaling NaN (DESIGN.md)";
+const REENCODED_NAN: &str = "a quiet canonical NaN, and invalid for a signaling NaN (floaty)";
 
 /// The rule for an unsupported x87 operand.
 const UNSUPPORTED_X87: &str = "the default NaN and invalid for an unsupported x87 operand \
-     (DESIGN.md)";
+     (Intel SDM)";
 
 impl Conversion {
     /// Returns the flags of floaty that the library reports.
@@ -603,7 +603,7 @@ impl Conversion {
     }
 
     /// Returns the expected outcome for operand `x`, from the outcome of the
-    /// library, and the rule of `DESIGN.md` that changes it, if any.
+    /// library, and the rule of floaty that changes it, if any.
     fn expected(&self, x: u128, library: Outcome<u128>) -> (Outcome<u128>, Option<&'static str>) {
         match (self.source, self.target) {
             (Side::Binary(binary), Side::Bid(layout)) if binary.unsupported(x) => {

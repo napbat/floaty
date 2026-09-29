@@ -11,17 +11,17 @@
 //! - To binary: GMP reduces `C * 10^q` to an integer of at least `p + 3`
 //!   bits and a sticky bit, and the MPFR oracle rounds that input.
 //!
-//! The special values follow the conversion rules in `DESIGN.md`. A NaN
-//! result must be a quiet NaN with the sign of the source and the payload of
-//! the rule in `DESIGN.md`, in both directions: the payload bits align with
-//! the trailing significand field of the decimal format and keep their
-//! high-order bits, and a decimal payload above `10^(p - 1) - 1` becomes
-//! zero. The Intel library confirms that rule for binary32, binary64, x87
-//! extended, and binary128. The test computes the payload with GMP from the
-//! payload of the source, which floaty's `decode` gives. The binary decoding
-//! tests check that payload for the binary formats. For the decimal formats,
-//! every decimal operation reads its NaN operands as `decode` does, and the
-//! decTest and Intel tests check the payloads of those results bit for bit.
+//! The special values follow floaty's conversion rules. A NaN result must be
+//! a quiet NaN with the sign of the source and the payload of floaty's rule,
+//! in both directions: the payload bits align with the trailing significand
+//! field of the decimal format and keep their high-order bits, and a decimal
+//! payload above `10^(p - 1) - 1` becomes zero. The Intel library confirms
+//! that rule for binary32, binary64, x87 extended, and binary128. The test
+//! computes the payload with GMP from the payload of the source, which
+//! floaty's `decode` gives. The binary decoding tests check that payload for
+//! the binary formats. For the decimal formats, every decimal operation
+//! reads its NaN operands as `decode` does, and the decTest and Intel tests
+//! check the payloads of those results bit for bit.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -43,7 +43,7 @@ use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
 /// Returns the payload of a binary NaN converted from a decimal value, by
-/// the rule in `DESIGN.md`. The payload value of a decimal NaN is a field of
+/// floaty's rule. The payload value of a decimal NaN is a field of
 /// `trailing` bits. The binary payload is the fraction below the quiet bit.
 /// A format with one NaN encoding has no payload, and neither has a NaN that
 /// a finite value or an infinity gives.
@@ -62,7 +62,7 @@ fn binary_payload(source: &Decoded<2>, trailing: u32, format: &Format) -> Intege
 }
 
 /// Returns the expected result of converting a decoded binary value to a
-/// decimal format, by the conversion rules in `DESIGN.md`. A NaN payload of
+/// decimal format, by floaty's conversion rules. A NaN payload of
 /// the source is a field of `payload_bits` bits.
 fn binary_to_decimal<const N: usize>(
     source: &Decoded<N>,

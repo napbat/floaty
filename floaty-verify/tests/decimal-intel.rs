@@ -13,8 +13,9 @@
 //!   `DENORMAL_INPUT`, and the library must not set its denormal flag.
 //! - `nearbyint`, the `round_integral_*` functions other than
 //!   `round_integral_exact`, and the conversions to integers without `x` do
-//!   not signal inexact. floaty always reports `INEXACT`, as `DESIGN.md`
-//!   states, so the test drops it for those functions.
+//!   not signal inexact. floaty always reports `INEXACT`, as
+//!   `round_to_integral_with` and `to_int_with` state, so the test drops it
+//!   for those functions.
 //! - `lrint` and `llrint` are the `to_int64_x*` conversion in the direction
 //!   of the line, and `lround` and `llround` are `to_int64_rninta`, as the
 //!   library sources `bid*_lrintd.c` and `bid*_lround.c` define them.
@@ -26,7 +27,7 @@
 //! - `minnum` and `maxnum` of two operands that compare equal can return
 //!   either operand, and `readtest.c` accepts any result that compares equal
 //!   to the expected one. Where the operands and the expected result compare
-//!   equal, the rule of `DESIGN.md` decides the bits instead: see
+//!   equal, floaty's rule decides the bits instead: see
 //!   [`intel_decimal::equal_operand_choice`]. The test wants the exact bits
 //!   of the line otherwise.
 //! - `fma(x, y, z)` runs as `y.mul_add_with(x, z)`; see [`fused`].
@@ -100,7 +101,7 @@ enum Match {
     /// The bits are equal.
     Bits,
     /// The bits are equal. When the operands compare equal, the result of
-    /// the minimum or the maximum follows the rule of `DESIGN.md`.
+    /// the minimum or the maximum follows floaty's rule.
     EqualOperands(Extremum),
 }
 
@@ -114,8 +115,8 @@ struct Verdict {
 }
 
 /// The rule for `minnum` and `maxnum` of operands that compare equal.
-const EQUAL_OPERANDS: &str = "DESIGN.md for operands that compare equal: -0 below +0, and the \
-     members of a cohort in totalOrder";
+const EQUAL_OPERANDS: &str = "floaty's rule for operands that compare equal: -0 below +0, and \
+     the members of a cohort in totalOrder";
 
 /// The comparison of a line, or why its fields cannot be read.
 type Checked = Result<Verdict, String>;
@@ -264,8 +265,8 @@ where
     };
     let expected = narrow::<F>(expected);
     // `readtest.in` is the oracle for the value and the flags. IEEE 754 lets
-    // either operand be the result, so the rule of `DESIGN.md`, with the
-    // order of the library's `totalOrder`, decides the bits.
+    // either operand be the result, so floaty's rule, with the order of the
+    // library's `totalOrder`, decides the bits.
     let equal = |a: F::Bits, b: F::Bits| F::compare(a, b, Predicate::QuietEqual).value;
     if equal(x, y) && equal(expected, x) {
         let choice = intel_decimal::equal_operand_choice::<F>(x, y, extremum);
@@ -610,9 +611,8 @@ where
 ///
 /// The library takes the NaN of `y`, then of `z`, then of `x`. floaty takes
 /// the NaN of the first factor, then of the second, then of the addend, so
-/// the test passes the factors as `y * x`, as `DESIGN.md` maps an
-/// instruction to `mul_add`. [`fma_nan_order`] finds the lines where the
-/// orders still differ.
+/// the test passes the factors as `y * x`. [`fma_nan_order`] finds the
+/// lines where the orders still differ.
 fn fused<F, const W: usize>(line: &Line) -> Checked
 where
     F: Format<Bits = Bits<W>>,
@@ -629,8 +629,8 @@ where
 
 /// Returns whether an `fma` line has NaN operands `x` and `z` and a number
 /// `y`. The library then returns the NaN of `z`, and floaty the NaN of the
-/// factor `x`: `DESIGN.md` selects the NaN of the factors before the NaN of
-/// the addend.
+/// factor `x`: `FusedNanOrder::ProductFirst` selects the NaN of the factors
+/// before the NaN of the addend.
 fn fma_nan_order<F: Format>(line: &Line) -> Result<bool, String> {
     let nan = |index| -> Result<bool, String> {
         let class = F::class(operand::<F>(line, index)?);
@@ -683,8 +683,7 @@ impl Skip {
             Self::Conversion => "a conversion between formats: decimal-intel-conversions.rs",
             Self::FmaNanOrder => {
                 "fma with NaN x and z and a number y: the library returns the NaN of z, floaty \
-                 the NaN of the factors first (DESIGN.md: mul_add selects a NaN in SoftFloat's \
-                 order)"
+                 the NaN of the factors first (FusedNanOrder::ProductFirst, SoftFloat's order)"
             }
         }
     }

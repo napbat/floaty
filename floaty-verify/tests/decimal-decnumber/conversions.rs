@@ -4,9 +4,9 @@
 //! decNumber converts a NaN without quieting it, and a narrowing keeps the
 //! low-order payload digits. IEEE 754 `convertFormat` quiets a signaling
 //! NaN and signals invalid, and floaty keeps the high-order payload digits,
-//! as `DESIGN.md` records under "NaN Payloads in Conversions". So for a NaN
-//! the test takes the sign and the payload digits of decNumber's string of
-//! the operand, and applies that rule.
+//! as the Intel decimal library does. So for a NaN the test takes the sign
+//! and the payload digits of decNumber's string of the operand, and applies
+//! that rule.
 //!
 //! A widening copies a non-canonical declet or special value, and floaty
 //! gives the canonical encoding of the number. So the expected result is
@@ -24,9 +24,8 @@ use super::{
     direction, flags_of,
 };
 
-/// The note of a NaN operand, which the payload rule of `DESIGN.md`
-/// checks.
-const NAN_NOTE: &str = "a NaN, with the payload rule of DESIGN.md";
+/// The note of a NaN operand, which floaty's payload rule checks.
+const NAN_NOTE: &str = "a NaN, with floaty's payload rule";
 
 /// Returns the NaN that a conversion from format `S` to format `T` gives
 /// for a NaN operand, from decNumber's string of the operand. The result is

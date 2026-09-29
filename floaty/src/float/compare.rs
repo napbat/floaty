@@ -10,6 +10,9 @@ use crate::host::{self, Kind};
 
 /// Defines a minimum or maximum operation: a method with the default mode and
 /// a `_with` method that returns the flags.
+///
+/// The method has no `#[inline]` hint. With the hint, the engine minimum of
+/// x87 extended precision took 7.6 ns instead of 6.6 ns in the benchmark.
 macro_rules! min_max {
     ($name:ident, $with:ident, $operation:ident, $summary:literal) => {
         #[doc = concat!("Returns ", $summary, ", with the default mode.")]
@@ -28,7 +31,9 @@ macro_rules! min_max {
         ///
         /// The result is an operand in its canonical encoding, or a NaN that
         /// the NaN rule selects. `-0` orders below `+0`. The operation does
-        /// not round.
+        /// not round, and reports no [`Flags::TINY`]. With denormals-are-zero,
+        /// a subnormal operand reads as a zero, so the result can be that
+        /// zero.
         #[must_use]
         pub fn $with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
             let (bits, flags) = S::min_max(

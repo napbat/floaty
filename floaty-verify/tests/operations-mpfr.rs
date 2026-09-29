@@ -1,4 +1,4 @@
-//! Compares the operations of build step 4 with the oracle in
+//! Compares the operations beyond arithmetic with the oracle in
 //! `floaty_verify::operations`, for every operand pair and every operand of
 //! the FP8 formats, in every behavior of `operations::BEHAVIORS`.
 //!
@@ -95,7 +95,7 @@ fn every_fp8_pair_remainder() {
 }
 
 /// The scales of `scale_b`: every scale that moves an FP8 value across its
-/// whole range, and the extremes, where `DESIGN.md` clamps at `2^30`.
+/// whole range, and the extremes, where floaty clamps at `2^30`.
 fn scales() -> Vec<i32> {
     let mut scales: Vec<i32> = (-40..=40).collect();
     scales.extend([

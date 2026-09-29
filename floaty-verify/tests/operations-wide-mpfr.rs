@@ -1,4 +1,4 @@
-//! Compares the operations of build step 4 with the oracle in
+//! Compares the operations beyond arithmetic with the oracle in
 //! `floaty_verify::operations`, for the wider formats: bfloat16, TF32, a
 //! 72-bit layout whose exponent field crosses a limb boundary, x87 extended
 //! precision with precision control, binary256, and binary512. It also
@@ -259,7 +259,7 @@ struct Plan<'a, S: Standard<W>, const W: usize> {
     seed: u64,
 }
 
-/// Checks every step 4 operation on the samples of a format.
+/// Checks every operation beyond arithmetic on the samples of a format.
 fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
     let layout = plan.layout;
     let format = format::<S, W>(Specials::Ieee);

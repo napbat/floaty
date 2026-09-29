@@ -6,7 +6,7 @@
 //! `TotalOrder::Datum` floaty must give that order. With
 //! `TotalOrder::Encoding` it must give that order for two data, and the
 //! order of the bits below the sign for two encodings of one datum, reversed
-//! for a negative sign, as `DESIGN.md` states.
+//! for a negative sign, as `TotalOrder::Encoding` states.
 
 use std::cmp::Ordering;
 

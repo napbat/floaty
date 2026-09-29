@@ -1,5 +1,5 @@
 //! An arithmetic oracle: MPFR computes the finite results, and the special
-//! values follow IEEE 754 and the rules in `DESIGN.md`.
+//! values follow IEEE 754 and the rules of floaty's `Env`.
 //!
 //! MPFR computes each result at the format precision plus 64 bits, rounded
 //! toward zero, with a sticky bit for the lost bits. The rounding oracle in

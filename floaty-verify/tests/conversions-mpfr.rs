@@ -1,8 +1,8 @@
 //! Compares conversions from the formats that TestFloat lacks, bfloat16,
 //! TF32, the FP8 formats, and binary256 and binary512, with the MPFR oracle.
 //!
-//! MPFR rounds the finite values. The special values follow the conversion
-//! rules in `DESIGN.md`. TestFloat checks NaN payloads for the IEEE formats,
+//! MPFR rounds the finite values. The special values follow floaty's
+//! conversion rules. TestFloat checks NaN payloads for the IEEE formats,
 //! so this test checks only that a NaN is a NaN with the right sign.
 
 // The references of this test build only for x86-64.

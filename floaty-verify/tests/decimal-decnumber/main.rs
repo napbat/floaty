@@ -43,16 +43,20 @@
 //!   the truncating `divideint` and `remainder`, `maxmag`, `minmag`,
 //!   `nexttoward`, and the text conversions.
 //! - decNumber gives `Division_impossible` when the integer quotient of
-//!   `remaindernear` has more than `p` digits. floaty follows IEEE 754 and
-//!   gives the exact remainder, as `DESIGN.md` records.
+//!   `remaindernear` has more than `p` digits, as `decBasic.c` of decNumber
+//!   3.68 does at lines 591 to 595. floaty follows IEEE 754 and gives the
+//!   exact remainder, as the Intel decimal library does: `1E+384`
+//!   remaindernear `1` is `0`. The test identifies these cases by the
+//!   condition of decNumber, not by floaty's result, and counts them.
 //! - floaty's `scale_b` takes an `i32`. decNumber takes a scale operand that
 //!   is an integer with exponent 0, up to `2 * (emax + p)`, and signals
 //!   invalid for every other operand.
 //! - A fused multiply-add with a signaling NaN factor and a different
-//!   signaling NaN addend. floaty selects the NaN in SoftFloat's order, as
-//!   `DESIGN.md` records, so the quiet NaN of the factors meets the addend
-//!   and the addend wins. decNumber gives the first signaling NaN. IEEE
-//!   754-2019 section 6.2.3 does not say which NaN gives the payload.
+//!   signaling NaN addend. floaty selects the NaN in SoftFloat's order,
+//!   `FusedNanOrder::ProductFirst`, so the quiet NaN of the factors meets
+//!   the addend and the addend wins. decNumber gives the first signaling
+//!   NaN. IEEE 754-2019 section 6.2.3 does not say which NaN gives the
+//!   payload.
 //!
 //! Every fact that decides a skip or a note comes from decNumber: its class
 //! names and its scientific strings, not floaty's classification.
@@ -134,8 +138,8 @@ fn flags_of(status: Status) -> Flags {
     .fold(Flags::NONE, |all, (_, flag)| all | flag)
 }
 
-/// The rule by which an operation reports `TINY` and `ROUNDED_UP`, from
-/// `DESIGN.md`.
+/// The rule by which floaty reports `TINY` and `ROUNDED_UP` for an
+/// operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Report {
     /// A rounded operation: `TINY` when the exact result is not zero and

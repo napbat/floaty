@@ -15,7 +15,7 @@ use crate::mpfr::Format;
 ///
 /// IEEE 754-2019 section 5.11: zeros of either sign are equal, a NaN is
 /// unordered, and a quiet predicate signals invalid only for a signaling
-/// NaN. `DESIGN.md` adds that an unsupported encoding is unordered and
+/// NaN. floaty adds that an unsupported encoding is unordered and
 /// signals invalid.
 #[must_use]
 pub fn compare_quiet<const N: usize>(
@@ -63,7 +63,7 @@ pub fn compare_signaling<const N: usize>(
 /// orders below a quiet NaN, and a smaller payload below a larger one; the
 /// negative NaNs order in reverse. The NaN of `Fnuz` is negative.
 ///
-/// An encoding that is not canonical orders by the rules in `DESIGN.md`.
+/// An encoding that is not canonical orders by the rules of `TotalOrder`.
 /// With `TotalOrder::Encoding` it orders by the sign bit, and then by the
 /// magnitude bits. With `TotalOrder::Datum` an x87 pseudo-denormal is its
 /// datum, the equal normal value, and an unsupported encoding orders by the
@@ -198,7 +198,7 @@ impl MinMax {
 /// IEEE 754-2019 section 9.6: `minimum` gives a NaN for a NaN operand, and
 /// `minimumNumber` gives the number and signals invalid for a signaling NaN.
 /// IEEE 754-2008 section 5.3.1: `minNum` gives the number for a quiet NaN and
-/// a NaN for a signaling NaN. `DESIGN.md` orders `-0` below `+0` in every
+/// a NaN for a signaling NaN. floaty orders `-0` below `+0` in every
 /// family, and returns the operand in its canonical encoding.
 #[must_use]
 pub fn min_max<const N: usize>(

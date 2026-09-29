@@ -2,7 +2,7 @@
 //! MPFR: `decode`, conversion to binary and decimal formats, and the
 //! comparisons.
 //!
-//! MPFR adds the two halves exactly. The special values follow `DESIGN.md`:
+//! MPFR adds the two halves exactly. The special values follow floaty's rule:
 //! a NaN or an infinite high half gives that value; with a finite high half,
 //! a NaN or an infinite low half gives that value; and a zero sum takes the
 //! sign of the high half. The conversion rules for the special values are the

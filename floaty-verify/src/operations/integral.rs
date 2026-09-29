@@ -59,7 +59,7 @@ fn integral_flags(value: &BigFloat, integral: &BigFloat) -> Flags {
 ///
 /// IEEE 754-2019 section 5.9 `roundToIntegralExact`: a zero or an infinity
 /// does not change, and a result that differs from the operand signals
-/// inexact. `DESIGN.md` adds `ROUNDED_UP`, and the precision limit and
+/// inexact. floaty adds `ROUNDED_UP`, and the precision limit and
 /// flush-to-zero do not apply. An integer above the largest finite value of
 /// the format overflows as the rounding oracle gives it.
 ///
@@ -113,7 +113,7 @@ pub fn round_to_integral<const N: usize>(
 /// type `I`.
 ///
 /// IEEE 754-2019 section 5.8 `convertToIntegerExact`: the value rounds in
-/// the direction of the behavior. `DESIGN.md` gives `Nan` for a NaN or an
+/// the direction of the behavior. floaty gives `Nan` for a NaN or an
 /// unsupported encoding, and `OutOfRange` with the sign of the float for an
 /// infinity or a rounded value outside the range of `I`. Both signal invalid
 /// and not inexact. A value that fits signals `INEXACT` and `ROUNDED_UP` as

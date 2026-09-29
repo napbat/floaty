@@ -1,4 +1,5 @@
-//! Checks that compare the step 4 operations of floaty with the oracle.
+//! Checks that compare the operations beyond arithmetic of floaty with the
+//! oracle.
 //!
 //! Each check panics with the operation, the operands, and the behavior when
 //! floaty differs from the oracle. A float result must also be canonical.

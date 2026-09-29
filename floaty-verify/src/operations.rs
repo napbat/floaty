@@ -1,15 +1,15 @@
-//! An oracle for the operations of build step 4: comparison, total order,
+//! An oracle for the operations beyond arithmetic: comparison, total order,
 //! minimum and maximum, rounding to an integral value, conversion to and from
 //! an integer, the remainder, scaling by a power of two, the next value up or
 //! down, and the sign operations.
 //!
 //! MPFR computes each finite result. The operations that do not round get the
 //! exact MPFR value, and the others round with the oracle in [`crate::mpfr`].
-//! IEEE 754-2019 and the rules in `DESIGN.md` give the special values, the
-//! flags, and the NaN that each rule selects.
+//! IEEE 754-2019 and the documented rules of floaty give the special values,
+//! the flags, and the NaN that each rule selects.
 //!
 //! The oracle reads its operands with floaty's own `decode` and `classify`,
-//! which the step 1 oracles check, as [`crate::arithmetic`] does.
+//! which `tests/classification.rs` checks, as [`crate::arithmetic`] does.
 
 use core::cmp::Ordering;
 use core::num::NonZeroU32;
@@ -28,11 +28,11 @@ pub mod check;
 pub mod compare;
 pub mod integral;
 
-/// The behaviors of the step 4 tests. Together they use every rounding
+/// The behaviors of the operation tests. Together they use every rounding
 /// direction, every NaN rule, both tininess rules, flush-to-zero,
 /// denormals-are-zero, saturation, and a precision limit. Each operation
-/// ignores the fields that `DESIGN.md` says do not apply to it, so every
-/// behavior also checks that those fields change nothing.
+/// ignores the fields that its documentation says do not apply to it, so
+/// every behavior also checks that those fields change nothing.
 pub const BEHAVIORS: [Env; 8] = [
     Env::IEEE,
     Env::IEEE
@@ -295,11 +295,11 @@ fn default_nan(format: &Format, env: &Env) -> Outcome {
 /// made quiet, and `INVALID` when an operand is a signaling NaN. At least one
 /// operand is a NaN.
 ///
-/// The rules are those of `DESIGN.md` and the documentation of
-/// `NanPropagation`: `SignalingFirst` takes the first signaling NaN, or else
-/// the first NaN. `FirstOperand` takes the first NaN. `LargerSignificand`
-/// takes a quiet NaN before a signaling NaN, then the larger payload, then
-/// the positive sign. `DefaultNan` gives the default NaN.
+/// The rules are those of the documentation of `NanPropagation`:
+/// `SignalingFirst` takes the first signaling NaN, or else the first NaN.
+/// `FirstOperand` takes the first NaN. `LargerSignificand` takes a quiet NaN
+/// before a signaling NaN, then the larger payload, then the positive sign.
+/// `DefaultNan` gives the default NaN.
 fn propagate(operands: &[Read], format: &Format, env: &Env) -> (Outcome, Flags) {
     let nans: Vec<(bool, bool, &Integer)> = operands
         .iter()
@@ -359,7 +359,7 @@ fn special_operands(operands: &[Read], format: &Format, env: &Env) -> Option<(Ou
 }
 
 /// Returns `TINY` for a nonzero finite value below the smallest normal
-/// magnitude. `DESIGN.md` reports `TINY` for a subnormal remainder.
+/// magnitude. floaty reports `TINY` for a subnormal remainder.
 fn tiny(value: &BigFloat, format: &Format) -> Flags {
     let smallest_normal = BigFloat::with_val(2, 1) << format.emin;
     if value.is_normal() && *value.as_abs() < smallest_normal {
@@ -375,7 +375,7 @@ fn tiny(value: &BigFloat, format: &Format) -> Flags {
 /// integer nearest `x / y`, and the even one at a tie. MPFR computes it
 /// exactly. The remainder of a finite `x` by an infinity is `x`, and a zero
 /// remainder has the sign of `x`. Section 7.2 makes an infinite `x` or a zero
-/// `y` invalid. `DESIGN.md` reports `TINY` for a subnormal result; the
+/// `y` invalid. floaty reports `TINY` for a subnormal result; the
 /// rounding direction, the precision limit, and flush-to-zero do not apply.
 ///
 /// # Panics
@@ -416,7 +416,7 @@ pub fn remainder<const N: usize>(
 /// The largest scale magnitude that the oracle applies. The exponent range
 /// of every format spans less than `2^23`, so a larger scale overflows or
 /// underflows past every rounding boundary, and gives the same result as the
-/// clamp of `DESIGN.md` at `2^30`. The smaller limit keeps the MPFR exponent
+/// clamp of floaty at `2^30`. The smaller limit keeps the MPFR exponent
 /// inside its default range.
 const SCALE_LIMIT: i32 = 1 << 24;
 
@@ -478,8 +478,8 @@ pub enum Direction {
 /// the rounded value is the neighbor. An infinity reads as a value past the
 /// largest finite value. In a format without an infinity, the value past the
 /// largest finite value is the NaN, or with `saturate` set the largest
-/// finite value itself, as `DESIGN.md` says. Only a signaling NaN or an
-/// unsupported encoding signals.
+/// finite value itself. Only a signaling NaN or an unsupported encoding
+/// signals.
 ///
 /// # Panics
 ///
@@ -545,8 +545,8 @@ pub fn next<const N: usize>(
 }
 
 /// Returns the expected encoding of a sign operation: the encoding with its
-/// sign bit set to `negative`. `DESIGN.md`: a zero and the NaN of `Fnuz` have
-/// one encoding each, so they do not change.
+/// sign bit set to `negative`. A zero and the NaN of `Fnuz` have one
+/// encoding each, so they do not change.
 #[must_use]
 pub fn with_sign(sample: &Sample<8>, specials: Specials, negative: bool) -> Integer {
     let sign = sample.width - 1;

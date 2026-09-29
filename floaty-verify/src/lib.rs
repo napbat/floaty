@@ -1,7 +1,7 @@
 //! Verification harness for `floaty`.
 //!
 //! The harness compares `floaty` against established reference
-//! implementations. `DESIGN.md` at the repository root lists which reference
+//! implementations. The README at the repository root lists which reference
 //! checks which format. The tests live in `tests/`, and this library holds
 //! what the tests share.
 //!

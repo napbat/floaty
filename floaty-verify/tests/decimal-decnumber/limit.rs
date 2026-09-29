@@ -5,8 +5,8 @@
 //! digits, in the six shared rounding modes. The test compares the result
 //! bits, the five IEEE 754 flags, `TINY`, and `ROUNDED_UP`.
 //!
-//! No decimal library has a precision limit, so the test applies the rule
-//! of `DESIGN.md` to decNumber's results. The limit moves only the rounding
+//! No decimal library has a precision limit, so the test applies floaty's
+//! rule to decNumber's results. The limit moves only the rounding
 //! position. `decnumber::limited` rounds the exact result once to `L`
 //! digits with the exponent range of the format and no clamp: the
 //! subnormal quantum is `10^(emin - L + 1)`, a result overflows when its
@@ -141,7 +141,7 @@ fn nearest<F: Arithmetic>(coefficient: u128, exponent: i32, preferred: i64) -> (
     (coefficient * power_of_ten(shift), chosen)
 }
 
-/// Returns the encoding that the rule of `DESIGN.md` gives to decNumber's
+/// Returns the encoding that floaty's rule gives to decNumber's
 /// result at a precision limit, with its status and the preferred exponent
 /// of the operation.
 fn represent<F: Arithmetic>(text: &str, status: Status, preferred: i64, limit: u32) -> F::Bits {

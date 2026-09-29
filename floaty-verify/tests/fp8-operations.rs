@@ -5,18 +5,19 @@
 //! `np.nextafter` steps toward a target. The table uses the infinities as
 //! targets, or the largest finite values of a format without an infinity.
 //! There `np.nextafter` of the largest value gives the value itself, so the
-//! test checks that value by the rule of `DESIGN.md` instead: the NaN, or the
+//! test checks that value by floaty's rule instead: the NaN, or the
 //! largest value when the behavior saturates.
 //!
-//! `ml_dtypes` differs from `DESIGN.md` in two cases, which the test checks
-//! by `DESIGN.md` only:
+//! `ml_dtypes` 0.6.0 differs from floaty in two cases, which the test checks
+//! by floaty's rules only:
 //!
 //! - `np.nextafter` of a NaN gives a canonical NaN without the sign and the
 //!   payload of the operand (E4M3 `0xFF` gives `0x7F`). A result with a NaN
 //!   operand only has to be a NaN.
 //! - `np.copysign` of the FNUZ zero and a negative sign gives `0x80`, the
 //!   NaN, although `np.negative` keeps the zero. The FNUZ formats have no
-//!   negative zero, and `DESIGN.md` keeps the one zero encoding.
+//!   negative zero, and IEEE 754-2019 section 5.5.1 changes only the sign
+//!   bit, so floaty keeps the one zero encoding.
 
 use floaty::format::Standard;
 use floaty::{Binary, Env, Float, Fnuz, NoInf};
@@ -36,7 +37,7 @@ struct Limit {
 }
 
 /// Checks `next_up` or `next_down` of one operand against the table, and
-/// against `DESIGN.md` at the limit.
+/// against floaty's rule at the limit.
 fn check_next<S: Standard<8, Bits = u8>>(
     x: Float<S, 8>,
     (result, saturated): (Float<S, 8>, Float<S, 8>),

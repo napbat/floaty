@@ -7,7 +7,7 @@ This record compares three things for each operation of `Lanes`:
 - the gap between the two.
 
 It also lists the operations of `Float` that `Lanes` does not have.
-`DESIGN.md` lists the host paths that exist. This record lists the host
+The README lists the host paths that exist. This record lists the host
 paths that could exist, and what blocks each one.
 
 The record describes the branch `x86-64-gaps` on 2026-09-29, which closed
@@ -176,7 +176,7 @@ A mode is a type, so an operation in another mode compiles to the engine.
   does not support `avx512f`, and under `-cpu max` a binary with `VADDPS`
   on a 512-bit register stops with an illegal instruction. An AVX-512 path
   needs Intel SDE or a processor with AVX-512 for its oracle tests. A new
-  build in the gates is a design change.
+  build needs its own gates in `AGENTS.md`.
 - Stable Rust 1.85, the minimum version of floaty, never sets
   `cfg(target_feature = "avx512f")` or the other AVX-512 features. Rust
   1.89 made them stable. A path at AVX-512F, AVX512_BF16, AVX512-FP16, or
@@ -186,8 +186,8 @@ A mode is a type, so an operation in another mode compiles to the engine.
 ## Manual Conflicts
 
 The Intel manuals disagree with themselves in three places that a future
-path would depend on. Each conflict needs a record in `docs/anomalies/`,
-with evidence from hardware, before a host path depends on it.
+path would depend on. Each conflict needs evidence from hardware, recorded
+beside the test that checks it, before a host path depends on it.
 
 1. Chapter 4 of the AVX512-FP16 specification says that binary16 operands
    never flush and never read as zero. The executable specification of the

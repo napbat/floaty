@@ -136,9 +136,12 @@ pub fn run(
 /// signaling NaN.
 ///
 /// SoftFloat 3e's ARM-VFPv2 `softfloat_propagateNaNExtF80UI` never quiets
-/// the NaN it returns: its line `uiZ.v0 | UINT64_C( 0xC000000000000000 );`
-/// discards the result. `docs/anomalies/softfloat-arm-extf80-nan-quieting.md`
-/// records the bug. Every other value passes through unchanged.
+/// the NaN it returns: line 79 of `s_propagateNaNExtF80UI.c`,
+/// `uiZ.v0 | UINT64_C( 0xC000000000000000 );`, discards its result. Every
+/// other specialization sets the quiet bit, and IEEE 754-2019 section 6.2
+/// requires a quiet NaN. No ARM processor has the x87 format, so no hardware
+/// shows the combination. The flags stay as TestFloat gives them. Every
+/// other value passes through unchanged.
 #[must_use]
 pub fn quiet_extended_nan(bits: u128) -> u128 {
     let exponent = (bits >> 64) & 0x7FFF;
