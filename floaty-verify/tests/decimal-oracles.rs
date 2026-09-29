@@ -10,6 +10,9 @@
 //! A pass shows that the downloads, the builds, the FFI, and the parsers are
 //! right. The skip counts show which cases later floaty tests can use.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use std::collections::BTreeMap;
 
 use floaty_verify::decnumber::{Arithmetic, Double, Format, Outcome, Quad, Single, Status};

@@ -1,6 +1,9 @@
 //! Compares classification and decoded values with `rustc_apfloat`, the Rust
 //! port of LLVM APFloat, and with the host `f32` and `f64` types.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use floaty::{BF16, Binary, Class, F8E4M3, F8E5M2, F16, F32, F64, F80, F128, Float, NoInf, TF32};
 use floaty_verify::apfloat::{Tf32, check_value, class};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};

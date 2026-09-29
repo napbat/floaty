@@ -8,6 +8,9 @@
 //! `DefaultNan` rule. A run with the default mode in one rounding direction
 //! also converts with the static mode `Rounded<Ieee, R>` as the behavior.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use floaty::env::NanRule;
 use floaty::{Env, F16, F32, F64, F80, F128, Flags};
 use floaty_verify::testfloat::{

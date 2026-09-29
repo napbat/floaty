@@ -7,21 +7,38 @@
 //!
 //! The harness is not a default workspace member, because its references
 //! need a C toolchain. Run it with `cargo test -p floaty-verify`.
+//!
+//! The C references, MPFR, and the x86 hardware build only for x86-64. On
+//! another target, the harness has the modules that need none of them, and
+//! the tests that use only those.
 
+#[cfg(target_arch = "aarch64")]
+pub mod aarch64;
 pub mod apfloat;
+#[cfg(target_arch = "x86_64")]
 pub mod arithmetic;
+#[cfg(target_arch = "x86_64")]
 pub mod decnumber;
+#[cfg(target_arch = "x86_64")]
 pub mod dectest;
 pub mod encodings;
+#[cfg(target_arch = "x86_64")]
 pub mod ibm_ldouble;
+#[cfg(target_arch = "x86_64")]
 pub mod intel_decimal;
 pub mod modes;
+#[cfg(target_arch = "x86_64")]
 pub mod mpfr;
+#[cfg(target_arch = "x86_64")]
 pub mod operations;
+#[cfg(target_arch = "x86_64")]
 pub mod qd;
 pub mod random;
+#[cfg(target_arch = "x86_64")]
 pub mod readtest;
+#[cfg(target_arch = "x86_64")]
 pub mod shape;
+#[cfg(target_arch = "x86_64")]
 pub mod testfloat;
 #[cfg(target_arch = "x86_64")]
 pub mod x86;

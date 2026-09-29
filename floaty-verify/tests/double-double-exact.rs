@@ -8,6 +8,9 @@
 //! sign of the high half. The conversion rules for the special values are the
 //! rules that the MPFR conversion oracles already check.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use core::cmp::Ordering;
 use core::num::NonZeroU32;
 

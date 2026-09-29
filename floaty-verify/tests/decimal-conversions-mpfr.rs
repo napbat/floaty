@@ -23,6 +23,9 @@
 //! every decimal operation reads its NaN operands as `decode` does, and the
 //! decTest and Intel tests check the payloads of those results bit for bit.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use core::num::NonZeroU32;
 
 use floaty::env::Tininess;

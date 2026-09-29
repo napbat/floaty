@@ -9,9 +9,12 @@
 //! NaN rules, which do not depend on the direction. Two- and three-operand
 //! functions use TestFloat level 1, and square root uses level 2.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use core::num::NonZeroU32;
 
-use floaty::env::Tininess;
+use floaty::env::{NanRule, Tininess};
 use floaty::{Env, F16, F32, F64, F80, F128, Rounding, mode};
 use floaty_verify::testfloat::{
     self, ARM, ARM_DEFAULT_NAN, DEFAULT_NAN_RULE, ROUNDINGS, SSE, SSE_RULE, TININESS, X87,
@@ -114,11 +117,49 @@ fn has_static_mode(env: Env) -> bool {
     env == Env::IEEE.with_rounding(env.rounding)
 }
 
+/// Returns `true` when two NaN rules give the same NaN for one or two
+/// operands.
+fn same_rule(run: NanRule, mode: NanRule) -> bool {
+    (run.propagation, run.default_negative) == (mode.propagation, mode.default_negative)
+}
+
+/// Returns `true` when two NaN rules give the same NaN for every operation,
+/// the fused multiply-add included.
+fn same_fused_rule(run: NanRule, mode: NanRule) -> bool {
+    run == mode
+}
+
+/// Returns the bits of `$body` in the mode whose NaN rule `$same` matches the
+/// rule of a run that rounds to nearest even at the full precision, or
+/// `None` when no mode matches.
+///
+/// The entry points of a mode that return no flags, the operators, `sqrt`,
+/// and `mul_add`, take a host path where the build has one. So a run that
+/// matches a mode checks the host paths against TestFloat.
+macro_rules! in_mode_of_run {
+    ($alias:ty, $env:expr, $same:expr, [$($value:ident),+] => $body:expr) => {{
+        let env: Env = $env;
+        if env.rounding != Rounding::NearestEven || env.precision.is_some() {
+            None
+        } else if $same(env.nan, Env::IEEE.nan) {
+            Some(u128::from($body.to_bits()))
+        } else if $same(env.nan, Env::X86_SSE.nan) {
+            $(let $value = $value.with_mode::<mode::X86Sse>();)+
+            Some(u128::from($body.to_bits()))
+        } else if $same(env.nan, Env::X87.nan) && <$alias>::PRECISION <= 64 {
+            // The x87 mode limits the precision to 64 bits.
+            $(let $value = $value.with_mode::<mode::X87>();)+
+            Some(u128::from($body.to_bits()))
+        } else {
+            None
+        }
+    }};
+}
+
 /// Compares one two-operand case.
 ///
 /// A run that rounds to nearest even with the NaN rule of a mode also checks
-/// the operator of a type with that mode. The operators of binary32 and
-/// binary64 take the host fast path, so this checks that path.
+/// the operator of a type with that mode.
 macro_rules! two_operands {
     ($alias:ty, $method:ident, $operator:tt, $function:expr, $expected:expr) => {
         |line: &str, env: Env| {
@@ -129,23 +170,8 @@ macro_rules! two_operands {
             let (ours, ours_flags) = a.$method(b, env);
             let context = format!("{} {env:?} {line}", $function);
             assert_eq!(u128::from(ours.to_bits()), result, "{context}: result");
-            if env.rounding == Rounding::NearestEven && env.precision.is_none() {
-                let rule = (env.nan.propagation, env.nan.default_negative);
-                let operator = if rule == (Env::IEEE.nan.propagation, false) {
-                    Some(u128::from((a $operator b).to_bits()))
-                } else if rule == (Env::X86_SSE.nan.propagation, true) {
-                    let (a, b) = (a.with_mode::<mode::X86Sse>(), b.with_mode::<mode::X86Sse>());
-                    Some(u128::from((a $operator b).to_bits()))
-                } else if rule == (Env::X87.nan.propagation, true) && <$alias>::PRECISION <= 64 {
-                    // The x87 mode limits the precision to 64 bits.
-                    let (a, b) = (a.with_mode::<mode::X87>(), b.with_mode::<mode::X87>());
-                    Some(u128::from((a $operator b).to_bits()))
-                } else {
-                    None
-                };
-                if let Some(bits) = operator {
-                    assert_eq!(bits, result, "{context}: operator");
-                }
+            if let Some(bits) = in_mode_of_run!($alias, env, same_rule, [a, b] => (a $operator b)) {
+                assert_eq!(bits, result, "{context}: operator");
             }
             assert_eq!(
                 flag_bits(ours_flags),
@@ -239,6 +265,11 @@ macro_rules! format_tests {
                         let (ours, ours_flags) = value.sqrt_with(env);
                         let context = format!("{function} {env:?} {line}");
                         assert_eq!(u128::from(ours.to_bits()), result, "{context}: result");
+                        if let Some(bits) =
+                            in_mode_of_run!($alias, env, same_rule, [value] => value.sqrt())
+                        {
+                            assert_eq!(bits, result, "{context}: sqrt of the mode");
+                        }
                         assert_eq!(
                             flag_bits(ours_flags),
                             flags,
@@ -283,6 +314,11 @@ macro_rules! mul_add {
             let (ours, ours_flags) = a.mul_add_with(b, c, env);
             let context = format!("{} {env:?} {line}", $function);
             assert_eq!(u128::from(ours.to_bits()), result, "{context}: result");
+            if let Some(bits) =
+                in_mode_of_run!($alias, env, same_fused_rule, [a, b, c] => a.mul_add(b, c))
+            {
+                assert_eq!(bits, result, "{context}: mul_add of the mode");
+            }
             assert_eq!(
                 flag_bits(ours_flags),
                 flags,

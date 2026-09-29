@@ -17,6 +17,9 @@
 //! Comparisons and the remainder use TestFloat level 1. The operations with
 //! one operand use level 2.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::num::NonZeroU32;

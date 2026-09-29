@@ -9,6 +9,9 @@
 //! remainder pairs with close exponents. Every pair of boundary encodings
 //! also gives the remainder at the extreme exponent differences.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use core::num::NonZeroU32;
 
 use floaty::format::Standard;

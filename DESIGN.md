@@ -28,8 +28,9 @@ parameters. A new format is a new set of parameters, not a new engine.
 ## Goals
 
 - Give bit-identical results on every host. The engine does not use host
-  floating-point arithmetic, except in a fast path that the oracle tests prove
-  identical.
+  floating-point arithmetic. A host path computes on the floating-point unit
+  of the host only where it gives the bits of the engine, which the oracle
+  tests prove.
 - Round add, subtract, multiply, divide, square root, fused multiply-add, and
   every conversion correctly.
 - Model platform behavior as data: rounding direction, flush-to-zero,
@@ -59,6 +60,8 @@ These items are out of scope now. Some can return later.
 - The `floaty` crate is `no_std` and has no dependencies.
 - The workspace denies warnings, Clippy `pedantic`, rustdoc `all`, and
   `missing_docs`.
+- `floaty` has `unsafe` code only in its host paths. A build with
+  `--cfg floaty_engine_only` has no host path and no `unsafe` code.
 - Every C reference library lives in `floaty-verify`.
 - The repository is private.
 
@@ -295,7 +298,8 @@ Step 8 fixed these rules:
 
 - Each algorithm is a fixed sequence of binary64 operations and
   comparisons. floaty runs each step on the floaty binary64 engine under
-  the behavior of the call. The result has the union of the flags of the
+  the behavior of the call. An operator, which returns no flags, can run a
+  step on a host path, which gives the same bits. The result has the union of the flags of the
   steps, as the hardware sets them when it runs the reference.
 - With the behavior of the reference platform, the result and the five
   IEEE flags match the reference in every rounding direction. `TINY`,
@@ -1002,35 +1006,16 @@ The decimal formats follow the Intel decimal library:
     and 1 at a time, after a test of the last digit, and it appends zeros
     with one multiplication. Exact quotients, roots, and conversions of
     short binary values have many trailing zeros.
-- A fast path must pass the same oracle tests as the generic path, and this
-  file must list it. There is one fast path.
-  - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
-    the host `f32` and `f64` on x86-64 with SSE2. The mode must round to
-    nearest even without FTZ, DAZ, or a precision limit below the format
-    precision. MXCSR must also round to nearest even without FTZ or DAZ.
-    Each call reads MXCSR with `STMXCSR`, because an emulator or a library
-    built with `-ffast-math` can change it. That read is the one `unsafe`
-    block of `floaty`. The block stores MXCSR in a stack slot of its own and
-    loads the value into a register. A store into a slot of the frame of the
-    caller made a later load of the frame wait on store forwarding, which
-    doubled the time of an operator.
-  - The operators return no flags. A NaN result goes back to the engine,
-    which selects the NaN by the rule of the mode. The `_with` methods never
-    take the path, because portable Rust cannot read the host flags. `sqrt`
-    and `mul_add` are not in `core`, so they stay in the engine.
-  - The TestFloat arithmetic tests check the operators in every run that
-    rounds to nearest even with the NaN rule of a mode. The SSE hardware
-    tests check them under the MXCSR value at reset. They also check that
-    the operators give the engine result under FTZ, DAZ, and each directed
-    rounding of MXCSR. A test checks that the operators of every format give
-    the `_with` result of the default mode.
-  - Other hosts use the engine until the oracle tests run there.
+- The host paths, in their own section below, compute some operations on
+  the floating-point unit of the host.
 - Step 6 rejected two fast paths:
   - Lookup tables for FP8. A table takes 64 KiB for each operation, format,
     and behavior, and the engine computes an FP8 operation in 25 to 47 ns.
   - An exact computation in a wider host format and one software rounding.
     The software rounding is most of the cost, and the path would be a
-    second arithmetic path for a small gain.
+    second arithmetic path for a small gain. The host path rules allow such
+    a computation only where a host instruction does the last rounding,
+    such as the binary16 conversion of F16C.
 - `cargo bench -p floaty-verify --bench operations` measures the main
   operations of each format against the host types and `rustc_apfloat`. A
   second table measures other operations and operands in the engine: the
@@ -1175,6 +1160,25 @@ interleaved runs.
 | decimal128 BID divide | 138 | 124 |
 | decimal128 BID square root | 292 | 262 |
 
+The host paths of the first batch, before and after, in nanoseconds per
+operation of the entry points without flags. The x86-64-v3 build enables FMA
+and F16C.
+
+| Operation | Before | Default build | x86-64-v3 build |
+| --- | --- | --- | --- |
+| binary32 `sqrt` | 30 | 1.3 | 1.3 |
+| binary64 `sqrt` | 29 | 1.3 | 1.3 |
+| binary64 `mul_add` | 25 | 25 | 1.9 |
+| binary16 `+` | 16 | 16 | 2.2 |
+| binary16 `sqrt` | 30 | 30 | 1.6 |
+| `Qd` `+` | 258 | 14 | 15 |
+| `Qd` `*` | 145 | 26 | 7.5 |
+| `Qd` `/` | 994 | 108 | 79 |
+| `Qd` `sqrt` | 478 | 54 | 41 |
+| `Gcc` `+` | 179 | 64 | 33 |
+| `Gcc` `*` | 158 | 135 | 33 |
+| `Gcc` `/` | 254 | 91 | 48 |
+
 The integer square root without a division, the 256-bit conversion width,
 and the DPD decoder on 64-bit groups, before and after, in nanoseconds per
 operation with an `Env`. Each figure is the lower of two interleaved runs.
@@ -1207,6 +1211,102 @@ two interleaved runs, or the counters of the processor at 4.6 GHz.
 | decimal64 BID, a cent value divided by 4 | 105 | 86 |
 | decimal64 BID, the square root of a square of a cent value | 106 | 80 |
 
+### Host Paths
+
+A host path computes an operation on the floating-point unit of the host.
+The engine defines every result, so a host path only makes an operation
+faster. It gives the bits of the engine for each input that it accepts, and
+it sends every other input to the engine.
+
+- The build selects each host path at compile time, from `target_arch` and
+  `target_feature`. floaty does not detect the processor at run time. A
+  consumer enables a feature with `-C target-feature` or `-C target-cpu`,
+  for example `-C target-cpu=x86-64-v3`. A build for the baseline x86-64
+  has the SSE2 paths only. Cargo compiles `floaty` with the flags of the
+  consumer, so the selection follows the build of the consumer.
+- The only test at run time reads the floating-point environment of the
+  host, which an emulator or a library can change: MXCSR on x86-64, and
+  FPCR on AArch64. An algorithm of many steps reads it once.
+- A host path serves only the entry points that return no flags: the
+  operators, the methods that drop the flags of the default mode, and the
+  double-double operators. The `_with` methods always run the engine,
+  because the host flags do not give `ROUNDED_UP`, and do not give `TINY`
+  for tininess before rounding.
+- The mode must have the behavior of the host unit: round to nearest even,
+  without FTZ, DAZ, or a precision limit below the format precision. A
+  mode is a type, so an operation in another mode compiles to the engine.
+- A NaN result goes back to the engine, which selects the NaN by the rule
+  of the mode. An input that a path does not model goes back to the engine
+  too.
+- A host path can set the status flags of the host unit: those of MXCSR on
+  x86-64, and FPSR on AArch64. floaty never reads them.
+- A host path is a direct instruction or a host algorithm. A direct
+  instruction is the IEEE 754 operation, such as `SQRTSD`. A host algorithm
+  composes exact host operations, such as binary16 arithmetic through
+  binary32. A host algorithm rounds only in a host instruction or in the
+  rounding routine of its radix, and its record cites the proof that it
+  gives the bits of the engine.
+- Integer instructions, such as `MULX`, `ADCX`, and `LZCNT`, need no host
+  path. LLVM selects them for the limb code when the build enables their
+  feature.
+- The `unsafe` code of `floaty` is the host paths: `core::arch` intrinsics
+  and inline assembly, in the host module only. The build enables the
+  feature of each intrinsic, so each call is sound. Each block states its
+  safety reasoning.
+- A build with `--cfg floaty_engine_only` has no host path. The gates test
+  that build, so the oracle tests cover the engine where a host path would
+  run.
+- Each host path passes the oracle tests in a build that enables it: the
+  default build, the x86-64-v3 build, and the AArch64 build under
+  `qemu-aarch64`. A test also checks that each entry point of a host path
+  gives the result of its `_with` method in the default mode.
+- The table below lists each host path. `cargo bench -p floaty-verify
+  --bench operations` must show the gain of each one.
+
+| Host path | Feature | Formats and operations | Goes back to the engine | Manual | Oracle tests |
+| --- | --- | --- | --- | --- | --- |
+| SSE operators | x86-64 with SSE2 | `+`, `-`, `*`, and `/` of binary32 and binary64 | A NaN result, or MXCSR other than round to nearest even without FTZ and DAZ and with every exception masked | Intel SDM Volume 1, revision 253665-093US, section 10.2.3, Figure 10-3: MXCSR | TestFloat arithmetic, SSE hardware, host paths |
+| AArch64 operators | AArch64 | `+`, `-`, `*`, and `/` of binary32 and binary64 | A NaN result, or FPCR with a nonzero `RMode`, FZ, FZ16, FIZ, AH, AHP, or trap enable | Arm Architecture Registers, DDI 0601: FPCR | Host paths and AArch64 hardware, under `qemu-aarch64` |
+| SSE square root | x86-64 with SSE2 | `sqrt` of binary32 and binary64, by `SQRTSS` and `SQRTSD` | As the SSE operators | Intel SDM Volume 2: `SQRTSS`, `SQRTSD` | TestFloat arithmetic, SSE hardware, host paths |
+| FMA fused multiply-add | x86-64 with FMA | `mul_add` of binary32 and binary64, by `VFMADD213SS` and `VFMADD213SD` | As the SSE operators | Intel SDM Volume 2: `VFMADD213SS`, `VFMADD213SD` | TestFloat arithmetic, SSE hardware, and host paths, in the x86-64-v3 build |
+| F16C binary16 | x86-64 with F16C | `+`, `-`, `*`, `/`, and `sqrt` of binary16: `VCVTPH2PS` widens the operands exactly, the SSE unit computes in binary32, and `VCVTPS2PH` rounds to nearest even | As the SSE operators. The fused multiply-add of binary16 always runs in the engine. | Intel SDM Volume 2: `VCVTPH2PS`, `VCVTPS2PH` | TestFloat arithmetic, SSE hardware, and host paths with every square root and an ignored sweep of every pair, in the x86-64-v3 build |
+| AArch64 square root, fused multiply-add, and binary16 | AArch64 | `sqrt` and `mul_add` of binary32 and binary64, by `FSQRT` and `FMADD`, and binary16 as F16C gives it, with `FCVT` | As the AArch64 operators | Arm Architecture Reference Manual, DDI 0487: `FSQRT`, `FMADD`, `FCVT` | Host paths and AArch64 hardware, under `qemu-aarch64` |
+| Double-double operators | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`. One check of MXCSR or FPCR serves every step, and each binary64 step takes a binary64 path. | A step that its path declines runs in the engine | As the binary64 paths | Double-double, with the operators of the SSE mode against QD, and host paths |
+
+The binary16 path rounds twice: to binary32, and then to binary16. binary32
+holds 2p + 2 bits of binary16, so the two roundings of add, subtract,
+multiply, divide, and square root give the correctly rounded result:
+Figueroa, "When is double rounding innocuous?", ACM SIGNUM Newsletter 30(3),
+1995. Every binary32 result of binary16 operands is a normal number, so the
+binary32 rounding keeps all 24 bits. The theorem does not hold for the fused
+multiply-add, whose exact result can need many more bits.
+
+The SSE and AArch64 operators:
+
+- The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
+  the host `f32` and `f64` on x86-64 with SSE2. The mode must round to
+  nearest even without FTZ, DAZ, or a precision limit below the format
+  precision. MXCSR must also round to nearest even without FTZ or DAZ.
+- Each call reads MXCSR with `STMXCSR`, because an emulator or a library
+  built with `-ffast-math` can change it. An unmasked exception traps in the
+  host unit, and the engine never traps, so every exception must be masked.
+  The block stores MXCSR in a stack slot of its own and loads the value into
+  a register. A store into a slot of the frame of the caller made a later
+  load of the frame wait on store forwarding, which doubled the time of an
+  operator.
+- The operators return no flags. A NaN result goes back to the engine,
+  which selects the NaN by the rule of the mode. The `_with` methods never
+  take the path.
+- The TestFloat arithmetic tests check the operators in every run that
+  rounds to nearest even with the NaN rule of a mode. The SSE hardware tests
+  check them under the MXCSR value at reset. They also check that the
+  operators give the engine result under FTZ, DAZ, and each directed
+  rounding of MXCSR, and with each exception unmasked. A test checks that
+  the operators of every format give the `_with` result of the default mode.
+- The AArch64 operators follow the same rules with FPCR, which each call
+  reads with `MRS`. The AArch64 hardware test runs them under each field of
+  FPCR that changes a result or enables a trap.
+
 ## Verification
 
 A bit-exact claim needs an independent reference. floaty tests against
@@ -1214,6 +1314,26 @@ established implementations. Where no implementation exists, the test
 evaluates the published definition, from IEEE 754 or a vendor manual, with an
 established library such as MPFR. A reference written only for floaty is not
 an oracle.
+
+The gates run the tests in four builds:
+
+- The default build for x86-64.
+- The x86-64-v3 build, `-C target-cpu=x86-64-v3`, for the host paths of FMA,
+  F16C, and SSE4.1.
+- The engine-only build, `--cfg floaty_engine_only`, for the engine where a
+  host path runs in the other builds.
+- The AArch64 build, `--target aarch64-unknown-linux-gnu`, which
+  `qemu-aarch64` 10.2.1 runs. `floaty-verify` builds its C reference
+  libraries and its x86 hardware tests only for x86-64. On AArch64 it runs
+  the tests of `floaty` and the host path tests, which compare each host
+  path with the engine. The engine passes the oracle tests on x86-64 and
+  gives the same bits on every host, so that comparison checks each AArch64
+  host path against those oracles. QEMU's AArch64 target stands in for
+  AArch64 hardware.
+
+Code for one architecture, such as inline assembly and `core::arch`
+intrinsics, is behind `cfg(target_arch)` in `floaty` and in `floaty-verify`,
+so each crate builds for every target of the gates.
 
 | Scope | Oracle | Coverage |
 | --- | --- | --- |
@@ -1381,6 +1501,8 @@ floaty/                  the workspace
 │       ├── binary.rs    unpack, pack, and every binary operation
 │       ├── decimal.rs   the BID and DPD codecs and every decimal operation
 │       ├── radix.rs     exact arithmetic for binary and decimal conversions
+│       ├── host.rs      the host paths, with one module in host/ for each
+│       │                architecture
 │       └── double_double.rs  the double-double type, and the Gcc and Qd
 │                        algorithms
 └── floaty-verify/       TestFloat, MPFR, decimal, and hardware harness
@@ -1460,9 +1582,6 @@ Each step passes its oracle tests before the next step starts.
   binary128, binary256, and decimal128 by a third. Its factor takes one long
   division, so it slowed the remainder of close operands, and a modulus of
   one limb or of 8 limbs gained nothing.
-- Decide whether the double-double operators, which drop the flags, run
-  their binary64 steps through the binary64 operators and their host fast
-  path. Each step now takes the engine, so `Qd` division takes about 1 us.
 - Measure the specialization per format and behavior again on an idle host.
   Other work loaded the host during the measurement in this file.
 - Add mode combinators for the NaN rule and the tininess rule with the Arm

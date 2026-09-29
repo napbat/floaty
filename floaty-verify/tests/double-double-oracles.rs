@@ -11,6 +11,9 @@
 //! The expected values come from the references, and the tests pin them. A
 //! comment gives the reason for a value where the reason is not plain.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use floaty_verify::ibm_ldouble::{self, Case, Flags, Operation, Outcome, Pair, Rounding};
 use floaty_verify::qd;
 use floaty_verify::random::SplitMix64;
@@ -360,7 +363,6 @@ fn qd_returns_the_flags_of_each_operation() {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 #[test]
 fn qd_restores_the_floating_point_environment() {
     use floaty_verify::x86::{MXCSR_MASKED, MXCSR_ROUNDINGS, mxcsr, with_mxcsr};

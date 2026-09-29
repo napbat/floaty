@@ -230,6 +230,11 @@ fn main() {
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     println!("cargo:rerun-if-changed=build.rs");
 
+    // The references build only for x86-64. On another target, the harness
+    // has only the tests that need no reference library.
+    if env::var("CARGO_CFG_TARGET_ARCH").expect("cargo sets CARGO_CFG_TARGET_ARCH") != "x86_64" {
+        return;
+    }
     // The references run on the host, so the check is on the host, not on
     // the target.
     let host = env::var("HOST").expect("cargo sets HOST");

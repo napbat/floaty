@@ -4,8 +4,8 @@
 use super::Float;
 use crate::env::{Flags, Mode, Override};
 use crate::format::Standard;
-use crate::format::internal::{Host, Step};
-use crate::host::{self, Operation};
+use crate::format::internal::Step;
+use crate::host::{self, Kind, Operation};
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Adds `other`. Returns the sum and the flags.
@@ -44,8 +44,15 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
 
     /// Returns the square root, with the default mode.
     #[must_use]
+    #[inline]
     pub fn sqrt(self) -> Self {
-        self.sqrt_with(M::default()).0
+        if !host::available(S::HOST, Kind::SquareRoot) {
+            return self.sqrt_with(M::default()).0;
+        }
+        match host::sqrt::<S, W>(self.bits, &M::ENV) {
+            Some(bits) => Self::from_masked(bits),
+            None => sqrt_in_engine(self),
+        }
     }
 
     /// Returns the square root and the flags.
@@ -58,8 +65,15 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Returns `self * multiplier + addend`, rounded once, with the default
     /// mode.
     #[must_use]
+    #[inline]
     pub fn mul_add(self, multiplier: Self, addend: Self) -> Self {
-        self.mul_add_with(multiplier, addend, M::default()).0
+        if !host::available(S::HOST, Kind::FusedMultiplyAdd) {
+            return self.mul_add_with(multiplier, addend, M::default()).0;
+        }
+        match host::mul_add::<S, W>(self.bits, multiplier.bits, addend.bits, &M::ENV) {
+            Some(bits) => Self::from_masked(bits),
+            None => mul_add_in_engine(self, multiplier, addend),
+        }
     }
 
     /// Returns `self * multiplier + addend`, rounded once, and the flags.
@@ -198,7 +212,7 @@ macro_rules! operator {
 
             #[inline]
             fn $method(self, other: Self) -> Self {
-                if S::HOST == Host::None {
+                if !host::available(S::HOST, Kind::Arithmetic) {
                     return self.$with(other, M::default()).0;
                 }
                 let host = host::binary::<S, W>(self.bits, other.bits, Operation::$trait, &M::ENV);
@@ -226,3 +240,25 @@ operator!(Add, add, add_with, add_in_engine);
 operator!(Sub, sub, sub_with, sub_in_engine);
 operator!(Mul, mul, mul_with, mul_in_engine);
 operator!(Div, div, div_with, div_in_engine);
+
+/// Runs the square root in the engine, for a format whose host path does not
+/// apply.
+#[cold]
+#[inline(never)]
+fn sqrt_in_engine<S: Standard<W>, const W: usize, M: Mode>(
+    value: Float<S, W, M>,
+) -> Float<S, W, M> {
+    value.sqrt_with(M::default()).0
+}
+
+/// Runs the fused multiply-add in the engine, for a format whose host path
+/// does not apply.
+#[cold]
+#[inline(never)]
+fn mul_add_in_engine<S: Standard<W>, const W: usize, M: Mode>(
+    left: Float<S, W, M>,
+    multiplier: Float<S, W, M>,
+    addend: Float<S, W, M>,
+) -> Float<S, W, M> {
+    left.mul_add_with(multiplier, addend, M::default()).0
+}

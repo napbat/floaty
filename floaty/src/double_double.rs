@@ -25,7 +25,7 @@ use core::fmt;
 use core::marker::PhantomData;
 
 use self::steps::Steps;
-use crate::env::{Env, Flags, Mode, Override, mode};
+use crate::env::{Behavior, Env, Flags, Mode, Override, mode};
 use crate::float::{Decoded, F64, Float, FloatType};
 use crate::format::internal::Source;
 use crate::format::{Binary, Standard};
@@ -187,14 +187,13 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         }
     }
 
-    /// Runs the algorithm of an operation with two operands.
-    fn run<O: Override>(
+    /// Runs the algorithm of an operation with two operands in `steps`.
+    fn run<B: Behavior>(
         self,
         other: Self,
-        behavior: O,
-        operation: [TwoOperands<O::Behavior>; 2],
+        mut steps: Steps<B>,
+        operation: [TwoOperands<B>; 2],
     ) -> (Self, Flags) {
-        let mut steps = Steps::new(behavior.apply::<M>());
         let [gcc, qd] = operation;
         let algorithm = match Alg::KIND {
             AlgorithmKind::Gcc => gcc,
@@ -207,25 +206,41 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     /// Returns `self + other` and the flags of every step.
     #[must_use]
     pub fn add_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
-        self.run(other, behavior, [gcc::add, qd::add])
+        self.run(
+            other,
+            Steps::new(behavior.apply::<M>()),
+            [gcc::add, qd::add],
+        )
     }
 
     /// Returns `self - other` and the flags of every step.
     #[must_use]
     pub fn sub_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
-        self.run(other, behavior, [gcc::sub, qd::sub])
+        self.run(
+            other,
+            Steps::new(behavior.apply::<M>()),
+            [gcc::sub, qd::sub],
+        )
     }
 
     /// Returns `self * other` and the flags of every step.
     #[must_use]
     pub fn mul_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
-        self.run(other, behavior, [gcc::mul, qd::mul])
+        self.run(
+            other,
+            Steps::new(behavior.apply::<M>()),
+            [gcc::mul, qd::mul],
+        )
     }
 
     /// Returns `self / other` and the flags of every step.
     #[must_use]
     pub fn div_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
-        self.run(other, behavior, [gcc::div, qd::div])
+        self.run(
+            other,
+            Steps::new(behavior.apply::<M>()),
+            [gcc::div, qd::div],
+        )
     }
 
     /// Returns the value with both halves negated when the exact value has a
@@ -356,10 +371,13 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
 }
 
 impl<M: Mode> DoubleDouble<Qd, M> {
-    /// Returns the square root with the default mode.
+    /// Returns the square root with the default mode. The steps take the host
+    /// paths of binary64 where the build has them.
     #[must_use]
     pub fn sqrt(self) -> Self {
-        self.sqrt_with(M::default()).0
+        let mut steps = Steps::without_flags(M::default());
+        let (hi, lo) = qd::sqrt(&mut steps, (self.hi, self.lo));
+        Self::new(hi, lo)
     }
 
     /// Returns the square root by QD's `sqrt`, and the flags of every step.
@@ -485,24 +503,25 @@ impl<Alg: Algorithm, M: Mode> core::ops::Neg for DoubleDouble<Alg, M> {
     }
 }
 
-/// Implements an arithmetic operator with the default mode, and drops the
-/// flags.
+/// Implements an arithmetic operator with the default mode, without flags. The
+/// steps take the host paths of binary64 where the build has them.
 macro_rules! operator {
-    ($trait:ident, $method:ident, $with:ident) => {
+    ($trait:ident, $method:ident, $gcc:path, $qd:path) => {
         impl<Alg: Algorithm, M: Mode> core::ops::$trait for DoubleDouble<Alg, M> {
             type Output = Self;
 
             fn $method(self, other: Self) -> Self {
-                self.$with(other, M::default()).0
+                self.run(other, Steps::without_flags(M::default()), [$gcc, $qd])
+                    .0
             }
         }
     };
 }
 
-operator!(Add, add, add_with);
-operator!(Sub, sub, sub_with);
-operator!(Mul, mul, mul_with);
-operator!(Div, div, div_with);
+operator!(Add, add, gcc::add, qd::add);
+operator!(Sub, sub, gcc::sub, qd::sub);
+operator!(Mul, mul, gcc::mul, qd::mul);
+operator!(Div, div, gcc::div, qd::div);
 
 impl<Alg: Algorithm, M: Mode> PartialEq for DoubleDouble<Alg, M> {
     /// Compares the exact values as the quiet equality predicate does.

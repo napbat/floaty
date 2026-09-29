@@ -30,6 +30,9 @@
 //! The report counts the cases that each rule decides. The generators are
 //! seeded, so each test asserts the counts exactly.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use core::cmp::Ordering;
 use std::collections::BTreeMap;
 

@@ -2,6 +2,9 @@
 //! IEEE 754-2019 section 3.4, evaluated exactly with MPFR. No established
 //! library decodes these widths, so the definition is the reference.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use floaty::{
     Binary, Class, Decoded, F160, F192, F224, F256, F288, F320, F352, F384, F416, F448, F480, F512,
     Float,

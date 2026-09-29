@@ -1,6 +1,9 @@
 //! Compares the FP8 formats with the `ml_dtypes` reference table in
 //! `data/fp8-reference.txt`.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use floaty::{Class, Decoded, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz};
 use floaty_verify::shape::{self, Payload, trailing_payload};
 use rug::Integer;

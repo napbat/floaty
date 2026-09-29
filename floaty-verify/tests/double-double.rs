@@ -9,6 +9,9 @@
 //! states. The test counts the cases with a malformed operand, a finite high
 //! half and a NaN low half, whose NaN the fused NaN order decides.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use std::collections::BTreeMap;
 
 use floaty::env::Tininess;
@@ -343,6 +346,7 @@ fn qd_matches_the_qd_library() {
         (a, operands.second(a))
     });
     let pairs: Vec<(Pair, Pair)> = FIXED.into_iter().chain(random).collect();
+    let mut operator_checks = 0_usize;
     for (a, b) in pairs {
         let (x, y) = (value::<Qd>(a), value::<Qd>(b));
         for rounding in Rounding::ALL {
@@ -373,17 +377,40 @@ fn qd_matches_the_qd_library() {
                     })
                 }
             );
-            for ((name, (result, flags), theirs), fixed) in binary.into_iter().zip(fixed) {
+            // The operators and `sqrt` of the SSE mode, which rounds to
+            // nearest even, return no flags and take the host paths of
+            // binary64 where the build has them.
+            let operators = (rounding == Rounding::NearestEven).then(|| {
+                let (x, y) = (
+                    value_in::<Qd, floaty::mode::X86Sse>(a),
+                    value_in::<Qd, floaty::mode::X86Sse>(b),
+                );
+                [x + y, x - y, x * y, x / y, x.sqrt()]
+                    .map(|result| (result.hi().to_bits(), result.lo().to_bits()))
+            });
+            for (index, ((name, (result, flags), theirs), fixed)) in
+                binary.into_iter().zip(fixed).enumerate()
+            {
                 let ours = outcome(result.hi(), result.lo(), flags);
                 tally.check(|| format!("{name} {a:?} {b:?} {rounding:?}"), ours, theirs);
                 let context = || format!("{name} {a:?} {b:?} {rounding:?} static mode");
                 tally.check(context, fixed, theirs);
+                if let Some(operators) = operators {
+                    assert_eq!(
+                        operators[index],
+                        (theirs.result.hi, theirs.result.lo),
+                        "{name} {a:?} {b:?}: the operator of the SSE mode"
+                    );
+                    operator_checks += 1;
+                }
             }
         }
     }
     tally.report("Qd against QD");
     assert_eq!(tally.failed, 0, "floaty matches QD");
-    // The generator is seeded, so the count is exact: each case runs with an
-    // Env and with a static mode.
+    // The generator is seeded, so the counts are exact: each case runs with an
+    // Env and with a static mode, and each case that rounds to nearest even
+    // also runs through the operators of the SSE mode.
     assert_eq!(tally.passed, 960_200);
+    assert_eq!(operator_checks, 960_200 / 8);
 }

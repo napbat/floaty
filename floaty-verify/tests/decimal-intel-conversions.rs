@@ -27,6 +27,9 @@
 //! The counts show how many cases each rule decides. The archive is pinned
 //! and the generators are seeded, so each test asserts the counts exactly.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use std::collections::BTreeMap;
 
 use floaty::format::{Bid, Binary, Decimal, Dpd, Standard, X87};

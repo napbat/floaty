@@ -1,2 +1,2 @@
 # Product names that appear in documentation and are not code identifiers.
-doc-valid-idents = ["..", "TestFloat", "SoftFloat", "APFloat", "decTest", "decNumber", "PowerPC"]
+doc-valid-idents = ["..", "TestFloat", "SoftFloat", "APFloat", "decTest", "decNumber", "PowerPC", "AArch64"]

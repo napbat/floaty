@@ -35,6 +35,9 @@
 //! - `scalbln` takes a 64-bit scale. floaty takes an `i32`, and a scale
 //!   beyond `2^30` acts as `2^30`, so the test clamps the scale to `i32`.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use core::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::panic;

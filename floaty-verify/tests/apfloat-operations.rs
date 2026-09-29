@@ -33,6 +33,9 @@
 //!   encodings (`docs/anomalies/x87-noncanonical-rustc-apfloat.md`), so the
 //!   x87 operands are canonical.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use floaty::env::{NanPropagation, NanRule};
 use floaty::format::Standard;
 use floaty::{

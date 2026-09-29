@@ -68,6 +68,9 @@
 //! results in cases that decTest does not cover, as `Arithmetic::fma_wide`
 //! and `Arithmetic::total_order` describe.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 mod conversions;
 mod flush;
 mod limit;

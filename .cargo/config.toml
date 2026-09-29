@@ -1,0 +1,6 @@
+# The AArch64 gates of AGENTS.md build for AArch64 Linux and run the tests
+# under QEMU 10.2.1. The packages gcc-aarch64-linux-gnu and
+# libc6-dev-arm64-cross give the linker and the C library that QEMU loads.
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+runner = ["qemu-aarch64", "-L", "/usr/aarch64-linux-gnu"]

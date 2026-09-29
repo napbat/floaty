@@ -9,6 +9,9 @@
 //! layouts with a small exponent range also run, because a rounded integer
 //! can overflow them.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use floaty::format::Standard;
 use floaty::{Binary, Float, Fnuz, Int, NoInf, UInt};
 use floaty_verify::mpfr::Specials;

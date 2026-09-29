@@ -5,6 +5,9 @@
 //! rules in `DESIGN.md`. TestFloat checks NaN payloads for the IEEE formats,
 //! so this test checks only that a NaN is a NaN with the right sign.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use core::num::NonZeroU32;
 
 use floaty::env::Tininess;

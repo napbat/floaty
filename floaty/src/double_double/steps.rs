@@ -5,12 +5,19 @@ use core::cmp::Ordering;
 
 use crate::env::{Behavior, Flags};
 use crate::float::F64;
+use crate::format::internal::Host;
+use crate::host::{self, Kind, Operation, Ready};
 
 /// Runs binary64 operations under one behavior and collects their flags, as
 /// the status register of a processor does.
+///
+/// The steps of an entry point that returns no flags can take the host paths
+/// of binary64. A host step gives the bits of the engine, and a step that the
+/// host path declines runs in the engine.
 pub struct Steps<B> {
     behavior: B,
     flags: Flags,
+    host: Option<Ready>,
 }
 
 impl<B: Behavior> Steps<B> {
@@ -19,7 +26,30 @@ impl<B: Behavior> Steps<B> {
         Self {
             behavior,
             flags: Flags::NONE,
+            host: None,
         }
+    }
+
+    /// Starts the steps of an entry point that returns no flags. The steps
+    /// take the host paths of binary64 when the build has them and the host
+    /// allows them, which one check decides for every step.
+    pub fn without_flags(behavior: B) -> Self {
+        let host = if host::available(Host::Double, Kind::Arithmetic) {
+            host::ready(&behavior.env())
+        } else {
+            None
+        };
+        Self {
+            behavior,
+            flags: Flags::NONE,
+            host,
+        }
+    }
+
+    /// Returns the result of a host step, or `None` when the step runs in the
+    /// engine.
+    fn host_step(&self, step: impl FnOnce(Ready) -> Option<u64>) -> Option<F64> {
+        self.host.and_then(step).map(F64::from_bits)
     }
 
     /// Returns the flags of every step so far.
@@ -33,38 +63,56 @@ impl<B: Behavior> Steps<B> {
         result
     }
 
+    /// Returns an operator of two values, from the host or the engine.
+    fn operator(&mut self, a: F64, b: F64, operation: Operation) -> F64 {
+        let host = |ready: Ready| ready.binary(a.to_bits(), b.to_bits(), operation);
+        if let Some(result) = self.host_step(host) {
+            return result;
+        }
+        let step = match operation {
+            Operation::Add => a.add_with(b, self.behavior),
+            Operation::Sub => a.sub_with(b, self.behavior),
+            Operation::Mul => a.mul_with(b, self.behavior),
+            Operation::Div => a.div_with(b, self.behavior),
+        };
+        self.record(step)
+    }
+
     /// Returns `a + b`.
     pub fn add(&mut self, a: F64, b: F64) -> F64 {
-        let step = a.add_with(b, self.behavior);
-        self.record(step)
+        self.operator(a, b, Operation::Add)
     }
 
     /// Returns `a - b`.
     pub fn sub(&mut self, a: F64, b: F64) -> F64 {
-        let step = a.sub_with(b, self.behavior);
-        self.record(step)
+        self.operator(a, b, Operation::Sub)
     }
 
     /// Returns `a * b`.
     pub fn mul(&mut self, a: F64, b: F64) -> F64 {
-        let step = a.mul_with(b, self.behavior);
-        self.record(step)
+        self.operator(a, b, Operation::Mul)
     }
 
     /// Returns `a / b`.
     pub fn div(&mut self, a: F64, b: F64) -> F64 {
-        let step = a.div_with(b, self.behavior);
-        self.record(step)
+        self.operator(a, b, Operation::Div)
     }
 
     /// Returns the square root of `a`.
     pub fn sqrt(&mut self, a: F64) -> F64 {
+        if let Some(result) = self.host_step(|ready| ready.sqrt(a.to_bits())) {
+            return result;
+        }
         let step = a.sqrt_with(self.behavior);
         self.record(step)
     }
 
     /// Returns `a * c + b`, rounded once.
     pub fn fused_add(&mut self, a: F64, c: F64, b: F64) -> F64 {
+        let host = |ready: Ready| ready.mul_add(a.to_bits(), c.to_bits(), b.to_bits());
+        if let Some(result) = self.host_step(host) {
+            return result;
+        }
         let step = a.mul_add_with(c, b, self.behavior);
         self.record(step)
     }

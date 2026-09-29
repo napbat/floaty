@@ -112,6 +112,7 @@ where
 
     /// The host format with the same encoding.
     const HOST: Host = match (E, Self::WIDTH, Enc::KIND) {
+        (5, 16, EncodingKind::Ieee) => Host::Half,
         (8, 32, EncodingKind::Ieee) => Host::Single,
         (11, 64, EncodingKind::Ieee) => Host::Double,
         _ => Host::None,

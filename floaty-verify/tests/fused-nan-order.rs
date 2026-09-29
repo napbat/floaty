@@ -21,6 +21,9 @@
 //! instructions under QEMU, which the `ibm_ldouble` batch program executes.
 //! That test compares every result and every flag.
 
+// The references of this test build only for x86-64.
+#![cfg(target_arch = "x86_64")]
+
 use floaty::env::{FusedNanOrder, NanPropagation, NanRule};
 use floaty::{Class, D64Bid, Env, F32, F64, Flags};
 use floaty_verify::ibm_ldouble::{

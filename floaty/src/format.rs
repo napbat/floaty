@@ -49,7 +49,7 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     #[doc(hidden)]
     const PAYLOAD_DIGITS: u32;
 
-    /// The host format with the same encoding, for the host fast path.
+    /// The host format with the same encoding, for the host paths.
     #[doc(hidden)]
     const HOST: Host;
 
@@ -237,6 +237,11 @@ pub(crate) mod internal {
         Single,
         /// The host `f64`: IEEE 754 binary64.
         Double,
+        /// IEEE 754 binary16, which computes in the host `f32` and converts in
+        /// host instructions. binary32 holds 2p + 2 bits of binary16, so the
+        /// two roundings of add, subtract, multiply, divide, and square root
+        /// give the correctly rounded result.
+        Half,
     }
 
     /// The direction of `next_up` and `next_down`.

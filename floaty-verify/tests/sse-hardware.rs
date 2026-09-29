@@ -11,7 +11,8 @@
 
 use std::hint::black_box;
 
-use floaty::{Env, F32, F64, mode};
+use floaty::{Env, F16, F32, F64, mode};
+use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, MXCSR_DAZ, MXCSR_FTZ, MXCSR_MASKED, MXCSR_ROUNDINGS, mxcsr_flags, sse_env,
@@ -411,8 +412,8 @@ fn check_single(first: u32, second: u32, third: u32, control: u32, env: Env, daz
     );
 }
 
-/// Checks the four operators of one type under one MXCSR value against the
-/// engine results of the default mode.
+/// Checks the four operators, `sqrt`, and `mul_add` of one type under one
+/// MXCSR value against the engine results of the default mode.
 macro_rules! operators_under {
     ($alias:ty, $control:expr, $pairs:expr) => {
         for &(a, b) in $pairs {
@@ -423,6 +424,8 @@ macro_rules! operators_under {
                 x.sub_with(y, env).0.to_bits(),
                 x.mul_with(y, env).0.to_bits(),
                 x.div_with(y, env).0.to_bits(),
+                x.sqrt_with(env).0.to_bits(),
+                x.mul_add_with(y, x, env).0.to_bits(),
             ];
             let ours = x86::with_mxcsr($control, || {
                 let (x, y) = (black_box(x), black_box(y));
@@ -431,6 +434,8 @@ macro_rules! operators_under {
                     (x - y).to_bits(),
                     (x * y).to_bits(),
                     (x / y).to_bits(),
+                    x.sqrt().to_bits(),
+                    x.mul_add(y, x).to_bits(),
                 ]
             });
             assert_eq!(ours, expected, "{a:#x} {b:#x} under MXCSR {:#x}", $control);
@@ -440,21 +445,40 @@ macro_rules! operators_under {
 
 #[test]
 fn operators_read_mxcsr_before_the_host_unit() {
-    // FTZ, DAZ, and each directed rounding change the host results. Under
-    // each, the operators still give the engine results of the default mode.
-    let controls = [
+    // FTZ, DAZ, and each directed rounding change the host results, and an
+    // unmasked exception traps in the host unit. Under each, the operators
+    // still give the engine results of the default mode. The masks IM, DM,
+    // ZM, OM, UM, and PM are bits 7 to 12.
+    let directions = [
         MXCSR_MASKED | MXCSR_FTZ,
         MXCSR_MASKED | MXCSR_DAZ,
         MXCSR_MASKED | (1 << 13),
         MXCSR_MASKED | (2 << 13),
         MXCSR_MASKED | (3 << 13),
     ];
+    let unmasked = (7..=12).map(|mask| MXCSR_MASKED & !(1 << mask));
+    let controls: Vec<u32> = directions.into_iter().chain(unmasked).collect();
     let mut random = SplitMix64::new(0x00C5_0000);
     let single = single_operands(&mut random, 4_000);
     let single_pairs = pairs(&single, SINGLE_SPECIALS.len(), 1 << 31, 1);
     let double = double_operands(&mut random, 4_000);
     let double_pairs = pairs(&double, 10, 1 << 63, 1);
+    // binary16 takes the F16C path in a build with F16C.
+    let mut halves: Vec<u16> = boundary_encodings_u128(16, 5, IntegerBit::Implicit)
+        .into_iter()
+        .map(|bits| u16::try_from(bits).expect("a binary16 encoding has 16 bits"))
+        .collect();
+    halves.extend(
+        (0..4_000)
+            .map(|_| u16::try_from(random.next_u64() >> 48).expect("the shift keeps 16 bits")),
+    );
+    let half_pairs: Vec<(u16, u16)> = halves
+        .iter()
+        .zip(halves.iter().rev())
+        .map(|(&a, &b)| (a, b))
+        .collect();
     for control in controls {
+        operators_under!(F16, control, &half_pairs);
         operators_under!(F32, control, &single_pairs);
         operators_under!(F64, control, &double_pairs);
     }

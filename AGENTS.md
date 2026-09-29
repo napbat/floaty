@@ -28,12 +28,25 @@ floaty is bit-exact, platform-independent software floating point.
 ## Correctness Rules
 
 - Give the same bits on every host. Do not use host floating-point arithmetic
-  in `floaty`: no `f32` or `f64` operations and no math library calls. A fast
-  path is the only exception. It must pass the same oracle tests as the
-  generic path, and `DESIGN.md` must list it.
+  in `floaty`: no `f32` or `f64` operations and no math library calls. A host
+  path is the only exception. `DESIGN.md` defines host paths and must list
+  each one.
+- Make a host path give the bits of the engine for every input it accepts.
+  Send every other input, and every NaN result, to the engine.
+- Select a host path at compile time with `cfg(target_arch)` and
+  `cfg(target_feature)`. Do not detect the processor at run time.
+- Use a host path only in an entry point that returns no flags. The `_with`
+  methods always run the engine.
+- Pass the oracle tests in a build that enables each host path. Show its gain
+  with `cargo bench -p floaty-verify --bench operations`.
+- Put the `unsafe` code of `floaty` only in its host module. Give each
+  `unsafe` block a `SAFETY` comment.
+- Put code for one architecture, such as inline assembly and `core::arch`
+  intrinsics, behind `cfg(target_arch)` in `floaty` and in its tests. Every
+  crate must build for each target of the gates.
 - Round through the one rounding routine of each radix: `exact` for binary
   formats and `decimal::round` for decimal formats. Do not write another
-  rounding path.
+  rounding path. A host path can also round in a host instruction.
 - Handle special values in the operation. NaNs, infinities, and zeros never
   reach the rounding routine.
 - Test every behavior against an established oracle: TestFloat, MPFR,
@@ -62,14 +75,39 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
 ```
 
+Then run the clippy and test gates in the other builds of `DESIGN.md`: the
+x86-64-v3 build, the engine-only build, and the AArch64 build under QEMU.
+Each build of the host keeps its own target directory.
+
+```text
+export V3="-C target-cpu=x86-64-v3" ENGINE="--cfg floaty_engine_only"
+RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
+RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo test --workspace --no-fail-fast
+RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
+RUSTFLAGS="$ENGINE" CARGO_TARGET_DIR=target/engine-only cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
+RUSTFLAGS="$ENGINE" CARGO_TARGET_DIR=target/engine-only cargo test --workspace --no-fail-fast
+cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
+cargo test --workspace --no-fail-fast --target aarch64-unknown-linux-gnu
+cargo +1.85 clippy -p floaty --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
+```
+
 - Install the minimum-version toolchain once:
   `rustup toolchain install 1.85 --profile minimal --component clippy`.
-- `--workspace` includes `floaty-verify`. Its build runs on Linux x86-64
-  hosts only, and needs the submodules (`git submodule update --init`),
-  `make`, `gcc`, `g++` 15.2.0, `objcopy`, `m4`, `curl`, `tar`, `sha256sum`,
-  `python3`, `powerpc64le-linux-gnu-gcc` 15.2.0 with its binutils (package
-  gcc-powerpc64le-linux-gnu), and `qemu-ppc64le` 10.2.1 (package
-  qemu-user). The build compiles TestFloat, MPFR, decNumber, the Intel
+- Install the AArch64 target once for both toolchains:
+  `rustup target add aarch64-unknown-linux-gnu` and
+  `rustup target add --toolchain 1.85 aarch64-unknown-linux-gnu`.
+- The AArch64 gates need `aarch64-linux-gnu-gcc` 15.2.0 with its C library
+  (packages gcc-aarch64-linux-gnu and libc6-dev-arm64-cross) and
+  `qemu-aarch64` 10.2.1 (package qemu-user). `.cargo/config.toml` names the
+  linker and the QEMU runner. The x86-64-v3 gates need a processor with AVX2
+  and FMA.
+- `--workspace` includes `floaty-verify`. It builds its C reference
+  libraries and its x86 hardware tests only for x86-64. That build runs on
+  Linux x86-64 hosts only, and needs the submodules (`git submodule update
+  --init`), `make`, `gcc`, `g++` 15.2.0, `objcopy`, `m4`, `curl`, `tar`,
+  `sha256sum`, `python3`, `powerpc64le-linux-gnu-gcc` 15.2.0 with its
+  binutils (package gcc-powerpc64le-linux-gnu), and `qemu-ppc64le` 10.2.1
+  (package qemu-user). The build compiles TestFloat, MPFR, decNumber, the Intel
   decimal library, and QD from source. The first build downloads the
   decimal and QD archives, so it needs network access once. The `Qd` tests
   need a processor on which glibc's `fma` is the FMA3 instruction. On

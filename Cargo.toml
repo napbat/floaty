@@ -25,6 +25,8 @@ nonstandard_style = { level = "deny", priority = -1 }
 rust_2018_idioms = { level = "deny", priority = -1 }
 future_incompatible = { level = "deny", priority = -1 }
 missing_docs = "deny"
+# `--cfg floaty_engine_only` builds `floaty` without its host paths.
+unexpected_cfgs = { level = "deny", check-cfg = ["cfg(floaty_engine_only)"] }
 
 [workspace.lints.clippy]
 correctness = { level = "deny", priority = -1 }
