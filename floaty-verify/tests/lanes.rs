@@ -191,6 +191,51 @@ fn lanes_of_other_modes_give_the_scalar_results() {
 }
 
 #[test]
+fn lanes_round_in_the_direction_of_their_mode() {
+    // `round_to_integral` takes the direction of the mode in the packed
+    // paths. Each direction and format below checks every operation of
+    // `lanes_match!`: the arithmetic of a directed mode runs in the engine,
+    // and the rounding to integral values takes the paths.
+    use floaty::mode::direction::{NearestAway, ToOdd, TowardNegative, TowardPositive};
+    use floaty::mode::{Ieee, Rounded};
+    type Up = Float<floaty::Binary<8>, 32, Rounded<Ieee, TowardPositive>>;
+    type Down = Float<floaty::Binary<5>, 16, Rounded<Ieee, TowardNegative>>;
+    type Away = Float<floaty::Binary<11>, 64, Rounded<Ieee, NearestAway>>;
+    type Chopped = Float<floaty::Binary<8>, 16, Rounded<Ieee, TowardZero>>;
+    type Odd = Float<floaty::Binary<8>, 32, Rounded<Ieee, ToOdd>>;
+    let mut random = SplitMix64::new(0x1A4E_D1E0);
+    // Values an exact half above an integer, of both signs, are the ties of
+    // the rounding to integral values.
+    let ties: Vec<F64> = (-200_i64..200)
+        .map(|integer| {
+            let half = F64::from_bits(0x3FE0_0000_0000_0000);
+            F64::from_int(integer).add_with(half, Env::IEEE).0
+        })
+        .collect();
+    let with_ties = |mut encodings: Vec<u128>, tie: fn(F64) -> u128| {
+        encodings.extend(ties.iter().map(|&value| tie(value)));
+        encodings
+    };
+    let singles = with_ties(encodings(&mut random, 32, 8), |value| {
+        u128::from(value.convert::<F32>().to_bits())
+    });
+    let halves = with_ties(encodings(&mut random, 16, 5), |value| {
+        u128::from(value.convert::<F16>().to_bits())
+    });
+    let doubles = with_ties(encodings(&mut random, 64, 11), |value| {
+        u128::from(value.to_bits())
+    });
+    let bfloats = with_ties(encodings(&mut random, 16, 8), |value| {
+        u128::from(value.convert::<BF16>().to_bits())
+    });
+    lanes_match!(Up, u32, 13, &singles, [Env::IEEE]);
+    lanes_match!(Odd, u32, 5, &singles, [Env::IEEE]);
+    lanes_match!(Down, u16, 13, &halves, [Env::IEEE]);
+    lanes_match!(Away, u64, 7, &doubles, [Env::IEEE]);
+    lanes_match!(Chopped, u16, 13, &bfloats, [Env::IEEE]);
+}
+
+#[test]
 fn lanes_convert_as_their_lanes_do() {
     let mut random = SplitMix64::new(0x1A4E_C0F7);
     let singles = encodings(&mut random, 32, 8);

@@ -2,16 +2,16 @@
 //!
 //! A bfloat16 encoding is the high half of a binary32 encoding, so a shift
 //! widens each lane exactly, with no floating-point instruction. The
-//! integral value of a bfloat16 value is a bfloat16 value, so the low 16
-//! bits of the binary32 integral value are zero, and a shift narrows it
-//! exactly. No instruction of the builds rounds binary32 to bfloat16 at
+//! integral value of a bfloat16 value in each direction is a bfloat16
+//! value, so the low 16 bits of the binary32 integral value are zero, and a
+//! shift narrows it exactly. No instruction of the builds rounds binary32 to bfloat16 at
 //! every value, so the arithmetic of bfloat16 lanes takes the scalar path
 //! of each lane.
 
 use super::super::environment::{self, packed};
 use super::super::paths::nan_bfloat;
 use super::{chunk, encodings_u16, in_chunks, lanes_u16};
-use crate::env::Mode;
+use crate::env::{Mode, Rounding};
 use crate::float::Float;
 use crate::format::Standard;
 
@@ -28,19 +28,34 @@ fn narrow_integral(value: f32) -> u16 {
     u16::try_from(value.to_bits() >> 16).expect("a shift by 16 leaves 16 bits")
 }
 
-/// Returns each bfloat16 lane rounded to an integral value to nearest even,
-/// or `None` when the build has no instruction or a lane is a NaN.
+/// Returns each bfloat16 lane rounded to an integral value in the direction
+/// `rounding`, or `None` when the build has no instruction or a lane is a
+/// NaN.
 #[inline]
 pub(super) fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
+    rounding: Rounding,
 ) -> Option<[Float<S, W, M>; N]> {
     let x = encodings_u16(value)?;
     lanes_u16(value, nan_bfloat, |lanes| {
         in_chunks::<u16, N, 8, 4>(
             lanes,
-            |start| Some(packed::round_f32x8(chunk(x, start).map(widen))?.map(narrow_integral)),
-            |start| Some(packed::round_f32x4(chunk(x, start).map(widen))?.map(narrow_integral)),
-            |index| Some(narrow_integral(environment::round_f32(widen(x[index]))?)),
+            |start| {
+                Some(
+                    packed::round_f32x8(chunk(x, start).map(widen), rounding)?.map(narrow_integral),
+                )
+            },
+            |start| {
+                Some(
+                    packed::round_f32x4(chunk(x, start).map(widen), rounding)?.map(narrow_integral),
+                )
+            },
+            |index| {
+                Some(narrow_integral(environment::round_f32(
+                    widen(x[index]),
+                    rounding,
+                )?))
+            },
         )
     })
 }

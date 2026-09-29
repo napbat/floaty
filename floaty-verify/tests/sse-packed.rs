@@ -503,3 +503,40 @@ fn bfloat16_lanes_read_mxcsr_before_the_packed_unit() {
         }
     }
 }
+
+#[test]
+fn directed_rounding_reads_mxcsr_before_the_unit() {
+    // The rounding to integral values in a directed mode takes the direction
+    // from the immediate of `ROUNDPS` and `ROUNDSS`, but FTZ, DAZ, and the
+    // exception masks of MXCSR still apply. Under each control, the lanes and
+    // the scalar values give the engine results of the mode.
+    type Up = floaty::Float<
+        floaty::Binary<8>,
+        32,
+        floaty::mode::Rounded<floaty::mode::Ieee, floaty::mode::direction::TowardPositive>,
+    >;
+    let mut random = SplitMix64::new(0x00C5_D1E0);
+    let chunks = chunks::<5>(&mut random, 32, 8);
+    for control in controls() {
+        for chunk in chunks.iter().step_by(7) {
+            let bits = chunk.map(|bits| u32::try_from(bits).expect("a binary32 encoding"));
+            let lanes = Lanes::<Up, 5>::from_bits(bits);
+            let ours = x86::with_mxcsr(control, || {
+                let lanes = black_box(lanes);
+                (
+                    lanes.round_to_integral().to_bits(),
+                    lanes
+                        .into_array()
+                        .map(|value| value.round_to_integral().to_bits()),
+                )
+            });
+            let engine = bits.map(|bits| {
+                Up::from_bits(bits)
+                    .round_to_integral_with(Up::ENV)
+                    .0
+                    .to_bits()
+            });
+            assert_eq!(ours, (engine, engine), "{bits:x?} under {control:#x}");
+        }
+    }
+}

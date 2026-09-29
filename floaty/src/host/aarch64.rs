@@ -2,6 +2,7 @@
 //! the host paths.
 
 use super::Operation;
+use crate::env::Rounding;
 
 pub mod packed;
 
@@ -360,39 +361,49 @@ pub fn narrow_double_to_half(value: f64) -> Option<u16> {
     Some(u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits"))
 }
 
-/// Returns a binary32 value rounded to an integral value to nearest even, by
-/// `FRINTN`.
+/// Runs one rounding to an integral value on `$value`, from the instruction
+/// of the direction `$rounding`: `FRINTN` to nearest even, `FRINTA` to
+/// nearest with ties away from zero, `FRINTM` toward negative infinity,
+/// `FRINTP` toward positive infinity, and `FRINTZ` toward zero. Returns
+/// `None` from the function for another direction.
+macro_rules! round_scalar {
+    ($rounding:expr, $register:literal, $value:ident) => {
+        match $rounding {
+            Rounding::NearestEven => round_scalar!(concat!("frintn ", $register), $value),
+            Rounding::NearestAway => round_scalar!(concat!("frinta ", $register), $value),
+            Rounding::TowardNegative => round_scalar!(concat!("frintm ", $register), $value),
+            Rounding::TowardPositive => round_scalar!(concat!("frintp ", $register), $value),
+            Rounding::TowardZero => round_scalar!(concat!("frintz ", $register), $value),
+            Rounding::ToOdd => return None,
+        }
+    };
+    ($instruction:expr, $value:ident) => {
+        // SAFETY: the instruction reads and writes one SIMD and floating-point
+        // register. Every AArch64 target has it, and it changes only the
+        // status flags of FPSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                $instruction,
+                value = inout(vreg) $value,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+    };
+}
+
+/// Returns a binary32 value rounded to an integral value in the direction
+/// `rounding`, or `None` for a direction that no instruction has.
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack SSE4.1.
-pub fn round_f32(mut value: f32) -> Option<f32> {
-    // SAFETY: FRINTN reads and writes one SIMD and floating-point register.
-    // Every AArch64 target has the instruction, and it changes only the status
-    // flags of FPSR, which floaty does not read.
-    unsafe {
-        core::arch::asm!(
-            "frintn {value:s}, {value:s}",
-            value = inout(vreg) value,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
+pub fn round_f32(mut value: f32, rounding: Rounding) -> Option<f32> {
+    round_scalar!(rounding, "{value:s}, {value:s}", value);
     Some(value)
 }
 
-/// Returns a binary64 value rounded to an integral value to nearest even, by
-/// `FRINTN`.
+/// Returns a binary64 value rounded to an integral value in the direction
+/// `rounding`, or `None` for a direction that no instruction has.
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack SSE4.1.
-pub fn round_f64(mut value: f64) -> Option<f64> {
-    // SAFETY: FRINTN reads and writes one SIMD and floating-point register.
-    // Every AArch64 target has the instruction, and it changes only the status
-    // flags of FPSR, which floaty does not read.
-    unsafe {
-        core::arch::asm!(
-            "frintn {value:d}, {value:d}",
-            value = inout(vreg) value,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
+pub fn round_f64(mut value: f64, rounding: Rounding) -> Option<f64> {
+    round_scalar!(rounding, "{value:d}, {value:d}", value);
     Some(value)
 }
 

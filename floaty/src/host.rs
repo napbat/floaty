@@ -9,8 +9,10 @@
 //!
 //! A path serves only entry points that return no flags. The mode must round
 //! to nearest even without FTZ, DAZ, or a precision limit below the format
-//! precision, and the environment of the host must match it. A NaN result goes
-//! back to the engine, which selects the NaN by the rule of the mode.
+//! precision, and the environment of the host must match it. The rounding to
+//! an integral value also takes a directed rounding, which its instructions
+//! take from their encoding. A NaN result goes back to the engine, which
+//! selects the NaN by the rule of the mode.
 
 use crate::format::internal::Host;
 
@@ -76,7 +78,7 @@ pub enum Kind {
     SquareRoot,
     /// The fused multiply-add.
     FusedMultiplyAdd,
-    /// The rounding to an integral value, to nearest even.
+    /// The rounding to an integral value.
     RoundToIntegral,
     /// The conversion to an integer, to nearest even.
     ToInt,

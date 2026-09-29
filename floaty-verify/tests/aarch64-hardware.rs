@@ -309,3 +309,41 @@ fn bfloat16_lanes_read_fpcr_before_the_vector_unit() {
         }
     }
 }
+
+#[test]
+fn directed_rounding_reads_fpcr_before_the_vector_unit() {
+    // The rounding to integral values in a directed mode takes the direction
+    // from the instruction, `FRINTP` here, but the other fields of FPCR still
+    // apply. Under each setting, the lanes and the scalar values give the
+    // engine results of the mode.
+    type Up = floaty::Float<
+        floaty::Binary<8>,
+        32,
+        floaty::mode::Rounded<floaty::mode::Ieee, floaty::mode::direction::TowardPositive>,
+    >;
+    let mut random = SplitMix64::new(0x00A6_D1E0);
+    let encodings = encodings::<u32>(&pairs(&mut random, 32, 8));
+    for control in core::iter::once(0).chain(FPCR_SETTINGS) {
+        for start in (0..encodings.len()).step_by(7) {
+            let bits: [u32; 5] =
+                core::array::from_fn(|offset| encodings[(start + offset) % encodings.len()]);
+            let lanes = Lanes::<Up, 5>::from_bits(bits);
+            let ours = with_fpcr(control, || {
+                let lanes = black_box(lanes);
+                (
+                    lanes.round_to_integral().to_bits(),
+                    lanes
+                        .into_array()
+                        .map(|value| value.round_to_integral().to_bits()),
+                )
+            });
+            let engine = bits.map(|bits| {
+                Up::from_bits(bits)
+                    .round_to_integral_with(Up::ENV)
+                    .0
+                    .to_bits()
+            });
+            assert_eq!(ours, (engine, engine), "{bits:x?} under FPCR {control:#x}");
+        }
+    }
+}

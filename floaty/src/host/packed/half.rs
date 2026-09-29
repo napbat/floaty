@@ -13,7 +13,7 @@ use super::super::Operation;
 use super::super::environment::{self, packed};
 use super::super::paths::nan_16;
 use super::{chunk, encodings_u16, in_chunks, lanes_u16, singles};
-use crate::env::Mode;
+use crate::env::{Mode, Rounding};
 use crate::float::Float;
 use crate::format::Standard;
 
@@ -74,11 +74,14 @@ pub(super) fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     })
 }
 
-/// Returns each binary16 lane rounded to an integral value to nearest even,
-/// or `None` when the build has no instruction or a lane is a NaN.
+/// Returns each binary16 lane rounded to an integral value in the direction
+/// `rounding`, or `None` when the build has no instruction or a lane is a
+/// NaN. The integral value in each direction is a binary16 value, so the
+/// narrowing is exact.
 #[inline]
 pub(super) fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
+    rounding: Rounding,
 ) -> Option<[Float<S, W, M>; N]> {
     let x = encodings_u16(value)?;
     lanes_u16(value, nan_16, |lanes| {
@@ -86,15 +89,15 @@ pub(super) fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N
             lanes,
             |start| {
                 let a = packed::widen_halves_x8(*chunk(x, start))?;
-                packed::narrow_halves_x8(packed::round_f32x8(a)?)
+                packed::narrow_halves_x8(packed::round_f32x8(a, rounding)?)
             },
             |start| {
                 let a = packed::widen_halves_x4(*chunk(x, start))?;
-                packed::narrow_halves_x4(packed::round_f32x4(a)?)
+                packed::narrow_halves_x4(packed::round_f32x4(a, rounding)?)
             },
             |index| {
                 let a = environment::widen_half(x[index])?;
-                environment::narrow_half(environment::round_f32(a)?)
+                environment::narrow_half(environment::round_f32(a, rounding)?)
             },
         )
     })

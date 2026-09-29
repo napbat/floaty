@@ -16,6 +16,7 @@ use core::mem::transmute;
 
 use super::super::Operation;
 use super::sse;
+use crate::env::Rounding;
 
 /// `true` when the build has 256-bit registers, which hold eight binary32 or
 /// four binary64 lanes.
@@ -142,33 +143,61 @@ pub fn sqrt_f64x2(value: [f64; 2]) -> [f64; 2] {
     double_lanes(a)
 }
 
-/// Returns four binary32 lanes rounded to integral values to nearest even,
-/// by `ROUNDPS` with the rounding control 0 in its immediate.
+/// Runs one packed rounding to an integral value on `$a`, in registers of
+/// the class `$class`, with the rounding control of `$rounding` in the
+/// immediate of the instruction: 0 to nearest even, 1 toward negative
+/// infinity, 2 toward positive infinity, and 3 toward zero. Returns `None`
+/// from the function for another direction.
+#[cfg(target_feature = "sse4.1")]
+macro_rules! round_packed {
+    ($class:ident, $rounding:expr, [$even:expr, $down:expr, $up:expr, $zero:expr $(,)?], $a:ident) => {
+        match $rounding {
+            Rounding::NearestEven => packed!($class, $even, $a, $a),
+            Rounding::TowardNegative => packed!($class, $down, $a, $a),
+            Rounding::TowardPositive => packed!($class, $up, $a, $a),
+            Rounding::TowardZero => packed!($class, $zero, $a, $a),
+            Rounding::NearestAway | Rounding::ToOdd => return None,
+        }
+    };
+}
+
+/// Returns four binary32 lanes rounded to integral values in the direction
+/// `rounding`, by `ROUNDPS` with the direction in its immediate, or `None`
+/// for a direction that the immediate does not have.
 #[cfg(target_feature = "sse4.1")]
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // A build without SSE4.1 returns `None` from the same signature.
-pub fn round_f32x4(value: [f32; 4]) -> Option<[f32; 4]> {
+pub fn round_f32x4(value: [f32; 4], rounding: Rounding) -> Option<[f32; 4]> {
     let mut a = singles(value);
-    packed!(
+    round_packed!(
         xmm_reg,
-        sse!("roundps {a}, {b}, 0", "vroundps {a}, {b}, 0"),
-        a,
+        rounding,
+        [
+            sse!("roundps {a}, {b}, 0", "vroundps {a}, {b}, 0"),
+            sse!("roundps {a}, {b}, 1", "vroundps {a}, {b}, 1"),
+            sse!("roundps {a}, {b}, 2", "vroundps {a}, {b}, 2"),
+            sse!("roundps {a}, {b}, 3", "vroundps {a}, {b}, 3"),
+        ],
         a
     );
     Some(single_lanes(a))
 }
 
-/// Returns two binary64 lanes rounded to integral values to nearest even,
-/// by `ROUNDPD` with the rounding control 0 in its immediate.
+/// Returns two binary64 lanes rounded to integral values in the direction
+/// `rounding`, by `ROUNDPD` with the direction in its immediate, or `None`
+/// for a direction that the immediate does not have.
 #[cfg(target_feature = "sse4.1")]
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // A build without SSE4.1 returns `None` from the same signature.
-pub fn round_f64x2(value: [f64; 2]) -> Option<[f64; 2]> {
+pub fn round_f64x2(value: [f64; 2], rounding: Rounding) -> Option<[f64; 2]> {
     let mut a = doubles(value);
-    packed!(
+    round_packed!(
         xmm_reg,
-        sse!("roundpd {a}, {b}, 0", "vroundpd {a}, {b}, 0"),
-        a,
+        rounding,
+        [
+            sse!("roundpd {a}, {b}, 0", "vroundpd {a}, {b}, 0"),
+            sse!("roundpd {a}, {b}, 1", "vroundpd {a}, {b}, 1"),
+            sse!("roundpd {a}, {b}, 2", "vroundpd {a}, {b}, 2"),
+            sse!("roundpd {a}, {b}, 3", "vroundpd {a}, {b}, 3"),
+        ],
         a
     );
     Some(double_lanes(a))
@@ -177,14 +206,14 @@ pub fn round_f64x2(value: [f64; 2]) -> Option<[f64; 2]> {
 /// Returns `None`: a build without SSE4.1 has no packed rounding.
 #[cfg(not(target_feature = "sse4.1"))]
 #[inline]
-pub fn round_f32x4(_value: [f32; 4]) -> Option<[f32; 4]> {
+pub fn round_f32x4(_value: [f32; 4], _rounding: Rounding) -> Option<[f32; 4]> {
     None
 }
 
 /// Returns `None`: a build without SSE4.1 has no packed rounding.
 #[cfg(not(target_feature = "sse4.1"))]
 #[inline]
-pub fn round_f64x2(_value: [f64; 2]) -> Option<[f64; 2]> {
+pub fn round_f64x2(_value: [f64; 2], _rounding: Rounding) -> Option<[f64; 2]> {
     None
 }
 
@@ -345,6 +374,23 @@ pub fn narrow_halves_x4(_value: [f32; 4]) -> Option<[u16; 4]> {
 /// Defines a function for a 256-bit chunk, which runs its form in `wide`
 /// where the build has the features, and returns `None` otherwise.
 macro_rules! wide {
+    ($(#[$doc:meta])* $name:ident, $features:meta, ($($argument:ident: $type:ty),+) -> Option<$result:ty>) => {
+        $(#[$doc])*
+        #[cfg($features)]
+        #[inline]
+        pub fn $name($($argument: $type),+) -> Option<$result> {
+            // SAFETY: the build enables the features of the 256-bit form, so
+            // the processor that runs it has them.
+            unsafe { wide::$name($($argument),+) }
+        }
+
+        #[doc = "Returns `None`: the build has no 256-bit form."]
+        #[cfg(not($features))]
+        #[inline]
+        pub fn $name($(_: $type),+) -> Option<$result> {
+            None
+        }
+    };
     ($(#[$doc:meta])* $name:ident, $features:meta, ($($argument:ident: $type:ty),+) -> $result:ty) => {
         $(#[$doc])*
         #[cfg($features)]
@@ -384,14 +430,16 @@ wide!(
     sqrt_f64x4, target_feature = "avx", (value: [f64; 4]) -> [f64; 4]
 );
 wide!(
-    /// Returns eight binary32 lanes rounded to integral values to nearest
-    /// even, by `VROUNDPS` with the immediate 0.
-    round_f32x8, target_feature = "avx", (value: [f32; 8]) -> [f32; 8]
+    /// Returns eight binary32 lanes rounded to integral values in the
+    /// direction `rounding`, by `VROUNDPS` with the direction in its
+    /// immediate, or `None` for a direction that the immediate does not have.
+    round_f32x8, target_feature = "avx", (value: [f32; 8], rounding: Rounding) -> Option<[f32; 8]>
 );
 wide!(
-    /// Returns four binary64 lanes rounded to integral values to nearest
-    /// even, by `VROUNDPD` with the immediate 0.
-    round_f64x4, target_feature = "avx", (value: [f64; 4]) -> [f64; 4]
+    /// Returns four binary64 lanes rounded to integral values in the
+    /// direction `rounding`, by `VROUNDPD` with the direction in its
+    /// immediate, or `None` for a direction that the immediate does not have.
+    round_f64x4, target_feature = "avx", (value: [f64; 4], rounding: Rounding) -> Option<[f64; 4]>
 );
 wide!(
     /// Returns `left * right + addend` of eight triples of binary32 lanes,
@@ -435,6 +483,7 @@ mod wide {
     use core::mem::transmute;
 
     use super::Operation;
+    use crate::env::Rounding;
 
     /// Returns eight binary32 lanes as the value of an AVX register.
     #[inline]
@@ -536,10 +585,20 @@ mod wide {
     /// The processor must have AVX.
     #[target_feature(enable = "avx")]
     #[inline]
-    pub unsafe fn round_f32x8(value: [f32; 8]) -> [f32; 8] {
+    pub unsafe fn round_f32x8(value: [f32; 8], rounding: Rounding) -> Option<[f32; 8]> {
         let mut a = singles(value);
-        packed!(ymm_reg, "vroundps {a}, {b}, 0", a, a);
-        single_lanes(a)
+        round_packed!(
+            ymm_reg,
+            rounding,
+            [
+                "vroundps {a}, {b}, 0",
+                "vroundps {a}, {b}, 1",
+                "vroundps {a}, {b}, 2",
+                "vroundps {a}, {b}, 3",
+            ],
+            a
+        );
+        Some(single_lanes(a))
     }
 
     /// # Safety
@@ -547,10 +606,20 @@ mod wide {
     /// The processor must have AVX.
     #[target_feature(enable = "avx")]
     #[inline]
-    pub unsafe fn round_f64x4(value: [f64; 4]) -> [f64; 4] {
+    pub unsafe fn round_f64x4(value: [f64; 4], rounding: Rounding) -> Option<[f64; 4]> {
         let mut a = doubles(value);
-        packed!(ymm_reg, "vroundpd {a}, {b}, 0", a, a);
-        double_lanes(a)
+        round_packed!(
+            ymm_reg,
+            rounding,
+            [
+                "vroundpd {a}, {b}, 0",
+                "vroundpd {a}, {b}, 1",
+                "vroundpd {a}, {b}, 2",
+                "vroundpd {a}, {b}, 3",
+            ],
+            a
+        );
+        Some(double_lanes(a))
     }
 
     /// # Safety
@@ -676,6 +745,7 @@ mod tests {
         widen_single,
     };
     use super::Operation;
+    use crate::env::Rounding;
 
     /// Storage aligned to 32 bytes, so that the lanes at an offset of one lane
     /// have an address that is not a multiple of 16.
@@ -742,12 +812,14 @@ mod tests {
             two.map(narrow_double).map(f32::to_bits),
             "CVTPD2PS"
         );
-        if let Some(lanes) = super::round_f32x4(four) {
-            let again = super::round_f32x4(lanes).expect("the build has ROUNDPS");
+        if let Some(lanes) = super::round_f32x4(four, Rounding::NearestEven) {
+            let again =
+                super::round_f32x4(lanes, Rounding::NearestEven).expect("the build has ROUNDPS");
             assert_eq!(lanes.map(f32::to_bits), again.map(f32::to_bits), "ROUNDPS");
         }
-        if let Some(lanes) = super::round_f64x2(two) {
-            let again = super::round_f64x2(lanes).expect("the build has ROUNDPD");
+        if let Some(lanes) = super::round_f64x2(two, Rounding::NearestEven) {
+            let again =
+                super::round_f64x2(lanes, Rounding::NearestEven).expect("the build has ROUNDPD");
             assert_eq!(lanes.map(f64::to_bits), again.map(f64::to_bits), "ROUNDPD");
         }
     }

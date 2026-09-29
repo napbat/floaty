@@ -11,6 +11,7 @@ use core::arch::aarch64::{float32x2_t, float32x4_t, float64x2_t, uint16x4_t};
 use core::mem::transmute;
 
 use super::super::Operation;
+use crate::env::Rounding;
 
 /// `false`: AArch64 has no vector registers wider than 128 bits in the base
 /// architecture.
@@ -158,23 +159,68 @@ pub fn sqrt_f64x2(value: [f64; 2]) -> [f64; 2] {
     double_lanes(a)
 }
 
-/// Returns four binary32 lanes rounded to integral values to nearest even,
-/// by `FRINTN`.
+/// Runs one packed rounding to an integral value on `$a`, from the
+/// instruction of the direction `$rounding` on the arrangement
+/// `$arrangement`: `FRINTN`, `FRINTA`, `FRINTM`, `FRINTP`, or `FRINTZ`.
+/// Returns `None` from the function for another direction.
+macro_rules! round_vector {
+    ($rounding:expr, $arrangement:literal, $a:ident) => {
+        match $rounding {
+            Rounding::NearestEven => {
+                vector!(
+                    concat!("frintn {a:v}", $arrangement, ", {b:v}", $arrangement),
+                    $a,
+                    $a
+                )
+            }
+            Rounding::NearestAway => {
+                vector!(
+                    concat!("frinta {a:v}", $arrangement, ", {b:v}", $arrangement),
+                    $a,
+                    $a
+                )
+            }
+            Rounding::TowardNegative => {
+                vector!(
+                    concat!("frintm {a:v}", $arrangement, ", {b:v}", $arrangement),
+                    $a,
+                    $a
+                )
+            }
+            Rounding::TowardPositive => {
+                vector!(
+                    concat!("frintp {a:v}", $arrangement, ", {b:v}", $arrangement),
+                    $a,
+                    $a
+                )
+            }
+            Rounding::TowardZero => {
+                vector!(
+                    concat!("frintz {a:v}", $arrangement, ", {b:v}", $arrangement),
+                    $a,
+                    $a
+                )
+            }
+            Rounding::ToOdd => return None,
+        }
+    };
+}
+
+/// Returns four binary32 lanes rounded to integral values in the direction
+/// `rounding`, or `None` for a direction that no instruction has.
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack SSE4.1.
-pub fn round_f32x4(value: [f32; 4]) -> Option<[f32; 4]> {
+pub fn round_f32x4(value: [f32; 4], rounding: Rounding) -> Option<[f32; 4]> {
     let mut a = singles(value);
-    vector!("frintn {a:v}.4s, {b:v}.4s", a, a);
+    round_vector!(rounding, ".4s", a);
     Some(single_lanes(a))
 }
 
-/// Returns two binary64 lanes rounded to integral values to nearest even, by
-/// `FRINTN`.
+/// Returns two binary64 lanes rounded to integral values in the direction
+/// `rounding`, or `None` for a direction that no instruction has.
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack SSE4.1.
-pub fn round_f64x2(value: [f64; 2]) -> Option<[f64; 2]> {
+pub fn round_f64x2(value: [f64; 2], rounding: Rounding) -> Option<[f64; 2]> {
     let mut a = doubles(value);
-    vector!("frintn {a:v}.2d, {b:v}.2d", a, a);
+    round_vector!(rounding, ".2d", a);
     Some(double_lanes(a))
 }
 
@@ -313,8 +359,8 @@ no_wide!(binary_f32x8, ([f32; 8], [f32; 8], Operation) -> [f32; 8]);
 no_wide!(binary_f64x4, ([f64; 4], [f64; 4], Operation) -> [f64; 4]);
 no_wide!(sqrt_f32x8, ([f32; 8]) -> [f32; 8]);
 no_wide!(sqrt_f64x4, ([f64; 4]) -> [f64; 4]);
-no_wide!(round_f32x8, ([f32; 8]) -> [f32; 8]);
-no_wide!(round_f64x4, ([f64; 4]) -> [f64; 4]);
+no_wide!(round_f32x8, ([f32; 8], Rounding) -> [f32; 8]);
+no_wide!(round_f64x4, ([f64; 4], Rounding) -> [f64; 4]);
 no_wide!(mul_add_f32x8, ([f32; 8], [f32; 8], [f32; 8]) -> [f32; 8]);
 no_wide!(mul_add_f64x4, ([f64; 4], [f64; 4], [f64; 4]) -> [f64; 4]);
 no_wide!(widen_x4, ([f32; 4]) -> [f64; 4]);

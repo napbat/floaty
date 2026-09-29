@@ -2,6 +2,7 @@
 //! control word of the x87 unit, and the instructions of the host paths.
 
 use super::Operation;
+use crate::env::Rounding;
 
 pub mod packed;
 
@@ -344,43 +345,95 @@ pub fn narrow_double_to_half(_value: f64) -> Option<u16> {
     None
 }
 
-/// Returns a binary32 value rounded to an integral value to nearest even, by
-/// `ROUNDSS` with the rounding control 0 in its immediate.
+/// Runs one rounding to an integral value on `$value`, with the rounding
+/// control of `$rounding` in the immediate of the instruction: 0 to nearest
+/// even, 1 toward negative infinity, 2 toward positive infinity, and 3
+/// toward zero. Returns `None` from the function for another direction.
+#[cfg(target_feature = "sse4.1")]
+macro_rules! round_scalar {
+    ($rounding:expr, [$even:expr, $down:expr, $up:expr, $zero:expr $(,)?], $value:ident) => {
+        match $rounding {
+            Rounding::NearestEven => round_scalar!($even, $value),
+            Rounding::TowardNegative => round_scalar!($down, $value),
+            Rounding::TowardPositive => round_scalar!($up, $value),
+            Rounding::TowardZero => round_scalar!($zero, $value),
+            Rounding::NearestAway | Rounding::ToOdd => return None,
+        }
+    };
+    ($instruction:expr, $value:ident) => {
+        // SAFETY: ROUNDSS and ROUNDSD read and write one SSE register. The
+        // build enables SSE4.1, and `sse!` selects a VEX form only in a build
+        // with AVX. The instruction changes only the status flags of MXCSR,
+        // which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                $instruction,
+                value = inout(xmm_reg) $value,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+    };
+}
+
+/// Returns a binary32 value rounded to an integral value in the direction
+/// `rounding`, by `ROUNDSS` with the direction in its immediate, or `None`
+/// for a direction that the immediate does not have.
 #[cfg(target_feature = "sse4.1")]
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // A build without SSE4.1 returns `None` from the same signature.
-pub fn round_f32(mut value: f32) -> Option<f32> {
-    // SAFETY: ROUNDSS reads and writes one SSE register. The build enables
-    // SSE4.1, and `sse!` selects a VEX form only in a build with AVX. The
-    // instruction changes only the status flags of MXCSR, which floaty does
-    // not read.
-    unsafe {
-        core::arch::asm!(
-            sse!("roundss {value}, {value}, 0", "vroundss {value}, {value}, {value}, 0"),
-            value = inout(xmm_reg) value,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
+pub fn round_f32(mut value: f32, rounding: Rounding) -> Option<f32> {
+    round_scalar!(
+        rounding,
+        [
+            sse!(
+                "roundss {value}, {value}, 0",
+                "vroundss {value}, {value}, {value}, 0"
+            ),
+            sse!(
+                "roundss {value}, {value}, 1",
+                "vroundss {value}, {value}, {value}, 1"
+            ),
+            sse!(
+                "roundss {value}, {value}, 2",
+                "vroundss {value}, {value}, {value}, 2"
+            ),
+            sse!(
+                "roundss {value}, {value}, 3",
+                "vroundss {value}, {value}, {value}, 3"
+            ),
+        ],
+        value
+    );
     Some(value)
 }
 
-/// Returns a binary64 value rounded to an integral value to nearest even, by
-/// `ROUNDSD` with the rounding control 0 in its immediate.
+/// Returns a binary64 value rounded to an integral value in the direction
+/// `rounding`, by `ROUNDSD` with the direction in its immediate, or `None`
+/// for a direction that the immediate does not have.
 #[cfg(target_feature = "sse4.1")]
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // A build without SSE4.1 returns `None` from the same signature.
-pub fn round_f64(mut value: f64) -> Option<f64> {
-    // SAFETY: ROUNDSD reads and writes one SSE register. The build enables
-    // SSE4.1, and `sse!` selects a VEX form only in a build with AVX. The
-    // instruction changes only the status flags of MXCSR, which floaty does
-    // not read.
-    unsafe {
-        core::arch::asm!(
-            sse!("roundsd {value}, {value}, 0", "vroundsd {value}, {value}, {value}, 0"),
-            value = inout(xmm_reg) value,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
+pub fn round_f64(mut value: f64, rounding: Rounding) -> Option<f64> {
+    round_scalar!(
+        rounding,
+        [
+            sse!(
+                "roundsd {value}, {value}, 0",
+                "vroundsd {value}, {value}, {value}, 0"
+            ),
+            sse!(
+                "roundsd {value}, {value}, 1",
+                "vroundsd {value}, {value}, {value}, 1"
+            ),
+            sse!(
+                "roundsd {value}, {value}, 2",
+                "vroundsd {value}, {value}, {value}, 2"
+            ),
+            sse!(
+                "roundsd {value}, {value}, 3",
+                "vroundsd {value}, {value}, {value}, 3"
+            ),
+        ],
+        value
+    );
     Some(value)
 }
 
@@ -388,7 +441,7 @@ pub fn round_f64(mut value: f64) -> Option<f64> {
 /// integral value.
 #[cfg(not(target_feature = "sse4.1"))]
 #[inline]
-pub fn round_f32(_value: f32) -> Option<f32> {
+pub fn round_f32(_value: f32, _rounding: Rounding) -> Option<f32> {
     None
 }
 
@@ -396,7 +449,7 @@ pub fn round_f32(_value: f32) -> Option<f32> {
 /// integral value.
 #[cfg(not(target_feature = "sse4.1"))]
 #[inline]
-pub fn round_f64(_value: f64) -> Option<f64> {
+pub fn round_f64(_value: f64, _rounding: Rounding) -> Option<f64> {
     None
 }
 

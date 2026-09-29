@@ -19,7 +19,7 @@ mod bfloat;
 mod half;
 
 use super::environment::{self, packed};
-use super::paths::{nan_16, nan_32, nan_64, precision_of, ready_for};
+use super::paths::{nan_16, nan_32, nan_64, precision_of, ready_for, ready_for_integral};
 use super::{Kind, Operation};
 use crate::env::{Env, Mode};
 use crate::float::Float;
@@ -322,25 +322,26 @@ pub fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     }
 }
 
-/// Returns each lane rounded to an integral value to nearest even from the
-/// host unit.
+/// Returns each lane rounded to an integral value in the rounding direction
+/// of `env` from the host unit.
 #[inline]
 pub fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
     env: &Env,
 ) -> Option<[Float<S, W, M>; N]> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+    if !ready_for_integral(S::HOST, env, S::PRECISION) {
         return None;
     }
+    let rounding = env.rounding;
     match S::HOST {
         Host::Single => {
             let x = singles(value)?;
             single_lanes(value, |lanes| {
                 in_chunks::<f32, N, 8, 4>(
                     lanes,
-                    |start| packed::round_f32x8(*chunk(x, start)),
-                    |start| packed::round_f32x4(*chunk(x, start)),
-                    |index| environment::round_f32(x[index]),
+                    |start| packed::round_f32x8(*chunk(x, start), rounding),
+                    |start| packed::round_f32x4(*chunk(x, start), rounding),
+                    |index| environment::round_f32(x[index], rounding),
                 )
             })
         }
@@ -349,14 +350,14 @@ pub fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N: usize
             double_lanes(value, |lanes| {
                 in_chunks::<f64, N, 4, 2>(
                     lanes,
-                    |start| packed::round_f64x4(*chunk(x, start)),
-                    |start| packed::round_f64x2(*chunk(x, start)),
-                    |index| environment::round_f64(x[index]),
+                    |start| packed::round_f64x4(*chunk(x, start), rounding),
+                    |start| packed::round_f64x2(*chunk(x, start), rounding),
+                    |index| environment::round_f64(x[index], rounding),
                 )
             })
         }
-        Host::Half => half::round_to_integral(value),
-        Host::BFloat => bfloat::round_to_integral(value),
+        Host::Half => half::round_to_integral(value, rounding),
+        Host::BFloat => bfloat::round_to_integral(value, rounding),
         Host::None | Host::Extended => None,
     }
 }

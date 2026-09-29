@@ -259,32 +259,56 @@ pub fn mul_add<S: Standard<W>, const W: usize>(
     }
 }
 
-/// Returns the value rounded to an integral value to nearest even from the
-/// host unit, or `None` when the path does not apply or the result is a NaN.
+/// Returns `true` when the mode and the environment of the host unit allow a
+/// rounding to an integral value in the direction of `env`. The instructions
+/// take the direction in their encoding, not from the environment, so every
+/// other field must allow a host path, and the environment must round to
+/// nearest even.
+#[inline]
+pub(super) fn ready_for_integral(host: Host, env: &Env, precision: u32) -> bool {
+    ready_for(host, &env.with_rounding(Rounding::NearestEven), precision)
+}
+
+/// Returns the value rounded to an integral value in the rounding direction
+/// of `env` from the host unit, or `None` when the path does not apply, the
+/// unit has no instruction for the direction, or the result is a NaN.
 #[inline]
 pub fn round_to_integral<S: Standard<W>, const W: usize>(
     value: S::Bits,
     env: &Env,
 ) -> Option<S::Bits> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+    if !ready_for_integral(S::HOST, env, S::PRECISION) {
         return None;
     }
+    let rounding = env.rounding;
     match S::HOST {
         Host::None => None,
-        Host::Single => single_encoding::<S, W>(environment::round_f32(single::<S, W>(value))?),
-        Host::Double => double_encoding::<S, W>(environment::round_f64(double::<S, W>(value))?),
-        // The integral value of a binary16 value is a binary16 value, so the
-        // narrowing is exact.
-        Host::Half => half_encoding::<S, W>(environment::round_f32(half::<S, W>(value)?)?),
-        // The integral value of a bfloat16 value is a bfloat16 value, so the
-        // low 16 bits of the binary32 result are zero, and a shift narrows it.
+        Host::Single => {
+            single_encoding::<S, W>(environment::round_f32(single::<S, W>(value), rounding)?)
+        }
+        Host::Double => {
+            double_encoding::<S, W>(environment::round_f64(double::<S, W>(value), rounding)?)
+        }
+        // The integral value of a binary16 value in each direction is a
+        // binary16 value, so the narrowing is exact.
+        Host::Half => {
+            half_encoding::<S, W>(environment::round_f32(half::<S, W>(value)?, rounding)?)
+        }
+        // The integral value of a bfloat16 value in each direction is a
+        // bfloat16 value, so the low 16 bits of the binary32 result are zero,
+        // and a shift narrows it.
         Host::BFloat => {
-            let bits = environment::round_f32(bfloat::<S, W>(value))?.to_bits();
+            let bits = environment::round_f32(bfloat::<S, W>(value), rounding)?.to_bits();
             encoding::<S, W>(u64::from(bits >> 16), nan_32(bits))
         }
-        // The precision control does not apply to `FRNDINT`, Intel SDM
-        // Volume 1, section 8.1.5.2, so the integral value rounds once.
+        // `FRNDINT` rounds in the direction of the control word, which the
+        // path requires to be to nearest. The precision control does not
+        // apply to `FRNDINT`, Intel SDM Volume 1, section 8.1.5.2, so the
+        // integral value rounds once.
         Host::Extended => {
+            if !matches!(rounding, Rounding::NearestEven) {
+                return None;
+            }
             environment::x87_round(&extended::<S, W>(value)).map(extended_encoding::<S, W>)
         }
     }
