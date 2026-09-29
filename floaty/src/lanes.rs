@@ -224,7 +224,16 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
             return Lanes::new(self.lanes.map(Float::convert::<T>));
         }
         match host::packed::convert(&self.lanes, T::HOST, &<T::Mode as Mode>::ENV) {
-            Some(bits) => Lanes::new(bits.map(|bits| T::from_host([bits, 0]))),
+            Some(bits) => {
+                // A loop, not `array::map`, which LLVM calls out of line
+                // for four lanes.
+                let mut lanes = [T::from_host([0, 0]); N];
+                lanes
+                    .iter_mut()
+                    .zip(bits)
+                    .for_each(|(lane, bits)| *lane = T::from_host([bits, 0]));
+                Lanes::new(lanes)
+            }
             None => convert_out_of_line(self),
         }
     }
