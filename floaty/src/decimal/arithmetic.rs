@@ -140,12 +140,14 @@ where
     pub(super) fn operand<L: Limbs>(bits: L, env: &Env, flags: &mut Flags) -> Unpacked<L> {
         let value = Self::decode(bits);
         let Unpacked::Finite {
-            negative, exponent, ..
+            negative,
+            exponent,
+            significand,
         } = value
         else {
             return value;
         };
-        if Self::classify(bits) != crate::float::Class::Subnormal {
+        if !Self::is_subnormal(exponent, limbs::to_u128(&significand)) {
             return value;
         }
         *flags |= Flags::DENORMAL_INPUT;

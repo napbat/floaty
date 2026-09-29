@@ -958,6 +958,11 @@ The decimal formats follow the Intel decimal library:
     too, so `limbs::multiply_fit` multiplies without a product type of twice
     the width. The engine first computed every format on 512 bits, and a
     decimal64 addition ran about 3,150 instructions.
+  - A decimal operation decodes each operand once. The class of a nonzero
+    value needs no digit count. At an exponent of at least emin, the value
+    is normal. Below emin, the value is subnormal when its coefficient is
+    below `10^(emin - exponent)`. The digit count of a value of at most 128
+    bits compares the value with one entry of a table of powers of 10.
 - A fast path must pass the same oracle tests as the generic path, and this
   file must list it. There is one fast path.
   - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
@@ -1064,6 +1069,23 @@ most of their time.
 | decimal128 BID square root | 452 | 377 |
 | decimal64 DPD add | 366 | 242 |
 | decimal128 DPD add | 661 | 580 |
+
+One decode of each operand and the faster digit count, before and after,
+in nanoseconds per operation with an `Env`. Each figure is the lower of two
+interleaved runs, on a host with more load than for the table above.
+
+| Operation | Before | After |
+| --- | --- | --- |
+| decimal32 BID add | 121 | 87 |
+| decimal64 BID add | 122 | 92 |
+| decimal64 BID multiply | 122 | 91 |
+| decimal64 BID fused multiply-add | 166 | 120 |
+| decimal64 BID to `i64` | 71 | 56 |
+| decimal128 BID add | 145 | 91 |
+| decimal128 BID multiply | 149 | 109 |
+| decimal128 BID divide | 240 | 180 |
+| decimal64 DPD add | 266 | 223 |
+| decimal128 DPD add | 630 | 542 |
 
 ## Verification
 
@@ -1313,10 +1335,11 @@ Each step passes its oracle tests before the next step starts.
 - Decide whether a reciprocal square root estimate, as SoftFloat uses,
   replaces the integer square root and the wide division. The speedup pass
   left them slow: binary128 `sqrt` takes 255 ns.
-- Decide whether decimal digit counting takes a faster path. The class of
-  each operand scans a table of 39 powers of 10, and a 256-bit decimal128
-  result counts its digits with a division. Together they take about a
-  third of a decimal128 addition.
+- Decide whether the decimal engine divides by a power of 10 with a
+  multiplication by its reciprocal. The rounding cut and the DPD codec
+  divide 128-bit values with the software division of the compiler. That
+  division takes 22% of a decimal128 multiplication, and a third of a
+  decimal64 DPD addition.
 - Measure the specialization per format and behavior again on an idle host.
   Other work loaded the host during the measurement in this file.
 - Add mode combinators for the NaN rule and the tininess rule with the Arm

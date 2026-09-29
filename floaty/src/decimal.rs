@@ -24,7 +24,7 @@ mod scale;
 /// decimal128 radicand has at most 71 digits.
 type Wide<L> = <L as Widen>::Double;
 
-use self::digits::{digit_count_u128, power_of_ten_u128};
+use self::digits::power_of_ten_u128;
 use self::round::DecimalTarget;
 use crate::env::{Behavior, Flags, TotalOrder};
 use crate::exact::Unrounded;
@@ -280,6 +280,17 @@ where
         }
     }
 
+    /// Returns `true` when a nonzero `coefficient * 10^exponent` is below
+    /// `10^emin`.
+    ///
+    /// At an exponent of at least emin, the leading digit is at emin or
+    /// above. Below emin, the leading digit is below emin when the
+    /// coefficient has at most `emin - exponent` digits. That count is below
+    /// the precision, so the power of 10 fits.
+    fn is_subnormal(exponent: i32, coefficient: u128) -> bool {
+        exponent < Self::EMIN && coefficient < power_of_ten_u128(Self::EMIN.abs_diff(exponent))
+    }
+
     /// Returns the class of an encoding.
     pub fn classify<L: Limbs>(bits: L) -> Class {
         match Self::decode(bits) {
@@ -289,8 +300,7 @@ where
                 significand,
                 ..
             } => {
-                let digits = digit_count_u128(limbs::to_u128(&significand));
-                if exponent + signed(digits) - 1 < Self::EMIN {
+                if Self::is_subnormal(exponent, limbs::to_u128(&significand)) {
                     Class::Subnormal
                 } else {
                     Class::Normal
@@ -502,6 +512,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::env::{Env, Flags};
     use crate::float::{Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded};
 
     #[test]
@@ -576,6 +587,41 @@ mod tests {
         assert_eq!(
             D64Bid::from_bits(0x7E00_0000_0000_0000).classify(),
             Class::SignalingNan
+        );
+    }
+
+    #[test]
+    fn the_class_changes_at_the_smallest_normal_magnitude() {
+        // A BID encoding with a small coefficient has its exponent field
+        // above the coefficient field. The smallest normal magnitude,
+        // 10^emin, is 10^(p - 1) at the smallest exponent and 1 at emin.
+        let d32 = |field: u32, coefficient: u32| D32Bid::from_bits((field << 23) | coefficient);
+        assert_eq!(d32(0, 1_000_000).classify(), Class::Normal);
+        assert_eq!(d32(0, 999_999).classify(), Class::Subnormal);
+        assert_eq!(d32(6, 1).classify(), Class::Normal);
+        assert_eq!(d32(5, 1).classify(), Class::Subnormal);
+        let d64 = |field: u64, coefficient: u64| D64Bid::from_bits((field << 53) | coefficient);
+        assert_eq!(d64(0, 10_u64.pow(15)).classify(), Class::Normal);
+        assert_eq!(d64(0, 10_u64.pow(15) - 1).classify(), Class::Subnormal);
+        assert_eq!(d64(15, 1).classify(), Class::Normal);
+        assert_eq!(d64(14, 1).classify(), Class::Subnormal);
+        let d128 =
+            |field: u128, coefficient: u128| D128Bid::from_bits((field << 113) | coefficient);
+        assert_eq!(d128(0, 10_u128.pow(33)).classify(), Class::Normal);
+        assert_eq!(d128(0, 10_u128.pow(33) - 1).classify(), Class::Subnormal);
+        assert_eq!(d128(33, 1).classify(), Class::Normal);
+        assert_eq!(d128(32, 1).classify(), Class::Subnormal);
+        // An operation reports the subnormal operand, and DAZ reads it as a
+        // zero with its exponent.
+        let (normal, subnormal) = (d64(0, 10_u64.pow(15)), d64(0, 10_u64.pow(15) - 1));
+        let (_, flags) = normal.add_with(normal, Env::IEEE);
+        assert!(!flags.contains(Flags::DENORMAL_INPUT));
+        let (_, flags) = subnormal.add_with(normal, Env::IEEE);
+        assert!(flags.contains(Flags::DENORMAL_INPUT));
+        let (sum, flags) = subnormal.add_with(normal, Env::IEEE.with_denormals_are_zero(true));
+        assert_eq!(
+            (sum.to_bits(), flags),
+            (normal.to_bits(), Flags::DENORMAL_INPUT)
         );
     }
 }
