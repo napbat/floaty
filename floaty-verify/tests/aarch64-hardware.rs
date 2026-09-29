@@ -398,11 +398,12 @@ fn comparisons_read_fpcr_before_the_host_unit() {
     let single_pairs = pairs(&mut random, 32, 8);
     let double_pairs = pairs(&mut random, 64, 11);
     let half_pairs = pairs(&mut random, 16, 5);
+    let bfloat_pairs = pairs(&mut random, 16, 8);
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
         comparisons_under!(F32, u32, control, &single_pairs);
         comparisons_under!(F64, u64, control, &double_pairs);
         comparisons_under!(F16, u16, control, &half_pairs);
-        comparisons_under!(BF16, u16, control, &half_pairs);
+        comparisons_under!(BF16, u16, control, &bfloat_pairs);
     }
 }
 

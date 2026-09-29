@@ -10,15 +10,16 @@ It also lists the operations of `Float` that `Lanes` does not have.
 `DESIGN.md` lists the host paths that exist. This record lists the host
 paths that could exist, and what blocks each one.
 
-The record describes the branch `x86-64-gaps` on 2026-09-30, which closed
+The record describes the branch `x86-64-gaps` on 2026-09-29, which closed
 the first seven gaps of the first version of this record. The figures come
-from
-`cargo bench -p floaty-verify --bench operations` on a Core i9-9900K, which
-has x86-64-v3 and no AVX-512. Each figure is the lower of two runs. A
+from `cargo bench -p floaty-verify --bench operations` on a Core i9-9900K,
+which has x86-64-v3 and no AVX-512. Each figure is the lower of two runs. A
 `Lanes` figure is in nanoseconds per lane, and a `Float` figure in
-nanoseconds per operation. Where a cell gives two figures, the first is the
-default build and the second the x86-64-v3 build. For comparison, a packed
-path of binary32 takes 0.2 to 0.6 nanoseconds per lane.
+nanoseconds per operation. Each table has a column for the default build
+and one for the x86-64-v3 build. In the table of binary32 and binary64, a
+cell gives the figure of binary32 and then that of binary64. For
+comparison, a packed path of binary32 takes 0.2 to 0.6 nanoseconds per
+lane.
 
 ## Terms
 
@@ -86,8 +87,8 @@ binary32 x 8 and binary64 x 4 in the x86-64-v3 build.
 | `mul_add` | Engine: 22.8, 25.2 | Packed, FMA: 0.4, 0.9 | `VFMADD213PS`, `VFMADD213PD` (FMA). SSE2 has none. | None in the default build |
 | `round_to_integral` | Engine: 9.0, 8.4 | Packed, SSE4.1, in each direction but `NearestAway`: 0.3, 0.6 | `ROUNDPS`, `ROUNDPD` with the direction in the immediate (SSE4.1). `VRNDSCALEPS` (AVX-512F). SSE2 has none. | None in the default build |
 | `convert` between binary32 and binary64 | Packed: 0.9, 1.4 | Packed: 0.5, 0.8 | `CVTPS2PD`, `CVTPD2PS`, and their AVX forms | None |
-| Comparison | Packed, `compare_quiet`. Scalar `UCOMISS`: 2.4, 2.5 | Packed. Scalar: 4.1, 1.8 | `CMPLTPS` and `CMPUNORDPS`, and their other forms. `UCOMISS`, `UCOMISD`. | None |
-| Minimum and maximum | Packed, with the scalar path for a chunk with a NaN or two zeros. Scalar `MINSS`: 2.3, 2.4 | Packed. Scalar: 2.7, 2.2 | `MINPS`, `MAXPS`, and their other forms. `VRANGEPS` gives `min_num` and `max_num` without the fallback (AVX-512DQ). `VMINMAXPS` gives the IEEE 754-2019 operations (AVX10.2). | None below AVX-512DQ |
+| Comparison | Packed `compare_quiet`: 1.4, 1.8. Scalar `UCOMISS`: 2.4, 2.5 | Packed: 1.7, 1.8. Scalar: 4.1, 1.8 | `CMPLTPS` and `CMPUNORDPS`, and their other forms. `UCOMISS`, `UCOMISD`. | None |
+| Minimum and maximum | Packed `minimum`: 0.7, 2.1. A NaN or two zeros in any pair of lanes sends every lane to its scalar path. Scalar `MINSS`: 2.3, 2.4 | Packed: 0.5, 1.1. Scalar: 2.7, 2.2 | `MINPS`, `MAXPS`, and their other forms. `VRANGEPS` gives `min_num` and `max_num` without the fallback (AVX-512DQ). `VMINMAXPS` gives the IEEE 754-2019 operations (AVX10.2). | None below AVX-512DQ |
 | `to_int` | Scalar `CVTSS2SI` for each lane: 2.5, 2.1 | Scalar: 2.2, 2.1 | `CVTPS2DQ`, `CVTPD2DQ` to a 32-bit integer (SSE2). `VCVTPS2QQ`, `VCVTPD2QQ` to a 64-bit integer (AVX-512DQ). The integer indefinite goes to the engine. | Packed paths to 32 bits at SSE2 |
 | `from_int` | Scalar `CVTSI2SS` for each lane: 2.2, 2.2 | Scalar: 2.2, 2.2 | `CVTDQ2PS` rounds, and `CVTDQ2PD` is exact (SSE2). `VCVTQQ2PS`, `VCVTQQ2PD` (AVX-512DQ). | Packed paths from 32 bits at SSE2 |
 | `remainder` | Scalar `FPREM1` for each lane: 12.2, 12.7; distant operands 21.4, 131.4 | Scalar: 12.3, 12.5; 21.0, 131.2 | The x87 `FPREM1`, one lane at a time. No SSE or AVX instruction. | None |
@@ -207,6 +208,12 @@ with evidence from hardware, before a host path depends on it.
 - A scalar comparison sends an unordered pair to the engine, although the
   host order is exact for it: the path returns no result for a NaN, so
   `PartialOrd` cannot tell the unordered pair from a path that declines.
+- The packed comparison gains little over the scalar path of each lane:
+  1.4 nanoseconds per lane against 2.4 for binary32 x 8. The path makes the
+  `Option<Ordering>` of each lane from three masks, lane by lane.
+- The AArch64 build with `FEAT_BF16` has `BFCVTN`, which rounds packed
+  binary32 lanes to bfloat16. No packed path of bfloat16 arithmetic uses it
+  yet. This record lists only the gaps of x86-64.
 
 ## Gaps by Priority
 

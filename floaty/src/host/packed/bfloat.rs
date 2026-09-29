@@ -4,9 +4,11 @@
 //! widens each lane exactly, with no floating-point instruction. The
 //! integral value of a bfloat16 value in each direction is a bfloat16
 //! value, so the low 16 bits of the binary32 integral value are zero, and a
-//! shift narrows it exactly. No instruction of the builds rounds binary32 to bfloat16 at
-//! every value, so the arithmetic of bfloat16 lanes takes the scalar path
-//! of each lane.
+//! shift narrows it exactly. The arithmetic of bfloat16 lanes takes the
+//! scalar path of each lane: no x86-64 instruction below `AVX512_BF16` rounds
+//! binary32 to bfloat16, and `VCVTNEPS2BF16` reads a subnormal input as
+//! zero. The AArch64 build with `FEAT_BF16` has `BFCVTN`, which no packed
+//! path uses yet.
 
 use super::super::environment::{self, packed};
 use super::super::paths::nan_bfloat;

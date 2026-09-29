@@ -176,7 +176,7 @@ fn lanes_of_the_other_formats_give_the_scalar_results() {
 #[test]
 fn lanes_of_other_modes_give_the_scalar_results() {
     // The SSE mode takes the packed paths and selects NaNs by its own rule.
-    // A directed mode never takes them.
+    // A directed mode takes them only for the rounding to integral values.
     type Sse = Float<floaty::Binary<8>, 32, X86Sse>;
     type Truncating = Float<floaty::Binary<11>, 64, Rounded<floaty::mode::Ieee, TowardZero>>;
     let mut random = SplitMix64::new(0x1A4E_00DE);
@@ -198,6 +198,7 @@ fn lanes_round_in_the_direction_of_their_mode() {
     // and the rounding to integral values takes the paths.
     use floaty::mode::direction::{NearestAway, ToOdd, TowardNegative, TowardPositive};
     use floaty::mode::{Ieee, Rounded};
+    type Double<R> = Float<floaty::Binary<11>, 64, Rounded<Ieee, R>>;
     type Up = Float<floaty::Binary<8>, 32, Rounded<Ieee, TowardPositive>>;
     type Down = Float<floaty::Binary<5>, 16, Rounded<Ieee, TowardNegative>>;
     type Away = Float<floaty::Binary<11>, 64, Rounded<Ieee, NearestAway>>;
@@ -232,6 +233,12 @@ fn lanes_round_in_the_direction_of_their_mode() {
     lanes_match!(Odd, u32, 5, &singles, [Env::IEEE]);
     lanes_match!(Down, u16, 13, &halves, [Env::IEEE]);
     lanes_match!(Away, u64, 7, &doubles, [Env::IEEE]);
+    // Seven binary64 lanes take a 256-bit chunk, a 128-bit chunk, and one
+    // single lane in the x86-64-v3 build, and each form of `ROUNDPD`.
+    lanes_match!(Double<TowardNegative>, u64, 7, &doubles, [Env::IEEE]);
+    lanes_match!(Double<TowardPositive>, u64, 7, &doubles, [Env::IEEE]);
+    lanes_match!(Double<TowardZero>, u64, 7, &doubles, [Env::IEEE]);
+    lanes_match!(Double<TowardZero>, u64, 3, &doubles, [Env::IEEE]);
     lanes_match!(Chopped, u16, 13, &bfloats, [Env::IEEE]);
 }
 

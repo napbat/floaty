@@ -878,3 +878,40 @@ fn remainders_give_the_default_mode_results() {
         );
     }
 }
+
+/// Checks the remainder of the format `$alias` on dividends whose quotient
+/// by the divisor is an exact half, which rounds to the even integer, and on
+/// exact multiples of the divisor, whose remainder is a zero with the sign of
+/// the dividend. Each divisor is an odd integer below `2^$bits` times a power
+/// of two, so every product is exact.
+macro_rules! ties_and_multiples_match {
+    ($alias:ty, $bits:literal, $random:expr) => {{
+        let random: &mut SplitMix64 = $random;
+        for _ in 0..4_000 {
+            let odd = i64::try_from(random.next_u64() >> (64 - $bits)).expect("small") | 1;
+            let quotient = i64::try_from(random.next_u64() >> 54).expect("small");
+            let scale = i32::try_from(random.next_u64() % 60).expect("small") - 30;
+            let sign = if random.next_u64() & 1 == 0 { 1 } else { -1 };
+            let divisor = <$alias>::from_int(odd).scale_b(scale);
+            let tie = <$alias>::from_int(sign * (2 * quotient + 1) * odd).scale_b(scale - 1);
+            let multiple = <$alias>::from_int(sign * quotient * odd).scale_b(scale);
+            for dividend in [tie, multiple] {
+                assert_eq!(
+                    dividend.remainder(divisor).to_bits(),
+                    dividend.remainder_with(divisor, <$alias>::ENV).0.to_bits(),
+                    "{dividend:?} {divisor:?}"
+                );
+            }
+        }
+    }};
+}
+
+#[test]
+fn remainders_of_ties_and_multiples_give_the_default_mode_results() {
+    // `FPREM1` rounds a quotient that lies halfway between two integers to
+    // the even one, and a remainder of zero keeps the sign of the dividend.
+    let mut random = SplitMix64::new(0xE3E4);
+    ties_and_multiples_match!(floaty::F32, 12, &mut random);
+    ties_and_multiples_match!(F64, 40, &mut random);
+    ties_and_multiples_match!(F80, 50, &mut random);
+}

@@ -384,19 +384,25 @@ pub fn compare<S: Standard<W>, const W: usize>(
 /// Returns `true` for two binary32 encodings where the minimum and maximum
 /// instructions of the host differ from the operations: a NaN operand, or two
 /// zeros. `MINSS` then gives the second operand, and every operation orders
-/// `-0` below `+0`.
+/// `-0` below `+0`. The test has no branch, so LLVM tests the lanes of a
+/// packed path at once.
 #[inline]
-fn min_max_differs(left: u32, right: u32) -> bool {
+pub(super) fn min_max_differs(left: u32, right: u32) -> bool {
+    let nan = (left & 0x7FFF_FFFF).max(right & 0x7FFF_FFFF) > 0x7F80_0000;
     // The shift drops the sign bits, so the result is zero for two zeros.
-    nan_32(left) || nan_32(right) || (left | right) << 1 == 0
+    let zeros = (left | right) << 1 == 0;
+    nan | zeros
 }
 
 /// Returns `true` for two binary64 encodings where the minimum and maximum
 /// instructions of the host differ from the operations, as
 /// `min_max_differs` does for binary32.
 #[inline]
-fn min_max_differs_64(left: u64, right: u64) -> bool {
-    nan_64(left) || nan_64(right) || (left | right) << 1 == 0
+pub(super) fn min_max_differs_64(left: u64, right: u64) -> bool {
+    let magnitude = 0x7FFF_FFFF_FFFF_FFFF;
+    let nan = (left & magnitude).max(right & magnitude) > 0x7FF0_0000_0000_0000;
+    let zeros = (left | right) << 1 == 0;
+    nan | zeros
 }
 
 /// Returns the smaller or the larger of two binary32 values from the host
@@ -472,6 +478,20 @@ pub fn min_max<S: Standard<W>, const W: usize>(
 /// nanoseconds on the path and 181 in the engine, and at 1,000, 252 and 182.
 const REMAINDER_REACH: u64 = 630;
 
+/// Returns `true` when the remainder path takes a dividend and a divisor
+/// with the exponent fields `dividend` and `divisor`, in a format of
+/// `precision` bits. A subnormal operand or result makes the x87 unit take a
+/// microcode assist that is slower than the engine. A nonzero remainder is a
+/// multiple of the unit in the last place of the divisor, so it can be
+/// subnormal only when the exponent field of the divisor is below the
+/// precision.
+#[inline]
+fn remainder_fits(dividend: u64, divisor: u64, precision: u32) -> bool {
+    dividend != 0
+        && divisor >= u64::from(precision)
+        && dividend.saturating_sub(divisor) <= REMAINDER_REACH
+}
+
 /// Returns the IEEE remainder of two values from the x87 unit, or `None` when
 /// the path does not apply, the exponents of the operands lie farther apart
 /// than the path reaches, or the result is a NaN. The x87 unit loads binary32
@@ -490,7 +510,7 @@ pub fn remainder<S: Standard<W>, const W: usize>(
     match S::HOST {
         Host::None | Host::Half | Host::BFloat => None,
         Host::Single => {
-            if ((x >> 23) & 0xFF).saturating_sub((y >> 23) & 0xFF) > REMAINDER_REACH {
+            if !remainder_fits((x >> 23) & 0xFF, (y >> 23) & 0xFF, S::PRECISION) {
                 return None;
             }
             let bits = |value: u64| u32::try_from(value).expect("a binary32 encoding has 32 bits");
@@ -498,14 +518,14 @@ pub fn remainder<S: Standard<W>, const W: usize>(
             encoding::<S, W>(u64::from(result), false)
         }
         Host::Double => {
-            if ((x >> 52) & 0x7FF).saturating_sub((y >> 52) & 0x7FF) > REMAINDER_REACH {
+            if !remainder_fits((x >> 52) & 0x7FF, (y >> 52) & 0x7FF, S::PRECISION) {
                 return None;
             }
             encoding::<S, W>(environment::x87_remainder_double(x, y)?, false)
         }
         Host::Extended => {
             let (x, y) = (extended::<S, W>(dividend), extended::<S, W>(divisor));
-            if (x[1] & 0x7FFF).saturating_sub(y[1] & 0x7FFF) > REMAINDER_REACH {
+            if !remainder_fits(x[1] & 0x7FFF, y[1] & 0x7FFF, S::PRECISION) {
                 return None;
             }
             environment::x87_remainder(&x, &y).map(extended_encoding::<S, W>)

@@ -69,9 +69,10 @@ const OTHER_COLUMNS: [&str; 11] = [
 /// The operations of the double-double table, in column order.
 const DOUBLE_DOUBLE_COLUMNS: [&str; 5] = ["add", "mul", "div", "sqrt", "add_zero"];
 
-/// The operations of the `Lanes` table, in column order. `scalar_add` adds the
-/// lanes one at a time with the operator of the type, for comparison.
-const LANES_COLUMNS: [&str; 9] = [
+/// The operations of the `Lanes` table, in column order. `cmp` is
+/// `compare_quiet`, and `min` is `minimum`. `scalar_add` adds the lanes one at
+/// a time with the operator of the type, for comparison.
+const LANES_COLUMNS: [&str; 11] = [
     "add",
     "mul",
     "div",
@@ -79,6 +80,8 @@ const LANES_COLUMNS: [&str; 9] = [
     "mul_add",
     "round_int",
     "convert",
+    "cmp",
+    "min",
     "add_with",
     "scalar_add",
 ];
@@ -352,6 +355,8 @@ fn lanes_row<S: Standard<W>, const W: usize, const N: usize, T: Copy>(
         })),
         Some(each_pair(&left, &left, |x, _| x.round_to_integral())),
         Some(each_pair(&left, &left, |x, _| convert(x))),
+        Some(each_pair(&left, &right, Lanes::compare_quiet)),
+        Some(each_pair(&left, &right, Lanes::minimum)),
         Some(each_pair(&left, &right, |x, y| x.add_with(y, Env::IEEE).0)),
         Some(each_pair(&first, &second, |x, y| x + y)),
     ];

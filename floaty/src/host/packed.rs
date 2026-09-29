@@ -37,7 +37,15 @@ use crate::format::internal::{Host, MinMax};
 #[must_use]
 pub const fn lanes_of(host: Host, kind: Kind) -> bool {
     match (host, kind) {
-        (Host::Single | Host::Double, _) | (Host::BFloat, Kind::RoundToIntegral) => true,
+        (
+            Host::Single | Host::Double,
+            Kind::Arithmetic
+            | Kind::SquareRoot
+            | Kind::FusedMultiplyAdd
+            | Kind::RoundToIntegral
+            | Kind::Comparison,
+        )
+        | (Host::BFloat, Kind::RoundToIntegral) => true,
         (Host::Half, Kind::Arithmetic | Kind::SquareRoot | Kind::RoundToIntegral) => packed::HALF,
         _ => false,
     }
