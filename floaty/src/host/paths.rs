@@ -55,6 +55,12 @@ pub(super) const fn nan_16(bits: u16) -> bool {
     bits & 0x7FFF > 0x7C00
 }
 
+/// Returns `true` for the bits of a bfloat16 NaN.
+#[inline]
+pub(super) const fn nan_bfloat(bits: u16) -> bool {
+    bits & 0x7FFF > 0x7F80
+}
+
 /// Returns `true` for the bits of a binary64 NaN.
 #[inline]
 pub(super) const fn nan_64(bits: u64) -> bool {

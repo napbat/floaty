@@ -11,7 +11,8 @@
 
 use super::super::Operation;
 use super::super::environment::{self, packed};
-use super::{chunk, half_lanes, halves, in_chunks, singles};
+use super::super::paths::nan_16;
+use super::{chunk, encodings_u16, in_chunks, lanes_u16, singles};
 use crate::env::Mode;
 use crate::float::Float;
 use crate::format::Standard;
@@ -24,8 +25,8 @@ pub(super) fn binary<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     right: &[Float<S, W, M>; N],
     operation: Operation,
 ) -> Option<[Float<S, W, M>; N]> {
-    let (x, y) = (halves(left)?, halves(right)?);
-    half_lanes(left, |lanes| {
+    let (x, y) = (encodings_u16(left)?, encodings_u16(right)?);
+    lanes_u16(left, nan_16, |lanes| {
         in_chunks::<u16, N, 8, 4>(
             lanes,
             |start| {
@@ -53,8 +54,8 @@ pub(super) fn binary<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
 pub(super) fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
 ) -> Option<[Float<S, W, M>; N]> {
-    let x = halves(value)?;
-    half_lanes(value, |lanes| {
+    let x = encodings_u16(value)?;
+    lanes_u16(value, nan_16, |lanes| {
         in_chunks::<u16, N, 8, 4>(
             lanes,
             |start| {
@@ -79,8 +80,8 @@ pub(super) fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
 pub(super) fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
 ) -> Option<[Float<S, W, M>; N]> {
-    let x = halves(value)?;
-    half_lanes(value, |lanes| {
+    let x = encodings_u16(value)?;
+    lanes_u16(value, nan_16, |lanes| {
         in_chunks::<u16, N, 8, 4>(
             lanes,
             |start| {
@@ -105,7 +106,7 @@ pub(super) fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N
 pub(super) fn to_singles<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
 ) -> Option<[f32; N]> {
-    let x = halves(value)?;
+    let x = encodings_u16(value)?;
     let mut lanes = [0.0; N];
     in_chunks::<f32, N, 8, 4>(
         &mut lanes,
@@ -122,7 +123,7 @@ pub(super) fn to_singles<S: Standard<W>, const W: usize, M: Mode, const N: usize
 pub(super) fn to_doubles<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
 ) -> Option<[f64; N]> {
-    let x = halves(value)?;
+    let x = encodings_u16(value)?;
     let mut lanes = [0.0; N];
     in_chunks::<f64, N, 4, 2>(
         &mut lanes,

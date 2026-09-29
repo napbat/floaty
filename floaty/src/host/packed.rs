@@ -15,6 +15,7 @@
 //! of the lanes in smaller parts made each load of a chunk wait for the
 //! stores, which took more time than the arithmetic.
 
+mod bfloat;
 mod half;
 
 use super::environment::{self, packed};
@@ -28,12 +29,12 @@ use crate::format::internal::Host;
 /// Returns `true` when the packed paths compute the operations of `kind` on
 /// lanes of the host kind `host`. binary16 lanes compute in binary32 where
 /// the build widens and narrows them, except the fused multiply-add: two
-/// roundings of it through binary32 can differ from one. The answer is a
-/// constant.
+/// roundings of it through binary32 can differ from one. bfloat16 lanes
+/// round to integral values in binary32. The answer is a constant.
 #[must_use]
 pub const fn lanes_of(host: Host, kind: Kind) -> bool {
     match (host, kind) {
-        (Host::Single | Host::Double, _) => true,
+        (Host::Single | Host::Double, _) | (Host::BFloat, Kind::RoundToIntegral) => true,
         (Host::Half, Kind::Arithmetic | Kind::SquareRoot | Kind::RoundToIntegral) => packed::HALF,
         _ => false,
     }
@@ -46,7 +47,9 @@ pub const fn lanes_of(host: Host, kind: Kind) -> bool {
 #[must_use]
 pub const fn converts(from: Host, to: Host) -> bool {
     match (from, to) {
-        (Host::Single, Host::Double) | (Host::Double, Host::Single) => true,
+        (Host::Single, Host::Double)
+        | (Host::Double, Host::Single)
+        | (Host::BFloat, Host::Single | Host::Double) => true,
         (Host::Half, Host::Single | Host::Double) | (Host::Single, Host::Half) => packed::HALF,
         _ => false,
     }
@@ -114,9 +117,9 @@ fn doubles_mut<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
 }
 
 /// Returns an array of values of a format with 16-bit storage as an array
-/// of `u16`, or `None` for another format.
+/// of `u16` encodings, or `None` for another format.
 #[inline]
-fn halves<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+fn encodings_u16<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     lanes: &[Float<S, W, M>; N],
 ) -> Option<&[u16; N]> {
     if !fits::<S, W, M, u16>() {
@@ -127,9 +130,9 @@ fn halves<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
 }
 
 /// Returns an array of values of a format with 16-bit storage as a mutable
-/// array of `u16`, or `None` for another format.
+/// array of `u16` encodings, or `None` for another format.
 #[inline]
-fn halves_mut<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+fn encodings_u16_mut<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     lanes: &mut [Float<S, W, M>; N],
 ) -> Option<&mut [u16; N]> {
     if !fits::<S, W, M, u16>() {
@@ -214,18 +217,20 @@ fn double_lanes<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     (!nan).then_some(lanes)
 }
 
-/// Computes binary16 lanes into a copy of `first` with `compute`, which
-/// writes the encodings of the lanes. Returns `None` when a lane is a NaN.
+/// Computes lanes of a format with 16-bit storage into a copy of `first`
+/// with `compute`, which writes the encodings of the lanes. Returns `None`
+/// when a lane is a NaN, which `is_nan` tests on an encoding.
 #[inline]
-fn half_lanes<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+fn lanes_u16<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     first: &[Float<S, W, M>; N],
+    is_nan: impl Fn(u16) -> bool,
     compute: impl FnOnce(&mut [u16; N]) -> Option<()>,
 ) -> Option<[Float<S, W, M>; N]> {
     let mut lanes = *first;
-    let values = halves_mut(&mut lanes)?;
+    let values = encodings_u16_mut(&mut lanes)?;
     compute(values)?;
     // A fold without a branch lets LLVM test all lanes at once.
-    let nan = values.iter().fold(false, |nan, &bits| nan | nan_16(bits));
+    let nan = values.iter().fold(false, |nan, &bits| nan | is_nan(bits));
     (!nan).then_some(lanes)
 }
 
@@ -351,7 +356,8 @@ pub fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N: usize
             })
         }
         Host::Half => half::round_to_integral(value),
-        Host::None | Host::BFloat | Host::Extended => None,
+        Host::BFloat => bfloat::round_to_integral(value),
+        Host::None | Host::Extended => None,
     }
 }
 
@@ -406,8 +412,9 @@ pub fn mul_add<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
 
 /// Returns the encoding of each lane converted to the host kind `to` by the
 /// host unit. The packed paths convert between binary32 and binary64, from
-/// binary16 to both, and from binary32 to binary16. A conversion gives a NaN
-/// only for a NaN lane, so the result is `None` for a NaN lane.
+/// binary16 and bfloat16 to both, and from binary32 to binary16. A
+/// conversion gives a NaN only for a NaN lane, so the result is `None` for
+/// a NaN lane.
 #[inline]
 pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
@@ -458,6 +465,16 @@ pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             let bits = half::from_singles(value)?;
             let nan = bits.iter().fold(false, |nan, &bits| nan | nan_16(bits));
             (!nan).then_some(bits.map(u64::from))
+        }
+        (Host::BFloat, Host::Single) => {
+            let bits = bfloat::to_singles(value)?.map(f32::to_bits);
+            let nan = bits.iter().fold(false, |nan, &bits| nan | nan_32(bits));
+            (!nan).then_some(bits.map(u64::from))
+        }
+        (Host::BFloat, Host::Double) => {
+            let lanes = bfloat::to_doubles(value)?.map(f64::to_bits);
+            let nan = lanes.iter().fold(false, |nan, &bits| nan | nan_64(bits));
+            (!nan).then_some(lanes)
         }
         _ => None,
     }

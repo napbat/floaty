@@ -276,3 +276,36 @@ fn lanes_read_fpcr_before_the_vector_unit() {
         }
     }
 }
+
+#[test]
+fn bfloat16_lanes_read_fpcr_before_the_vector_unit() {
+    // Under each setting of FPCR, and under the default, the rounding and the
+    // conversions of bfloat16 lanes give the engine results of the default
+    // mode.
+    let mut random = SplitMix64::new(0x00A6_1ABF);
+    let encodings = encodings::<u16>(&pairs(&mut random, 16, 8));
+    for control in core::iter::once(0).chain(FPCR_SETTINGS) {
+        for start in (0..encodings.len()).step_by(5) {
+            let bits: [u16; 5] =
+                core::array::from_fn(|offset| encodings[(start + offset) % encodings.len()]);
+            let lanes = Lanes::<BF16, 5>::from_bits(bits);
+            let ours = with_fpcr(control, || {
+                let lanes = black_box(lanes);
+                let single: Lanes<F32, 5> = lanes.convert();
+                let double: Lanes<F64, 5> = lanes.convert();
+                (
+                    lanes.round_to_integral().to_bits(),
+                    single.to_bits(),
+                    double.to_bits(),
+                )
+            });
+            let values = bits.map(BF16::from_bits);
+            let engine = (
+                values.map(|value| value.round_to_integral_with(BF16::ENV).0.to_bits()),
+                values.map(|value| value.convert_with::<F32>(F32::ENV).0.to_bits()),
+                values.map(|value| value.convert_with::<F64>(F64::ENV).0.to_bits()),
+            );
+            assert_eq!(ours, engine, "{bits:x?} under FPCR {control:#x}");
+        }
+    }
+}

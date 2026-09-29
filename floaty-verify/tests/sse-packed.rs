@@ -8,7 +8,7 @@
 
 use std::hint::black_box;
 
-use floaty::{Env, F16, F32, F64, Flags, Lanes};
+use floaty::{BF16, Env, F16, F32, F64, Flags, Lanes};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
@@ -469,6 +469,37 @@ fn binary16_lanes_read_mxcsr_before_the_packed_unit() {
                 binary16_engine_results(lanes, narrow),
                 "{lanes:x?} {narrow:x?} under {control:#x}"
             );
+        }
+    }
+}
+
+#[test]
+fn bfloat16_lanes_read_mxcsr_before_the_packed_unit() {
+    // Under each control, the rounding and the conversions of bfloat16 lanes
+    // give the engine results of the default mode.
+    let mut random = SplitMix64::new(0x00C5_4EBF);
+    let chunks = chunks::<13>(&mut random, 16, 8);
+    for control in controls() {
+        for chunk in chunks.iter().step_by(3) {
+            let bits = chunk.map(|bits| u16::try_from(bits).expect("a bfloat16 encoding"));
+            let lanes = Lanes::<BF16, 13>::from_bits(bits);
+            let ours = x86::with_mxcsr(control, || {
+                let lanes = black_box(lanes);
+                let single: Lanes<F32, 13> = lanes.convert();
+                let double: Lanes<F64, 13> = lanes.convert();
+                (
+                    lanes.round_to_integral().to_bits(),
+                    single.to_bits(),
+                    double.to_bits(),
+                )
+            });
+            let values = bits.map(BF16::from_bits);
+            let engine = (
+                values.map(|value| value.round_to_integral_with(BF16::ENV).0.to_bits()),
+                values.map(|value| value.convert_with::<F32>(F32::ENV).0.to_bits()),
+                values.map(|value| value.convert_with::<F64>(F64::ENV).0.to_bits()),
+            );
+            assert_eq!(ours, engine, "{bits:x?} under {control:#x}");
         }
     }
 }
