@@ -5,7 +5,6 @@ use core::ops;
 use crate::env::{Flags, Mode, Override};
 use crate::float::{Float, FloatType};
 use crate::format::Standard;
-use crate::host::packed::Packed;
 use crate::host::{self, Kind, Operation};
 
 /// `N` values of one float type, as the lanes of a vector register.
@@ -86,48 +85,56 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         Self::new(lanes)
     }
 
-    /// Returns the lanes of a packed host path. Each NaN lane comes from
-    /// `engine`, which selects the NaN by the rule of the mode.
-    #[inline]
-    fn from_packed(
-        packed: Packed<Float<S, W, M>, N>,
-        engine: impl Fn(usize) -> Float<S, W, M>,
-    ) -> Self {
-        let lanes = Self::new(packed.lanes);
-        if packed.nan {
-            lanes.nan_lanes_in_engine(engine)
-        } else {
-            lanes
-        }
-    }
-
-    /// Replaces each NaN lane with the result of `engine` for its index. A
-    /// host NaN means an engine NaN, whose selection the mode decides. A NaN
-    /// lane is rare, so this stays out of line.
+    /// Applies `operation` to each lane, for lanes whose packed host path
+    /// declines at run time or gives a NaN lane. Each lane can still take a
+    /// scalar host path, which sends a NaN to the engine. The call stays out
+    /// of line, so that the packed path inlines into its caller.
     #[cold]
     #[inline(never)]
-    fn nan_lanes_in_engine(self, engine: impl Fn(usize) -> Float<S, W, M>) -> Self {
+    fn map_out_of_line(self, operation: impl FnMut(Float<S, W, M>) -> Float<S, W, M>) -> Self {
+        self.map(operation)
+    }
+
+    /// Applies `operation` to each pair of lanes, for lanes whose packed host
+    /// path declines, as `map_out_of_line` does.
+    #[cold]
+    #[inline(never)]
+    fn zip_out_of_line(
+        self,
+        other: Self,
+        operation: impl FnMut(Float<S, W, M>, Float<S, W, M>) -> Float<S, W, M>,
+    ) -> Self {
+        self.zip(other, operation)
+    }
+
+    /// Returns the fused multiply-add of each triple of lanes, lane by lane.
+    fn mul_add_lane_wise(self, multiplier: Self, addend: Self) -> Self {
         let mut lanes = self.lanes;
         lanes
             .iter_mut()
-            .enumerate()
-            .filter(|(_, lane)| lane.is_nan())
-            .for_each(|(index, lane)| *lane = engine(index));
+            .zip(multiplier.lanes.into_iter().zip(addend.lanes))
+            .for_each(|(lane, (multiplier, addend))| *lane = lane.mul_add(multiplier, addend));
         Self::new(lanes)
+    }
+
+    /// Returns the fused multiply-add of each triple of lanes, for lanes
+    /// whose packed host path declines, as `map_out_of_line` does.
+    #[cold]
+    #[inline(never)]
+    fn mul_add_out_of_line(self, multiplier: Self, addend: Self) -> Self {
+        self.mul_add_lane_wise(multiplier, addend)
     }
 
     /// Returns the square root of each lane, with the default mode.
     #[must_use]
     #[inline]
     pub fn sqrt(self) -> Self {
-        if !host::available(S::HOST, Kind::SquareRoot) {
+        if !host::available(S::HOST, Kind::SquareRoot) || !host::packed::lanes_of(S::HOST) {
             return self.map(Float::sqrt);
         }
         match host::packed::sqrt(&self.lanes, &M::ENV) {
-            Some(packed) => {
-                Self::from_packed(packed, |index| self.lanes[index].sqrt_with(M::default()).0)
-            }
-            None => self.map(Float::sqrt),
+            Some(lanes) => Self::new(lanes),
+            None => self.map_out_of_line(Float::sqrt),
         }
     }
 
@@ -149,25 +156,12 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn mul_add(self, multiplier: Self, addend: Self) -> Self {
-        let lane_wise = || {
-            let mut lanes = self.lanes;
-            lanes
-                .iter_mut()
-                .zip(multiplier.lanes.into_iter().zip(addend.lanes))
-                .for_each(|(lane, (multiplier, addend))| *lane = lane.mul_add(multiplier, addend));
-            Self::new(lanes)
-        };
-        if !host::available(S::HOST, Kind::FusedMultiplyAdd) {
-            return lane_wise();
+        if !host::available(S::HOST, Kind::FusedMultiplyAdd) || !host::packed::lanes_of(S::HOST) {
+            return self.mul_add_lane_wise(multiplier, addend);
         }
         match host::packed::mul_add(&self.lanes, &multiplier.lanes, &addend.lanes, &M::ENV) {
-            Some(packed) => Self::from_packed(packed, |index| {
-                let (multiplier, addend) = (multiplier.lanes[index], addend.lanes[index]);
-                self.lanes[index]
-                    .mul_add_with(multiplier, addend, M::default())
-                    .0
-            }),
-            None => lane_wise(),
+            Some(lanes) => Self::new(lanes),
+            None => self.mul_add_out_of_line(multiplier, addend),
         }
     }
 
@@ -198,14 +192,12 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn round_to_integral(self) -> Self {
-        if !host::available(S::HOST, Kind::RoundToIntegral) {
+        if !host::available(S::HOST, Kind::RoundToIntegral) || !host::packed::lanes_of(S::HOST) {
             return self.map(Float::round_to_integral);
         }
         match host::packed::round_to_integral(&self.lanes, &M::ENV) {
-            Some(packed) => Self::from_packed(packed, |index| {
-                self.lanes[index].round_to_integral_with(M::default()).0
-            }),
-            None => self.map(Float::round_to_integral),
+            Some(lanes) => Self::new(lanes),
+            None => self.map_out_of_line(Float::round_to_integral),
         }
     }
 
@@ -228,15 +220,12 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn convert<T: FloatType>(self) -> Lanes<T, N> {
-        let lane_wise = || Lanes::new(self.lanes.map(Float::convert::<T>));
-        if !host::convertible(S::HOST, T::HOST) {
-            return lane_wise();
+        if !host::packed::converts(S::HOST, T::HOST) {
+            return Lanes::new(self.lanes.map(Float::convert::<T>));
         }
         match host::packed::convert(&self.lanes, T::HOST, &<T::Mode as Mode>::ENV) {
-            // A conversion gives a NaN only for a NaN lane.
-            Some(packed) if packed.nan => lanes_in_engine(self),
-            Some(packed) => Lanes::new(packed.lanes.map(|bits| T::from_host([bits, 0]))),
-            None => lane_wise(),
+            Some(bits) => Lanes::new(bits.map(|bits| T::from_host([bits, 0]))),
+            None => convert_out_of_line(self),
         }
     }
 
@@ -267,14 +256,12 @@ macro_rules! operator {
 
             #[inline]
             fn $method(self, other: Self) -> Self {
-                if !host::available(S::HOST, Kind::Arithmetic) {
+                if !host::available(S::HOST, Kind::Arithmetic) || !host::packed::lanes_of(S::HOST) {
                     return self.zip(other, ops::$trait::$method);
                 }
                 match host::packed::binary(&self.lanes, &other.lanes, Operation::$trait, &M::ENV) {
-                    Some(packed) => Self::from_packed(packed, |index| {
-                        self.lanes[index].$with(other.lanes[index], M::default()).0
-                    }),
-                    None => self.zip(other, ops::$trait::$method),
+                    Some(lanes) => Self::new(lanes),
+                    None => self.zip_out_of_line(other, ops::$trait::$method),
                 }
             }
         }
@@ -301,16 +288,12 @@ operator!(Sub, sub, sub_with, "the difference");
 operator!(Mul, mul, mul_with, "the product");
 operator!(Div, div, div_with, "the quotient");
 
-/// Converts each lane in the engine, for lanes with a NaN, whose NaN the
-/// rule of the destination mode selects.
+/// Converts each lane to the float type `T`, for lanes whose packed host
+/// path declines, as `Lanes::map_out_of_line` does.
 #[cold]
 #[inline(never)]
-fn lanes_in_engine<S: Standard<W>, const W: usize, M: Mode, const N: usize, T: FloatType>(
+fn convert_out_of_line<S: Standard<W>, const W: usize, M: Mode, const N: usize, T: FloatType>(
     lanes: Lanes<Float<S, W, M>, N>,
 ) -> Lanes<T, N> {
-    Lanes::new(
-        lanes
-            .lanes
-            .map(|lane| lane.convert_with::<T>(T::Mode::default()).0),
-    )
+    Lanes::new(lanes.lanes.map(Float::convert::<T>))
 }

@@ -1,348 +1,350 @@
 //! The packed instructions of the SSE unit, for the paths of `Lanes`: 128-bit
 //! registers with SSE2, SSE4.1, and FMA, and 256-bit registers with AVX.
 //!
-//! Each function computes one chunk of `C` lanes into `out`, and returns
-//! `None` for a chunk width that the build has no instruction for. The block
-//! loads the operands through pointers with an unaligned move, computes in
-//! registers, and stores the result through `out`. A legacy SSE instruction
-//! with a 128-bit memory operand faults on an address that is not a multiple
-//! of 16, and an array of lanes has no such alignment. The last arm of each
-//! `match` uses the parameters, so a build with no instruction for any width
-//! has no unused parameter.
+//! Each function computes one chunk of lanes in registers. The block takes
+//! and gives register values, so it touches no memory: the compiler loads and
+//! stores the lanes, and keeps them in registers between operations. A legacy
+//! SSE instruction with a 128-bit memory operand faults on an address that is
+//! not a multiple of 16, and a block with a memory operand stops the compiler
+//! from keeping values in registers across it. A function for a feature that
+//! the build does not have returns `None`.
+
+use core::arch::x86_64::{__m128, __m128d};
+use core::mem::transmute;
 
 use super::super::Operation;
+use super::sse;
 
 /// `true` when the build has 256-bit registers, which hold eight binary32 or
 /// four binary64 lanes.
 pub const WIDE: bool = cfg!(target_feature = "avx");
 
-/// Runs a packed operation on two chunks in registers of the class `$class`,
-/// and stores the result chunk through `$out`. `$operation` is the
-/// instruction that combines the registers `a` and `b` into `a`.
-macro_rules! two_chunks {
-    ($class:ident, $move:literal, $operation:expr, $left:expr, $right:expr, $out:expr) => {{
-        // SAFETY: the block loads each operand through its pointer, which
-        // points to a chunk of the width of the register, and stores the
-        // result through a pointer to a chunk of that width. The build enables
-        // the instructions of the register class, and they change only the
-        // status flags of MXCSR, which floaty does not read.
-        unsafe {
-            core::arch::asm!(
-                concat!($move, " {a}, [{left}]"),
-                concat!($move, " {b}, [{right}]"),
-                $operation,
-                concat!($move, " [{result}], {a}"),
-                left = in(reg) $left.as_ptr(),
-                right = in(reg) $right.as_ptr(),
-                result = in(reg) $out.as_mut_ptr(),
-                a = out($class) _,
-                b = out($class) _,
-                options(nostack, preserves_flags),
-            );
-        }
-        Some(())
-    }};
+/// Returns four binary32 lanes as the value of an SSE register.
+#[inline]
+fn singles(lanes: [f32; 4]) -> __m128 {
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    unsafe { transmute::<[f32; 4], __m128>(lanes) }
 }
 
-/// Runs a packed operation on one chunk, and stores the result chunk through
-/// `$out`. `$load` loads the chunk through `value` into `a`, `$operation`
-/// computes in `a`, and `$store` stores `a` through `result`.
-macro_rules! one_chunk {
-    ($class:ident, $load:literal, $operation:literal, $store:literal, $value:expr, $out:expr) => {{
-        // SAFETY: as in `two_chunks`, with one operand. The load and the
-        // store move the widths of the chunks.
-        unsafe {
-            core::arch::asm!(
-                $load,
-                $operation,
-                $store,
-                value = in(reg) $value.as_ptr(),
-                result = in(reg) $out.as_mut_ptr(),
-                a = out($class) _,
-                options(nostack, preserves_flags),
-            );
-        }
-        Some(())
-    }};
+/// Returns the four binary32 lanes of an SSE register value.
+#[inline]
+fn single_lanes(value: __m128) -> [f32; 4] {
+    // SAFETY: as in `singles`.
+    unsafe { transmute::<__m128, [f32; 4]>(value) }
 }
 
-/// Runs a packed fused multiply-add on three chunks, `a = a * b + addend`,
-/// and stores the result chunk through `$out`.
-#[cfg(target_feature = "fma")]
-macro_rules! fused {
-    ($class:ident, $move:literal, $operation:literal, $left:expr, $right:expr, $addend:expr, $out:expr) => {{
-        // SAFETY: as in `two_chunks`, with a third operand that the
-        // instruction reads through `addend`. The build enables FMA, whose
-        // VEX encoding needs no alignment of a memory operand.
-        unsafe {
-            core::arch::asm!(
-                concat!($move, " {a}, [{left}]"),
-                concat!($move, " {b}, [{right}]"),
-                concat!($operation, " {a}, {b}, [{addend}]"),
-                concat!($move, " [{result}], {a}"),
-                left = in(reg) $left.as_ptr(),
-                right = in(reg) $right.as_ptr(),
-                addend = in(reg) $addend.as_ptr(),
-                result = in(reg) $out.as_mut_ptr(),
-                a = out($class) _,
-                b = out($class) _,
-                options(nostack, preserves_flags),
-            );
-        }
-        Some(())
-    }};
+/// Returns two binary64 lanes as the value of an SSE register.
+#[inline]
+fn doubles(lanes: [f64; 2]) -> __m128d {
+    // SAFETY: as in `singles`.
+    unsafe { transmute::<[f64; 2], __m128d>(lanes) }
 }
 
-/// Selects the instruction of an operation from its four names, and stores
-/// the result chunk through `$out`.
-macro_rules! arithmetic {
-    ($class:ident, $move:literal, $operation:expr, [$add:literal, $sub:literal, $mul:literal, $div:literal], $form:literal, $left:expr, $right:expr, $out:expr) => {
-        match $operation {
-            Operation::Add => two_chunks!($class, $move, concat!($add, $form), $left, $right, $out),
-            Operation::Sub => two_chunks!($class, $move, concat!($sub, $form), $left, $right, $out),
-            Operation::Mul => two_chunks!($class, $move, concat!($mul, $form), $left, $right, $out),
-            Operation::Div => two_chunks!($class, $move, concat!($div, $form), $left, $right, $out),
+/// Returns the two binary64 lanes of an SSE register value.
+#[inline]
+fn double_lanes(value: __m128d) -> [f64; 2] {
+    // SAFETY: as in `singles`.
+    unsafe { transmute::<__m128d, [f64; 2]>(value) }
+}
+
+/// Runs one packed instruction on the register values `$a` and `$b` of the
+/// class `$class`, and leaves the result in `$a`.
+macro_rules! packed {
+    ($class:ident, $instruction:expr, $a:ident, $b:ident) => {
+        // SAFETY: the instruction reads and writes registers of the class,
+        // which the build enables, and `sse!` selects a VEX form only in a
+        // build with AVX. The instruction changes only the status flags of
+        // MXCSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                $instruction,
+                a = inout($class) $a,
+                b = in($class) $b,
+                options(pure, nomem, nostack, preserves_flags),
+            );
         }
     };
 }
 
-/// Computes `operation` of two chunks of binary32 lanes into `out`, by
-/// `ADDPS`, `SUBPS`, `MULPS`, or `DIVPS`, or their 256-bit AVX forms.
-#[inline]
-pub fn binary_f32<const C: usize>(
-    left: &[f32; C],
-    right: &[f32; C],
-    out: &mut [f32; C],
-    operation: Operation,
-) -> Option<()> {
-    match C {
-        4 => arithmetic!(
-            xmm_reg,
-            "movups",
-            operation,
-            ["addps", "subps", "mulps", "divps"],
-            " {a}, {b}",
-            left,
-            right,
-            out
-        ),
-        // SAFETY: the build enables the features of the 256-bit form, so
-        // the processor that runs it has them.
-        #[cfg(target_feature = "avx")]
-        8 => unsafe { wide::binary_f32(left, right, out, operation) },
-        _ => None,
-    }
+/// Runs the instruction of `$operation` from its four templates on `$a` and
+/// `$b`, and leaves the result in `$a`.
+macro_rules! arithmetic {
+    ($class:ident, $operation:expr, [$add:expr, $sub:expr, $mul:expr, $div:expr $(,)?], $a:ident, $b:ident) => {
+        match $operation {
+            Operation::Add => packed!($class, $add, $a, $b),
+            Operation::Sub => packed!($class, $sub, $a, $b),
+            Operation::Mul => packed!($class, $mul, $a, $b),
+            Operation::Div => packed!($class, $div, $a, $b),
+        }
+    };
 }
 
-/// Computes `operation` of two chunks of binary64 lanes into `out`, by
-/// `ADDPD`, `SUBPD`, `MULPD`, or `DIVPD`, or their 256-bit AVX forms.
+/// Returns `operation` of four pairs of binary32 lanes, by `ADDPS`, `SUBPS`,
+/// `MULPS`, or `DIVPS`.
 #[inline]
-pub fn binary_f64<const C: usize>(
-    left: &[f64; C],
-    right: &[f64; C],
-    out: &mut [f64; C],
-    operation: Operation,
-) -> Option<()> {
-    match C {
-        2 => arithmetic!(
-            xmm_reg,
-            "movupd",
-            operation,
-            ["addpd", "subpd", "mulpd", "divpd"],
-            " {a}, {b}",
-            left,
-            right,
-            out
-        ),
-        // SAFETY: the build enables the features of the 256-bit form, so
-        // the processor that runs it has them.
-        #[cfg(target_feature = "avx")]
-        4 => unsafe { wide::binary_f64(left, right, out, operation) },
-        _ => None,
-    }
+pub fn binary_f32x4(left: [f32; 4], right: [f32; 4], operation: Operation) -> [f32; 4] {
+    let (mut a, b) = (singles(left), singles(right));
+    arithmetic!(
+        xmm_reg,
+        operation,
+        [
+            sse!("addps {a}, {b}", "vaddps {a}, {a}, {b}"),
+            sse!("subps {a}, {b}", "vsubps {a}, {a}, {b}"),
+            sse!("mulps {a}, {b}", "vmulps {a}, {a}, {b}"),
+            sse!("divps {a}, {b}", "vdivps {a}, {a}, {b}"),
+        ],
+        a,
+        b
+    );
+    single_lanes(a)
 }
 
-/// Computes the square roots of a chunk of binary32 lanes into `out`, by
-/// `SQRTPS` or its 256-bit AVX form.
+/// Returns `operation` of two pairs of binary64 lanes, by `ADDPD`, `SUBPD`,
+/// `MULPD`, or `DIVPD`.
 #[inline]
-pub fn sqrt_f32<const C: usize>(value: &[f32; C], out: &mut [f32; C]) -> Option<()> {
-    match C {
-        4 => one_chunk!(
-            xmm_reg,
-            "movups {a}, [{value}]",
-            "sqrtps {a}, {a}",
-            "movups [{result}], {a}",
-            value,
-            out
-        ),
-        // SAFETY: the build enables the features of the 256-bit form, so
-        // the processor that runs it has them.
-        #[cfg(target_feature = "avx")]
-        8 => unsafe { wide::sqrt_f32(value, out) },
-        _ => None,
-    }
+pub fn binary_f64x2(left: [f64; 2], right: [f64; 2], operation: Operation) -> [f64; 2] {
+    let (mut a, b) = (doubles(left), doubles(right));
+    arithmetic!(
+        xmm_reg,
+        operation,
+        [
+            sse!("addpd {a}, {b}", "vaddpd {a}, {a}, {b}"),
+            sse!("subpd {a}, {b}", "vsubpd {a}, {a}, {b}"),
+            sse!("mulpd {a}, {b}", "vmulpd {a}, {a}, {b}"),
+            sse!("divpd {a}, {b}", "vdivpd {a}, {a}, {b}"),
+        ],
+        a,
+        b
+    );
+    double_lanes(a)
 }
 
-/// Computes the square roots of a chunk of binary64 lanes into `out`, by
-/// `SQRTPD` or its 256-bit AVX form.
+/// Returns the square roots of four binary32 lanes, by `SQRTPS`.
 #[inline]
-pub fn sqrt_f64<const C: usize>(value: &[f64; C], out: &mut [f64; C]) -> Option<()> {
-    match C {
-        2 => one_chunk!(
-            xmm_reg,
-            "movupd {a}, [{value}]",
-            "sqrtpd {a}, {a}",
-            "movupd [{result}], {a}",
-            value,
-            out
-        ),
-        // SAFETY: the build enables the features of the 256-bit form, so
-        // the processor that runs it has them.
-        #[cfg(target_feature = "avx")]
-        4 => unsafe { wide::sqrt_f64(value, out) },
-        _ => None,
-    }
+pub fn sqrt_f32x4(value: [f32; 4]) -> [f32; 4] {
+    let mut a = singles(value);
+    packed!(xmm_reg, sse!("sqrtps {a}, {b}", "vsqrtps {a}, {b}"), a, a);
+    single_lanes(a)
 }
 
-/// Computes the lanes of a binary32 chunk rounded to integral values to
-/// nearest even into `out`, by `ROUNDPS` with the rounding control 0 in its
-/// immediate, or its 256-bit AVX form.
+/// Returns the square roots of two binary64 lanes, by `SQRTPD`.
 #[inline]
-pub fn round_f32<const C: usize>(value: &[f32; C], out: &mut [f32; C]) -> Option<()> {
-    match C {
-        #[cfg(target_feature = "sse4.1")]
-        4 => one_chunk!(
-            xmm_reg,
-            "movups {a}, [{value}]",
-            "roundps {a}, {a}, 0",
-            "movups [{result}], {a}",
-            value,
-            out
-        ),
-        // SAFETY: the build enables the features of the 256-bit form, so
-        // the processor that runs it has them.
-        #[cfg(target_feature = "avx")]
-        8 => unsafe { wide::round_f32(value, out) },
-        _ => {
-            let _ = (value, out);
+pub fn sqrt_f64x2(value: [f64; 2]) -> [f64; 2] {
+    let mut a = doubles(value);
+    packed!(xmm_reg, sse!("sqrtpd {a}, {b}", "vsqrtpd {a}, {b}"), a, a);
+    double_lanes(a)
+}
+
+/// Returns four binary32 lanes rounded to integral values to nearest even,
+/// by `ROUNDPS` with the rounding control 0 in its immediate.
+#[cfg(target_feature = "sse4.1")]
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // A build without SSE4.1 returns `None` from the same signature.
+pub fn round_f32x4(value: [f32; 4]) -> Option<[f32; 4]> {
+    let mut a = singles(value);
+    packed!(
+        xmm_reg,
+        sse!("roundps {a}, {b}, 0", "vroundps {a}, {b}, 0"),
+        a,
+        a
+    );
+    Some(single_lanes(a))
+}
+
+/// Returns two binary64 lanes rounded to integral values to nearest even,
+/// by `ROUNDPD` with the rounding control 0 in its immediate.
+#[cfg(target_feature = "sse4.1")]
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // A build without SSE4.1 returns `None` from the same signature.
+pub fn round_f64x2(value: [f64; 2]) -> Option<[f64; 2]> {
+    let mut a = doubles(value);
+    packed!(
+        xmm_reg,
+        sse!("roundpd {a}, {b}, 0", "vroundpd {a}, {b}, 0"),
+        a,
+        a
+    );
+    Some(double_lanes(a))
+}
+
+/// Returns `None`: a build without SSE4.1 has no packed rounding.
+#[cfg(not(target_feature = "sse4.1"))]
+#[inline]
+pub fn round_f32x4(_value: [f32; 4]) -> Option<[f32; 4]> {
+    None
+}
+
+/// Returns `None`: a build without SSE4.1 has no packed rounding.
+#[cfg(not(target_feature = "sse4.1"))]
+#[inline]
+pub fn round_f64x2(_value: [f64; 2]) -> Option<[f64; 2]> {
+    None
+}
+
+/// Runs a packed fused multiply-add, `$a = $a * $b + $c`, in registers of the
+/// class `$class`.
+#[cfg(target_feature = "fma")]
+macro_rules! fused {
+    ($class:ident, $instruction:literal, $a:ident, $b:ident, $c:ident) => {
+        // SAFETY: as in `packed!`, with a third register. The build enables
+        // FMA.
+        unsafe {
+            core::arch::asm!(
+                concat!($instruction, " {a}, {b}, {c}"),
+                a = inout($class) $a,
+                b = in($class) $b,
+                c = in($class) $c,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+    };
+}
+
+/// Returns `left * right + addend` of four triples of binary32 lanes, each
+/// rounded once, by `VFMADD213PS`.
+#[cfg(target_feature = "fma")]
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // A build without FMA returns `None` from the same signature.
+pub fn mul_add_f32x4(left: [f32; 4], right: [f32; 4], addend: [f32; 4]) -> Option<[f32; 4]> {
+    let (mut a, b, c) = (singles(left), singles(right), singles(addend));
+    fused!(xmm_reg, "vfmadd213ps", a, b, c);
+    Some(single_lanes(a))
+}
+
+/// Returns `left * right + addend` of two triples of binary64 lanes, each
+/// rounded once, by `VFMADD213PD`.
+#[cfg(target_feature = "fma")]
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // A build without FMA returns `None` from the same signature.
+pub fn mul_add_f64x2(left: [f64; 2], right: [f64; 2], addend: [f64; 2]) -> Option<[f64; 2]> {
+    let (mut a, b, c) = (doubles(left), doubles(right), doubles(addend));
+    fused!(xmm_reg, "vfmadd213pd", a, b, c);
+    Some(double_lanes(a))
+}
+
+/// Returns `None`: a build without FMA has no packed fused multiply-add.
+#[cfg(not(target_feature = "fma"))]
+#[inline]
+pub fn mul_add_f32x4(_left: [f32; 4], _right: [f32; 4], _addend: [f32; 4]) -> Option<[f32; 4]> {
+    None
+}
+
+/// Returns `None`: a build without FMA has no packed fused multiply-add.
+#[cfg(not(target_feature = "fma"))]
+#[inline]
+pub fn mul_add_f64x2(_left: [f64; 2], _right: [f64; 2], _addend: [f64; 2]) -> Option<[f64; 2]> {
+    None
+}
+
+/// Returns two binary32 lanes widened exactly to binary64, by `CVTPS2PD`.
+#[inline]
+pub fn widen_x2(value: [f32; 2]) -> [f64; 2] {
+    let a = singles([value[0], value[1], 0.0, 0.0]);
+    let result: __m128d;
+    // SAFETY: CVTPS2PD reads and writes SSE registers. SSE2 is part of every
+    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // The conversion changes only the status flags of MXCSR, which floaty
+    // does not read.
+    unsafe {
+        core::arch::asm!(
+            sse!("cvtps2pd {result}, {a}", "vcvtps2pd {result}, {a}"),
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    double_lanes(result)
+}
+
+/// Returns two binary64 lanes rounded to binary32, by `CVTPD2PS`.
+#[inline]
+pub fn narrow_x2(value: [f64; 2]) -> [f32; 2] {
+    let a = doubles(value);
+    let result: __m128;
+    // SAFETY: as in `widen_x2`, with `CVTPD2PS`.
+    unsafe {
+        core::arch::asm!(
+            sse!("cvtpd2ps {result}, {a}", "vcvtpd2ps {result}, {a}"),
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    let [low, high, _, _] = single_lanes(result);
+    [low, high]
+}
+
+/// Defines a function for a 256-bit chunk, which runs its form in `wide`
+/// where the build has the features, and returns `None` otherwise.
+macro_rules! wide {
+    ($(#[$doc:meta])* $name:ident, $features:meta, ($($argument:ident: $type:ty),+) -> $result:ty) => {
+        $(#[$doc])*
+        #[cfg($features)]
+        #[inline]
+        #[allow(clippy::unnecessary_wraps)] // A build without the feature returns `None` from the same signature.
+        pub fn $name($($argument: $type),+) -> Option<$result> {
+            // SAFETY: the build enables the features of the 256-bit form, so
+            // the processor that runs it has them.
+            Some(unsafe { wide::$name($($argument),+) })
+        }
+
+        #[doc = "Returns `None`: the build has no 256-bit form."]
+        #[cfg(not($features))]
+        #[inline]
+        pub fn $name($(_: $type),+) -> Option<$result> {
             None
         }
-    }
+    };
 }
 
-/// Computes the lanes of a binary64 chunk rounded to integral values to
-/// nearest even into `out`, by `ROUNDPD` with the rounding control 0 in its
-/// immediate, or its 256-bit AVX form.
-#[inline]
-pub fn round_f64<const C: usize>(value: &[f64; C], out: &mut [f64; C]) -> Option<()> {
-    match C {
-        #[cfg(target_feature = "sse4.1")]
-        2 => one_chunk!(
-            xmm_reg,
-            "movupd {a}, [{value}]",
-            "roundpd {a}, {a}, 0",
-            "movupd [{result}], {a}",
-            value,
-            out
-        ),
-        // SAFETY: the build enables the features of the 256-bit form, so
-        // the processor that runs it has them.
-        #[cfg(target_feature = "avx")]
-        4 => unsafe { wide::round_f64(value, out) },
-        _ => {
-            let _ = (value, out);
-            None
-        }
-    }
-}
-
-/// Computes `left * right + addend` of chunks of binary32 lanes into `out`,
-/// each lane rounded once, by `VFMADD213PS`.
-#[inline]
-pub fn mul_add_f32<const C: usize>(
-    left: &[f32; C],
-    right: &[f32; C],
-    addend: &[f32; C],
-    out: &mut [f32; C],
-) -> Option<()> {
-    match C {
-        #[cfg(target_feature = "fma")]
-        4 => fused!(xmm_reg, "vmovups", "vfmadd213ps", left, right, addend, out),
-        // SAFETY: the build enables the features of the 256-bit form, so
-        // the processor that runs it has them.
-        #[cfg(target_feature = "fma")]
-        8 => unsafe { wide::mul_add_f32(left, right, addend, out) },
-        _ => {
-            let _ = (left, right, addend, out);
-            None
-        }
-    }
-}
-
-/// Computes `left * right + addend` of chunks of binary64 lanes into `out`,
-/// each lane rounded once, by `VFMADD213PD`.
-#[inline]
-pub fn mul_add_f64<const C: usize>(
-    left: &[f64; C],
-    right: &[f64; C],
-    addend: &[f64; C],
-    out: &mut [f64; C],
-) -> Option<()> {
-    match C {
-        #[cfg(target_feature = "fma")]
-        2 => fused!(xmm_reg, "vmovupd", "vfmadd213pd", left, right, addend, out),
-        // SAFETY: the build enables the features of the 256-bit form, so
-        // the processor that runs it has them.
-        #[cfg(target_feature = "fma")]
-        4 => unsafe { wide::mul_add_f64(left, right, addend, out) },
-        _ => {
-            let _ = (left, right, addend, out);
-            None
-        }
-    }
-}
-
-/// Computes a chunk of binary32 lanes widened exactly to binary64 into
-/// `out`, by `CVTPS2PD` for two lanes or its AVX form for four.
-#[inline]
-pub fn widen<const C: usize>(value: &[f32; C], out: &mut [f64; C]) -> Option<()> {
-    match C {
-        2 => one_chunk!(
-            xmm_reg,
-            "movsd {a}, qword ptr [{value}]",
-            "cvtps2pd {a}, {a}",
-            "movupd [{result}], {a}",
-            value,
-            out
-        ),
-        // SAFETY: the build enables the features of the 256-bit form, so
-        // the processor that runs it has them.
-        #[cfg(target_feature = "avx")]
-        4 => unsafe { wide::widen(value, out) },
-        _ => None,
-    }
-}
-
-/// Computes a chunk of binary64 lanes rounded to binary32 into `out`, by
-/// `CVTPD2PS` for two lanes or its AVX form for four.
-#[inline]
-pub fn narrow<const C: usize>(value: &[f64; C], out: &mut [f32; C]) -> Option<()> {
-    match C {
-        2 => one_chunk!(
-            xmm_reg,
-            "movupd {a}, [{value}]",
-            "cvtpd2ps {a}, {a}",
-            "movsd qword ptr [{result}], {a}",
-            value,
-            out
-        ),
-        // SAFETY: the build enables the features of the 256-bit form, so
-        // the processor that runs it has them.
-        #[cfg(target_feature = "avx")]
-        4 => unsafe { wide::narrow(value, out) },
-        _ => None,
-    }
-}
+wide!(
+    /// Returns `operation` of eight pairs of binary32 lanes, by `VADDPS`,
+    /// `VSUBPS`, `VMULPS`, or `VDIVPS`.
+    binary_f32x8, target_feature = "avx", (left: [f32; 8], right: [f32; 8], operation: Operation) -> [f32; 8]
+);
+wide!(
+    /// Returns `operation` of four pairs of binary64 lanes, by `VADDPD`,
+    /// `VSUBPD`, `VMULPD`, or `VDIVPD`.
+    binary_f64x4, target_feature = "avx", (left: [f64; 4], right: [f64; 4], operation: Operation) -> [f64; 4]
+);
+wide!(
+    /// Returns the square roots of eight binary32 lanes, by `VSQRTPS`.
+    sqrt_f32x8, target_feature = "avx", (value: [f32; 8]) -> [f32; 8]
+);
+wide!(
+    /// Returns the square roots of four binary64 lanes, by `VSQRTPD`.
+    sqrt_f64x4, target_feature = "avx", (value: [f64; 4]) -> [f64; 4]
+);
+wide!(
+    /// Returns eight binary32 lanes rounded to integral values to nearest
+    /// even, by `VROUNDPS` with the immediate 0.
+    round_f32x8, target_feature = "avx", (value: [f32; 8]) -> [f32; 8]
+);
+wide!(
+    /// Returns four binary64 lanes rounded to integral values to nearest
+    /// even, by `VROUNDPD` with the immediate 0.
+    round_f64x4, target_feature = "avx", (value: [f64; 4]) -> [f64; 4]
+);
+wide!(
+    /// Returns `left * right + addend` of eight triples of binary32 lanes,
+    /// each rounded once, by `VFMADD213PS`.
+    mul_add_f32x8, all(target_feature = "avx", target_feature = "fma"), (left: [f32; 8], right: [f32; 8], addend: [f32; 8]) -> [f32; 8]
+);
+wide!(
+    /// Returns `left * right + addend` of four triples of binary64 lanes,
+    /// each rounded once, by `VFMADD213PD`.
+    mul_add_f64x4, all(target_feature = "avx", target_feature = "fma"), (left: [f64; 4], right: [f64; 4], addend: [f64; 4]) -> [f64; 4]
+);
+wide!(
+    /// Returns four binary32 lanes widened exactly to binary64, by
+    /// `VCVTPS2PD`.
+    widen_x4, target_feature = "avx", (value: [f32; 4]) -> [f64; 4]
+);
+wide!(
+    /// Returns four binary64 lanes rounded to binary32, by `VCVTPD2PS`.
+    narrow_x4, target_feature = "avx", (value: [f64; 4]) -> [f32; 4]
+);
 
 /// The 256-bit forms, in functions that enable their features for their own
 /// code. A caller compiled without AVX, such as a doctest, which does not
@@ -350,208 +352,192 @@ pub fn narrow<const C: usize>(value: &[f64; C], out: &mut [f32; C]) -> Option<()
 /// function inlines into a caller with the features.
 #[cfg(target_feature = "avx")]
 mod wide {
+    use core::arch::x86_64::{__m128, __m256, __m256d};
+    use core::mem::transmute;
+
     use super::Operation;
 
-    /// Computes `operation` of two chunks of binary32 lanes into `out`, by
-    /// `VADDPS`, `VSUBPS`, `VMULPS`, or `VDIVPS`.
-    ///
+    /// Returns eight binary32 lanes as the value of an AVX register.
+    #[inline]
+    fn singles(lanes: [f32; 8]) -> __m256 {
+        // SAFETY: both types hold 32 bytes, and every bit pattern is a value
+        // of each.
+        unsafe { transmute::<[f32; 8], __m256>(lanes) }
+    }
+
+    /// Returns the eight binary32 lanes of an AVX register value.
+    #[inline]
+    fn single_lanes(value: __m256) -> [f32; 8] {
+        // SAFETY: as in `singles`.
+        unsafe { transmute::<__m256, [f32; 8]>(value) }
+    }
+
+    /// Returns four binary64 lanes as the value of an AVX register.
+    #[inline]
+    fn doubles(lanes: [f64; 4]) -> __m256d {
+        // SAFETY: as in `singles`.
+        unsafe { transmute::<[f64; 4], __m256d>(lanes) }
+    }
+
+    /// Returns the four binary64 lanes of an AVX register value.
+    #[inline]
+    fn double_lanes(value: __m256d) -> [f64; 4] {
+        // SAFETY: as in `singles`.
+        unsafe { transmute::<__m256d, [f64; 4]>(value) }
+    }
+
     /// # Safety
     ///
     /// The processor must have AVX.
     #[target_feature(enable = "avx")]
     #[inline]
-    pub unsafe fn binary_f32<const C: usize>(
-        left: &[f32; C],
-        right: &[f32; C],
-        out: &mut [f32; C],
-        operation: Operation,
-    ) -> Option<()> {
+    pub unsafe fn binary_f32x8(left: [f32; 8], right: [f32; 8], operation: Operation) -> [f32; 8] {
+        let (mut a, b) = (singles(left), singles(right));
         arithmetic!(
             ymm_reg,
-            "vmovups",
             operation,
-            ["vaddps", "vsubps", "vmulps", "vdivps"],
-            " {a}, {a}, {b}",
-            left,
-            right,
-            out
-        )
+            [
+                "vaddps {a}, {a}, {b}",
+                "vsubps {a}, {a}, {b}",
+                "vmulps {a}, {a}, {b}",
+                "vdivps {a}, {a}, {b}",
+            ],
+            a,
+            b
+        );
+        single_lanes(a)
     }
 
-    /// Computes `operation` of two chunks of binary64 lanes into `out`, by
-    /// `VADDPD`, `VSUBPD`, `VMULPD`, or `VDIVPD`.
-    ///
     /// # Safety
     ///
     /// The processor must have AVX.
     #[target_feature(enable = "avx")]
     #[inline]
-    pub unsafe fn binary_f64<const C: usize>(
-        left: &[f64; C],
-        right: &[f64; C],
-        out: &mut [f64; C],
-        operation: Operation,
-    ) -> Option<()> {
+    pub unsafe fn binary_f64x4(left: [f64; 4], right: [f64; 4], operation: Operation) -> [f64; 4] {
+        let (mut a, b) = (doubles(left), doubles(right));
         arithmetic!(
             ymm_reg,
-            "vmovupd",
             operation,
-            ["vaddpd", "vsubpd", "vmulpd", "vdivpd"],
-            " {a}, {a}, {b}",
-            left,
-            right,
-            out
-        )
+            [
+                "vaddpd {a}, {a}, {b}",
+                "vsubpd {a}, {a}, {b}",
+                "vmulpd {a}, {a}, {b}",
+                "vdivpd {a}, {a}, {b}",
+            ],
+            a,
+            b
+        );
+        double_lanes(a)
     }
 
-    /// Computes the square roots of a chunk of binary32 lanes into `out`, by
-    /// `VSQRTPS`.
-    ///
     /// # Safety
     ///
     /// The processor must have AVX.
     #[target_feature(enable = "avx")]
     #[inline]
-    pub unsafe fn sqrt_f32<const C: usize>(value: &[f32; C], out: &mut [f32; C]) -> Option<()> {
-        one_chunk!(
-            ymm_reg,
-            "vmovups {a}, [{value}]",
-            "vsqrtps {a}, {a}",
-            "vmovups [{result}], {a}",
-            value,
-            out
-        )
+    pub unsafe fn sqrt_f32x8(value: [f32; 8]) -> [f32; 8] {
+        let mut a = singles(value);
+        packed!(ymm_reg, "vsqrtps {a}, {b}", a, a);
+        single_lanes(a)
     }
 
-    /// Computes the square roots of a chunk of binary64 lanes into `out`, by
-    /// `VSQRTPD`.
-    ///
     /// # Safety
     ///
     /// The processor must have AVX.
     #[target_feature(enable = "avx")]
     #[inline]
-    pub unsafe fn sqrt_f64<const C: usize>(value: &[f64; C], out: &mut [f64; C]) -> Option<()> {
-        one_chunk!(
-            ymm_reg,
-            "vmovupd {a}, [{value}]",
-            "vsqrtpd {a}, {a}",
-            "vmovupd [{result}], {a}",
-            value,
-            out
-        )
+    pub unsafe fn sqrt_f64x4(value: [f64; 4]) -> [f64; 4] {
+        let mut a = doubles(value);
+        packed!(ymm_reg, "vsqrtpd {a}, {b}", a, a);
+        double_lanes(a)
     }
 
-    /// Computes the lanes of a binary32 chunk rounded to integral values to
-    /// nearest even into `out`, by `VROUNDPS` with the immediate 0.
-    ///
     /// # Safety
     ///
     /// The processor must have AVX.
     #[target_feature(enable = "avx")]
     #[inline]
-    pub unsafe fn round_f32<const C: usize>(value: &[f32; C], out: &mut [f32; C]) -> Option<()> {
-        one_chunk!(
-            ymm_reg,
-            "vmovups {a}, [{value}]",
-            "vroundps {a}, {a}, 0",
-            "vmovups [{result}], {a}",
-            value,
-            out
-        )
+    pub unsafe fn round_f32x8(value: [f32; 8]) -> [f32; 8] {
+        let mut a = singles(value);
+        packed!(ymm_reg, "vroundps {a}, {b}, 0", a, a);
+        single_lanes(a)
     }
 
-    /// Computes the lanes of a binary64 chunk rounded to integral values to
-    /// nearest even into `out`, by `VROUNDPD` with the immediate 0.
-    ///
     /// # Safety
     ///
     /// The processor must have AVX.
     #[target_feature(enable = "avx")]
     #[inline]
-    pub unsafe fn round_f64<const C: usize>(value: &[f64; C], out: &mut [f64; C]) -> Option<()> {
-        one_chunk!(
-            ymm_reg,
-            "vmovupd {a}, [{value}]",
-            "vroundpd {a}, {a}, 0",
-            "vmovupd [{result}], {a}",
-            value,
-            out
-        )
+    pub unsafe fn round_f64x4(value: [f64; 4]) -> [f64; 4] {
+        let mut a = doubles(value);
+        packed!(ymm_reg, "vroundpd {a}, {b}, 0", a, a);
+        double_lanes(a)
     }
 
-    /// Computes `left * right + addend` of chunks of binary32 lanes into
-    /// `out`, each lane rounded once, by `VFMADD213PS`.
-    ///
     /// # Safety
     ///
     /// The processor must have AVX and FMA.
     #[cfg(target_feature = "fma")]
     #[target_feature(enable = "avx,fma")]
     #[inline]
-    pub unsafe fn mul_add_f32<const C: usize>(
-        left: &[f32; C],
-        right: &[f32; C],
-        addend: &[f32; C],
-        out: &mut [f32; C],
-    ) -> Option<()> {
-        fused!(ymm_reg, "vmovups", "vfmadd213ps", left, right, addend, out)
+    pub unsafe fn mul_add_f32x8(left: [f32; 8], right: [f32; 8], addend: [f32; 8]) -> [f32; 8] {
+        let (mut a, b, c) = (singles(left), singles(right), singles(addend));
+        fused!(ymm_reg, "vfmadd213ps", a, b, c);
+        single_lanes(a)
     }
 
-    /// Computes `left * right + addend` of chunks of binary64 lanes into
-    /// `out`, each lane rounded once, by `VFMADD213PD`.
-    ///
     /// # Safety
     ///
     /// The processor must have AVX and FMA.
     #[cfg(target_feature = "fma")]
     #[target_feature(enable = "avx,fma")]
     #[inline]
-    pub unsafe fn mul_add_f64<const C: usize>(
-        left: &[f64; C],
-        right: &[f64; C],
-        addend: &[f64; C],
-        out: &mut [f64; C],
-    ) -> Option<()> {
-        fused!(ymm_reg, "vmovupd", "vfmadd213pd", left, right, addend, out)
+    pub unsafe fn mul_add_f64x4(left: [f64; 4], right: [f64; 4], addend: [f64; 4]) -> [f64; 4] {
+        let (mut a, b, c) = (doubles(left), doubles(right), doubles(addend));
+        fused!(ymm_reg, "vfmadd213pd", a, b, c);
+        double_lanes(a)
     }
 
-    /// Computes a chunk of binary32 lanes widened exactly to binary64 into
-    /// `out`, by `VCVTPS2PD`.
-    ///
     /// # Safety
     ///
     /// The processor must have AVX.
     #[target_feature(enable = "avx")]
     #[inline]
-    pub unsafe fn widen<const C: usize>(value: &[f32; C], out: &mut [f64; C]) -> Option<()> {
-        one_chunk!(
-            ymm_reg,
-            "vmovups {a:x}, [{value}]",
-            "vcvtps2pd {a}, {a:x}",
-            "vmovupd [{result}], {a}",
-            value,
-            out
-        )
+    pub unsafe fn widen_x4(value: [f32; 4]) -> [f64; 4] {
+        let a = super::singles(value);
+        let result: __m256d;
+        // SAFETY: VCVTPS2PD reads an SSE register and writes an AVX register.
+        // The caller guarantees AVX, and the conversion changes only the
+        // status flags of MXCSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                "vcvtps2pd {result}, {a}",
+                a = in(xmm_reg) a,
+                result = lateout(ymm_reg) result,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+        double_lanes(result)
     }
 
-    /// Computes a chunk of binary64 lanes rounded to binary32 into `out`, by
-    /// `VCVTPD2PS`.
-    ///
     /// # Safety
     ///
     /// The processor must have AVX.
     #[target_feature(enable = "avx")]
     #[inline]
-    pub unsafe fn narrow<const C: usize>(value: &[f64; C], out: &mut [f32; C]) -> Option<()> {
-        one_chunk!(
-            ymm_reg,
-            "vmovupd {a}, [{value}]",
-            "vcvtpd2ps {a:x}, {a}",
-            "vmovups [{result}], {a:x}",
-            value,
-            out
-        )
+    pub unsafe fn narrow_x4(value: [f64; 4]) -> [f32; 4] {
+        let a = doubles(value);
+        let result: __m128;
+        // SAFETY: as in `widen_x4`, with `VCVTPD2PS`.
+        unsafe {
+            core::arch::asm!(
+                "vcvtpd2ps {result}, {a}",
+                a = in(ymm_reg) a,
+                result = lateout(xmm_reg) result,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+        super::single_lanes(result)
     }
 }
 
@@ -560,27 +546,20 @@ mod tests {
     use super::super::{binary_f32, binary_f64, narrow_double, sqrt_f32, sqrt_f64, widen_single};
     use super::Operation;
 
-    /// Storage aligned to 32 bytes, so that the chunk at an offset of one lane
-    /// has an address that is not a multiple of 16.
+    /// Storage aligned to 32 bytes, so that the lanes at an offset of one lane
+    /// have an address that is not a multiple of 16.
     #[repr(align(32))]
     struct Aligned<T>(T);
 
-    /// Returns the chunk of `C` lanes at lane 1 of `lanes`.
-    fn unaligned<T, const C: usize>(lanes: &[T]) -> &[T; C] {
+    /// Returns the `C` lanes at lane 1 of `lanes`.
+    fn unaligned<T: Copy, const C: usize>(lanes: &[T]) -> [T; C] {
         lanes[1..=C]
             .try_into()
             .expect("the storage holds a chunk after lane 0")
     }
 
-    /// Returns the mutable chunk of `C` lanes at lane 1 of `lanes`.
-    fn unaligned_mut<T, const C: usize>(lanes: &mut [T]) -> &mut [T; C] {
-        (&mut lanes[1..=C])
-            .try_into()
-            .expect("the storage holds a chunk after lane 0")
-    }
-
     #[test]
-    fn every_chunk_reads_and_writes_through_an_unaligned_address() {
+    fn every_chunk_gives_the_lanes_of_the_scalar_instructions() {
         let singles = Aligned(
             [
                 0x3FC0_0000_u32,
@@ -599,55 +578,46 @@ mod tests {
             ]
             .map(f64::from_bits),
         );
-        let (mut single_out, mut double_out) = (Aligned([0.0_f32; 5]), Aligned([0.0_f64; 3]));
-        let four: &[f32; 4] = unaligned(&singles.0);
-        let two: &[f64; 2] = unaligned(&doubles.0);
-        let pair: &[f32; 2] = unaligned(&singles.0);
-
-        let out: &mut [f32; 4] = unaligned_mut(&mut single_out.0);
-        super::binary_f32(four, four, out, Operation::Mul).expect("SSE2 has MULPS");
+        let four: [f32; 4] = unaligned(&singles.0);
+        let two: [f64; 2] = unaligned(&doubles.0);
+        let pair: [f32; 2] = unaligned(&singles.0);
+        let lanes = super::binary_f32x4(four, four, Operation::Mul);
         let each = four.map(|lane| binary_f32(lane, lane, Operation::Mul));
-        assert_eq!(out.map(f32::to_bits), each.map(f32::to_bits), "MULPS");
-        super::sqrt_f32(four, out).expect("SSE2 has SQRTPS");
+        assert_eq!(lanes.map(f32::to_bits), each.map(f32::to_bits), "MULPS");
+        let lanes = super::sqrt_f32x4(four);
         assert_eq!(
-            out.map(f32::to_bits),
+            lanes.map(f32::to_bits),
             four.map(sqrt_f32).map(f32::to_bits),
             "SQRTPS"
         );
-        if super::round_f32(four, out).is_some() {
-            let each = *out;
-            super::round_f32(&each, out).expect("the build has ROUNDPS");
-            assert_eq!(out.map(f32::to_bits), each.map(f32::to_bits), "ROUNDPS");
-        }
-
-        let out: &mut [f64; 2] = unaligned_mut(&mut double_out.0);
-        super::binary_f64(two, two, out, Operation::Div).expect("SSE2 has DIVPD");
+        let lanes = super::binary_f64x2(two, two, Operation::Div);
         let each = two.map(|lane| binary_f64(lane, lane, Operation::Div));
-        assert_eq!(out.map(f64::to_bits), each.map(f64::to_bits), "DIVPD");
-        super::sqrt_f64(two, out).expect("SSE2 has SQRTPD");
+        assert_eq!(lanes.map(f64::to_bits), each.map(f64::to_bits), "DIVPD");
+        let lanes = super::sqrt_f64x2(two);
         assert_eq!(
-            out.map(f64::to_bits),
+            lanes.map(f64::to_bits),
             two.map(sqrt_f64).map(f64::to_bits),
             "SQRTPD"
         );
-        if super::round_f64(two, out).is_some() {
-            let each = *out;
-            super::round_f64(&each, out).expect("the build has ROUNDPD");
-            assert_eq!(out.map(f64::to_bits), each.map(f64::to_bits), "ROUNDPD");
-        }
-        super::widen(pair, out).expect("SSE2 has CVTPS2PD");
+        let widened = super::widen_x2(pair);
         assert_eq!(
-            out.map(f64::to_bits),
+            widened.map(f64::to_bits),
             pair.map(widen_single).map(f64::to_bits),
             "CVTPS2PD"
         );
-
-        let out: &mut [f32; 2] = unaligned_mut(&mut single_out.0);
-        super::narrow(two, out).expect("SSE2 has CVTPD2PS");
+        let narrowed = super::narrow_x2(two);
         assert_eq!(
-            out.map(f32::to_bits),
+            narrowed.map(f32::to_bits),
             two.map(narrow_double).map(f32::to_bits),
             "CVTPD2PS"
         );
+        if let Some(lanes) = super::round_f32x4(four) {
+            let again = super::round_f32x4(lanes).expect("the build has ROUNDPS");
+            assert_eq!(lanes.map(f32::to_bits), again.map(f32::to_bits), "ROUNDPS");
+        }
+        if let Some(lanes) = super::round_f64x2(two) {
+            let again = super::round_f64x2(lanes).expect("the build has ROUNDPD");
+            assert_eq!(lanes.map(f64::to_bits), again.map(f64::to_bits), "ROUNDPD");
+        }
     }
 }

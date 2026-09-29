@@ -37,13 +37,39 @@ pub fn default_environment() -> bool {
     mxcsr & (RESULT_FIELDS | MASKS) == MASKS
 }
 
+/// Selects the template of an SSE instruction: the VEX form `$vex` in a build
+/// with AVX, and the legacy form `$legacy` otherwise.
+///
+/// A legacy SSE instruction keeps the upper half of its 256-bit register.
+/// After a 256-bit instruction, the legacy instruction waits on that half, or
+/// the unit saves the upper halves of all registers. A VEX form clears the
+/// upper half and does not wait on it.
+#[cfg(target_feature = "avx")]
+macro_rules! sse {
+    ($legacy:literal, $vex:literal) => {
+        $vex
+    };
+}
+
+/// Selects the legacy form `$legacy` of an SSE instruction in a build
+/// without AVX, which has no VEX forms.
+#[cfg(not(target_feature = "avx"))]
+macro_rules! sse {
+    ($legacy:literal, $vex:literal) => {
+        $legacy
+    };
+}
+
+pub(super) use sse;
+
 /// Runs one scalar SSE instruction on `$left` and `$right`, and leaves the
 /// result in `$left`.
 macro_rules! sse_scalar {
-    ($instruction:literal, $left:ident, $right:ident) => {
+    ($instruction:expr, $left:ident, $right:ident) => {
         // SAFETY: the instruction reads and writes SSE registers. SSE2 is part
-        // of every x86-64 target, and the instruction changes only the status
-        // flags of MXCSR, which floaty does not read.
+        // of every x86-64 target, and `sse!` selects a VEX form only in a
+        // build with AVX. The instruction changes only the status flags of
+        // MXCSR, which floaty does not read.
         unsafe {
             core::arch::asm!(
                 $instruction,
@@ -60,10 +86,26 @@ macro_rules! sse_scalar {
 #[inline]
 pub fn binary_f32(mut left: f32, right: f32, operation: Operation) -> f32 {
     match operation {
-        Operation::Add => sse_scalar!("addss {left}, {right}", left, right),
-        Operation::Sub => sse_scalar!("subss {left}, {right}", left, right),
-        Operation::Mul => sse_scalar!("mulss {left}, {right}", left, right),
-        Operation::Div => sse_scalar!("divss {left}, {right}", left, right),
+        Operation::Add => sse_scalar!(
+            sse!("addss {left}, {right}", "vaddss {left}, {left}, {right}"),
+            left,
+            right
+        ),
+        Operation::Sub => sse_scalar!(
+            sse!("subss {left}, {right}", "vsubss {left}, {left}, {right}"),
+            left,
+            right
+        ),
+        Operation::Mul => sse_scalar!(
+            sse!("mulss {left}, {right}", "vmulss {left}, {left}, {right}"),
+            left,
+            right
+        ),
+        Operation::Div => sse_scalar!(
+            sse!("divss {left}, {right}", "vdivss {left}, {left}, {right}"),
+            left,
+            right
+        ),
     }
     left
 }
@@ -73,10 +115,26 @@ pub fn binary_f32(mut left: f32, right: f32, operation: Operation) -> f32 {
 #[inline]
 pub fn binary_f64(mut left: f64, right: f64, operation: Operation) -> f64 {
     match operation {
-        Operation::Add => sse_scalar!("addsd {left}, {right}", left, right),
-        Operation::Sub => sse_scalar!("subsd {left}, {right}", left, right),
-        Operation::Mul => sse_scalar!("mulsd {left}, {right}", left, right),
-        Operation::Div => sse_scalar!("divsd {left}, {right}", left, right),
+        Operation::Add => sse_scalar!(
+            sse!("addsd {left}, {right}", "vaddsd {left}, {left}, {right}"),
+            left,
+            right
+        ),
+        Operation::Sub => sse_scalar!(
+            sse!("subsd {left}, {right}", "vsubsd {left}, {left}, {right}"),
+            left,
+            right
+        ),
+        Operation::Mul => sse_scalar!(
+            sse!("mulsd {left}, {right}", "vmulsd {left}, {left}, {right}"),
+            left,
+            right
+        ),
+        Operation::Div => sse_scalar!(
+            sse!("divsd {left}, {right}", "vdivsd {left}, {left}, {right}"),
+            left,
+            right
+        ),
     }
     left
 }
@@ -86,11 +144,12 @@ pub fn binary_f64(mut left: f64, right: f64, operation: Operation) -> f64 {
 pub fn widen_single(value: f32) -> f64 {
     let result: f64;
     // SAFETY: CVTSS2SD reads and writes SSE registers. SSE2 is part of every
-    // x86-64 target, and the conversion changes only the status flags of
-    // MXCSR, which floaty does not read.
+    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // The conversion changes only the status flags of MXCSR, which floaty
+    // does not read.
     unsafe {
         core::arch::asm!(
-            "cvtss2sd {result}, {value}",
+            sse!("cvtss2sd {result}, {value}", "vcvtss2sd {result}, {value}, {value}"),
             value = in(xmm_reg) value,
             result = lateout(xmm_reg) result,
             options(pure, nomem, nostack, preserves_flags),
@@ -103,11 +162,12 @@ pub fn widen_single(value: f32) -> f64 {
 #[inline]
 pub fn sqrt_f32(mut value: f32) -> f32 {
     // SAFETY: SQRTSS reads and writes one SSE register. SSE2 is part of every
-    // x86-64 target, and the instruction changes only the status flags of
-    // MXCSR, which floaty does not read.
+    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // The instruction changes only the status flags of MXCSR, which floaty
+    // does not read.
     unsafe {
         core::arch::asm!(
-            "sqrtss {value}, {value}",
+            sse!("sqrtss {value}, {value}", "vsqrtss {value}, {value}, {value}"),
             value = inout(xmm_reg) value,
             options(pure, nomem, nostack, preserves_flags),
         );
@@ -119,11 +179,12 @@ pub fn sqrt_f32(mut value: f32) -> f32 {
 #[inline]
 pub fn sqrt_f64(mut value: f64) -> f64 {
     // SAFETY: SQRTSD reads and writes one SSE register. SSE2 is part of every
-    // x86-64 target, and the instruction changes only the status flags of
-    // MXCSR, which floaty does not read.
+    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // The instruction changes only the status flags of MXCSR, which floaty
+    // does not read.
     unsafe {
         core::arch::asm!(
-            "sqrtsd {value}, {value}",
+            sse!("sqrtsd {value}, {value}", "vsqrtsd {value}, {value}, {value}"),
             value = inout(xmm_reg) value,
             options(pure, nomem, nostack, preserves_flags),
         );
@@ -262,11 +323,12 @@ pub fn mul_add_f16(_left: u16, _right: u16, _addend: u16) -> Option<u16> {
 pub fn narrow_double(value: f64) -> f32 {
     let result: f32;
     // SAFETY: CVTSD2SS reads and writes SSE registers. SSE2 is part of every
-    // x86-64 target, and the rounding changes only the status flags of MXCSR,
-    // which floaty does not read.
+    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // The rounding changes only the status flags of MXCSR, which floaty does
+    // not read.
     unsafe {
         core::arch::asm!(
-            "cvtsd2ss {result}, {value}",
+            sse!("cvtsd2ss {result}, {value}", "vcvtsd2ss {result}, {value}, {value}"),
             value = in(xmm_reg) value,
             result = lateout(xmm_reg) result,
             options(pure, nomem, nostack, preserves_flags),
@@ -289,11 +351,12 @@ pub fn narrow_double_to_half(_value: f64) -> Option<u16> {
 #[allow(clippy::unnecessary_wraps)] // A build without SSE4.1 returns `None` from the same signature.
 pub fn round_f32(mut value: f32) -> Option<f32> {
     // SAFETY: ROUNDSS reads and writes one SSE register. The build enables
-    // SSE4.1, and the instruction changes only the status flags of MXCSR,
-    // which floaty does not read.
+    // SSE4.1, and `sse!` selects a VEX form only in a build with AVX. The
+    // instruction changes only the status flags of MXCSR, which floaty does
+    // not read.
     unsafe {
         core::arch::asm!(
-            "roundss {value}, {value}, 0",
+            sse!("roundss {value}, {value}, 0", "vroundss {value}, {value}, {value}, 0"),
             value = inout(xmm_reg) value,
             options(pure, nomem, nostack, preserves_flags),
         );
@@ -308,11 +371,12 @@ pub fn round_f32(mut value: f32) -> Option<f32> {
 #[allow(clippy::unnecessary_wraps)] // A build without SSE4.1 returns `None` from the same signature.
 pub fn round_f64(mut value: f64) -> Option<f64> {
     // SAFETY: ROUNDSD reads and writes one SSE register. The build enables
-    // SSE4.1, and the instruction changes only the status flags of MXCSR,
-    // which floaty does not read.
+    // SSE4.1, and `sse!` selects a VEX form only in a build with AVX. The
+    // instruction changes only the status flags of MXCSR, which floaty does
+    // not read.
     unsafe {
         core::arch::asm!(
-            "roundsd {value}, {value}, 0",
+            sse!("roundsd {value}, {value}, 0", "vroundsd {value}, {value}, {value}, 0"),
             value = inout(xmm_reg) value,
             options(pure, nomem, nostack, preserves_flags),
         );
@@ -343,11 +407,12 @@ pub fn round_f64(_value: f64) -> Option<f64> {
 pub fn to_int_f32(value: f32) -> Option<i64> {
     let result: i64;
     // SAFETY: CVTSS2SI reads an SSE register and writes a general register.
-    // SSE2 is part of every x86-64 target, and the conversion changes only the
-    // status flags of MXCSR, which floaty does not read.
+    // SSE2 is part of every x86-64 target, and `sse!` selects a VEX form only
+    // in a build with AVX. The conversion changes only the status flags of
+    // MXCSR, which floaty does not read.
     unsafe {
         core::arch::asm!(
-            "cvtss2si {result}, {value}",
+            sse!("cvtss2si {result}, {value}", "vcvtss2si {result}, {value}"),
             value = in(xmm_reg) value,
             result = lateout(reg) result,
             options(pure, nomem, nostack, preserves_flags),
@@ -363,11 +428,12 @@ pub fn to_int_f32(value: f32) -> Option<i64> {
 pub fn to_int_f64(value: f64) -> Option<i64> {
     let result: i64;
     // SAFETY: CVTSD2SI reads an SSE register and writes a general register.
-    // SSE2 is part of every x86-64 target, and the conversion changes only the
-    // status flags of MXCSR, which floaty does not read.
+    // SSE2 is part of every x86-64 target, and `sse!` selects a VEX form only
+    // in a build with AVX. The conversion changes only the status flags of
+    // MXCSR, which floaty does not read.
     unsafe {
         core::arch::asm!(
-            "cvtsd2si {result}, {value}",
+            sse!("cvtsd2si {result}, {value}", "vcvtsd2si {result}, {value}"),
             value = in(xmm_reg) value,
             result = lateout(reg) result,
             options(pure, nomem, nostack, preserves_flags),
@@ -383,12 +449,13 @@ pub fn from_int_f32(value: i64) -> f32 {
     let result: f32;
     // SAFETY: XORPS clears an SSE register, so CVTSI2SS does not wait on its
     // old value. CVTSI2SS writes the converted value into the low lane. SSE2 is
-    // part of every x86-64 target, and the conversion changes only the status
-    // flags of MXCSR, which floaty does not read.
+    // part of every x86-64 target, and `sse!` selects a VEX form only in a
+    // build with AVX. The conversion changes only the status flags of MXCSR,
+    // which floaty does not read.
     unsafe {
         core::arch::asm!(
-            "xorps {result}, {result}",
-            "cvtsi2ss {result}, {value}",
+            sse!("xorps {result}, {result}", "vxorps {result}, {result}, {result}"),
+            sse!("cvtsi2ss {result}, {value}", "vcvtsi2ss {result}, {result}, {value}"),
             value = in(reg) value,
             result = out(xmm_reg) result,
             options(pure, nomem, nostack, preserves_flags),
@@ -404,12 +471,13 @@ pub fn from_int_f64(value: i64) -> f64 {
     let result: f64;
     // SAFETY: XORPD clears an SSE register, so CVTSI2SD does not wait on its
     // old value. CVTSI2SD writes the converted value into the low lane. SSE2 is
-    // part of every x86-64 target, and the conversion changes only the status
-    // flags of MXCSR, which floaty does not read.
+    // part of every x86-64 target, and `sse!` selects a VEX form only in a
+    // build with AVX. The conversion changes only the status flags of MXCSR,
+    // which floaty does not read.
     unsafe {
         core::arch::asm!(
-            "xorpd {result}, {result}",
-            "cvtsi2sd {result}, {value}",
+            sse!("xorpd {result}, {result}", "vxorpd {result}, {result}, {result}"),
+            sse!("cvtsi2sd {result}, {value}", "vcvtsi2sd {result}, {result}, {value}"),
             value = in(reg) value,
             result = out(xmm_reg) result,
             options(pure, nomem, nostack, preserves_flags),

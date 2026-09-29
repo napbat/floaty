@@ -1,10 +1,14 @@
 //! The vector instructions of the AArch64 floating-point unit, for the paths
 //! of `Lanes`: 128-bit registers of four binary32 or two binary64 lanes.
 //!
-//! Each function computes one chunk of `C` lanes into `out`, and returns
-//! `None` for a chunk width that has no instruction. The block loads the
-//! operands through pointers, computes in registers, and stores the result
-//! through `out`.
+//! Each function computes one chunk of lanes in registers. The block takes
+//! and gives register values, so it touches no memory: the compiler loads and
+//! stores the lanes, and keeps them in registers between operations. The base
+//! architecture has no wider registers, so each function for a 256-bit chunk
+//! returns `None`.
+
+use core::arch::aarch64::{float32x2_t, float32x4_t, float64x2_t};
+use core::mem::transmute;
 
 use super::super::Operation;
 
@@ -12,89 +16,59 @@ use super::super::Operation;
 /// architecture.
 pub const WIDE: bool = false;
 
-/// Runs a vector operation on two chunks, and stores the result chunk
-/// through `$out`. `$operation` combines the registers `a` and `b` into `a`.
-macro_rules! two_chunks {
-    ($operation:expr, $left:expr, $right:expr, $out:expr) => {{
-        // SAFETY: the block loads each 128-bit operand through its pointer,
-        // which points to a chunk of 16 bytes, and stores the result through a
-        // pointer to a chunk of 16 bytes. Every AArch64 target has the
-        // instructions, and they change only the status flags of FPSR, which
-        // floaty does not read.
-        unsafe {
-            core::arch::asm!(
-                "ldr {a:q}, [{left}]",
-                "ldr {b:q}, [{right}]",
-                $operation,
-                "str {a:q}, [{result}]",
-                left = in(reg) $left.as_ptr(),
-                right = in(reg) $right.as_ptr(),
-                result = in(reg) $out.as_mut_ptr(),
-                a = out(vreg) _,
-                b = out(vreg) _,
-                options(nostack, preserves_flags),
-            );
-        }
-        Some(())
-    }};
+/// Returns four binary32 lanes as the value of a vector register.
+#[inline]
+fn singles(lanes: [f32; 4]) -> float32x4_t {
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    unsafe { transmute::<[f32; 4], float32x4_t>(lanes) }
 }
 
-/// Runs a vector operation on one chunk, and stores the result chunk through
-/// `$out`. `$load` loads the chunk into `a`, `$operation` computes in `a`,
-/// and `$store` stores `a`.
-macro_rules! one_chunk {
-    ($load:literal, $operation:literal, $store:literal, $value:expr, $out:expr) => {{
-        // SAFETY: as in `two_chunks`, with one operand. The load and the
-        // store move the widths of the chunks.
-        unsafe {
-            core::arch::asm!(
-                $load,
-                $operation,
-                $store,
-                value = in(reg) $value.as_ptr(),
-                result = in(reg) $out.as_mut_ptr(),
-                a = out(vreg) _,
-                options(nostack, preserves_flags),
-            );
-        }
-        Some(())
-    }};
+/// Returns the four binary32 lanes of a vector register value.
+#[inline]
+fn single_lanes(value: float32x4_t) -> [f32; 4] {
+    // SAFETY: as in `singles`.
+    unsafe { transmute::<float32x4_t, [f32; 4]>(value) }
 }
 
-/// Runs a vector fused multiply-add on three chunks, and stores the result
-/// chunk through `$out`. `FMLA` adds the product of `a` and `b` to `c`,
-/// rounded once.
-macro_rules! fused {
-    ($arrangement:literal, $left:expr, $right:expr, $addend:expr, $out:expr) => {{
-        // SAFETY: as in `two_chunks`, with a third operand that the block
-        // loads through `addend`.
-        unsafe {
-            core::arch::asm!(
-                "ldr {a:q}, [{left}]",
-                "ldr {b:q}, [{right}]",
-                "ldr {c:q}, [{addend}]",
-                concat!("fmla {c:v}", $arrangement, ", {a:v}", $arrangement, ", {b:v}", $arrangement),
-                "str {c:q}, [{result}]",
-                left = in(reg) $left.as_ptr(),
-                right = in(reg) $right.as_ptr(),
-                addend = in(reg) $addend.as_ptr(),
-                result = in(reg) $out.as_mut_ptr(),
-                a = out(vreg) _,
-                b = out(vreg) _,
-                c = out(vreg) _,
-                options(nostack, preserves_flags),
-            );
-        }
-        Some(())
-    }};
+/// Returns two binary64 lanes as the value of a vector register.
+#[inline]
+fn doubles(lanes: [f64; 2]) -> float64x2_t {
+    // SAFETY: as in `singles`.
+    unsafe { transmute::<[f64; 2], float64x2_t>(lanes) }
 }
 
-/// Selects the instruction of an operation, and stores the result chunk
-/// through `$out`.
+/// Returns the two binary64 lanes of a vector register value.
+#[inline]
+fn double_lanes(value: float64x2_t) -> [f64; 2] {
+    // SAFETY: as in `singles`.
+    unsafe { transmute::<float64x2_t, [f64; 2]>(value) }
+}
+
+/// Runs one vector instruction on the register values `$a` and `$b`, and
+/// leaves the result in `$a`.
+macro_rules! vector {
+    ($instruction:expr, $a:ident, $b:ident) => {
+        // SAFETY: the instruction reads and writes SIMD and floating-point
+        // registers. Every AArch64 target has it, and it changes only the
+        // status flags of FPSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                $instruction,
+                a = inout(vreg) $a,
+                b = in(vreg) $b,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+    };
+}
+
+/// Runs one instruction of `$operation` on `$a` and `$b` with the
+/// arrangement `$arrangement`, and leaves the result in `$a`.
 macro_rules! arithmetic {
-    ($operation:expr, $arrangement:literal, $left:expr, $right:expr, $out:expr) => {
+    ($operation:expr, $arrangement:literal, $a:ident, $b:ident) => {
         match $operation {
-            Operation::Add => two_chunks!(
+            Operation::Add => vector!(
                 concat!(
                     "fadd {a:v}",
                     $arrangement,
@@ -103,11 +77,10 @@ macro_rules! arithmetic {
                     ", {b:v}",
                     $arrangement
                 ),
-                $left,
-                $right,
-                $out
+                $a,
+                $b
             ),
-            Operation::Sub => two_chunks!(
+            Operation::Sub => vector!(
                 concat!(
                     "fsub {a:v}",
                     $arrangement,
@@ -116,11 +89,10 @@ macro_rules! arithmetic {
                     ", {b:v}",
                     $arrangement
                 ),
-                $left,
-                $right,
-                $out
+                $a,
+                $b
             ),
-            Operation::Mul => two_chunks!(
+            Operation::Mul => vector!(
                 concat!(
                     "fmul {a:v}",
                     $arrangement,
@@ -129,11 +101,10 @@ macro_rules! arithmetic {
                     ", {b:v}",
                     $arrangement
                 ),
-                $left,
-                $right,
-                $out
+                $a,
+                $b
             ),
-            Operation::Div => two_chunks!(
+            Operation::Div => vector!(
                 concat!(
                     "fdiv {a:v}",
                     $arrangement,
@@ -142,166 +113,162 @@ macro_rules! arithmetic {
                     ", {b:v}",
                     $arrangement
                 ),
-                $left,
-                $right,
-                $out
+                $a,
+                $b
             ),
         }
     };
 }
 
-/// Computes `operation` of two chunks of four binary32 lanes into `out`, by
-/// `FADD`, `FSUB`, `FMUL`, or `FDIV` on `.4S`.
+/// Returns `operation` of four pairs of binary32 lanes, by `FADD`, `FSUB`,
+/// `FMUL`, or `FDIV` on `.4S`.
 #[inline]
-pub fn binary_f32<const C: usize>(
-    left: &[f32; C],
-    right: &[f32; C],
-    out: &mut [f32; C],
-    operation: Operation,
-) -> Option<()> {
-    match C {
-        4 => arithmetic!(operation, ".4s", left, right, out),
-        _ => None,
-    }
+pub fn binary_f32x4(left: [f32; 4], right: [f32; 4], operation: Operation) -> [f32; 4] {
+    let (mut a, b) = (singles(left), singles(right));
+    arithmetic!(operation, ".4s", a, b);
+    single_lanes(a)
 }
 
-/// Computes `operation` of two chunks of two binary64 lanes into `out`, by
-/// `FADD`, `FSUB`, `FMUL`, or `FDIV` on `.2D`.
+/// Returns `operation` of two pairs of binary64 lanes, by `FADD`, `FSUB`,
+/// `FMUL`, or `FDIV` on `.2D`.
 #[inline]
-pub fn binary_f64<const C: usize>(
-    left: &[f64; C],
-    right: &[f64; C],
-    out: &mut [f64; C],
-    operation: Operation,
-) -> Option<()> {
-    match C {
-        2 => arithmetic!(operation, ".2d", left, right, out),
-        _ => None,
-    }
+pub fn binary_f64x2(left: [f64; 2], right: [f64; 2], operation: Operation) -> [f64; 2] {
+    let (mut a, b) = (doubles(left), doubles(right));
+    arithmetic!(operation, ".2d", a, b);
+    double_lanes(a)
 }
 
-/// Computes the square roots of a chunk of four binary32 lanes into `out`,
-/// by `FSQRT`.
+/// Returns the square roots of four binary32 lanes, by `FSQRT`.
 #[inline]
-pub fn sqrt_f32<const C: usize>(value: &[f32; C], out: &mut [f32; C]) -> Option<()> {
-    match C {
-        4 => one_chunk!(
-            "ldr {a:q}, [{value}]",
-            "fsqrt {a:v}.4s, {a:v}.4s",
-            "str {a:q}, [{result}]",
-            value,
-            out
-        ),
-        _ => None,
-    }
+pub fn sqrt_f32x4(value: [f32; 4]) -> [f32; 4] {
+    let mut a = singles(value);
+    vector!("fsqrt {a:v}.4s, {b:v}.4s", a, a);
+    single_lanes(a)
 }
 
-/// Computes the square roots of a chunk of two binary64 lanes into `out`,
-/// by `FSQRT`.
+/// Returns the square roots of two binary64 lanes, by `FSQRT`.
 #[inline]
-pub fn sqrt_f64<const C: usize>(value: &[f64; C], out: &mut [f64; C]) -> Option<()> {
-    match C {
-        2 => one_chunk!(
-            "ldr {a:q}, [{value}]",
-            "fsqrt {a:v}.2d, {a:v}.2d",
-            "str {a:q}, [{result}]",
-            value,
-            out
-        ),
-        _ => None,
-    }
+pub fn sqrt_f64x2(value: [f64; 2]) -> [f64; 2] {
+    let mut a = doubles(value);
+    vector!("fsqrt {a:v}.2d, {b:v}.2d", a, a);
+    double_lanes(a)
 }
 
-/// Computes the lanes of a chunk of four binary32 lanes rounded to integral
-/// values to nearest even into `out`, by `FRINTN`.
+/// Returns four binary32 lanes rounded to integral values to nearest even,
+/// by `FRINTN`.
 #[inline]
-pub fn round_f32<const C: usize>(value: &[f32; C], out: &mut [f32; C]) -> Option<()> {
-    match C {
-        4 => one_chunk!(
-            "ldr {a:q}, [{value}]",
-            "frintn {a:v}.4s, {a:v}.4s",
-            "str {a:q}, [{result}]",
-            value,
-            out
-        ),
-        _ => None,
-    }
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack SSE4.1.
+pub fn round_f32x4(value: [f32; 4]) -> Option<[f32; 4]> {
+    let mut a = singles(value);
+    vector!("frintn {a:v}.4s, {b:v}.4s", a, a);
+    Some(single_lanes(a))
 }
 
-/// Computes the lanes of a chunk of two binary64 lanes rounded to integral
-/// values to nearest even into `out`, by `FRINTN`.
+/// Returns two binary64 lanes rounded to integral values to nearest even, by
+/// `FRINTN`.
 #[inline]
-pub fn round_f64<const C: usize>(value: &[f64; C], out: &mut [f64; C]) -> Option<()> {
-    match C {
-        2 => one_chunk!(
-            "ldr {a:q}, [{value}]",
-            "frintn {a:v}.2d, {a:v}.2d",
-            "str {a:q}, [{result}]",
-            value,
-            out
-        ),
-        _ => None,
-    }
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack SSE4.1.
+pub fn round_f64x2(value: [f64; 2]) -> Option<[f64; 2]> {
+    let mut a = doubles(value);
+    vector!("frintn {a:v}.2d, {b:v}.2d", a, a);
+    Some(double_lanes(a))
 }
 
-/// Computes `left * right + addend` of chunks of four binary32 lanes into
-/// `out`, each lane rounded once, by `FMLA`.
-#[inline]
-pub fn mul_add_f32<const C: usize>(
-    left: &[f32; C],
-    right: &[f32; C],
-    addend: &[f32; C],
-    out: &mut [f32; C],
-) -> Option<()> {
-    match C {
-        4 => fused!(".4s", left, right, addend, out),
-        _ => None,
-    }
+/// Runs a vector fused multiply-add: `FMLA` adds the product of `$b` and
+/// `$c` to `$a`, rounded once.
+macro_rules! fused {
+    ($arrangement:literal, $a:ident, $b:ident, $c:ident) => {
+        // SAFETY: as in `vector!`, with a third register.
+        unsafe {
+            core::arch::asm!(
+                concat!("fmla {a:v}", $arrangement, ", {b:v}", $arrangement, ", {c:v}", $arrangement),
+                a = inout(vreg) $a,
+                b = in(vreg) $b,
+                c = in(vreg) $c,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+    };
 }
 
-/// Computes `left * right + addend` of chunks of two binary64 lanes into
-/// `out`, each lane rounded once, by `FMLA`.
+/// Returns `left * right + addend` of four triples of binary32 lanes, each
+/// rounded once, by `FMLA`.
 #[inline]
-pub fn mul_add_f64<const C: usize>(
-    left: &[f64; C],
-    right: &[f64; C],
-    addend: &[f64; C],
-    out: &mut [f64; C],
-) -> Option<()> {
-    match C {
-        2 => fused!(".2d", left, right, addend, out),
-        _ => None,
-    }
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack FMA.
+pub fn mul_add_f32x4(left: [f32; 4], right: [f32; 4], addend: [f32; 4]) -> Option<[f32; 4]> {
+    let (mut a, b, c) = (singles(addend), singles(left), singles(right));
+    fused!(".4s", a, b, c);
+    Some(single_lanes(a))
 }
 
-/// Computes a chunk of two binary32 lanes widened exactly to binary64 into
-/// `out`, by `FCVTL`.
+/// Returns `left * right + addend` of two triples of binary64 lanes, each
+/// rounded once, by `FMLA`.
 #[inline]
-pub fn widen<const C: usize>(value: &[f32; C], out: &mut [f64; C]) -> Option<()> {
-    match C {
-        2 => one_chunk!(
-            "ldr {a:d}, [{value}]",
-            "fcvtl {a:v}.2d, {a:v}.2s",
-            "str {a:q}, [{result}]",
-            value,
-            out
-        ),
-        _ => None,
-    }
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack FMA.
+pub fn mul_add_f64x2(left: [f64; 2], right: [f64; 2], addend: [f64; 2]) -> Option<[f64; 2]> {
+    let (mut a, b, c) = (doubles(addend), doubles(left), doubles(right));
+    fused!(".2d", a, b, c);
+    Some(double_lanes(a))
 }
 
-/// Computes a chunk of two binary64 lanes rounded to binary32 into `out`, by
-/// `FCVTN`.
+/// Returns two binary32 lanes widened exactly to binary64, by `FCVTL`.
 #[inline]
-pub fn narrow<const C: usize>(value: &[f64; C], out: &mut [f32; C]) -> Option<()> {
-    match C {
-        2 => one_chunk!(
-            "ldr {a:q}, [{value}]",
-            "fcvtn {a:v}.2s, {a:v}.2d",
-            "str {a:d}, [{result}]",
-            value,
-            out
-        ),
-        _ => None,
+pub fn widen_x2(value: [f32; 2]) -> [f64; 2] {
+    // SAFETY: both types hold 8 bytes, and every bit pattern is a value of
+    // each.
+    let a = unsafe { transmute::<[f32; 2], float32x2_t>(value) };
+    let result: float64x2_t;
+    // SAFETY: FCVTL reads and writes SIMD and floating-point registers. Every
+    // AArch64 target has it, and the widening changes only the status flags
+    // of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "fcvtl {result:v}.2d, {a:v}.2s",
+            a = in(vreg) a,
+            result = lateout(vreg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
     }
+    double_lanes(result)
 }
+
+/// Returns two binary64 lanes rounded to binary32, by `FCVTN`.
+#[inline]
+pub fn narrow_x2(value: [f64; 2]) -> [f32; 2] {
+    let a = doubles(value);
+    let result: float32x2_t;
+    // SAFETY: as in `widen_x2`, with `FCVTN`.
+    unsafe {
+        core::arch::asm!(
+            "fcvtn {result:v}.2s, {a:v}.2d",
+            a = in(vreg) a,
+            result = lateout(vreg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    // SAFETY: both types hold 8 bytes, and every bit pattern is a value of
+    // each.
+    unsafe { transmute::<float32x2_t, [f32; 2]>(result) }
+}
+
+/// Defines a function for a 256-bit chunk, which returns `None`.
+macro_rules! no_wide {
+    ($name:ident, ($($type:ty),+) -> $result:ty) => {
+        #[doc = "Returns `None`: the base architecture has no 256-bit registers."]
+        #[inline]
+        pub fn $name($(_: $type),+) -> Option<$result> {
+            None
+        }
+    };
+}
+
+no_wide!(binary_f32x8, ([f32; 8], [f32; 8], Operation) -> [f32; 8]);
+no_wide!(binary_f64x4, ([f64; 4], [f64; 4], Operation) -> [f64; 4]);
+no_wide!(sqrt_f32x8, ([f32; 8]) -> [f32; 8]);
+no_wide!(sqrt_f64x4, ([f64; 4]) -> [f64; 4]);
+no_wide!(round_f32x8, ([f32; 8]) -> [f32; 8]);
+no_wide!(round_f64x4, ([f64; 4]) -> [f64; 4]);
+no_wide!(mul_add_f32x8, ([f32; 8], [f32; 8], [f32; 8]) -> [f32; 8]);
+no_wide!(mul_add_f64x4, ([f64; 4], [f64; 4], [f64; 4]) -> [f64; 4]);
+no_wide!(widen_x4, ([f32; 4]) -> [f64; 4]);
+no_wide!(narrow_x4, ([f64; 4]) -> [f32; 4]);

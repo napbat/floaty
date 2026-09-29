@@ -130,9 +130,10 @@ register. `Lanes<F32, 4>` is an SSE or NEON register of binary32 values, and
   emulator takes the flags of a packed instruction from the union. The union
   is the flags that the lanes raise, not a quirk of one instruction set.
 - The methods without flags take a packed host path where the build has one.
-  The path checks the environment once for all lanes, computes full chunks
-  of lanes with packed instructions and the other lanes with the scalar host
-  path, and sends each lane with a NaN result to the engine.
+  The path checks the environment once for all lanes, and computes full
+  chunks of lanes with packed instructions and the other lanes with the
+  scalar host path. When a lane gives a NaN, each lane takes its scalar
+  operation, which sends the NaN to the engine.
 - `Lanes` is a newtype. An operator on `[F32; 4]` would implement a foreign
   trait for a foreign type, which Rust does not allow.
 - `new` and `into_array` convert from and to an array, lane 0 first.
@@ -1295,15 +1296,20 @@ interleaved runs.
 The operations of `Lanes`, in nanoseconds per lane. The engine column
 group is the engine-only build. The last column adds the lanes one at a time
 with the scalar operator. Each figure is the lower of two interleaved runs.
-A call checks the environment once and tests the lanes for a NaN, so two
-binary64 lanes cost more than two scalar operations, and wider lanes gain.
+A call checks the environment once and tests the lanes for a NaN, so the
+time per lane falls as the lane count grows.
 
 | Lanes | Engine `+` | Default `+` | Default `sqrt` | x86-64-v3 `+` | x86-64-v3 `mul_add` | Scalar `+` |
 | --- | --- | --- | --- | --- | --- | --- |
-| binary32 x 4 | 12.4 | 1.3 | 1.3 | 1.3 | 1.3 | 1.5 |
-| binary32 x 8 | 12.1 | 0.9 | 0.9 | 0.7 | 1.0 | 1.5 |
-| binary64 x 2 | 15.0 | 2.2 | 2.2 | 2.2 | 2.2 | 1.5 |
-| binary64 x 4 | 14.1 | 1.9 | 1.8 | 1.4 | 1.5 | 1.5 |
+| binary32 x 4 | 12.4 | 0.5 | 0.6 | 0.5 | 0.7 | 1.5 |
+| binary32 x 8 | 12.1 | 0.4 | 0.5 | 0.3 | 0.3 | 1.5 |
+| binary64 x 2 | 15.0 | 1.3 | 1.4 | 0.9 | 1.2 | 1.5 |
+| binary64 x 4 | 14.1 | 0.9 | 1.1 | 0.7 | 0.6 | 1.5 |
+
+The register operands, the lane-by-lane operation after a NaN, and the VEX
+forms halved the time of each packed path. Before them, the operator of
+binary32 x 4 took 1.2 nanoseconds per lane in both builds, and the operator
+of binary64 x 2 took 2.2.
 
 The comparison and the minimum of two numbers by their bits, before and
 after, in nanoseconds per operation of `partial_cmp`, `minimum`, and the
@@ -1407,6 +1413,12 @@ it sends every other input to the engine.
   compiled with, and rustc rejects a 256-bit x86 register without AVX. A
   doctest does not take `RUSTFLAGS`, so its code lacks the features of the
   build. The function still inlines into a caller with the feature.
+- In a build with AVX, each SSE instruction of a host path takes its VEX
+  form. A legacy SSE instruction keeps the upper half of its 256-bit
+  register. After a 256-bit instruction, the legacy instruction waits on
+  that half, or the unit saves the upper halves of all registers. In the
+  x86-64-v3 build, the VEX forms took the operator of `Lanes<F32, 4>` in a
+  loop from 18.3 to 10.0 cycles on a Core i9-9900K.
 - A host path is a direct instruction or a host algorithm. A direct
   instruction is the IEEE 754 operation, such as `SQRTSD`. A host algorithm
   composes exact host operations, such as binary16 arithmetic through
@@ -1447,8 +1459,8 @@ it sends every other input to the engine.
 | `FEAT_FP16` fused multiply-add | AArch64 with `FEAT_FP16` | `mul_add` of binary16, by `FMADD` on half-precision registers | As the AArch64 operators | Arm Architecture Reference Manual, DDI 0487: `FMADD` | Host paths and AArch64 hardware, in the AArch64 FP16 build |
 | `FEAT_BF16` bfloat16 | AArch64 with `FEAT_BF16` | `+`, `-`, `*`, `/`, and `sqrt` of bfloat16: a shift widens the operands exactly to binary32, the unit computes in binary32, and `BFCVT` rounds to nearest even. `convert` from binary32 to bfloat16 by `BFCVT`. | As the AArch64 operators. The fused multiply-add of bfloat16 always runs in the engine. | Arm Architecture Reference Manual, DDI 0487: `BFCVT`, which honors every control of FPCR that applies to single-precision arithmetic | Host paths with every square root and an ignored sweep of every pair, and AArch64 hardware, in the AArch64 FP16 build |
 | bfloat16 through a shift | x86-64 with SSE2, and SSE4.1 for the rounding; AArch64 | A shift widens bfloat16 exactly to binary32. `convert` to binary32 needs no other instruction, and `convert` to binary64 adds `CVTSS2SD` or `FCVT`. `to_int` by `CVTSS2SI` or `FCVTNS`, and `round_to_integral` by `ROUNDSS` or `FRINTN` and a shift back. | As the SSE or AArch64 paths. `from_int` of bfloat16 always runs in the engine, because two roundings through binary32 can differ from one. | Intel SDM Volume 2 and Arm Architecture Reference Manual, DDI 0487: the instructions of the binary32 paths | Host paths with every bfloat16 encoding, SSE hardware, and AArch64 hardware |
-| Packed SSE and AVX | x86-64 with SSE2; AVX for 256 bits, FMA for `mul_add`, and SSE4.1 for the rounding | The `Lanes` operators, `sqrt`, `mul_add`, and `round_to_integral` of binary32 and binary64, by `ADDPS`, `SUBPS`, `MULPS`, `DIVPS`, `SQRTPS`, `VFMADD213PS`, `ROUNDPS`, their `PD` forms, and their 256-bit forms. `convert` of lanes between binary32 and binary64, by `CVTPS2PD` and `CVTPD2PS` and their AVX forms. | As the SSE operators, for all lanes at once. A NaN lane runs in the engine. | Intel SDM Volume 2: the instructions | Lanes, and the packed instructions of the SSE unit with the union of the lane flags |
-| Packed AArch64 | AArch64 | As the packed SSE paths at 128 bits, by `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FMLA`, and `FRINTN` on `.4S` and `.2D`, and `FCVTL` and `FCVTN` | As the AArch64 operators, for all lanes at once. A NaN lane runs in the engine. | Arm Architecture Reference Manual, DDI 0487: the instructions | Lanes and AArch64 hardware, under `qemu-aarch64` |
+| Packed SSE and AVX | x86-64 with SSE2; AVX for 256 bits, FMA for `mul_add`, and SSE4.1 for the rounding | The `Lanes` operators, `sqrt`, `mul_add`, and `round_to_integral` of binary32 and binary64, by `ADDPS`, `SUBPS`, `MULPS`, `DIVPS`, `SQRTPS`, `VFMADD213PS`, `ROUNDPS`, their `PD` forms, and their 256-bit forms. `convert` of lanes between binary32 and binary64, by `CVTPS2PD` and `CVTPD2PS` and their AVX forms. | As the SSE operators, for all lanes at once. A NaN lane sends each lane to its scalar operation. | Intel SDM Volume 2: the instructions | Lanes, and the packed instructions of the SSE unit with the union of the lane flags |
+| Packed AArch64 | AArch64 | As the packed SSE paths at 128 bits, by `FADD`, `FSUB`, `FMUL`, `FDIV`, `FSQRT`, `FMLA`, and `FRINTN` on `.4S` and `.2D`, and `FCVTL` and `FCVTN` | As the AArch64 operators, for all lanes at once. A NaN lane sends each lane to its scalar operation. | Arm Architecture Reference Manual, DDI 0487: the instructions | Lanes and AArch64 hardware, under `qemu-aarch64` |
 | Double-double operators | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`. One check of MXCSR or FPCR serves every step, and each binary64 step takes a binary64 path. | A step that its path declines runs in the engine | As the binary64 paths | Double-double, with the operators of the SSE mode against QD, and host paths |
 
 The binary16 path rounds twice: to binary32, and then to binary16. binary32
@@ -1514,24 +1526,33 @@ The x87 paths:
 
 The packed paths:
 
-- The paths read the lanes of a `Lanes` value in place and write the result
-  lanes in place. A copy of the lanes in parts made each load of a chunk wait
-  for the stores of the parts: two binary64 lanes took 58 cycles instead of
-  19.
-- Each block loads a chunk with an unaligned move and computes in
-  registers. A legacy SSE instruction with a 128-bit memory operand faults
-  on an address that is not a multiple of 16, and a `Lanes` value has the
-  alignment of one lane. A unit test runs every chunk at an address that is
-  not a multiple of 16.
+- The paths read the lanes of a `Lanes` value in place, as an array of
+  `f32` or `f64`. A copy of the lanes in parts made each load of a chunk
+  wait for the stores of the parts: two binary64 lanes took 58 cycles
+  instead of 19.
+- Each block takes and gives register values and touches no memory. The
+  compiler loads and stores the lanes, and keeps them in registers between
+  operations. A block with a memory operand stopped the compiler from moving
+  loads and stores across it. A legacy SSE instruction with a 128-bit memory
+  operand also faults on an address that is not a multiple of 16, and a
+  `Lanes` value has the alignment of one lane. A unit test runs every chunk
+  from an address that is not a multiple of 16.
 - A path computes full chunks with packed instructions, 256-bit chunks
   first where the build has AVX, and the other lanes with the scalar host
-  path. It tests the results for a NaN, and the engine computes each NaN
-  lane.
+  path. It tests the results for a NaN. When a lane is a NaN, the path
+  returns nothing, and each lane takes its scalar operation.
+- The lane-by-lane operation after a path returns nothing reads only the
+  operands. A NaN path that read the result lanes kept the result in memory:
+  in the default build, the operator of `Lanes<F32, 4>` took 19.7 cycles in
+  a loop instead of 14.5.
+- The lane-by-lane operation stays out of line. Inline, its scalar paths
+  made the operator of `Lanes<F32, 4>` take 30 cycles in a loop instead of
+  24.
 - The format, the operation, and the lane count are constants, so the
   selection folds away. The operator of `Lanes<F32, 4>` compiles to the
-  check of MXCSR, two loads, `ADDPS`, a store, and a NaN test of four
-  integer instructions and one branch. The engine path and the NaN lanes
-  stay out of line.
+  check of MXCSR, two loads, `ADDPS`, a NaN test of four vector instructions
+  and one branch, and a store. The lane-by-lane operation is a call on a
+  cold path.
 - The SSE packed test runs each packed instruction under every MXCSR
   setting. The lanes match, and the MXCSR flags of the instruction equal the
   union of the flags of the lanes, which `Lanes` returns from its `_with`

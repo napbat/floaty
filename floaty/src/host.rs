@@ -293,14 +293,16 @@ mod none {
         use crate::format::internal::Host;
         use crate::host::Operation;
 
-        /// The lanes that a packed host path computes. No value exists in
-        /// this build.
-        #[derive(Clone, Copy, Debug)]
-        pub struct Packed<L, const N: usize> {
-            /// The lanes.
-            pub lanes: [L; N],
-            /// `true` when a lane is a NaN.
-            pub nan: bool,
+        /// Returns `false`: this build has no host path.
+        #[must_use]
+        pub const fn lanes_of(_host: Host) -> bool {
+            false
+        }
+
+        /// Returns `false`: this build has no host path.
+        #[must_use]
+        pub const fn converts(_from: Host, _to: Host) -> bool {
+            false
         }
 
         /// Returns `None`: this build has no host path.
@@ -310,7 +312,7 @@ mod none {
             _right: &[Float<S, W, M>; N],
             _operation: Operation,
             _env: &Env,
-        ) -> Option<Packed<Float<S, W, M>, N>> {
+        ) -> Option<[Float<S, W, M>; N]> {
             None
         }
 
@@ -319,7 +321,7 @@ mod none {
         pub fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             _value: &[Float<S, W, M>; N],
             _env: &Env,
-        ) -> Option<Packed<Float<S, W, M>, N>> {
+        ) -> Option<[Float<S, W, M>; N]> {
             None
         }
 
@@ -328,7 +330,7 @@ mod none {
         pub fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             _value: &[Float<S, W, M>; N],
             _env: &Env,
-        ) -> Option<Packed<Float<S, W, M>, N>> {
+        ) -> Option<[Float<S, W, M>; N]> {
             None
         }
 
@@ -339,7 +341,7 @@ mod none {
             _right: &[Float<S, W, M>; N],
             _addend: &[Float<S, W, M>; N],
             _env: &Env,
-        ) -> Option<Packed<Float<S, W, M>, N>> {
+        ) -> Option<[Float<S, W, M>; N]> {
             None
         }
 
@@ -349,7 +351,7 @@ mod none {
             _value: &[Float<S, W, M>; N],
             _to: Host,
             _env: &Env,
-        ) -> Option<Packed<u64, N>> {
+        ) -> Option<[u64; N]> {
             None
         }
     }
