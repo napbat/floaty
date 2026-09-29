@@ -1,4 +1,7 @@
-//! The floating-point environment of AArch64: FPCR.
+//! The floating-point environment of AArch64, FPCR, and the instructions of
+//! the host paths.
+
+use super::Operation;
 
 /// Returns `true` when the floating-point unit rounds to nearest even without
 /// flushing, and enables no exception trap.
@@ -27,6 +30,68 @@ pub fn default_environment() -> bool {
         );
     }
     fpcr & RESULT_FIELDS == 0
+}
+
+/// Runs one scalar instruction of the floating-point unit on `$left` and
+/// `$right`, and leaves the result in `$left`.
+macro_rules! scalar {
+    ($instruction:literal, $left:ident, $right:ident) => {
+        // SAFETY: the instruction reads and writes SIMD and floating-point
+        // registers. Every AArch64 target has it, and it changes only the
+        // status flags of FPSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                $instruction,
+                left = inout(vreg) $left,
+                right = in(vreg) $right,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+    };
+}
+
+/// Returns `operation` of two binary32 values, by `FADD`, `FSUB`, `FMUL`, or
+/// `FDIV` in the rounding direction of FPCR.
+#[inline]
+pub fn binary_f32(mut left: f32, right: f32, operation: Operation) -> f32 {
+    match operation {
+        Operation::Add => scalar!("fadd {left:s}, {left:s}, {right:s}", left, right),
+        Operation::Sub => scalar!("fsub {left:s}, {left:s}, {right:s}", left, right),
+        Operation::Mul => scalar!("fmul {left:s}, {left:s}, {right:s}", left, right),
+        Operation::Div => scalar!("fdiv {left:s}, {left:s}, {right:s}", left, right),
+    }
+    left
+}
+
+/// Returns `operation` of two binary64 values, by `FADD`, `FSUB`, `FMUL`, or
+/// `FDIV` in the rounding direction of FPCR.
+#[inline]
+pub fn binary_f64(mut left: f64, right: f64, operation: Operation) -> f64 {
+    match operation {
+        Operation::Add => scalar!("fadd {left:d}, {left:d}, {right:d}", left, right),
+        Operation::Sub => scalar!("fsub {left:d}, {left:d}, {right:d}", left, right),
+        Operation::Mul => scalar!("fmul {left:d}, {left:d}, {right:d}", left, right),
+        Operation::Div => scalar!("fdiv {left:d}, {left:d}, {right:d}", left, right),
+    }
+    left
+}
+
+/// Returns a binary32 value widened exactly to binary64, by `FCVT`.
+#[inline]
+pub fn widen_single(value: f32) -> f64 {
+    let result: f64;
+    // SAFETY: FCVT reads and writes SIMD and floating-point registers. Every
+    // AArch64 target has the instruction, and the widening changes only the
+    // status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "fcvt {result:d}, {value:s}",
+            value = in(vreg) value,
+            result = lateout(vreg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    result
 }
 
 /// Returns the square root of a binary32 value, by `FSQRT`.
@@ -239,7 +304,10 @@ pub fn to_int_f32(value: f32) -> Option<i64> {
             options(pure, nomem, nostack, preserves_flags),
         );
     }
-    (result != i64::MIN && result != i64::MAX && !value.is_nan()).then_some(result)
+    // FCVTNS gives zero for a NaN. The NaN test uses integer instructions, as
+    // the paths do.
+    let nan = value.to_bits() & 0x7FFF_FFFF > 0x7F80_0000;
+    (result != i64::MIN && result != i64::MAX && !nan).then_some(result)
 }
 
 /// Returns a binary64 value rounded to a 64-bit integer to nearest even by
@@ -259,7 +327,10 @@ pub fn to_int_f64(value: f64) -> Option<i64> {
             options(pure, nomem, nostack, preserves_flags),
         );
     }
-    (result != i64::MIN && result != i64::MAX && !value.is_nan()).then_some(result)
+    // FCVTNS gives zero for a NaN. The NaN test uses integer instructions, as
+    // the paths do.
+    let nan = value.to_bits() & 0x7FFF_FFFF_FFFF_FFFF > 0x7FF0_0000_0000_0000;
+    (result != i64::MIN && result != i64::MAX && !nan).then_some(result)
 }
 
 /// Returns a 64-bit integer rounded to binary32, by `SCVTF` in the rounding

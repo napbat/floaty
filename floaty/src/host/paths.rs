@@ -1,6 +1,12 @@
 //! The entry points of the host paths, the same on every architecture that
 //! has them. The module of the architecture reads its floating-point
 //! environment.
+//!
+//! Every floating-point instruction of a path runs in inline assembly, and
+//! the NaN tests use integer instructions. LLVM assumes the default
+//! floating-point environment, so it can move a Rust float operation, even a
+//! comparison, above the check of the environment. There an unmasked
+//! exception traps.
 
 use super::Operation;
 use super::environment::{self, default_environment};
@@ -37,16 +43,16 @@ const fn compatible(env: &Env, precision: u32) -> bool {
         && full_precision
 }
 
-/// Applies an operation to two host values.
-macro_rules! apply {
-    ($operation:expr, $left:expr, $right:expr) => {
-        match $operation {
-            Operation::Add => $left + $right,
-            Operation::Sub => $left - $right,
-            Operation::Mul => $left * $right,
-            Operation::Div => $left / $right,
-        }
-    };
+/// Returns `true` for the bits of a binary32 NaN.
+#[inline]
+const fn nan_32(bits: u32) -> bool {
+    bits & 0x7FFF_FFFF > 0x7F80_0000
+}
+
+/// Returns `true` for the bits of a binary64 NaN.
+#[inline]
+const fn nan_64(bits: u64) -> bool {
+    bits & 0x7FFF_FFFF_FFFF_FFFF > 0x7FF0_0000_0000_0000
 }
 
 /// Returns the host value of a binary32 encoding.
@@ -68,7 +74,7 @@ fn half<S: Standard<W>, const W: usize>(bits: S::Bits) -> Option<f32> {
 /// instruction, or `None` for a NaN, which goes back to the engine.
 #[inline]
 fn half_encoding<S: Standard<W>, const W: usize>(result: f32) -> Option<S::Bits> {
-    if result.is_nan() {
+    if nan_32(result.to_bits()) {
         return None;
     }
     encoding::<S, W>(u64::from(environment::narrow_half(result)?), false)
@@ -89,6 +95,20 @@ fn encoding<S: Standard<W>, const W: usize>(result: u64, nan: bool) -> Option<S:
     }
     let limbs = <S::Bits as LimbConversion>::Limbs::ZERO.with_limb(0, result);
     Some(S::Bits::from_limbs(limbs))
+}
+
+/// Returns the encoding of a binary32 result, or `None` for a NaN.
+#[inline]
+fn single_encoding<S: Standard<W>, const W: usize>(result: f32) -> Option<S::Bits> {
+    let bits = result.to_bits();
+    encoding::<S, W>(u64::from(bits), nan_32(bits))
+}
+
+/// Returns the encoding of a binary64 result, or `None` for a NaN.
+#[inline]
+fn double_encoding<S: Standard<W>, const W: usize>(result: f64) -> Option<S::Bits> {
+    let bits = result.to_bits();
+    encoding::<S, W>(bits, nan_64(bits))
 }
 
 /// Returns `true` when the mode and the environment of the host allow a host
@@ -113,16 +133,16 @@ pub fn binary<S: Standard<W>, const W: usize>(
     match S::HOST {
         Host::None => None,
         Host::Single => {
-            let result = apply!(operation, single::<S, W>(left), single::<S, W>(right));
-            encoding::<S, W>(u64::from(result.to_bits()), result.is_nan())
+            let (left, right) = (single::<S, W>(left), single::<S, W>(right));
+            single_encoding::<S, W>(environment::binary_f32(left, right, operation))
         }
         Host::Double => {
-            let result = apply!(operation, double::<S, W>(left), double::<S, W>(right));
-            encoding::<S, W>(result.to_bits(), result.is_nan())
+            let (left, right) = (double::<S, W>(left), double::<S, W>(right));
+            double_encoding::<S, W>(environment::binary_f64(left, right, operation))
         }
         Host::Half => {
-            let result = apply!(operation, half::<S, W>(left)?, half::<S, W>(right)?);
-            half_encoding::<S, W>(result)
+            let (left, right) = (half::<S, W>(left)?, half::<S, W>(right)?);
+            half_encoding::<S, W>(environment::binary_f32(left, right, operation))
         }
     }
 }
@@ -136,14 +156,8 @@ pub fn sqrt<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Option
     }
     match S::HOST {
         Host::None => None,
-        Host::Single => {
-            let result = environment::sqrt_f32(single::<S, W>(value));
-            encoding::<S, W>(u64::from(result.to_bits()), result.is_nan())
-        }
-        Host::Double => {
-            let result = environment::sqrt_f64(double::<S, W>(value));
-            encoding::<S, W>(result.to_bits(), result.is_nan())
-        }
+        Host::Single => single_encoding::<S, W>(environment::sqrt_f32(single::<S, W>(value))),
+        Host::Double => double_encoding::<S, W>(environment::sqrt_f64(double::<S, W>(value))),
         Host::Half => half_encoding::<S, W>(environment::sqrt_f32(half::<S, W>(value)?)),
     }
 }
@@ -165,13 +179,11 @@ pub fn mul_add<S: Standard<W>, const W: usize>(
         Host::None | Host::Half => None,
         Host::Single => {
             let (a, b) = (single::<S, W>(left), single::<S, W>(right));
-            let result = environment::mul_add_f32(a, b, single::<S, W>(addend))?;
-            encoding::<S, W>(u64::from(result.to_bits()), result.is_nan())
+            single_encoding::<S, W>(environment::mul_add_f32(a, b, single::<S, W>(addend))?)
         }
         Host::Double => {
             let (a, b) = (double::<S, W>(left), double::<S, W>(right));
-            let result = environment::mul_add_f64(a, b, double::<S, W>(addend))?;
-            encoding::<S, W>(result.to_bits(), result.is_nan())
+            double_encoding::<S, W>(environment::mul_add_f64(a, b, double::<S, W>(addend))?)
         }
     }
 }
@@ -188,14 +200,8 @@ pub fn round_to_integral<S: Standard<W>, const W: usize>(
     }
     match S::HOST {
         Host::None => None,
-        Host::Single => {
-            let result = environment::round_f32(single::<S, W>(value))?;
-            encoding::<S, W>(u64::from(result.to_bits()), result.is_nan())
-        }
-        Host::Double => {
-            let result = environment::round_f64(double::<S, W>(value))?;
-            encoding::<S, W>(result.to_bits(), result.is_nan())
-        }
+        Host::Single => single_encoding::<S, W>(environment::round_f32(single::<S, W>(value))?),
+        Host::Double => double_encoding::<S, W>(environment::round_f64(double::<S, W>(value))?),
         // The integral value of a binary16 value is a binary16 value, so the
         // narrowing is exact.
         Host::Half => half_encoding::<S, W>(environment::round_f32(half::<S, W>(value)?)?),
@@ -263,33 +269,32 @@ pub fn convert(from: Host, to: Host, bits: u64, env: &Env) -> Option<u64> {
     match (from, to) {
         (Host::Single, Host::Double) => {
             let value = single(bits);
-            (!value.is_nan()).then(|| f64::from(value).to_bits())
+            (!nan_32(value.to_bits())).then(|| environment::widen_single(value).to_bits())
         }
         (Host::Half, Host::Single) => {
-            let value = half(bits)?;
-            (!value.is_nan()).then(|| u64::from(value.to_bits()))
+            let bits = half(bits)?.to_bits();
+            (!nan_32(bits)).then_some(u64::from(bits))
         }
         (Host::Half, Host::Double) => {
             let value = half(bits)?;
-            (!value.is_nan()).then(|| f64::from(value).to_bits())
+            (!nan_32(value.to_bits())).then(|| environment::widen_single(value).to_bits())
         }
         (Host::Double, Host::Single) => {
             let value = f64::from_bits(bits);
-            (!value.is_nan()).then(|| u64::from(environment::narrow_double(value).to_bits()))
+            (!nan_64(bits)).then(|| u64::from(environment::narrow_double(value).to_bits()))
         }
         (Host::Single, Host::Half) => {
             let value = single(bits);
-            if value.is_nan() {
+            if nan_32(value.to_bits()) {
                 return None;
             }
             environment::narrow_half(value).map(u64::from)
         }
         (Host::Double, Host::Half) => {
-            let value = f64::from_bits(bits);
-            if value.is_nan() {
+            if nan_64(bits) {
                 return None;
             }
-            environment::narrow_double_to_half(value).map(u64::from)
+            environment::narrow_double_to_half(f64::from_bits(bits)).map(u64::from)
         }
         _ => None,
     }
@@ -315,15 +320,17 @@ impl Ready {
     /// Returns `operation` of two binary64 encodings, or `None` for a NaN.
     #[inline]
     pub fn binary(self, left: u64, right: u64, operation: Operation) -> Option<u64> {
-        let result = apply!(operation, f64::from_bits(left), f64::from_bits(right));
-        (!result.is_nan()).then(|| result.to_bits())
+        let result =
+            environment::binary_f64(f64::from_bits(left), f64::from_bits(right), operation);
+        let bits = result.to_bits();
+        (!nan_64(bits)).then_some(bits)
     }
 
     /// Returns the square root of a binary64 encoding, or `None` for a NaN.
     #[inline]
     pub fn sqrt(self, value: u64) -> Option<u64> {
-        let result = environment::sqrt_f64(f64::from_bits(value));
-        (!result.is_nan()).then(|| result.to_bits())
+        let bits = environment::sqrt_f64(f64::from_bits(value)).to_bits();
+        (!nan_64(bits)).then_some(bits)
     }
 
     /// Returns `left * right + addend` of binary64 encodings, rounded once,
@@ -331,8 +338,8 @@ impl Ready {
     #[inline]
     pub fn mul_add(self, left: u64, right: u64, addend: u64) -> Option<u64> {
         let [a, b, c] = [left, right, addend].map(f64::from_bits);
-        let result = environment::mul_add_f64(a, b, c)?;
-        (!result.is_nan()).then(|| result.to_bits())
+        let bits = environment::mul_add_f64(a, b, c)?.to_bits();
+        (!nan_64(bits)).then_some(bits)
     }
 }
 

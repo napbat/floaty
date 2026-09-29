@@ -1,4 +1,7 @@
-//! The floating-point environment of x86-64: MXCSR of the SSE unit.
+//! The floating-point environment of x86-64, MXCSR of the SSE unit, and the
+//! instructions of the host paths.
+
+use super::Operation;
 
 /// Returns `true` when the SSE unit rounds to nearest even without FTZ or DAZ,
 /// and masks every exception.
@@ -30,6 +33,68 @@ pub fn default_environment() -> bool {
         );
     }
     mxcsr & (RESULT_FIELDS | MASKS) == MASKS
+}
+
+/// Runs one scalar SSE instruction on `$left` and `$right`, and leaves the
+/// result in `$left`.
+macro_rules! sse_scalar {
+    ($instruction:literal, $left:ident, $right:ident) => {
+        // SAFETY: the instruction reads and writes SSE registers. SSE2 is part
+        // of every x86-64 target, and the instruction changes only the status
+        // flags of MXCSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                $instruction,
+                left = inout(xmm_reg) $left,
+                right = in(xmm_reg) $right,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+    };
+}
+
+/// Returns `operation` of two binary32 values, by `ADDSS`, `SUBSS`, `MULSS`,
+/// or `DIVSS` in the rounding direction of MXCSR.
+#[inline]
+pub fn binary_f32(mut left: f32, right: f32, operation: Operation) -> f32 {
+    match operation {
+        Operation::Add => sse_scalar!("addss {left}, {right}", left, right),
+        Operation::Sub => sse_scalar!("subss {left}, {right}", left, right),
+        Operation::Mul => sse_scalar!("mulss {left}, {right}", left, right),
+        Operation::Div => sse_scalar!("divss {left}, {right}", left, right),
+    }
+    left
+}
+
+/// Returns `operation` of two binary64 values, by `ADDSD`, `SUBSD`, `MULSD`,
+/// or `DIVSD` in the rounding direction of MXCSR.
+#[inline]
+pub fn binary_f64(mut left: f64, right: f64, operation: Operation) -> f64 {
+    match operation {
+        Operation::Add => sse_scalar!("addsd {left}, {right}", left, right),
+        Operation::Sub => sse_scalar!("subsd {left}, {right}", left, right),
+        Operation::Mul => sse_scalar!("mulsd {left}, {right}", left, right),
+        Operation::Div => sse_scalar!("divsd {left}, {right}", left, right),
+    }
+    left
+}
+
+/// Returns a binary32 value widened exactly to binary64, by `CVTSS2SD`.
+#[inline]
+pub fn widen_single(value: f32) -> f64 {
+    let result: f64;
+    // SAFETY: CVTSS2SD reads and writes SSE registers. SSE2 is part of every
+    // x86-64 target, and the conversion changes only the status flags of
+    // MXCSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "cvtss2sd {result}, {value}",
+            value = in(xmm_reg) value,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    result
 }
 
 /// Returns the square root of a binary32 value, by `SQRTSS`.

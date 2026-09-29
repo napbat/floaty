@@ -1266,6 +1266,13 @@ it sends every other input to the engine.
   too.
 - A host path can set the status flags of the host unit: those of MXCSR on
   x86-64, and FPSR on AArch64. floaty never reads them.
+- A host path runs every floating-point instruction in inline assembly, and
+  tests a NaN with integer instructions on the bits. LLVM assumes the
+  default floating-point environment, so it can move a Rust float operation
+  above the check of the environment. The `VUCOMISD` of an `is_nan` test ran
+  before the check of MXCSR, and a signaling NaN trapped under an unmasked
+  invalid-operation exception. LLVM does not move an inline assembly block
+  above a branch.
 - A host path is a direct instruction or a host algorithm. A direct
   instruction is the IEEE 754 operation, such as `SQRTSD`. A host algorithm
   composes exact host operations, such as binary16 arithmetic through
@@ -1332,8 +1339,9 @@ to an integral value through binary32 narrows exactly.
 
 The SSE and AArch64 operators:
 
-- The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
-  the host `f32` and `f64` on x86-64 with SSE2. The mode must round to
+- The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute by
+  `ADDSS`, `SUBSS`, `MULSS`, `DIVSS`, and their `SD` forms on x86-64 with
+  SSE2. The mode must round to
   nearest even without FTZ, DAZ, or a precision limit below the format
   precision. MXCSR must also round to nearest even without FTZ or DAZ.
 - Each call reads MXCSR with `STMXCSR`, because an emulator or a library

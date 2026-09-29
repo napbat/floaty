@@ -41,6 +41,9 @@ floaty is bit-exact, platform-independent software floating point.
   with `cargo bench -p floaty-verify --bench operations`.
 - Put the `unsafe` code of `floaty` only in its host module. Give each
   `unsafe` block a `SAFETY` comment.
+- Run every floating-point instruction of a host path in inline assembly.
+  Test a NaN with integer instructions on the bits. LLVM can move a Rust
+  float operation above the check of the environment.
 - Put code for one architecture, such as inline assembly and `core::arch`
   intrinsics, behind `cfg(target_arch)` in `floaty` and in its tests. Every
   crate must build for each target of the gates.
