@@ -481,14 +481,17 @@ const REMAINDER_REACH: u64 = 630;
 /// Returns `true` when the remainder path takes a dividend and a divisor
 /// with the exponent fields `dividend` and `divisor`, in a format of
 /// `precision` bits. A subnormal operand or result makes the x87 unit take a
-/// microcode assist that is slower than the engine. A nonzero remainder is a
-/// multiple of the unit in the last place of the divisor, so it can be
-/// subnormal only when the exponent field of the divisor is below the
-/// precision.
+/// microcode assist that is slower than the engine, so a dividend with
+/// exponent field 0, a zero or a subnormal value, goes to the engine. When
+/// the quotient is not zero, the dividend lies at most one binade below the
+/// divisor, so the remainder is a multiple of half the unit in the last place
+/// of the divisor. When the quotient is zero, the remainder is the dividend.
+/// So the remainder can be subnormal only when the exponent field of the
+/// divisor is at most the precision.
 #[inline]
 fn remainder_fits(dividend: u64, divisor: u64, precision: u32) -> bool {
     dividend != 0
-        && divisor >= u64::from(precision)
+        && divisor > u64::from(precision)
         && dividend.saturating_sub(divisor) <= REMAINDER_REACH
 }
 

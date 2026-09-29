@@ -914,4 +914,21 @@ fn remainders_of_ties_and_multiples_give_the_default_mode_results() {
     ties_and_multiples_match!(floaty::F32, 12, &mut random);
     ties_and_multiples_match!(F64, 40, &mut random);
     ties_and_multiples_match!(F80, 50, &mut random);
+    // A dividend one binade below a divisor whose exponent field is the
+    // precision gives a subnormal remainder.
+    let (x, y) = (
+        floaty::F32::from_bits(0x0BFF_FFFF),
+        floaty::F32::from_bits(0x0C00_0000),
+    );
+    assert_eq!(x.remainder(y).to_bits(), 0x8040_0000);
+    let (x, y) = (
+        F64::from_bits(0x034F_FFFF_FFFF_FFFF),
+        F64::from_bits(0x0350_0000_0000_0000),
+    );
+    assert_eq!(x.remainder(y).to_bits(), 0x8008_0000_0000_0000);
+    let (x, y) = (
+        F80::from_bits(0x003F_FFFF_FFFF_FFFF_FFFF),
+        F80::from_bits(0x0040_8000_0000_0000_0000),
+    );
+    assert_eq!(x.remainder(y).to_bits(), 0x8000_4000_0000_0000_0000);
 }
