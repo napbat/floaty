@@ -516,6 +516,24 @@ pub fn multiply_small<L: Limbs>(value: L, factor: u64) -> L {
     product
 }
 
+/// Returns `left * right`. The product must fit `L`.
+///
+/// Values of at most 128 bits use the native `u128` product. A wider value
+/// adds one partial product for each limb of `right`. Each partial product is
+/// at most the whole product, so each one fits too.
+pub fn multiply_fit<L: Limbs>(left: L, right: L) -> L {
+    if L::BITS <= 128 {
+        let product = to_u128(&left) * to_u128(&right);
+        return from_u128(product);
+    }
+    (0..limb_count(&right)).fold(L::ZERO, |product, index| {
+        let shift = u32::try_from(index * 64).expect("a limb offset fits a u32");
+        let partial = multiply_small(left, right.limb(index));
+        debug_assert!(partial.bit_length() + shift <= L::BITS, "the product fits");
+        product.add(partial.shl(shift))
+    })
+}
+
 /// Returns the number of limbs up to the highest nonzero limb.
 #[inline]
 fn limb_count<L: Limbs>(value: &L) -> usize {
@@ -810,6 +828,24 @@ mod tests {
         assert_eq!(
             super::square_root([u64::MAX, 0]),
             ([u64::from(u32::MAX), 0], true)
+        );
+    }
+
+    #[test]
+    fn a_product_that_fits_needs_no_wider_type() {
+        assert_eq!(super::multiply_fit([6_u64], [7]), [42]);
+        assert_eq!(
+            super::multiply_fit([u64::MAX, 0], [u64::MAX, 0]),
+            [1, u64::MAX - 1]
+        );
+        // (2^128 - 1) * (2^64 + 3) across four limbs.
+        let product = super::multiply_fit([u64::MAX, u64::MAX, 0, 0], [3, 1, 0, 0]);
+        assert_eq!(product, [u64::MAX - 2, u64::MAX - 1, 2, 1]);
+        assert_eq!(
+            product,
+            [u64::MAX, u64::MAX, 0, 0]
+                .widening_mul([3, 1, 0, 0])
+                .resize::<[u64; 4]>()
         );
     }
 

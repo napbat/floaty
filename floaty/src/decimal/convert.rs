@@ -7,7 +7,7 @@ use crate::env::{Env, Flags, NanPropagation};
 use crate::exact::Unrounded;
 use crate::format::internal::Source;
 use crate::format::{DecimalEncoding, Storage, Width};
-use crate::limbs::{self, Limbs};
+use crate::limbs::{self, Limbs, Widen};
 use crate::nan::{self, default_nan};
 use crate::radix;
 use crate::unpacked::Unpacked;
@@ -24,7 +24,7 @@ where
     /// digits between decimal formats, and its high-order bits between a
     /// binary payload and the trailing significand field, as the Intel library
     /// does. A payload above `10^(p - 1) - 1` becomes zero.
-    pub fn convert_from<In: Limbs, Out: Limbs>(
+    pub fn convert_from<In: Limbs, Out: Widen>(
         value: Unpacked<In>,
         source: Source,
         env: &Env,
@@ -72,7 +72,7 @@ where
                     let value = Unrounded {
                         negative,
                         exponent,
-                        significand: significand.resize::<Wide>(),
+                        significand: significand.resize::<Wide<Out>>(),
                         sticky: false,
                     };
                     Self::finish(&value, i64::from(exponent), *env, Flags::NONE)
@@ -111,7 +111,7 @@ where
     /// the estimated leading digit, gives a coefficient of three to five
     /// digits more than the precision, and a sticky bit. The decimal rounding
     /// routine rounds it once.
-    fn from_binary<In: Limbs, Out: Limbs>(
+    fn from_binary<In: Limbs, Out: Widen>(
         negative: bool,
         exponent: i32,
         significand: &In,
@@ -121,7 +121,7 @@ where
         let lowest = i64::from(Self::EMIN) - precision + 1;
         let top = i64::from(exponent) + i64::from(significand.bit_length()) - 1;
         let digits = radix::digits_estimate(top);
-        let unit: Wide = power_of_ten(Self::PRECISION + 1);
+        let unit: Wide<Out> = power_of_ten(Self::PRECISION + 1);
         // A value far outside the range rounds as a stand-in on the same
         // side, so that the powers of 5 stay small. A value of more than
         // EMAX + 2 digits gives a stand-in far above the largest value. A value
@@ -153,9 +153,9 @@ where
             + (i64::from(exponent) - scale).max(0)
             + 1;
         let (coefficient, sticky) = if radix::fits_small(bits) {
-            reduce::<{ radix::SMALL }, In>(significand, exponent, scale)
+            reduce::<{ radix::SMALL }, In, Wide<Out>>(significand, exponent, scale)
         } else {
-            reduce::<{ radix::LARGE }, In>(significand, exponent, scale)
+            reduce::<{ radix::LARGE }, In, Wide<Out>>(significand, exponent, scale)
         };
         let value = Unrounded {
             negative,
@@ -167,9 +167,13 @@ where
     }
 }
 
-/// Returns `significand * 2^exponent / 10^scale`, rounded down, in numbers of
-/// `N` limbs, and `true` when the division is not exact.
-fn reduce<const N: usize, In: Limbs>(significand: &In, exponent: i32, scale: i64) -> (Wide, bool) {
+/// Returns `significand * 2^exponent / 10^scale`, rounded down, computed in
+/// numbers of `N` limbs, and `true` when the division is not exact.
+fn reduce<const N: usize, In: Limbs, Out: Limbs>(
+    significand: &In,
+    exponent: i32,
+    scale: i64,
+) -> (Out, bool) {
     let magnitude = u32::try_from(scale.unsigned_abs()).expect("the scale is small");
     let five = radix::power_of_five::<N>(magnitude);
     let shift = i64::from(exponent) - scale;

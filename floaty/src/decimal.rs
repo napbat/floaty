@@ -16,10 +16,13 @@ mod integral;
 mod round;
 mod scale;
 
-/// The limbs of an exact decimal result: 512 bits hold 154 digits. The widest
-/// intermediate is the radicand of a decimal128 square root, which has at
-/// most `2p + 3` digits, 71. A sum keeps at most `2p + 2` digits.
-type Wide = [u64; 8];
+/// The limbs of an exact decimal result: twice the storage limbs `L`.
+///
+/// The widest intermediate is the radicand of a square root, which has at
+/// most `2p + 3` digits. decimal32 and decimal64 compute on 128 bits, which
+/// hold 38 digits. decimal128 computes on 256 bits, which hold 77 digits. A
+/// decimal128 radicand has at most 71 digits.
+type Wide<L> = <L as Widen>::Double;
 
 use self::digits::{digit_count_u128, power_of_ten_u128};
 use self::round::DecimalTarget;
@@ -29,7 +32,7 @@ use crate::float::Class;
 use crate::format::internal::{Host, LimbConversion, MinMax, Source, Step};
 use crate::format::{Decimal, DecimalEncoding, DecimalKind, Standard, Storage, Width};
 use crate::integer::{Integer, ToInt};
-use crate::limbs::{self, Limbs};
+use crate::limbs::{self, Limbs, Widen};
 use crate::unpacked::Unpacked;
 
 /// The layout constants and codec of `Decimal<Enc>` at width `W`.

@@ -19,13 +19,13 @@ use crate::unpacked::Unpacked;
 /// A term of a sum: `coefficient * 10^exponent`. A zero term has a zero
 /// coefficient.
 #[derive(Clone, Copy)]
-struct Term {
+struct Term<L> {
     negative: bool,
     exponent: i64,
-    coefficient: Wide,
+    coefficient: L,
 }
 
-impl Term {
+impl<L: Limbs> Term<L> {
     /// Returns the adjusted exponent: the weight of the leading digit.
     fn top(&self) -> Option<i64> {
         let digits = digit_count(&self.coefficient);
@@ -33,7 +33,7 @@ impl Term {
     }
 
     /// Returns the term as an exact value.
-    fn exact(&self) -> Unrounded<Wide> {
+    fn exact(&self) -> Unrounded<L> {
         Unrounded {
             negative: self.negative,
             exponent: narrow(self.exponent),
@@ -44,9 +44,9 @@ impl Term {
 }
 
 /// The exact sum of two terms.
-enum Sum {
+enum Sum<L> {
     /// A nonzero sum. Its lowest digit can stand for a lost part.
-    Value(Unrounded<Wide>),
+    Value(Unrounded<L>),
     /// An exact zero.
     Zero,
 }
@@ -74,7 +74,7 @@ fn zero_sum_sign(env: &Env) -> bool {
 /// its round digit is at `c` or above. The true sum and the cut sum then lie
 /// strictly between the same two consecutive multiples of `10^c`, so they
 /// round alike.
-fn sum(first: Term, second: Term, precision: u32) -> Sum {
+fn sum<L: Limbs>(first: Term<L>, second: Term<L>, precision: u32) -> Sum<L> {
     let (dominant, dominant_top, other, other_top) = match (first.top(), second.top()) {
         (None, None) => return Sum::Zero,
         (Some(_), None) => return Sum::Value(first.exact()),
@@ -91,10 +91,10 @@ fn sum(first: Term, second: Term, precision: u32) -> Sum {
     } else {
         dominant.exponent.min(other.exponent)
     };
-    let scale = |term: &Term| {
+    let scale = |term: &Term<L>| {
         let shift = u32::try_from(term.exponent - common)
             .expect("a term is at or above the common exponent");
-        multiply(term.coefficient, power_of_ten(shift))
+        limbs::multiply_fit(term.coefficient, power_of_ten(shift))
     };
     let dominant_digits = scale(&dominant);
     let other_digits = if jam {
@@ -121,18 +121,11 @@ fn sum(first: Term, second: Term, precision: u32) -> Sum {
     })
 }
 
-/// Returns `value * factor` of two values whose product fits.
-fn multiply(value: Wide, factor: Wide) -> Wide {
-    let product = value.widening_mul(factor);
-    debug_assert!(product.bit_length() <= Wide::BITS, "the product fits");
-    product.resize()
-}
-
 /// Divides by `10^exponent`. Returns the quotient and `true` when the
 /// remainder is not zero.
-fn divide_by_power(value: Wide, exponent: u32) -> (Wide, bool) {
+fn divide_by_power<L: Limbs>(value: L, exponent: u32) -> (L, bool) {
     if exponent > digit_count(&value) {
-        return (Wide::ZERO, !value.is_zero());
+        return (L::ZERO, !value.is_zero());
     }
     let (quotient, remainder) = limbs::divide(value, power_of_ten(exponent));
     (quotient, !remainder.is_zero())
@@ -165,14 +158,15 @@ where
 
     /// Rounds an exact result with a preferred exponent, and encodes it.
     #[inline]
-    pub(super) fn finish<L: Limbs, B: Behavior>(
-        value: &Unrounded<Wide>,
+    pub(super) fn finish<L: Widen, B: Behavior>(
+        value: &Unrounded<Wide<L>>,
         preferred: i64,
         behavior: B,
         flags: Flags,
     ) -> (L, Flags) {
         let preferred = narrow(preferred.clamp(i64::from(i32::MIN), i64::from(i32::MAX)));
-        let (rounded, round_flags) = round::round::<Wide, L, Self, B>(value, preferred, behavior);
+        let (rounded, round_flags) =
+            round::round::<Wide<L>, L, Self, B>(value, preferred, behavior);
         (Self::encode(rounded), flags | round_flags)
     }
 
@@ -192,13 +186,14 @@ where
         }
     }
 
-    /// Returns the term of a zero or a finite value.
-    fn term<L: Limbs>(value: &Unpacked<L>) -> Term {
+    /// Returns the term of a zero or a finite value, in the limbs of an exact
+    /// result.
+    fn term<L: Widen>(value: &Unpacked<L>) -> Term<Wide<L>> {
         match *value {
             Unpacked::Zero { negative, exponent } => Term {
                 negative,
                 exponent: i64::from(exponent),
-                coefficient: Wide::ZERO,
+                coefficient: Wide::<L>::ZERO,
             },
             Unpacked::Finite {
                 negative,
@@ -235,8 +230,8 @@ where
 
     /// Rounds a sum with a preferred exponent, or encodes an exact zero sum.
     #[inline]
-    fn finish_sum<L: Limbs, B: Behavior>(
-        sum: &Sum,
+    fn finish_sum<L: Widen, B: Behavior>(
+        sum: &Sum<Wide<L>>,
         negative_zero: bool,
         preferred: i64,
         behavior: B,
@@ -250,7 +245,7 @@ where
 
     /// Adds `left` and `right`, or subtracts `right` when `subtract` is set.
     /// The preferred exponent is the smaller exponent of the operands.
-    pub fn add<L: Limbs, B: Behavior>(
+    pub fn add<L: Widen, B: Behavior>(
         left: L,
         right: L,
         subtract: bool,
@@ -288,7 +283,7 @@ where
 
     /// Multiplies `left` by `right`. The preferred exponent is the sum of the
     /// exponents.
-    pub fn mul<L: Limbs, B: Behavior>(left: L, right: L, behavior: B) -> (L, Flags) {
+    pub fn mul<L: Widen, B: Behavior>(left: L, right: L, behavior: B) -> (L, Flags) {
         let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
@@ -307,7 +302,8 @@ where
             }
             _ => {
                 let exponent = Self::exponent_of(&x) + Self::exponent_of(&y);
-                let product = multiply(Self::term(&x).coefficient, Self::term(&y).coefficient);
+                let product =
+                    limbs::multiply_fit(Self::term(&x).coefficient, Self::term(&y).coefficient);
                 let value = Unrounded {
                     negative,
                     exponent: narrow(exponent),
@@ -321,7 +317,7 @@ where
 
     /// Divides `left` by `right`. The preferred exponent is the exponent of
     /// `left` less the exponent of `right`.
-    pub fn div<L: Limbs, B: Behavior>(left: L, right: L, behavior: B) -> (L, Flags) {
+    pub fn div<L: Widen, B: Behavior>(left: L, right: L, behavior: B) -> (L, Flags) {
         let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
@@ -357,7 +353,7 @@ where
                     - i64::from(digit_count(&dividend)))
                 .max(0);
                 let scale = u32::try_from(scale).expect("the scale is small");
-                let numerator = multiply(dividend, power_of_ten(scale));
+                let numerator = limbs::multiply_fit(dividend, power_of_ten(scale));
                 let (quotient, remainder) = limbs::divide(numerator, divisor);
                 let preferred = Self::exponent_of(&x) - Self::exponent_of(&y);
                 let value = Unrounded {
@@ -373,7 +369,7 @@ where
 
     /// Returns the square root. The preferred exponent is half the exponent
     /// of the operand, rounded down.
-    pub fn sqrt<L: Limbs, B: Behavior>(value: L, behavior: B) -> (L, Flags) {
+    pub fn sqrt<L: Widen, B: Behavior>(value: L, behavior: B) -> (L, Flags) {
         let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(value, env, &mut flags);
@@ -401,7 +397,7 @@ where
                     scale += 1;
                 }
                 let shift = u32::try_from(scale).expect("the scale is small");
-                let radicand = multiply(coefficient, power_of_ten(shift));
+                let radicand = limbs::multiply_fit(coefficient, power_of_ten(shift));
                 let (root, inexact) = limbs::square_root(radicand);
                 let result = Unrounded {
                     negative: false,
@@ -420,7 +416,7 @@ where
     /// Returns `left * right + addend`, rounded once. The preferred exponent
     /// is the smaller of the product exponent and the addend exponent. The NaN
     /// cases follow the binary engine and the fused order of the NaN rule.
-    pub fn mul_add<L: Limbs, B: Behavior>(left: L, right: L, addend: L, behavior: B) -> (L, Flags) {
+    pub fn mul_add<L: Widen, B: Behavior>(left: L, right: L, addend: L, behavior: B) -> (L, Flags) {
         let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
@@ -464,7 +460,10 @@ where
                 let product = Term {
                     negative: product_negative,
                     exponent: product_exponent,
-                    coefficient: multiply(Self::term(&x).coefficient, Self::term(&y).coefficient),
+                    coefficient: limbs::multiply_fit(
+                        Self::term(&x).coefficient,
+                        Self::term(&y).coefficient,
+                    ),
                 };
                 let addend = Self::term(&z);
                 let preferred = product_exponent.min(addend.exponent);

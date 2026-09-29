@@ -728,7 +728,7 @@ can need millions of bits.
 | Divide and square root | `p + 2` bits, with a nonzero remainder as the sticky bit |
 | Fused multiply-add | The exact product, and the addend aligned with a sticky bit |
 | Conversion | The exact source significand |
-| Decimal operations | Coefficients in 512 bits, 154 digits. A product is exact, with at most `2p` digits. A sum keeps both terms exact, or cuts a term that is far smaller below the round digit with a digit that stands for the lost part: at most `2p + 2` digits. A square root scales its operand to at most `2p + 3` digits, 71 for decimal128 |
+| Decimal operations | Coefficients in twice the storage limbs: 128 bits, 38 digits, for decimal32 and decimal64, and 256 bits, 77 digits, for decimal128. A product is exact, with at most `2p` digits. A sum keeps both terms exact, or cuts a term that is far smaller below the round digit with a digit that stands for the lost part: at most `2p + 2` digits. A square root scales its operand to at most `2p + 3` digits, 71 for decimal128 |
 | Conversion between binary and decimal | Exact values in 1,024 bits when they fit, and in 16,384 bits otherwise: the value divided by a power of 5 and of 2 to a few digits more than the precision, with a sticky bit. The 16,384-bit arrays take tens of KiB of stack, which a `no_std` consumer with a small stack must allow for |
 
 The engine keeps the product, quotient, and root in a limb array of twice
@@ -949,9 +949,15 @@ The decimal formats follow the Intel decimal library:
   - The decimal engine follows the same pattern. Each decimal format is a
     target type of the decimal rounding routine, `DecimalRoundingTarget`,
     and the operations carry the behavior as a type down to it. A mode gains
-    less than 1% there: the decimal engine computes every format on 512-bit
-    integers, and multiplication and digit counting of those integers take
-    about half of the time of an operation.
+    less than 1% there, because the arithmetic on the coefficients takes
+    most of the time of an operation.
+  - Each decimal format computes on twice its storage limbs, the `Double`
+    type of `Widen`: 128 bits for decimal32 and decimal64, and 256 bits for
+    decimal128. The widest intermediate, a radicand of `2p + 3` digits, fits
+    both. Every product that the engine forms has at most `2p + 3` digits
+    too, so `limbs::multiply_fit` multiplies without a product type of twice
+    the width. The engine first computed every format on 512 bits, and a
+    decimal64 addition ran about 3,150 instructions.
 - A fast path must pass the same oracle tests as the generic path, and this
   file must list it. There is one fast path.
   - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
@@ -1039,6 +1045,25 @@ The three forced functions, measured against `#[inline]` on the same code:
 binary64 add with a mode takes 15.9 ns against 20.5 ns, round to integral
 takes 8.9 ns against 16.6 ns, and binary128 add with a mode takes 19.7 ns
 against 25.8 ns.
+
+The decimal working width of each format, against 512 bits for every
+format, in nanoseconds per operation with an `Env`. Each figure is the lower
+of two interleaved runs. The DPD rows gain less, because the DPD codec takes
+most of their time.
+
+| Operation | 512 bits | Twice the storage |
+| --- | --- | --- |
+| decimal32 BID add | 225 | 96 |
+| decimal64 BID add | 235 | 109 |
+| decimal64 BID multiply | 172 | 111 |
+| decimal64 BID divide | 210 | 118 |
+| decimal64 BID square root | 191 | 117 |
+| decimal64 BID fused multiply-add | 324 | 151 |
+| decimal128 BID add | 218 | 134 |
+| decimal128 BID divide | 279 | 218 |
+| decimal128 BID square root | 452 | 377 |
+| decimal64 DPD add | 366 | 242 |
+| decimal128 DPD add | 661 | 580 |
 
 ## Verification
 
@@ -1288,10 +1313,10 @@ Each step passes its oracle tests before the next step starts.
 - Decide whether a reciprocal square root estimate, as SoftFloat uses,
   replaces the integer square root and the wide division. The speedup pass
   left them slow: binary128 `sqrt` takes 255 ns.
-- Decide whether each decimal format computes on its own working width, in
-  place of 512 bits for every format: about 57 bits for decimal32, 117 bits
-  for decimal64, and 236 bits for decimal128. A decimal64 addition runs about
-  3,150 instructions, ten times a binary64 addition.
+- Decide whether decimal digit counting takes a faster path. The class of
+  each operand scans a table of 39 powers of 10, and a 256-bit decimal128
+  result counts its digits with a division. Together they take about a
+  third of a decimal128 addition.
 - Measure the specialization per format and behavior again on an idle host.
   Other work loaded the host during the measurement in this file.
 - Add mode combinators for the NaN rule and the tininess rule with the Arm

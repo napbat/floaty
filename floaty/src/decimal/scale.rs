@@ -8,7 +8,7 @@ use crate::env::{Env, Flags};
 use crate::exact::{Integral, Unrounded};
 use crate::format::internal::Step;
 use crate::format::{DecimalEncoding, Storage, Width};
-use crate::limbs::{self, Limbs};
+use crate::limbs::{self, Limbs, Widen};
 use crate::nan::{self, default_nan};
 use crate::unpacked::Unpacked;
 
@@ -32,7 +32,7 @@ where
 
     /// Returns `value * 10^scale`, rounded. The preferred exponent is the
     /// exponent of `value` plus `scale`.
-    pub fn scale_b<L: Limbs>(bits: L, scale: i32, env: &Env) -> (L, Flags) {
+    pub fn scale_b<L: Widen>(bits: L, scale: i32, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let value = Self::operand(bits, env, &mut flags);
         let scale = i64::from(scale.clamp(-SCALE_LIMIT, SCALE_LIMIT));
@@ -54,7 +54,7 @@ where
                 let scaled = Unrounded {
                     negative,
                     exponent: i32::try_from(exponent).expect("a scaled exponent fits an i32"),
-                    significand: significand.resize::<Wide>(),
+                    significand: significand.resize::<Wide<L>>(),
                     sticky: false,
                 };
                 Self::finish(&scaled, exponent, *env, flags)
@@ -167,7 +167,7 @@ where
     /// behavior and signal inexact. A coefficient that the new exponent makes
     /// longer than the precision signals invalid. The operation signals no
     /// underflow or overflow.
-    pub fn quantize<L: Limbs>(left: L, right: L, env: &Env) -> (L, Flags) {
+    pub fn quantize<L: Widen>(left: L, right: L, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
@@ -196,12 +196,13 @@ where
                 let value = Unrounded {
                     negative,
                     exponent: from,
-                    significand: significand.resize::<Wide>(),
+                    significand: significand.resize::<Wide<L>>(),
                     sticky: false,
                 };
                 let drop = i64::from(exponent) - i64::from(from);
-                let coefficient: Wide = if drop >= 0 {
-                    let integral: Integral<Wide> = round::round_digits(&value, drop, env.rounding);
+                let coefficient: Wide<L> = if drop >= 0 {
+                    let integral: Integral<Wide<L>> =
+                        round::round_digits(&value, drop, env.rounding);
                     if integral.inexact {
                         flags |= Flags::INEXACT;
                     }

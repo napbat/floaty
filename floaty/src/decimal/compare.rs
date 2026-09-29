@@ -14,13 +14,13 @@ use super::{DecimalLayout, Wide};
 use crate::env::{Env, Flags, TotalOrder};
 use crate::format::internal::MinMax;
 use crate::format::{DecimalEncoding, Storage, Width};
-use crate::limbs::{Limbs, Widen};
+use crate::limbs::{self, Limbs, Widen};
 use crate::nan::{self, default_nan};
 use crate::unpacked::Unpacked;
 
 /// Orders the magnitudes of two numbers: zeros, finite values, or
 /// infinities. Members of one cohort are equal.
-fn compare_magnitudes<L: Limbs>(first: &Unpacked<L>, second: &Unpacked<L>) -> Ordering {
+fn compare_magnitudes<L: Widen>(first: &Unpacked<L>, second: &Unpacked<L>) -> Ordering {
     let rank = |value: &Unpacked<L>| match value {
         Unpacked::Zero { .. } => 0,
         Unpacked::Finite { .. } => 1,
@@ -44,9 +44,9 @@ fn compare_magnitudes<L: Limbs>(first: &Unpacked<L>, second: &Unpacked<L>) -> Or
     else {
         return rank(first).cmp(&rank(second));
     };
-    let (first_coefficient, second_coefficient): (Wide, Wide) =
+    let (first_coefficient, second_coefficient): (Wide<L>, Wide<L>) =
         (first_significand.resize(), second_significand.resize());
-    let top = |exponent: i32, coefficient: &Wide| {
+    let top = |exponent: i32, coefficient: &Wide<L>| {
         i64::from(exponent) + i64::from(digit_count(coefficient))
     };
     let order =
@@ -57,11 +57,9 @@ fn compare_magnitudes<L: Limbs>(first: &Unpacked<L>, second: &Unpacked<L>) -> Or
     // Equal leading weights: align the coefficients at the smaller exponent.
     // The exponents differ by less than the precision.
     let lowest = first_exponent.min(second_exponent);
-    let align = |exponent: i32, coefficient: Wide| {
+    let align = |exponent: i32, coefficient: Wide<L>| {
         let shift = u32::try_from(exponent - lowest).expect("the shift is not negative");
-        let product = coefficient.widening_mul(power_of_ten(shift));
-        let aligned: Wide = product.resize();
-        aligned
+        limbs::multiply_fit(coefficient, power_of_ten(shift))
     };
     align(first_exponent, first_coefficient).compare(&align(second_exponent, second_coefficient))
 }
@@ -76,7 +74,7 @@ fn below_zero<L>(value: &Unpacked<L>) -> bool {
 
 /// Orders two numbers by value. Zeros of either sign and members of one
 /// cohort are equal.
-fn compare_numbers<L: Limbs>(first: &Unpacked<L>, second: &Unpacked<L>) -> Ordering {
+fn compare_numbers<L: Widen>(first: &Unpacked<L>, second: &Unpacked<L>) -> Ordering {
     match (below_zero(first), below_zero(second)) {
         (true, false) => Ordering::Less,
         (false, true) => Ordering::Greater,
@@ -114,7 +112,7 @@ where
 {
     /// Compares two values as the IEEE 754 quiet predicates do. `None` means
     /// that the values are unordered. A signaling NaN signals invalid.
-    pub fn compare<L: Limbs>(left: L, right: L, env: &Env) -> (Option<Ordering>, Flags) {
+    pub fn compare<L: Widen>(left: L, right: L, env: &Env) -> (Option<Ordering>, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
@@ -136,7 +134,7 @@ where
     /// canonical one, are equal with [`TotalOrder::Datum`], as IEEE 754-2019
     /// section 5.10 states. With [`TotalOrder::Encoding`] they order by
     /// their bits below the sign, reversed for a negative sign.
-    pub fn total_cmp<L: Limbs>(left: L, right: L, order: TotalOrder) -> Ordering {
+    pub fn total_cmp<L: Widen>(left: L, right: L, order: TotalOrder) -> Ordering {
         let negative = |bits: &L| bits.bit(Self::WIDTH - 1);
         match (negative(&left), negative(&right)) {
             (true, false) => return Ordering::Less,
@@ -186,7 +184,7 @@ where
     /// Returns the minimum or the maximum of one family. The NaN cases follow
     /// the binary engine. Equal values order by sign and then by exponent, so
     /// the maximum of 1.0 and 1.00 is 1.0.
-    pub fn min_max<L: Limbs>(left: L, right: L, operation: MinMax, env: &Env) -> (L, Flags) {
+    pub fn min_max<L: Widen>(left: L, right: L, operation: MinMax, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);

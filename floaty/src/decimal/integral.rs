@@ -18,17 +18,17 @@ use crate::unpacked::Unpacked;
 /// 2^512 is below 10^155.
 const LARGEST_TOP: i64 = 154;
 
-/// Returns `left * right mod modulus`. Both factors are below the modulus.
-fn multiply_mod(left: Wide, right: Wide, modulus: Wide) -> Wide {
-    let (_, rest) = limbs::divide(left.widening_mul(right), modulus.resize());
-    rest.resize()
+/// Returns `left * right mod modulus`. Both factors are below the modulus,
+/// and the square of the modulus fits `L`.
+fn multiply_mod<L: Limbs>(left: L, right: L, modulus: L) -> L {
+    limbs::divide(limbs::multiply_fit(left, right), modulus).1
 }
 
 /// Returns `10^exponent mod modulus` by square and multiply, so the cost grows
 /// with the bit length of the exponent.
-fn power_of_ten_mod(exponent: u32, modulus: Wide) -> Wide {
-    let ten = limbs::divide(power_of_ten::<Wide>(1), modulus).1;
-    let mut power = limbs::divide(power_of_ten::<Wide>(0), modulus).1;
+fn power_of_ten_mod<L: Limbs>(exponent: u32, modulus: L) -> L {
+    let ten = limbs::divide(power_of_ten::<L>(1), modulus).1;
+    let mut power = limbs::divide(power_of_ten::<L>(0), modulus).1;
     for position in (0..u32::BITS - exponent.leading_zeros()).rev() {
         power = multiply_mod(power, power, modulus);
         if (exponent >> position) & 1 == 1 {
@@ -166,7 +166,7 @@ where
     ///
     /// IEEE 754 has no limit on `n`. decNumber signals invalid when `n` has
     /// more digits than the precision; this function follows IEEE 754.
-    pub fn remainder<L: Limbs>(left: L, right: L, env: &Env) -> (L, Flags) {
+    pub fn remainder<L: Widen>(left: L, right: L, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
@@ -211,9 +211,9 @@ where
     /// Returns the remainder of two finite values: the dividend as its sign,
     /// exponent, and coefficient, and the divisor as its exponent and
     /// coefficient.
-    fn finite_remainder<L: Limbs>(
-        (negative, exponent, coefficient): (bool, i32, Wide),
-        (divisor_exponent, divisor_coefficient): (i32, Wide),
+    fn finite_remainder<L: Widen>(
+        (negative, exponent, coefficient): (bool, i32, Wide<L>),
+        (divisor_exponent, divisor_coefficient): (i32, Wide<L>),
         env: &Env,
         flags: Flags,
     ) -> (L, Flags) {
@@ -238,7 +238,7 @@ where
             };
             (rest, divisor_coefficient, odd)
         } else {
-            let top = |exponent: i32, coefficient: &Wide| {
+            let top = |exponent: i32, coefficient: &Wide<L>| {
                 i64::from(exponent) + i64::from(digit_count(coefficient)) - 1
             };
             if top(exponent, &coefficient) < top(divisor_exponent, &divisor_coefficient) - 1 {
@@ -252,9 +252,7 @@ where
                 return Self::exact_result(&value, i64::from(lowest), env, flags);
             }
             let shift = u32::try_from(divisor_exponent - exponent).expect("the shift is small");
-            let divisor = divisor_coefficient
-                .widening_mul(power_of_ten(shift))
-                .resize::<Wide>();
+            let divisor = limbs::multiply_fit(divisor_coefficient, power_of_ten(shift));
             let (quotient, rest) = limbs::divide(coefficient, divisor);
             (rest, divisor, quotient.bit(0))
         };
@@ -279,8 +277,8 @@ where
     /// Encodes an exact result through the rounding routine, which gives its
     /// canonical form and reports `TINY` for a subnormal value. The precision
     /// limit and flush-to-zero do not apply.
-    fn exact_result<L: Limbs>(
-        value: &Unrounded<Wide>,
+    fn exact_result<L: Widen>(
+        value: &Unrounded<Wide<L>>,
         preferred: i64,
         env: &Env,
         flags: Flags,
