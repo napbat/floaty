@@ -14,7 +14,6 @@ macro_rules! min_max {
     ($name:ident, $with:ident, $operation:ident, $summary:literal) => {
         #[doc = concat!("Returns ", $summary, ", with the default mode.")]
         #[must_use]
-        #[inline]
         pub fn $name(self, other: Self) -> Self {
             if !host::available(S::HOST, Kind::Comparison) {
                 return self.$with(other, M::default()).0;
