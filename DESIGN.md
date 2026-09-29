@@ -1027,9 +1027,12 @@ The decimal formats follow the Intel decimal library:
     The software rounding is most of the cost, and the path would be a
     second arithmetic path for a small gain.
 - `cargo bench -p floaty-verify --bench operations` measures the main
-  operations of each format against the host types and `rustc_apfloat`.
-  Results on an Intel i9-9900K, in nanoseconds per operation, before and
-  after step 6:
+  operations of each format against the host types and `rustc_apfloat`. A
+  second table measures other operations and operands in the engine: the
+  remainder of close and of distant operands, the conversions to decimal64
+  and from `i64`, and additions of subnormal operands and of a zero. A third
+  table measures the double-double types. Results on an Intel i9-9900K, in
+  nanoseconds per operation, before and after step 6:
 
 | Operation | Before | After |
 | --- | --- | --- |
