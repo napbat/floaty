@@ -1,7 +1,7 @@
 //! Decimal digits of binary integers: powers of 10, digit counts, and the
 //! last digit.
 
-use crate::limbs::{self, Limbs};
+use crate::limbs::{self, Divisor, Limbs};
 
 /// The powers of 10 that fit a `u128`: 10^0 to 10^38.
 const POWERS: [u128; 39] = {
@@ -16,6 +16,25 @@ const POWERS: [u128; 39] = {
 
 /// The largest power of 10 in a `u64`: 10^19.
 const LARGE_STEP: u64 = 10_000_000_000_000_000_000;
+
+/// The powers of 10 that fit a `u64`, 10^0 to 10^19, as divisors.
+const DIVISORS: [Divisor; 20] = {
+    let mut table = [Divisor::new(1); 20];
+    let mut power = 1;
+    let mut index = 1;
+    while index < 20 {
+        power *= 10;
+        table[index] = Divisor::new(power);
+        index += 1;
+    }
+    table
+};
+
+/// Returns 10^`exponent` as a divisor. The exponent is at most 19.
+#[inline]
+pub fn power_divisor(exponent: u32) -> Divisor {
+    DIVISORS[usize::try_from(exponent).expect("an exponent fits a usize")]
+}
 
 /// Returns 10^`exponent`. The power must fit `L`.
 pub fn power_of_ten<L: Limbs>(exponent: u32) -> L {
@@ -65,7 +84,7 @@ pub fn digit_count<L: Limbs>(value: &L) -> u32 {
     }
     // value >= 10^estimate exactly when value / 10 >= 10^(estimate - 1), a
     // power that fits because it is at most 2^(bits - 1).
-    let (tenth, _) = limbs::divide_small(*value, 10);
+    let (tenth, _) = limbs::divide_small(*value, power_divisor(1));
     if tenth.compare(&power_of_ten(estimate - 1)).is_ge() {
         estimate + 1
     } else {

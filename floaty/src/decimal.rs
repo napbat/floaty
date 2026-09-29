@@ -24,7 +24,7 @@ mod scale;
 /// decimal128 radicand has at most 71 digits.
 type Wide<L> = <L as Widen>::Double;
 
-use self::digits::power_of_ten_u128;
+use self::digits::{power_divisor, power_of_ten_u128};
 use self::round::DecimalTarget;
 use crate::env::{Behavior, Flags, TotalOrder};
 use crate::exact::Unrounded;
@@ -84,6 +84,9 @@ where
 
     /// The number of declets in the trailing significand field.
     const DECLETS: u32 = Self::TRAILING / 10;
+
+    /// The weight of the digit above the declets, `10^(3 * declets)`.
+    const DECLET_WEIGHT: u128 = power_of_ten_u128(3 * Self::DECLETS);
 
     /// The bias of the exponent field.
     const BIAS: i32 = Self::EMAX + signed(Self::PRECISION) - 2;
@@ -200,7 +203,7 @@ where
         };
         let field = (high << Self::CONTINUATION) | continuation;
         let rest = Self::trailing_value(Self::field(bits, 0, Self::TRAILING));
-        (field, digit * power_of_ten_u128(3 * Self::DECLETS) + rest)
+        (field, digit * Self::DECLET_WEIGHT + rest)
     }
 
     /// Returns the trailing significand field of a value below
@@ -208,12 +211,35 @@ where
     fn trailing_field(value: u128) -> u128 {
         match Enc::KIND {
             DecimalKind::Bid => value,
-            DecimalKind::Dpd => (0..Self::DECLETS).fold(0, |field, index| {
-                let group = (value / power_of_ten_u128(3 * index)) % 1000;
+            DecimalKind::Dpd => Self::declets(value).1,
+        }
+    }
+
+    /// Returns the digit of `value` above its declets, and the declets as a
+    /// trailing significand field. `value` is below `10^(3 * declets + 1)`.
+    fn declets(value: u128) -> (u128, u128) {
+        // A u64 holds six groups of three digits, and divides by 1000 with a
+        // multiplication. One division by 10^18 splits the value into two
+        // such parts.
+        let ([high, above], low) = limbs::divide_small(limbs::split_u128(value), power_divisor(18));
+        debug_assert!(above == 0, "the value has at most 34 digits");
+        let mut groups = [low, high].into_iter().flat_map(|part| {
+            (0..6).scan(part, |rest, _| {
+                let group = *rest % 1000;
+                *rest /= 1000;
+                Some(group)
+            })
+        });
+        let field = (0..Self::DECLETS)
+            .zip(&mut groups)
+            .fold(0, |field, (index, group)| {
                 let declet = declet::DECLETS[usize::try_from(group).expect("a group fits a usize")];
                 field | (u128::from(declet) << (10 * index))
-            }),
-        }
+            });
+        let digit = groups
+            .next()
+            .expect("two parts of six groups hold every digit");
+        (u128::from(digit), field)
     }
 
     /// Encodes a value in its canonical encoding. The value must be
@@ -264,8 +290,7 @@ where
                 }
             }
             DecimalKind::Dpd => {
-                let unit = power_of_ten_u128(3 * Self::DECLETS);
-                let (digit, rest) = (coefficient / unit, coefficient % unit);
+                let (digit, trailing) = Self::declets(coefficient);
                 let (high, low) = (field >> continuation, field & ((1 << continuation) - 1));
                 let combination = if digit < 8 {
                     (high << (continuation + 3)) | (digit << continuation) | low
@@ -275,7 +300,7 @@ where
                         | ((digit & 1) << continuation)
                         | low
                 };
-                sign | (combination << Self::TRAILING) | Self::trailing_field(rest)
+                sign | (combination << Self::TRAILING) | trailing
             }
         }
     }

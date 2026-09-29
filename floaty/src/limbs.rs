@@ -474,9 +474,13 @@ const SMALL_BUFFER: usize = 17;
 const LARGE_BUFFER: usize = 257;
 
 /// Returns the low 64 bits of a `u128`.
+///
+/// `u64::try_from` is not callable in a constant, so the function truncates
+/// with a cast, as its name states.
 #[inline]
-fn low_u64(value: u128) -> u64 {
-    split_u128(value)[0]
+#[allow(clippy::cast_possible_truncation)]
+const fn low_u64(value: u128) -> u64 {
+    value as u64
 }
 
 /// Returns a value of at most 128 bits as a `u128`.
@@ -540,22 +544,108 @@ fn limb_count<L: Limbs>(value: &L) -> usize {
     usize::try_from(value.bit_length().div_ceil(64)).expect("a limb count fits a usize")
 }
 
-/// Divides `value` by a nonzero `divisor` of one limb. Returns the quotient
-/// and the remainder. The division needs no buffer, so it takes a value of
-/// any width.
-pub fn divide_small<L: Limbs>(value: L, divisor: u64) -> (L, u64) {
-    debug_assert!(divisor != 0, "the divisor is not zero");
-    let by = u128::from(divisor);
+/// A nonzero divisor of one limb with its reciprocal.
+///
+/// A division by the divisor then takes two multiplications for each limb.
+/// The compiler calls a library function for a 128-bit division, even by a
+/// constant. The method is Algorithm 4 of Möller and Granlund, "Improved
+/// division by invariant integers", IEEE Transactions on Computers 60(2),
+/// 2011.
+#[derive(Clone, Copy, Debug)]
+pub struct Divisor {
+    /// The divisor shifted left until its top bit is set.
+    normalized: u64,
+    /// The shift of `normalized`.
+    shift: u32,
+    /// `floor((2^128 - 1) / normalized) - 2^64`.
+    reciprocal: u64,
+}
+
+impl Divisor {
+    /// Returns a nonzero divisor with its reciprocal.
+    #[must_use]
+    pub const fn new(divisor: u64) -> Self {
+        assert!(divisor != 0, "a divisor is not zero");
+        let shift = divisor.leading_zeros();
+        let normalized = divisor << shift;
+        // `u128::from` is not callable in a constant; the cast widens. The
+        // quotient is above 2^64 and below 2^65, because `normalized` is at
+        // least 2^63, so its low 64 bits are the quotient less 2^64.
+        let quotient = u128::MAX / normalized as u128;
+        Self {
+            normalized,
+            shift,
+            reciprocal: low_u64(quotient),
+        }
+    }
+
+    /// Divides `high * 2^64 + low` by `normalized`. `high` must be below
+    /// `normalized`, so the quotient fits a limb. Returns the quotient and the
+    /// remainder.
+    #[inline]
+    fn divide_normalized(self, high: u64, low: u64) -> (u64, u64) {
+        // The sum is below 2^128, because `high` is below `normalized`.
+        let estimate = u128::from(self.reciprocal) * u128::from(high)
+            + ((u128::from(high) << 64) | u128::from(low));
+        let [estimate_low, estimate_high] = split_u128(estimate);
+        let quotient = estimate_high.wrapping_add(1);
+        let remainder = low.wrapping_sub(quotient.wrapping_mul(self.normalized));
+        // The candidate quotient is at most one too large, which the first
+        // correction finds, and rarely one too small, which the second finds.
+        let (quotient, remainder) = if remainder > estimate_low {
+            (
+                quotient.wrapping_sub(1),
+                remainder.wrapping_add(self.normalized),
+            )
+        } else {
+            (quotient, remainder)
+        };
+        if remainder >= self.normalized {
+            (quotient + 1, remainder - self.normalized)
+        } else {
+            (quotient, remainder)
+        }
+    }
+
+    /// Divides `rest * 2^64 + limb` by the divisor. `rest` must be below the
+    /// divisor. Returns the quotient and the remainder.
+    #[inline]
+    fn divide_limb(self, rest: u64, limb: u64) -> (u64, u64) {
+        // The shift of both the value and the divisor keeps the quotient and
+        // shifts the remainder.
+        let (high, low) = if self.shift == 0 {
+            (rest, limb)
+        } else {
+            (
+                (rest << self.shift) | (limb >> (64 - self.shift)),
+                limb << self.shift,
+            )
+        };
+        let (quotient, remainder) = self.divide_normalized(high, low);
+        (quotient, remainder >> self.shift)
+    }
+
+    /// Divides a `u64` by the divisor. Returns the quotient and the remainder.
+    #[inline]
+    #[must_use]
+    pub fn divide_u64(self, value: u64) -> (u64, u64) {
+        self.divide_limb(0, value)
+    }
+}
+
+/// Divides `value` by a divisor of one limb. Returns the quotient and the
+/// remainder. The division needs no buffer, so it takes a value of any width.
+pub fn divide_small<L: Limbs>(value: L, divisor: Divisor) -> (L, u64) {
     let mut quotient = L::ZERO;
-    let mut rest = 0_u128;
+    let mut rest = 0_u64;
     // The remainder passes from each limb to the next lower one, so the loop
     // indexes.
     for index in (0..limb_count(&value)).rev() {
-        let current = (rest << 64) | u128::from(value.limb(index));
-        quotient = quotient.with_limb(index, low_u64(current / by));
-        rest = current % by;
+        let (digit, remainder) = divisor.divide_limb(rest, value.limb(index));
+        quotient = quotient.with_limb(index, digit);
+        rest = remainder;
     }
-    (quotient, low_u64(rest))
+    (quotient, rest)
 }
 
 /// Divides `numerator` by a nonzero `divisor`. Returns the quotient and the
@@ -740,199 +830,4 @@ fn mask(width: u32) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{Limbs, Widen};
-
-    #[test]
-    fn field_reads_across_a_limb_boundary() {
-        let value = [0xF000_0000_0000_0000, 0x0000_0000_0000_000A];
-        assert_eq!(value.field(60, 8), 0xAF);
-        assert_eq!(value.field(0, 64), 0xF000_0000_0000_0000);
-        assert_eq!(value.field(64, 4), 0xA);
-    }
-
-    #[test]
-    fn with_field_writes_across_a_limb_boundary() {
-        let value = [u64::MAX, u64::MAX].with_field(60, 8, 0x5A);
-        assert_eq!(value, [0xAFFF_FFFF_FFFF_FFFF, 0xFFFF_FFFF_FFFF_FFF5]);
-        assert_eq!(value.field(60, 8), 0x5A);
-        assert_eq!([0u64; 1].with_field(0, 64, u64::MAX), [u64::MAX]);
-    }
-
-    #[test]
-    fn low_bits_and_ones_agree() {
-        for count in 0..=192 {
-            let all: [u64; 3] = [u64::MAX; 3];
-            assert_eq!(
-                all.low_bits(count),
-                <[u64; 3]>::ones(count),
-                "count {count}"
-            );
-        }
-        assert_eq!(<[u64; 2]>::ones(64), [u64::MAX, 0]);
-        assert_eq!([u64::MAX].low_bits(0), [0]);
-    }
-
-    #[test]
-    fn resize_keeps_the_value() {
-        let narrow: [u64; 2] = [7, 9];
-        let wide: [u64; 4] = narrow.resize();
-        assert_eq!(wide, [7, 9, 0, 0]);
-        assert_eq!(wide.resize::<[u64; 2]>(), narrow);
-    }
-
-    #[test]
-    fn shifts_move_bits_across_limbs() {
-        let value: [u64; 3] = [0x8000_0000_0000_0001, 0x1, 0];
-        assert_eq!(value.shl(1), [0x2, 0x3, 0]);
-        assert_eq!(value.shl(64), [0, 0x8000_0000_0000_0001, 0x1]);
-        assert_eq!(value.shl(127), [0, 1 << 63, 0xC000_0000_0000_0000]);
-        assert_eq!(value.shr(1), [0xC000_0000_0000_0000, 0, 0]);
-        assert_eq!(value.shr(63), [0x3, 0, 0]);
-        assert_eq!(value.shr(64), [0x1, 0, 0]);
-        assert_eq!(value.shr(192), [0; 3]);
-        assert_eq!(value.shr(1000), [0; 3]);
-        assert_eq!(value.shl(192), [0; 3]);
-    }
-
-    #[test]
-    fn one_limb_operations_take_every_count() {
-        let value: [u64; 1] = [0x8000_0000_0000_0001];
-        assert_eq!(value.shl(0), value);
-        assert_eq!(value.shl(63), [1 << 63]);
-        assert_eq!(value.shl(64), [0]);
-        assert_eq!(value.shl(1000), [0]);
-        assert_eq!(value.shr(63), [1]);
-        assert_eq!(value.shr(64), [0]);
-        assert_eq!(value.shr(1000), [0]);
-        assert!(!value.any_below(0) && value.any_below(1) && value.any_below(64));
-        assert!(!<[u64; 1]>::ZERO.any_below(1000) && value.any_below(1000));
-        assert_eq!(value.low_bits(1), [1]);
-        assert_eq!(value.low_bits(64), value);
-        assert_eq!(value.low_bits(100), value);
-        assert_eq!((value.bit_length(), [0_u64].bit_length()), (64, 0));
-        assert_eq!([u64::MAX].increment(), [0]);
-        assert_eq!([3_u64].add([4]), [7]);
-        assert_eq!([7_u64].sub([4]), [3]);
-        assert_eq!([3_u64].compare(&[4]), core::cmp::Ordering::Less);
-        // Division and the square root of values below 2^64 on a wider
-        // array.
-        assert_eq!(
-            super::divide([100_u64, 0], [1 << 40, 0]),
-            ([0, 0], [100, 0])
-        );
-        assert_eq!(
-            super::divide([u64::MAX, 0], [0, 1]),
-            ([0, 0], [u64::MAX, 0])
-        );
-        assert_eq!(
-            super::square_root([u64::MAX, 0]),
-            ([u64::from(u32::MAX), 0], true)
-        );
-    }
-
-    #[test]
-    fn a_product_that_fits_needs_no_wider_type() {
-        assert_eq!(super::multiply_fit([6_u64], [7]), [42]);
-        assert_eq!(
-            super::multiply_fit([u64::MAX, 0], [u64::MAX, 0]),
-            [1, u64::MAX - 1]
-        );
-        // (2^128 - 1) * (2^64 + 3) across four limbs.
-        let product = super::multiply_fit([u64::MAX, u64::MAX, 0, 0], [3, 1, 0, 0]);
-        assert_eq!(product, [u64::MAX - 2, u64::MAX - 1, 2, 1]);
-        assert_eq!(
-            product,
-            [u64::MAX, u64::MAX, 0, 0]
-                .widening_mul([3, 1, 0, 0])
-                .resize::<[u64; 4]>()
-        );
-    }
-
-    #[test]
-    fn bit_length_and_any_below() {
-        assert_eq!([0_u64; 2].bit_length(), 0);
-        assert_eq!([1_u64, 0].bit_length(), 1);
-        assert_eq!([0, 1_u64 << 63].bit_length(), 128);
-        let value: [u64; 2] = [0x10, 0];
-        assert!(!value.any_below(4) && value.any_below(5) && value.any_below(500));
-        assert!(!value.bit(128) && !value.bit(4000));
-        assert_eq!(<[u64; 5]>::BITS, 320);
-    }
-
-    #[test]
-    fn add_sub_and_compare_carry_across_limbs() {
-        let a: [u64; 2] = [u64::MAX, 1];
-        let b: [u64; 2] = [1, 0];
-        assert_eq!(a.add(b), [0, 2]);
-        assert_eq!([0, 2].sub(b), a);
-        assert_eq!(a.compare(&b), core::cmp::Ordering::Greater);
-        assert_eq!(b.compare(&a), core::cmp::Ordering::Less);
-        assert_eq!(a.compare(&a), core::cmp::Ordering::Equal);
-        assert_eq!([0b1011_u64].shr_jam(2), [0b11]);
-        assert_eq!([0b1000_u64].shr_jam(2), [0b10]);
-        assert_eq!([1_u64, 0].shr_jam(200), [1, 0]);
-    }
-
-    #[test]
-    fn widening_multiply_divide_and_square_root() {
-        let product = [u64::MAX, u64::MAX].widening_mul([u64::MAX, u64::MAX]);
-        // (2^128 - 1)^2 = 2^256 - 2^129 + 1.
-        assert_eq!(product, [1, 0, u64::MAX - 1, u64::MAX]);
-        let (quotient, remainder) = super::divide([100_u64, 0], [7, 0]);
-        assert_eq!((quotient, remainder), ([14, 0], [2, 0]));
-        let (quotient, remainder) = super::divide(product, [u64::MAX, u64::MAX, 0, 0]);
-        assert_eq!((quotient, remainder), ([u64::MAX, u64::MAX, 0, 0], [0; 4]));
-        assert_eq!(super::square_root([144_u64]), ([12], false));
-        assert_eq!(super::square_root([145_u64]), ([12], true));
-        assert_eq!(super::square_root([0_u64, 1]), ([1 << 32, 0], false));
-        assert_eq!(
-            super::square_root(product),
-            ([u64::MAX, u64::MAX, 0, 0], false)
-        );
-    }
-
-    #[test]
-    fn long_division_matches_the_definition() {
-        // (2^128 - 1)^2 + 5 divided by 2^128 - 1. The top limb of the divisor
-        // needs no normalization.
-        let product = [u64::MAX, u64::MAX].widening_mul([u64::MAX, u64::MAX]);
-        let with_rest = product.add([5, 0, 0, 0]);
-        assert_eq!(
-            super::divide(with_rest, [u64::MAX, u64::MAX, 0, 0]),
-            ([u64::MAX, u64::MAX, 0, 0], [5, 0, 0, 0])
-        );
-        // A quotient limb whose estimate is too large exercises the add-back
-        // step: 2^192 / (2^128 + 1).
-        let (quotient, remainder) = super::divide([0, 0, 0, 1], [1, 0, 1, 0]);
-        // 2^192 = (2^64 - 1)(2^128 + 1) + (2^128 - 2^64 + 1).
-        assert_eq!(quotient, [u64::MAX, 0, 0, 0]);
-        assert_eq!(remainder, [1, u64::MAX, 0, 0]);
-        // One-limb divisor of a wide numerator.
-        assert_eq!(
-            super::divide([7, 0, 0, 1], [2, 0, 0, 0]),
-            ([3, 0, 1 << 63, 0], [1, 0, 0, 0])
-        );
-        // A wide square root by Newton's iteration.
-        let (root, inexact) = super::square_root(product);
-        assert_eq!((root, inexact), ([u64::MAX, u64::MAX, 0, 0], false));
-        let (root, inexact) = super::square_root(with_rest);
-        assert_eq!((root, inexact), ([u64::MAX, u64::MAX, 0, 0], true));
-    }
-
-    #[test]
-    fn increment_carries() {
-        assert_eq!([u64::MAX, 0].increment(), [0, 1]);
-        assert_eq!([u64::MAX, u64::MAX].increment(), [0, 0]);
-        assert_eq!([5_u64].increment(), [6]);
-    }
-
-    #[test]
-    fn bits_set_and_read() {
-        let value = <[u64; 2]>::ZERO.with_bit(0).with_bit(127);
-        assert!(value.bit(0) && value.bit(127) && !value.bit(64));
-        assert_eq!(value, [1, 1 << 63]);
-        assert!(!value.is_zero());
-        assert!(<[u64; 2]>::ZERO.is_zero());
-    }
-}
+mod tests;

@@ -963,6 +963,15 @@ The decimal formats follow the Intel decimal library:
     is normal. Below emin, the value is subnormal when its coefficient is
     below `10^(emin - exponent)`. The digit count of a value of at most 128
     bits compares the value with one entry of a table of powers of 10.
+  - The decimal engine divides by a power of 10 with a multiplication by
+    its reciprocal, by Algorithm 4 of Möller and Granlund, "Improved
+    division by invariant integers" (2011). The compiler calls a library
+    function for each 128-bit division, even by a constant. A table holds
+    10^0 to 10^19 with their reciprocals. The rounding cut divides by these
+    powers.
+  - The DPD encoder divides a coefficient once by 10^18. It takes each
+    group of three digits from the two 64-bit parts, because a 64-bit
+    division by 1000 compiles to a multiplication.
 - A fast path must pass the same oracle tests as the generic path, and this
   file must list it. There is one fast path.
   - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
@@ -1086,6 +1095,22 @@ interleaved runs, on a host with more load than for the table above.
 | decimal128 BID divide | 240 | 180 |
 | decimal64 DPD add | 266 | 223 |
 | decimal128 DPD add | 630 | 542 |
+
+Division by the reciprocal of a power of 10, and the DPD encoder on 64-bit
+parts, before and after, in nanoseconds per operation with an `Env`. Each
+figure is the lower of two interleaved runs.
+
+| Operation | Before | After |
+| --- | --- | --- |
+| decimal64 BID multiply | 86 | 56 |
+| decimal64 BID fused multiply-add | 113 | 85 |
+| decimal64 BID round to integral | 46 | 26 |
+| decimal128 BID multiply | 100 | 79 |
+| decimal128 BID divide | 170 | 146 |
+| decimal64 DPD add | 204 | 104 |
+| decimal64 DPD multiply | 199 | 78 |
+| decimal128 DPD add | 506 | 122 |
+| decimal128 DPD multiply | 617 | 116 |
 
 ## Verification
 
@@ -1335,11 +1360,10 @@ Each step passes its oracle tests before the next step starts.
 - Decide whether a reciprocal square root estimate, as SoftFloat uses,
   replaces the integer square root and the wide division. The speedup pass
   left them slow: binary128 `sqrt` takes 255 ns.
-- Decide whether the decimal engine divides by a power of 10 with a
-  multiplication by its reciprocal. The rounding cut and the DPD codec
-  divide 128-bit values with the software division of the compiler. That
-  division takes 22% of a decimal128 multiplication, and a third of a
-  decimal64 DPD addition.
+- Decide whether the long division of values wider than 128 bits,
+  `limbs::divide`, divides by the reciprocal of the top limb of the divisor.
+  Each quotient limb now calls the 128-bit library division, which takes
+  28% of a decimal128 division and of a decimal128 square root.
 - Measure the specialization per format and behavior again on an idle host.
   Other work loaded the host during the measurement in this file.
 - Add mode combinators for the NaN rule and the tininess rule with the Arm

@@ -112,7 +112,7 @@ pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
         kept = kept.increment();
         if digit_count(&kept) > precision {
             // The carry reached 10^precision.
-            kept = limbs::divide_small(kept, 10).0;
+            kept = limbs::divide_small(kept, digits::power_divisor(1)).0;
             position += 1;
         }
     }
@@ -184,15 +184,13 @@ fn cut<In: Limbs, Out: Limbs>(value: &Unrounded<In>, drop: i64, digits: u32) -> 
     let mut left = drop;
     while left > 0 {
         let chunk = left.min(CHUNK);
-        let divisor = u64::try_from(digits::power_of_ten_u128(chunk)).expect("10^19 fits a u64");
-        let (next, remainder) = limbs::divide_small(quotient, divisor);
+        let (next, remainder) = limbs::divide_small(quotient, digits::power_divisor(chunk));
         left -= chunk;
         if left == 0 {
             // The last chunk holds the first dropped digit.
-            let unit =
-                u64::try_from(digits::power_of_ten_u128(chunk - 1)).expect("10^18 fits a u64");
-            first = remainder / unit;
-            rest |= remainder % unit != 0;
+            let (digit, below) = digits::power_divisor(chunk - 1).divide_u64(remainder);
+            first = digit;
+            rest |= below != 0;
         } else {
             rest |= remainder != 0;
         }
@@ -249,7 +247,7 @@ fn nearest_to_preferred<L: Limbs>(
     let (lowest, highest) = target.exponents(target.precision);
     let preferred = i64::from(preferred).clamp(lowest, highest);
     while position < preferred && last_digit(&kept) == 0 {
-        kept = limbs::divide_small(kept, 10).0;
+        kept = limbs::divide_small(kept, digits::power_divisor(1)).0;
         position += 1;
     }
     while position > preferred && digit_count(&kept) < target.precision {
