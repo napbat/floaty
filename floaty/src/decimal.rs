@@ -35,6 +35,9 @@ use crate::integer::{Integer, ToInt};
 use crate::limbs::{self, Limbs, Widen};
 use crate::unpacked::Unpacked;
 
+/// The weight of the second group of six declets, 10^18.
+const GROUP_WEIGHT: u128 = power_of_ten_u128(18);
+
 /// The layout constants and codec of `Decimal<Enc>` at width `W`.
 pub struct DecimalLayout<Enc, const W: usize> {
     encoding: PhantomData<Enc>,
@@ -161,13 +164,20 @@ where
     fn trailing_value(trailing: u128) -> u128 {
         match Enc::KIND {
             DecimalKind::Bid => trailing,
-            DecimalKind::Dpd => (0..Self::DECLETS).rev().fold(0, |value, index| {
-                let declet = Self::field(trailing, 10 * index, 10);
-                value * 1000
-                    + u128::from(
-                        declet::VALUES[usize::try_from(declet).expect("a declet fits a usize")],
-                    )
-            }),
+            DecimalKind::Dpd => {
+                // Six declets hold 18 digits, which fit a u64. One 128-bit
+                // multiplication joins the two groups of declets.
+                let group = |declets: core::ops::Range<u32>| {
+                    declets.rev().fold(0, |value, index| {
+                        let declet = Self::field(trailing, 10 * index, 10);
+                        let digits =
+                            declet::VALUES[usize::try_from(declet).expect("a declet fits a usize")];
+                        value * 1000 + u64::from(digits)
+                    })
+                };
+                let split = Self::DECLETS.min(6);
+                u128::from(group(split..Self::DECLETS)) * GROUP_WEIGHT + u128::from(group(0..split))
+            }
         }
     }
 

@@ -985,6 +985,8 @@ The decimal formats follow the Intel decimal library:
   - A conversion between binary and decimal computes in 256 bits when its
     numbers fit, as they do for most values within about 10^60 of 1. It
     computes in 1,024 or 16,384 bits otherwise.
+  - The DPD decoder reads each group of six declets into a 64-bit integer,
+    and joins the two groups with one 128-bit multiplication.
 - A fast path must pass the same oracle tests as the generic path, and this
   file must list it. There is one fast path.
   - The operators `+`, `-`, `*`, and `/` of binary32 and binary64 compute on
