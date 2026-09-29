@@ -35,7 +35,7 @@ where
     ///     D64Bid::round(exact, Env::IEEE).0
     /// };
     /// // 2.17 quantized to 0.1 is 2.2.
-    /// let (rounded, _) = value(217, -2).quantize_with(value(1, -1), Rounding::NearestEven);
+    /// let (rounded, _) = value(217, -2).quantize_with(value(1, -1), Rounding::TiesToEven);
     /// assert_eq!(rounded.decode::<1>(), Decoded::Finite { negative: false, exponent: -1, significand: [22] });
     /// ```
     #[must_use]

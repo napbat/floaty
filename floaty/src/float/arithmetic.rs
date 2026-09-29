@@ -129,7 +129,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// ```
     /// use floaty::{F32, Flags, Rounding};
     ///
-    /// let (two, flags) = F32::from_bits(0x3FC0_0000).round_to_integral_with(Rounding::NearestEven);
+    /// let (two, flags) = F32::from_bits(0x3FC0_0000).round_to_integral_with(Rounding::TiesToEven);
     /// assert_eq!((two.to_bits(), flags), (0x4000_0000, Flags::INEXACT | Flags::ROUNDED_UP));
     /// ```
     #[must_use]

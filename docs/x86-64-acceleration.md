@@ -85,7 +85,7 @@ binary32 x 8 and binary64 x 4 in the x86-64-v3 build.
 | `+`, `-`, `*`, `/` | Packed, SSE2: 0.5, 1.2 | Packed, AVX: 0.3, 0.4 | `ADDPS`, `ADDPD` and the others. 512-bit forms with AVX-512F. | 512-bit chunks, and tail lanes in a mask |
 | `sqrt` | Packed: 0.6, 1.3 | Packed: 0.3, 0.7 | `SQRTPS`, `SQRTPD`. 512-bit forms. | As above |
 | `mul_add` | Engine: 22.8, 25.2 | Packed, FMA: 0.4, 0.9 | `VFMADD213PS`, `VFMADD213PD` (FMA). SSE2 has none. | None in the default build |
-| `round_to_integral` | Engine: 9.0, 8.4 | Packed, SSE4.1, in each direction but `NearestAway`: 0.3, 0.6 | `ROUNDPS`, `ROUNDPD` with the direction in the immediate (SSE4.1). `VRNDSCALEPS` (AVX-512F). SSE2 has none. | None in the default build |
+| `round_to_integral` | Engine: 9.0, 8.4 | Packed, SSE4.1, in each IEEE 754 direction but `TiesToAway`: 0.3, 0.6 | `ROUNDPS`, `ROUNDPD` with the direction in the immediate (SSE4.1). `VRNDSCALEPS` (AVX-512F). SSE2 has none. | None in the default build |
 | `convert` between binary32 and binary64 | Packed: 0.9, 1.4 | Packed: 0.5, 0.8 | `CVTPS2PD`, `CVTPD2PS`, and their AVX forms | None |
 | Comparison | Packed `compare_quiet`: 1.4, 1.8. Scalar `UCOMISS`: 2.4, 2.5 | Packed: 1.7, 1.8. Scalar: 4.1, 1.8 | `CMPLTPS` and `CMPUNORDPS`, and their other forms. `UCOMISS`, `UCOMISD`. | None |
 | Minimum and maximum | Packed `minimum`: 0.7, 2.1. A NaN or two zeros in any pair of lanes sends every lane to its scalar path. Scalar `MINSS`: 2.3, 2.4 | Packed: 0.5, 1.1. Scalar: 2.7, 2.2 | `MINPS`, `MAXPS`, and their other forms. `VRANGEPS` gives `min_num` and `max_num` without the fallback (AVX-512DQ). `VMINMAXPS` gives the IEEE 754-2019 operations (AVX10.2). | None below AVX-512DQ |
@@ -150,7 +150,7 @@ and 14.8 per operation.
 
 | Formats | Today | x86-64 instructions | Gap |
 | --- | --- | --- | --- |
-| `F8E4M3`, `F8E5M2` | Engine for every operation. `+` takes 14.4 and 12.8. | AVX10.2 has conversions only. `VCVTHF82PH` widens E4M3 to binary16 exactly. A shift widens E5M2 to binary16 exactly, at SSE2. `VCVTPH2HF8` and `VCVTPH2BF8` round binary16 to FP8 to nearest even and keep subnormals. An overflow gives a NaN for E4M3 and an infinity for E5M2, and the `S` forms saturate. AVX10.2 has no FP8 arithmetic. AMX-FP8 has only dot products. | Widening of E5M2 by a shift, now. The other conversions at AVX10.2. Arithmetic through binary32 needs a proof for the chain of roundings, and AVX10.2 to round to FP8. |
+| `F8E4M3Fn`, `F8E5M2` | Engine for every operation. `+` takes 14.4 and 12.8. | AVX10.2 has conversions only. `VCVTHF82PH` widens E4M3 to binary16 exactly. A shift widens E5M2 to binary16 exactly, at SSE2. `VCVTPH2HF8` and `VCVTPH2BF8` round binary16 to FP8 to nearest even and keep subnormals. An overflow gives a NaN for E4M3 and an infinity for E5M2, and the `S` forms saturate. AVX10.2 has no FP8 arithmetic. AMX-FP8 has only dot products. | Widening of E5M2 by a shift, now. The other conversions at AVX10.2. Arithmetic through binary32 needs a proof for the chain of roundings, and AVX10.2 to round to FP8. |
 | `F8E4M3Fnuz`, `F8E5M2Fnuz` | Engine | None. The FNUZ encodings differ from the E4M3 and E5M2 of AVX10.2. | None |
 | `TF32` | Engine | None. AMX-TF32 left the instruction set reference in 319433-062. | None |
 | binary128 and wider, the decimal formats | Engine | None | None |

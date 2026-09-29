@@ -362,11 +362,14 @@ pub fn narrow_double_to_half(_value: f64) -> Option<u16> {
 macro_rules! round_scalar {
     ($rounding:expr, [$even:expr, $down:expr, $up:expr, $zero:expr $(,)?], $value:ident) => {
         match $rounding {
-            Rounding::NearestEven => round_scalar!($even, $value),
+            Rounding::TiesToEven => round_scalar!($even, $value),
             Rounding::TowardNegative => round_scalar!($down, $value),
             Rounding::TowardPositive => round_scalar!($up, $value),
             Rounding::TowardZero => round_scalar!($zero, $value),
-            Rounding::NearestAway | Rounding::ToOdd => return None,
+            Rounding::TiesToAway
+            | Rounding::TiesTowardZero
+            | Rounding::AwayFromZero
+            | Rounding::ToOdd => return None,
         }
     };
     ($instruction:expr, $value:ident) => {

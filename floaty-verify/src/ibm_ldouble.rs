@@ -112,7 +112,7 @@ impl Instruction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Rounding {
     /// `FE_TONEAREST`: to nearest, with a tie to even.
-    NearestEven,
+    TiesToEven,
     /// `FE_TOWARDZERO`.
     TowardZero,
     /// `FE_UPWARD`: toward positive infinity.
@@ -124,7 +124,7 @@ pub enum Rounding {
 impl Rounding {
     /// Every rounding direction.
     pub const ALL: [Self; 4] = [
-        Self::NearestEven,
+        Self::TiesToEven,
         Self::TowardZero,
         Self::TowardPositive,
         Self::TowardNegative,
@@ -133,7 +133,7 @@ impl Rounding {
     /// Returns the name of the direction in the input of [`PROGRAM`].
     const fn word(self) -> &'static str {
         match self {
-            Self::NearestEven => "nearest",
+            Self::TiesToEven => "nearest",
             Self::TowardZero => "zero",
             Self::TowardPositive => "up",
             Self::TowardNegative => "down",
@@ -163,7 +163,7 @@ pub fn behavior(rounding: Rounding) -> floaty::Env {
 impl From<Rounding> for floaty::Rounding {
     fn from(rounding: Rounding) -> Self {
         match rounding {
-            Rounding::NearestEven => Self::NearestEven,
+            Rounding::TiesToEven => Self::TiesToEven,
             Rounding::TowardZero => Self::TowardZero,
             Rounding::TowardPositive => Self::TowardPositive,
             Rounding::TowardNegative => Self::TowardNegative,

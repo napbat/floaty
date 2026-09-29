@@ -573,7 +573,7 @@ fn main() {
     println!();
     println!("| Format | {} |", COLUMNS.join(" | "));
     println!("|---{}|", "|---".repeat(COLUMNS.len()));
-    floaty_row::<Binary<4, NoInf>, 8>("floaty F8E4M3", 1);
+    floaty_row::<Binary<4, NoInf>, 8>("floaty F8E4M3Fn", 1);
     floaty_row::<Binary<5, Fnuz>, 8>("floaty F8E5M2Fnuz", 10);
     floaty_row::<Binary<5>, 16>("floaty F16", 2);
     floaty_row::<Binary<8>, 16>("floaty BF16", 3);
@@ -601,7 +601,7 @@ fn main() {
     println!();
     println!("| Format | {} |", OTHER_COLUMNS.join(" | "));
     println!("|---{}|", "|---".repeat(OTHER_COLUMNS.len()));
-    other_row::<Binary<4, NoInf>, 8>("floaty F8E4M3", 21);
+    other_row::<Binary<4, NoInf>, 8>("floaty F8E4M3Fn", 21);
     other_row::<Binary<5, Fnuz>, 8>("floaty F8E5M2Fnuz", 22);
     other_row::<Binary<5>, 16>("floaty F16", 23);
     other_row::<Binary<8>, 16>("floaty BF16", 24);

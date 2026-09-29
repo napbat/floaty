@@ -160,11 +160,13 @@ pub mod direction {
     }
 
     direction!(
-        NearestEven,
-        NearestAway,
+        TiesToEven,
+        TiesToAway,
+        TiesTowardZero,
         TowardPositive,
         TowardNegative,
         TowardZero,
+        AwayFromZero,
         ToOdd
     );
 }

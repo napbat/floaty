@@ -60,8 +60,8 @@ use rustc_apfloat::{Round, Status, StatusAnd};
 
 /// The directions that both implementations have.
 const ROUNDINGS: [(Rounding, Round); 5] = [
-    (Rounding::NearestEven, Round::NearestTiesToEven),
-    (Rounding::NearestAway, Round::NearestTiesToAway),
+    (Rounding::TiesToEven, Round::NearestTiesToEven),
+    (Rounding::TiesToAway, Round::NearestTiesToAway),
     (Rounding::TowardPositive, Round::TowardPositive),
     (Rounding::TowardNegative, Round::TowardNegative),
     (Rounding::TowardZero, Round::TowardZero),

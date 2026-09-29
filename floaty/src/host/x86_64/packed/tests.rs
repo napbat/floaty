@@ -72,14 +72,12 @@ fn every_chunk_gives_the_lanes_of_the_scalar_instructions() {
         two.map(narrow_double).map(f32::to_bits),
         "CVTPD2PS"
     );
-    if let Some(lanes) = super::round_f32x4(four, Rounding::NearestEven) {
-        let again =
-            super::round_f32x4(lanes, Rounding::NearestEven).expect("the build has ROUNDPS");
+    if let Some(lanes) = super::round_f32x4(four, Rounding::TiesToEven) {
+        let again = super::round_f32x4(lanes, Rounding::TiesToEven).expect("the build has ROUNDPS");
         assert_eq!(lanes.map(f32::to_bits), again.map(f32::to_bits), "ROUNDPS");
     }
-    if let Some(lanes) = super::round_f64x2(two, Rounding::NearestEven) {
-        let again =
-            super::round_f64x2(lanes, Rounding::NearestEven).expect("the build has ROUNDPD");
+    if let Some(lanes) = super::round_f64x2(two, Rounding::TiesToEven) {
+        let again = super::round_f64x2(lanes, Rounding::TiesToEven).expect("the build has ROUNDPD");
         assert_eq!(lanes.map(f64::to_bits), again.map(f64::to_bits), "ROUNDPD");
     }
 }

@@ -27,7 +27,7 @@ use crate::limbs::Limbs;
 /// let (even, flags) = F32::round(halfway, F32::ENV);
 /// assert_eq!(even.to_bits(), 0x3F80_0000);
 /// assert_eq!(flags, Flags::INEXACT);
-/// let (away, _) = F32::round(halfway, Rounding::NearestAway);
+/// let (away, _) = F32::round(halfway, Rounding::TiesToAway);
 /// assert_eq!(away.to_bits(), 0x3F80_0001);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -172,13 +172,15 @@ pub fn rounds_up(
 ) -> bool {
     let inexact = dropped.is_inexact();
     match rounding {
-        Rounding::NearestEven => {
+        Rounding::TiesToEven => {
             dropped == Dropped::AboveHalf || (dropped == Dropped::Half && last_digit % 2 == 1)
         }
-        Rounding::NearestAway => matches!(dropped, Dropped::Half | Dropped::AboveHalf),
+        Rounding::TiesToAway => matches!(dropped, Dropped::Half | Dropped::AboveHalf),
+        Rounding::TiesTowardZero => dropped == Dropped::AboveHalf,
         Rounding::TowardPositive => inexact && !negative,
         Rounding::TowardNegative => inexact && negative,
         Rounding::TowardZero => false,
+        Rounding::AwayFromZero => inexact,
         Rounding::ToOdd => inexact && (last_digit == 0 || (radix == 10 && last_digit == 5)),
     }
 }
@@ -454,7 +456,10 @@ fn overflow<L: Limbs>(
 ) -> (Unpacked<L>, Flags) {
     let flags = Flags::OVERFLOW | Flags::INEXACT;
     let to_infinity = match env.rounding {
-        Rounding::NearestEven | Rounding::NearestAway => true,
+        Rounding::TiesToEven
+        | Rounding::TiesToAway
+        | Rounding::TiesTowardZero
+        | Rounding::AwayFromZero => true,
         Rounding::TowardPositive => !negative,
         Rounding::TowardNegative => negative,
         Rounding::TowardZero | Rounding::ToOdd => false,
@@ -499,7 +504,7 @@ mod tests {
 
     use crate::env::{Env, Flags, Rounding, Tininess};
     use crate::exact::Exact;
-    use crate::float::{F8E4M3, F8E4M3Fnuz, F16, F32, F80, F512};
+    use crate::float::{F8E4M3Fn, F8E4M3Fnuz, F16, F32, F80, F512};
 
     fn exact<const N: usize>(negative: bool, exponent: i32, significand: [u64; N]) -> Exact<N> {
         Exact {
@@ -521,9 +526,15 @@ mod tests {
     #[test]
     fn every_direction_at_a_halfway_value() {
         let cases = [
-            (Rounding::NearestEven, 0x3F80_0000, Flags::INEXACT),
+            (Rounding::TiesToEven, 0x3F80_0000, Flags::INEXACT),
             (
-                Rounding::NearestAway,
+                Rounding::TiesToAway,
+                0x3F80_0001,
+                Flags::INEXACT | Flags::ROUNDED_UP,
+            ),
+            (Rounding::TiesTowardZero, 0x3F80_0000, Flags::INEXACT),
+            (
+                Rounding::AwayFromZero,
                 0x3F80_0001,
                 Flags::INEXACT | Flags::ROUNDED_UP,
             ),
@@ -556,10 +567,34 @@ mod tests {
             F32::round(negative, Rounding::TowardPositive).0.to_bits(),
             0xBF80_0000
         );
+        assert_eq!(
+            F32::round(negative, Rounding::AwayFromZero).0.to_bits(),
+            0xBF80_0001
+        );
+        assert_eq!(
+            F32::round(negative, Rounding::TiesTowardZero).0.to_bits(),
+            0xBF80_0000
+        );
     }
 
     #[test]
-    fn nearest_even_keeps_an_odd_value_below_halfway_with_sticky() {
+    fn ties_toward_zero_rounds_up_only_above_halfway() {
+        // 1 + 2^-24 with a sticky bit: just above halfway.
+        let above = Exact {
+            negative: false,
+            exponent: -25,
+            significand: [(1 << 25) + 2],
+            sticky: true,
+        };
+        let (result, flags) = F32::round(above, Rounding::TiesTowardZero);
+        assert_eq!(
+            (result.to_bits(), flags),
+            (0x3F80_0001, Flags::INEXACT | Flags::ROUNDED_UP)
+        );
+    }
+
+    #[test]
+    fn ties_to_even_keeps_an_odd_value_below_halfway_with_sticky() {
         // 1 + 2^-23 + 2^-25, sticky: just above a quarter step; nearest is 1 + 2^-23.
         let value = Exact {
             negative: false,
@@ -567,7 +602,7 @@ mod tests {
             significand: [(1 << 25) + 5],
             sticky: true,
         };
-        let (result, flags) = F32::round(value, Rounding::NearestEven);
+        let (result, flags) = F32::round(value, Rounding::TiesToEven);
         assert_eq!((result.to_bits(), flags), (0x3F80_0001, Flags::INEXACT));
     }
 
@@ -575,7 +610,7 @@ mod tests {
     fn a_carry_moves_to_the_next_binade() {
         // 2 - 2^-25 rounds up to 2.0.
         let value = exact(false, -25, [(1 << 26) - 1]);
-        let (result, flags) = F32::round(value, Rounding::NearestEven);
+        let (result, flags) = F32::round(value, Rounding::TiesToEven);
         assert_eq!(
             (result.to_bits(), flags),
             (0x4000_0000, Flags::INEXACT | Flags::ROUNDED_UP)
@@ -601,7 +636,10 @@ mod tests {
     fn overflow_follows_the_direction_and_the_encoding() {
         let huge = exact(false, 128, [1]);
         let cases = [
-            (Rounding::NearestEven, 0x7F80_0000),
+            (Rounding::TiesToEven, 0x7F80_0000),
+            (Rounding::TiesToAway, 0x7F80_0000),
+            (Rounding::TiesTowardZero, 0x7F80_0000),
+            (Rounding::AwayFromZero, 0x7F80_0000),
             (Rounding::TowardPositive, 0x7F80_0000),
             (Rounding::TowardZero, 0x7F7F_FFFF),
             (Rounding::TowardNegative, 0x7F7F_FFFF),
@@ -617,10 +655,10 @@ mod tests {
         }
         // OCP E4M3 has no infinity. 480 rounds to the NaN encoding, so it overflows.
         let above = exact(false, 5, [15]);
-        assert_eq!(F8E4M3::round(above, Env::IEEE).0.to_bits(), 0x7F);
+        assert_eq!(F8E4M3Fn::round(above, Env::IEEE).0.to_bits(), 0x7F);
         let saturate = Env::IEEE.with_saturate(true);
-        assert_eq!(F8E4M3::round(above, saturate).0.to_bits(), 0x7E);
-        let (largest, flags) = F8E4M3::round(exact(false, 5, [14]), Env::IEEE);
+        assert_eq!(F8E4M3Fn::round(above, saturate).0.to_bits(), 0x7E);
+        let (largest, flags) = F8E4M3Fn::round(exact(false, 5, [14]), Env::IEEE);
         assert_eq!((largest.to_bits(), flags), (0x7E, Flags::NONE));
         assert_eq!(
             F8E4M3Fnuz::round(exact(true, 8, [1]), Env::IEEE)
@@ -632,6 +670,18 @@ mod tests {
             F8E4M3Fnuz::round(exact(true, 8, [1]), saturate).0.to_bits(),
             0xFF
         );
+    }
+
+    #[test]
+    fn a_tie_toward_zero_at_the_overflow_threshold_stays_finite() {
+        // (2^24 - 1/2) * 2^104: halfway between the largest binary32 value
+        // and 2^128.
+        let threshold = exact(false, 103, [(1 << 25) - 1]);
+        let (largest, flags) = F32::round(threshold, Rounding::TiesTowardZero);
+        assert_eq!((largest.to_bits(), flags), (0x7F7F_FFFF, Flags::INEXACT));
+        let (infinity, flags) = F32::round(threshold, Rounding::TiesToEven);
+        assert_eq!(infinity.to_bits(), 0x7F80_0000);
+        assert!(flags.contains(Flags::OVERFLOW));
     }
 
     /// 2^-126 - 2^-151: below the smallest normal binary32 value, but it rounds

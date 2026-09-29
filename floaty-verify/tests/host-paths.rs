@@ -7,7 +7,9 @@
 //! host path against those oracles. In a build without a host path, the
 //! entry points take the engine.
 
-use floaty::{BF16, DoubleDouble, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F64, F80, Gcc, Qd, TF32};
+use floaty::{
+    BF16, DoubleDouble, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F64, F80, Gcc, Qd, TF32,
+};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 
@@ -74,7 +76,7 @@ where
 #[test]
 fn operators_give_the_default_mode_results() {
     let every_pair = || (0..=u8::MAX).flat_map(|a| (0..=u8::MAX).map(move |b| (a, b)));
-    operators_match!(F8E4M3, u8, every_pair());
+    operators_match!(F8E4M3Fn, u8, every_pair());
     operators_match!(F8E5M2, u8, every_pair());
     operators_match!(F8E4M3Fnuz, u8, every_pair());
     operators_match!(F8E5M2Fnuz, u8, every_pair());
@@ -144,7 +146,7 @@ fn square_roots_and_fused_products_give_the_default_mode_results() {
     let every_pair: Vec<(u8, u8)> = (0..=u8::MAX)
         .flat_map(|a| (0..=u8::MAX).map(move |b| (a, b)))
         .collect();
-    methods_match!(F8E4M3, triples(&every_pair));
+    methods_match!(F8E4M3Fn, triples(&every_pair));
     methods_match!(F8E5M2, triples(&every_pair));
     methods_match!(F8E4M3Fnuz, triples(&every_pair));
     methods_match!(F8E5M2Fnuz, triples(&every_pair));
@@ -671,10 +673,13 @@ macro_rules! directed_rounding_matches {
 macro_rules! every_direction_matches {
     ($standard:ty, $width:literal, $encodings:expr) => {{
         use floaty::mode::direction::{
-            NearestAway, NearestEven, ToOdd, TowardNegative, TowardPositive, TowardZero,
+            AwayFromZero, TiesToAway, TiesToEven, TiesTowardZero, ToOdd, TowardNegative,
+            TowardPositive, TowardZero,
         };
-        directed_rounding_matches!($standard, $width, NearestEven, $encodings);
-        directed_rounding_matches!($standard, $width, NearestAway, $encodings);
+        directed_rounding_matches!($standard, $width, TiesToEven, $encodings);
+        directed_rounding_matches!($standard, $width, TiesToAway, $encodings);
+        directed_rounding_matches!($standard, $width, TiesTowardZero, $encodings);
+        directed_rounding_matches!($standard, $width, AwayFromZero, $encodings);
         directed_rounding_matches!($standard, $width, TowardPositive, $encodings);
         directed_rounding_matches!($standard, $width, TowardNegative, $encodings);
         directed_rounding_matches!($standard, $width, TowardZero, $encodings);

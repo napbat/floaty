@@ -52,7 +52,7 @@ where
         let toward_zero = F::square_root(x, decnumber::Rounding::Down);
         for rounding in SHARED_ROUNDINGS {
             let expected = F::square_root(x, rounding);
-            let direction = direction(rounding).expect("a shared mode has a direction");
+            let direction = direction(rounding);
             let (root, flags) =
                 DpdFloat::<W>::from_bits(x).sqrt_with(Env::IEEE.with_rounding(direction));
             let (root, flags) = (root.to_bits(), compared(flags));
@@ -83,19 +83,19 @@ where
 fn random_decimal64_square_root() {
     let tally = run_square_roots::<Double, 64>(20_000, 0x6464_0003);
     tally.report("random decimal64 square root");
-    tally.assert_counts(120_000, &[], &[]);
+    tally.assert_counts(160_000, &[], &[]);
 }
 
 #[test]
 fn random_decimal128_square_root() {
     let tally = run_square_roots::<Quad, 128>(20_000, 0x0128_0003);
     tally.report("random decimal128 square root");
-    tally.assert_counts(120_000, &[], &[]);
+    tally.assert_counts(160_000, &[], &[]);
 }
 
 #[test]
 fn random_decimal32_square_root() {
     let tally = run_square_roots::<Single, 32>(20_000, 0x0032_0004);
     tally.report("random decimal32 square root");
-    tally.assert_counts(120_000, &[], &[]);
+    tally.assert_counts(160_000, &[], &[]);
 }

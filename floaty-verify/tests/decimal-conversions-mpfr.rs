@@ -30,7 +30,7 @@ use core::num::NonZeroU32;
 
 use floaty::env::Tininess;
 use floaty::{
-    BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F8E4M3,
+    BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F8E4M3Fn,
     F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F256, F512, Flags, Rounding, TF32,
 };
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs, to_u128};
@@ -176,7 +176,7 @@ fn decimal_to_binary(
 
 /// The behaviors of a conversion to a decimal format. The tininess rule and
 /// `saturate` do not apply to a decimal destination.
-fn decimal_behaviors() -> [Env; 7] {
+fn decimal_behaviors() -> [Env; 9] {
     [
         Env::IEEE,
         Env::IEEE.with_rounding(Rounding::TowardZero),
@@ -185,17 +185,21 @@ fn decimal_behaviors() -> [Env; 7] {
             .with_flush_to_zero(true),
         Env::IEEE.with_rounding(Rounding::ToOdd),
         Env::IEEE
-            .with_rounding(Rounding::NearestAway)
+            .with_rounding(Rounding::TiesToAway)
             .with_denormals_are_zero(true),
         Env::IEEE
             .with_rounding(Rounding::TowardNegative)
             .with_precision(NonZeroU32::new(3)),
         Env::IEEE.with_precision(NonZeroU32::new(1)),
+        Env::IEEE.with_rounding(Rounding::TiesTowardZero),
+        Env::IEEE
+            .with_rounding(Rounding::AwayFromZero)
+            .with_flush_to_zero(true),
     ]
 }
 
 /// The behaviors of a conversion to a binary format.
-fn binary_behaviors() -> [Env; 7] {
+fn binary_behaviors() -> [Env; 9] {
     [
         Env::IEEE,
         Env::IEEE
@@ -206,7 +210,7 @@ fn binary_behaviors() -> [Env; 7] {
             .with_flush_to_zero(true),
         Env::IEEE.with_rounding(Rounding::ToOdd).with_saturate(true),
         Env::IEEE
-            .with_rounding(Rounding::NearestAway)
+            .with_rounding(Rounding::TiesToAway)
             .with_denormals_are_zero(true),
         Env::IEEE
             .with_rounding(Rounding::TowardNegative)
@@ -214,6 +218,10 @@ fn binary_behaviors() -> [Env; 7] {
         Env::IEEE
             .with_saturate(true)
             .with_precision(NonZeroU32::new(2)),
+        Env::IEEE
+            .with_rounding(Rounding::TiesTowardZero)
+            .with_tininess(Tininess::BeforeRounding),
+        Env::IEEE.with_rounding(Rounding::AwayFromZero),
     ]
 }
 
@@ -405,7 +413,7 @@ const DECIMAL128_SPECIALS: [u128; 9] = [
 #[test]
 fn from_the_fp8_formats_to_decimal() {
     let every: Vec<u8> = (0..=u8::MAX).collect();
-    check_to_decimal!(F8E4M3, every => D32Bid, D64Dpd, D128Bid);
+    check_to_decimal!(F8E4M3Fn, every => D32Bid, D64Dpd, D128Bid);
     check_to_decimal!(F8E5M2, every => D32Dpd, D64Bid, D128Dpd);
     check_to_decimal!(F8E4M3Fnuz, every => D32Bid, D64Bid);
     check_to_decimal!(F8E5M2Fnuz, every => D32Dpd, D128Bid);
@@ -545,7 +553,7 @@ fn from_decimal32_to_binary() {
     let values: Vec<D32Bid> = decimal_values!(D32Bid, 1, 2_000, 0xD32, DECIMAL32_SPECIALS);
     check_to_binary!(D32Bid, values =>
         F16: Specials::Ieee, BF16: Specials::Ieee, TF32: Specials::Ieee,
-        F8E4M3: Specials::NoInf, F8E5M2: Specials::Ieee,
+        F8E4M3Fn: Specials::NoInf, F8E5M2: Specials::Ieee,
         F8E4M3Fnuz: Specials::Fnuz, F8E5M2Fnuz: Specials::Fnuz,
         F256: Specials::Ieee, F512: Specials::Ieee);
 }
@@ -554,7 +562,7 @@ fn from_decimal32_to_binary() {
 fn from_decimal64_to_binary() {
     let values: Vec<D64Dpd> = decimal_values!(D64Dpd, 5, 2_000, 0xD64, DECIMAL64_SPECIALS);
     check_to_binary!(D64Dpd, values =>
-        F16: Specials::Ieee, BF16: Specials::Ieee, F8E4M3: Specials::NoInf,
+        F16: Specials::Ieee, BF16: Specials::Ieee, F8E4M3Fn: Specials::NoInf,
         F8E5M2Fnuz: Specials::Fnuz, F256: Specials::Ieee, F512: Specials::Ieee);
 }
 

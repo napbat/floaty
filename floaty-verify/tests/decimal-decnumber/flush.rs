@@ -206,7 +206,7 @@ where
         for _ in 0..count {
             let operands = generator.operands(operation);
             for rounding in SHARED_ROUNDINGS {
-                let direction = direction(rounding).expect("a shared mode has a direction");
+                let direction = direction(rounding);
                 for env in behaviors(direction) {
                     let (expected, expected_flags, note) =
                         match expected::<F, W>(operation, &operands, rounding, env) {
@@ -278,17 +278,17 @@ fn decimal64_flush_to_zero_and_denormals_are_zero() {
     let tally = run::<Double, 64>(1_000, 0x6464_0F70);
     tally.report("decimal64 FTZ and DAZ");
     // The generator is seeded, so the counts are exact.
-    let mut skipped = skips(960, 144, 1080, 1638);
-    skipped.push((SIGNALING_PAIR, 18));
-    tally.assert_counts(428_160, &skipped, &[(REPLACED, 26_682), (FLUSHED, 7_524)]);
+    let mut skipped = skips(1280, 192, 1440, 2184);
+    skipped.push((SIGNALING_PAIR, 24));
+    tally.assert_counts(570_880, &skipped, &[(REPLACED, 35_576), (FLUSHED, 10_032)]);
 }
 
 #[test]
 fn decimal128_flush_to_zero_and_denormals_are_zero() {
     let tally = run::<Quad, 128>(1_000, 0x0128_0F70);
     tally.report("decimal128 FTZ and DAZ");
-    let skipped = skips(1068, 126, 1224, 1584);
-    tally.assert_counts(427_998, &skipped, &[(REPLACED, 25_938), (FLUSHED, 7_158)]);
+    let skipped = skips(1424, 168, 1632, 2112);
+    tally.assert_counts(570_664, &skipped, &[(REPLACED, 34_584), (FLUSHED, 9_544)]);
 }
 
 #[test]
@@ -303,7 +303,7 @@ fn decimal32_flush_to_zero_and_denormals_are_zero() {
         .collect();
     let tally = run_operations::<Single, 32>(&operations, 1_000, 0x0032_0F70);
     tally.report("decimal32 FTZ and DAZ");
-    let mut skipped = skips(1002, 72, 846, 1764);
-    skipped.push((SIGNALING_PAIR, 18));
-    tally.assert_counts(356_298, &skipped, &[(REPLACED, 25_776), (FLUSHED, 7_476)]);
+    let mut skipped = skips(1336, 96, 1128, 2352);
+    skipped.push((SIGNALING_PAIR, 24));
+    tally.assert_counts(475_064, &skipped, &[(REPLACED, 34_368), (FLUSHED, 9_968)]);
 }

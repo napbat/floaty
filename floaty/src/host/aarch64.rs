@@ -371,12 +371,12 @@ pub fn narrow_double_to_half(value: f64) -> Option<u16> {
 macro_rules! round_scalar {
     ($rounding:expr, $register:literal, $value:ident) => {
         match $rounding {
-            Rounding::NearestEven => round_scalar!(concat!("frintn ", $register), $value),
-            Rounding::NearestAway => round_scalar!(concat!("frinta ", $register), $value),
+            Rounding::TiesToEven => round_scalar!(concat!("frintn ", $register), $value),
+            Rounding::TiesToAway => round_scalar!(concat!("frinta ", $register), $value),
             Rounding::TowardNegative => round_scalar!(concat!("frintm ", $register), $value),
             Rounding::TowardPositive => round_scalar!(concat!("frintp ", $register), $value),
             Rounding::TowardZero => round_scalar!(concat!("frintz ", $register), $value),
-            Rounding::ToOdd => return None,
+            Rounding::TiesTowardZero | Rounding::AwayFromZero | Rounding::ToOdd => return None,
         }
     };
     ($instruction:expr, $value:ident) => {

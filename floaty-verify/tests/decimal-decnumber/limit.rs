@@ -2,8 +2,8 @@
 //!
 //! `add`, `sub`, `mul`, `div`, `mul_add`, `sqrt`, and `scale_b` of
 //! decimal64 and decimal128 run at limits of 1, 2, 3, 7, and `p - 1`
-//! digits, in the six shared rounding modes. The test compares the result
-//! bits, the five IEEE 754 flags, `TINY`, and `ROUNDED_UP`.
+//! digits, in the eight rounding modes of decNumber. The test compares the
+//! result bits, the five IEEE 754 flags, `TINY`, and `ROUNDED_UP`.
 //!
 //! No decimal library has a precision limit, so the test applies floaty's
 //! rule to decNumber's results. The limit moves only the rounding
@@ -261,7 +261,7 @@ fn check_case<F: Arithmetic, const W: usize>(
         }
         let (want, status) = expected::<F>(limited, operands, limit, rounding);
         let want_flags = flags_of(status) | Report::Rounded.flags::<F>((want, status), toward_zero);
-        let direction = direction(rounding).expect("a shared mode has a direction");
+        let direction = direction(rounding);
         let env = Env::IEEE
             .with_rounding(direction)
             .with_precision(NonZeroU32::new(limit));
@@ -338,9 +338,9 @@ fn decimal64_precision_limit() {
     tally.report("decimal64 precision limit");
     // The generator is seeded, so the counts are exact.
     tally.assert_counts(
-        616_668,
-        &skips(552, 4554, 8184, 42),
-        &[(INVALID_PRODUCT, 288)],
+        822_224,
+        &skips(736, 6072, 10_912, 56),
+        &[(INVALID_PRODUCT, 384)],
     );
 }
 
@@ -349,8 +349,8 @@ fn decimal128_precision_limit() {
     let tally = run::<Quad, 128>(3_000, 0x0128_0017);
     tally.report("decimal128 precision limit");
     tally.assert_counts(
-        616_494,
-        &skips(750, 4320, 8388, 48),
-        &[(INVALID_PRODUCT, 270)],
+        821_992,
+        &skips(1000, 5760, 11_184, 64),
+        &[(INVALID_PRODUCT, 360)],
     );
 }

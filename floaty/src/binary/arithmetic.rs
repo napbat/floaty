@@ -654,7 +654,7 @@ mod tests {
     use crate::env::{
         Env, Flags, FusedNanOrder, InvalidProduct, NanPropagation, NanRule, Rounding,
     };
-    use crate::float::{F8E4M3, F32, F64, F80};
+    use crate::float::{F8E4M3Fn, F32, F64, F80};
 
     const F64_TWO: u64 = 0x4000_0000_0000_0000;
 
@@ -715,7 +715,7 @@ mod tests {
             0x8000_0000
         );
         // A format without an infinity gives its NaN for a division by zero.
-        let (nan, flags) = F8E4M3::from_bits(0x38).div_with(F8E4M3::from_bits(0), Env::IEEE);
+        let (nan, flags) = F8E4M3Fn::from_bits(0x38).div_with(F8E4M3Fn::from_bits(0), Env::IEEE);
         assert_eq!((nan.to_bits(), flags), (0x7F, Flags::DIVIDE_BY_ZERO));
     }
 

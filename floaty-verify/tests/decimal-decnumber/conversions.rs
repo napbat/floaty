@@ -79,7 +79,7 @@ fn check<S: Format, T: Arithmetic, const FROM: usize, const TO: usize>(
     Width<TO>: Storage<Bits = T::Bits>,
     Decimal<Dpd>: Standard<TO, Bits = T::Bits>,
 {
-    let direction = direction(rounding).expect("a shared mode has a direction");
+    let direction = direction(rounding);
     let (result, flags) = DpdFloat::<FROM>::from_bits(x)
         .convert_with::<DpdFloat<TO>>(Env::IEEE.with_rounding(direction));
     let flags = compared(flags);
@@ -165,7 +165,7 @@ fn widening_conversions() {
         }
     }
     tally.report("widening conversions");
-    tally.assert_counts(900_000, &[], &[(NAN_NOTE, 63_876)]);
+    tally.assert_counts(1_200_000, &[], &[(NAN_NOTE, 85_168)]);
 }
 
 #[test]
@@ -182,5 +182,5 @@ fn narrowing_conversions() {
         }
     }
     tally.report("narrowing conversions");
-    tally.assert_counts(600_000, &[], &[(NAN_NOTE, 42_534)]);
+    tally.assert_counts(800_000, &[], &[(NAN_NOTE, 56_712)]);
 }

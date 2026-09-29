@@ -48,8 +48,8 @@ pub const SSE_RULE: NanRule =
 
 /// The rounding directions and their `testfloat_gen` options.
 pub const ROUNDINGS: [(Rounding, &str); 6] = [
-    (Rounding::NearestEven, "-rnear_even"),
-    (Rounding::NearestAway, "-rnear_maxMag"),
+    (Rounding::TiesToEven, "-rnear_even"),
+    (Rounding::TiesToAway, "-rnear_maxMag"),
     (Rounding::TowardZero, "-rminMag"),
     (Rounding::TowardNegative, "-rmin"),
     (Rounding::TowardPositive, "-rmax"),

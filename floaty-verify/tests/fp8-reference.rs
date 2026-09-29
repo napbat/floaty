@@ -4,7 +4,7 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
-use floaty::{Class, Decoded, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz};
+use floaty::{Class, Decoded, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz};
 use floaty_verify::shape::{self, Payload, trailing_payload};
 use rug::Integer;
 
@@ -161,7 +161,7 @@ fn every_fp8_encoding_matches_ml_dtypes() {
                 emax,
                 emin,
             } => {
-                let ours = parameters!(alias, F8E4M3, F8E5M2, F8E4M3Fnuz, F8E5M2Fnuz);
+                let ours = parameters!(alias, F8E4M3Fn, F8E5M2, F8E4M3Fnuz, F8E5M2Fnuz);
                 assert_eq!(ours, (precision, emax, emin), "{alias} parameters");
                 formats += 1;
             }
@@ -173,7 +173,7 @@ fn every_fp8_encoding_matches_ml_dtypes() {
                 value,
             } => {
                 let (ours, decoded) =
-                    dispatch!(alias, bits, F8E4M3, F8E5M2, F8E4M3Fnuz, F8E5M2Fnuz);
+                    dispatch!(alias, bits, F8E4M3Fn, F8E5M2, F8E4M3Fnuz, F8E5M2Fnuz);
                 check(
                     &format!("{alias} {bits:#04x}"),
                     ours,

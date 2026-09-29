@@ -281,7 +281,7 @@ mod intel {
     /// operand rounding to nearest.
     fn operand<F: Format>(line: &Line, index: usize) -> Result<F::Bits, String> {
         field(line, index)?
-            .decimal::<F>(Rounding::NearestEven)
+            .decimal::<F>(Rounding::TiesToEven)
             .map_err(|error| error.to_string())
     }
 
@@ -422,8 +422,8 @@ mod intel {
             None => (Inexact::Ignored, suffix),
         };
         let rounding = match direction {
-            "rnint" => Rounding::NearestEven,
-            "rninta" => Rounding::NearestAway,
+            "rnint" => Rounding::TiesToEven,
+            "rninta" => Rounding::TiesToAway,
             "int" => Rounding::TowardZero,
             "floor" => Rounding::TowardNegative,
             "ceil" => Rounding::TowardPositive,
@@ -445,10 +445,10 @@ mod intel {
             "round_integral_exact" => rounded_1::<F>(line, F::round_integral_exact),
             "nearbyint" => rounded_1::<F>(line, F::nearbyint),
             "round_integral_nearest_even" => {
-                flagged_1::<F>(line, |x| F::round_integral(x, Rounding::NearestEven))
+                flagged_1::<F>(line, |x| F::round_integral(x, Rounding::TiesToEven))
             }
             "round_integral_nearest_away" => {
-                flagged_1::<F>(line, |x| F::round_integral(x, Rounding::NearestAway))
+                flagged_1::<F>(line, |x| F::round_integral(x, Rounding::TiesToAway))
             }
             "round_integral_zero" => {
                 flagged_1::<F>(line, |x| F::round_integral(x, Rounding::TowardZero))

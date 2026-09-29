@@ -1,8 +1,8 @@
 //! Compares the format parameters with IEEE 754 and with `rustc_apfloat`.
 
 use floaty::{
-    BF16, F8E4M3, F8E5M2, F16, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352, F384,
-    F416, F448, F480, F512, TF32,
+    BF16, F8E4M3Fn, F8E5M2, F16, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352,
+    F384, F416, F448, F480, F512, TF32,
 };
 use floaty_verify::apfloat::Tf32Semantics;
 use rustc_apfloat::ieee::{
@@ -91,7 +91,7 @@ fn aliases_match_rustc_apfloat() {
         apfloat::<Float8E5M2S>()
     );
     assert_eq!(
-        (F8E4M3::PRECISION, F8E4M3::EMAX, F8E4M3::EMIN),
+        (F8E4M3Fn::PRECISION, F8E4M3Fn::EMAX, F8E4M3Fn::EMIN),
         apfloat::<Float8E4M3FNS>()
     );
     assert_eq!(

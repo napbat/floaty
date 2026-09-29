@@ -1,5 +1,5 @@
-//! Seeded random operands through floaty and decNumber, in the six rounding
-//! modes that both have: result bits, the five IEEE 754 flags, `TINY`, and
+//! Seeded random operands through floaty and decNumber, in the eight rounding
+//! modes of decNumber: result bits, the five IEEE 754 flags, `TINY`, and
 //! `ROUNDED_UP`.
 //!
 //! decimal64 and decimal128 run against `decDouble` and `decQuad`, and
@@ -98,7 +98,7 @@ where
                 if let Some(note) = noted::<F>(operation, &operands) {
                     tally.note(note);
                 }
-                let direction = direction(rounding).expect("a shared mode has a direction");
+                let direction = direction(rounding);
                 let (answer, flags) = run_floaty::<F, W>(operation, &operands, direction);
                 if let Some((fixed, fixed_flags)) =
                     run_floaty_static::<F, W>(operation, &operands, direction)
@@ -180,35 +180,47 @@ fn random_decimal64_arithmetic() {
     let tally = run_random::<Double, 64>(&arithmetic(), 30_000, 0x6464_0001);
     tally.report("random decimal64 arithmetic");
     // The generator is seeded, so the counts are exact.
-    tally.assert_counts(899_862, &[(SIGNALING_PAIR, 138)], &[(INVALID_PRODUCT, 858)]);
+    tally.assert_counts(
+        1_199_816,
+        &[(SIGNALING_PAIR, 184)],
+        &[(INVALID_PRODUCT, 1144)],
+    );
 }
 
 #[test]
 fn random_decimal64_operations() {
     let tally = run_random::<Double, 64>(&others(), 10_000, 0x6464_0002);
     tally.report("random decimal64 operations");
-    tally.assert_counts(1_127_568, &other_skips(3666, 438, 2838, 5490), &[]);
+    tally.assert_counts(1_503_424, &other_skips(4888, 584, 3784, 7320), &[]);
 }
 
 #[test]
 fn random_decimal128_arithmetic() {
     let tally = run_random::<Quad, 128>(&arithmetic(), 30_000, 0x0128_0001);
     tally.report("random decimal128 arithmetic");
-    tally.assert_counts(899_862, &[(SIGNALING_PAIR, 138)], &[(INVALID_PRODUCT, 870)]);
+    tally.assert_counts(
+        1_199_816,
+        &[(SIGNALING_PAIR, 184)],
+        &[(INVALID_PRODUCT, 1160)],
+    );
 }
 
 #[test]
 fn random_decimal128_operations() {
     let tally = run_random::<Quad, 128>(&others(), 10_000, 0x0128_0002);
     tally.report("random decimal128 operations");
-    tally.assert_counts(1_127_598, &other_skips(3456, 498, 3060, 5388), &[]);
+    tally.assert_counts(1_503_464, &other_skips(4608, 664, 4080, 7184), &[]);
 }
 
 #[test]
 fn random_decimal32_arithmetic() {
     let tally = run_random::<Single, 32>(&arithmetic(), 30_000, 0x0032_0002);
     tally.report("random decimal32 arithmetic");
-    tally.assert_counts(899_880, &[(SIGNALING_PAIR, 120)], &[(INVALID_PRODUCT, 696)]);
+    tally.assert_counts(
+        1_199_840,
+        &[(SIGNALING_PAIR, 160)],
+        &[(INVALID_PRODUCT, 928)],
+    );
 }
 
 #[test]
@@ -219,5 +231,5 @@ fn random_decimal32_operations() {
         .collect();
     let tally = run_random::<Single, 32>(&operations, 10_000, 0x0032_0003);
     tally.report("random decimal32 operations");
-    tally.assert_counts(886_818, &other_skips(4206, 372, 3264, 5340), &[]);
+    tally.assert_counts(1_182_424, &other_skips(5608, 496, 4352, 7120), &[]);
 }

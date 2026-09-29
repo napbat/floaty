@@ -196,12 +196,14 @@ fn lanes_round_in_the_direction_of_their_mode() {
     // paths. Each direction and format below checks every operation of
     // `lanes_match!`: the arithmetic of a directed mode runs in the engine,
     // and the rounding to integral values takes the paths.
-    use floaty::mode::direction::{NearestAway, ToOdd, TowardNegative, TowardPositive};
+    use floaty::mode::direction::{
+        AwayFromZero, TiesToAway, TiesTowardZero, ToOdd, TowardNegative, TowardPositive,
+    };
     use floaty::mode::{Ieee, Rounded};
     type Double<R> = Float<floaty::Binary<11>, 64, Rounded<Ieee, R>>;
     type Up = Float<floaty::Binary<8>, 32, Rounded<Ieee, TowardPositive>>;
     type Down = Float<floaty::Binary<5>, 16, Rounded<Ieee, TowardNegative>>;
-    type Away = Float<floaty::Binary<11>, 64, Rounded<Ieee, NearestAway>>;
+    type Away = Float<floaty::Binary<11>, 64, Rounded<Ieee, TiesToAway>>;
     type Chopped = Float<floaty::Binary<8>, 16, Rounded<Ieee, TowardZero>>;
     type Odd = Float<floaty::Binary<8>, 32, Rounded<Ieee, ToOdd>>;
     let mut random = SplitMix64::new(0x1A4E_D1E0);
@@ -239,6 +241,14 @@ fn lanes_round_in_the_direction_of_their_mode() {
     lanes_match!(Double<TowardPositive>, u64, 7, &doubles, [Env::IEEE]);
     lanes_match!(Double<TowardZero>, u64, 7, &doubles, [Env::IEEE]);
     lanes_match!(Double<TowardZero>, u64, 3, &doubles, [Env::IEEE]);
+    // No unit rounds to an integral value in these two directions, so the
+    // packed paths decline them. Two lanes take only a 128-bit chunk, and
+    // four lanes only a 256-bit chunk in the x86-64-v3 build. A scalar lane
+    // after a chunk would decline too and hide a wrong chunk.
+    lanes_match!(Double<TiesTowardZero>, u64, 2, &doubles, [Env::IEEE]);
+    lanes_match!(Double<TiesTowardZero>, u64, 4, &doubles, [Env::IEEE]);
+    lanes_match!(Double<AwayFromZero>, u64, 2, &doubles, [Env::IEEE]);
+    lanes_match!(Double<AwayFromZero>, u64, 4, &doubles, [Env::IEEE]);
     lanes_match!(Chopped, u16, 13, &bfloats, [Env::IEEE]);
 }
 

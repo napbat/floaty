@@ -2,8 +2,9 @@
 //! between floats and 32- and 64-bit integers with Berkeley TestFloat, for
 //! binary16, binary32, binary64, x87 extended precision, and binary128.
 //!
-//! The ARM generator checks every rounding direction. The default-NaN, 8086,
-//! and 8086-SSE generators check the other NaN rules at the default behavior.
+//! The ARM generator checks each rounding direction of TestFloat. The
+//! default-NaN, 8086, and 8086-SSE generators check the other NaN rules at
+//! the default behavior.
 //! x87 extended precision also runs the remainder and round to integral at
 //! precision control 32 and 64 bits. SoftFloat and floaty ignore precision
 //! control for these operations, so the results do not change.

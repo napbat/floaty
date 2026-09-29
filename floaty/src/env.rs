@@ -12,15 +12,21 @@ use crate::sealed::Sealed;
 #[non_exhaustive]
 pub enum Rounding {
     /// Round to the nearest value. A tie goes to the even significand.
-    NearestEven,
+    TiesToEven,
     /// Round to the nearest value. A tie goes away from zero.
-    NearestAway,
+    TiesToAway,
+    /// Round to the nearest value. A tie goes toward zero. The decimal unit
+    /// of IBM POWER has this direction, and decNumber calls it `half_down`.
+    TiesTowardZero,
     /// Round toward positive infinity.
     TowardPositive,
     /// Round toward negative infinity.
     TowardNegative,
     /// Round toward zero.
     TowardZero,
+    /// Round away from zero. The decimal unit of IBM POWER has this
+    /// direction, and decNumber calls it `up`.
+    AwayFromZero,
     /// Round toward zero, then add one unit in the last place when the result
     /// is inexact and its last digit is 0, or 5 in a decimal format. For a
     /// binary format, the rule sets the lowest significand bit. For a decimal
@@ -242,7 +248,7 @@ impl Env {
     /// [`SignalingFirst`](NanPropagation::SignalingFirst) NaN rule with a
     /// positive default NaN.
     pub const IEEE: Self = Self {
-        rounding: Rounding::NearestEven,
+        rounding: Rounding::TiesToEven,
         flush_to_zero: false,
         denormals_are_zero: false,
         tininess: Tininess::AfterRounding,
@@ -268,7 +274,7 @@ impl Env {
     pub const X86_SSE: Self = Self {
         // MXCSR is 1F80H after power-up or reset: round to nearest, FTZ and
         // DAZ clear. Table 11-2, page 11-20.
-        rounding: Rounding::NearestEven,
+        rounding: Rounding::TiesToEven,
         flush_to_zero: false,
         denormals_are_zero: false,
         // Tininess is detected on the result of rounding with an unbounded
@@ -309,7 +315,7 @@ impl Env {
     pub const X87: Self = Self {
         // FNINIT sets the control word to 037FH: round to nearest and a
         // 64-bit precision. Section 8.1.5, page 8-7.
-        rounding: Rounding::NearestEven,
+        rounding: Rounding::TiesToEven,
         // The control word has no FTZ or DAZ field. Section 8.1.5, Figure 8-6,
         // page 8-7.
         flush_to_zero: false,

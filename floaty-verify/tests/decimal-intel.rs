@@ -159,7 +159,7 @@ fn field(line: &Line, index: usize) -> Result<&Field, String> {
 /// operand rounding to nearest.
 fn operand<F: Format>(line: &Line, index: usize) -> Result<F::Bits, String> {
     field(line, index)?
-        .decimal::<F>(IntelRounding::NearestEven)
+        .decimal::<F>(IntelRounding::TiesToEven)
         .map_err(|error| error.to_string())
 }
 
@@ -468,7 +468,7 @@ fn to_integer_name(name: &str, line: &Line) -> Option<(IntelInteger, IntelRoundi
         "lround" | "llround" => {
             return Some((
                 IntelInteger::Int64,
-                IntelRounding::NearestAway,
+                IntelRounding::TiesToAway,
                 Inexact::Ignored,
             ));
         }
@@ -483,8 +483,8 @@ fn to_integer_name(name: &str, line: &Line) -> Option<(IntelInteger, IntelRoundi
         None => (Inexact::Ignored, suffix),
     };
     let rounding = match direction {
-        "rnint" => IntelRounding::NearestEven,
-        "rninta" => IntelRounding::NearestAway,
+        "rnint" => IntelRounding::TiesToEven,
+        "rninta" => IntelRounding::TiesToAway,
         "int" => IntelRounding::TowardZero,
         "floor" => IntelRounding::TowardNegative,
         "ceil" => IntelRounding::TowardPositive,
@@ -533,10 +533,10 @@ where
         }
         "nearbyint" => unary::<F, W>(line, quiet, BidFloat::round_to_integral_with),
         "round_integral_nearest_even" => {
-            unary::<F, W>(line, quiet, fixed(IntelRounding::NearestEven))
+            unary::<F, W>(line, quiet, fixed(IntelRounding::TiesToEven))
         }
         "round_integral_nearest_away" => {
-            unary::<F, W>(line, quiet, fixed(IntelRounding::NearestAway))
+            unary::<F, W>(line, quiet, fixed(IntelRounding::TiesToAway))
         }
         "round_integral_zero" => unary::<F, W>(line, quiet, fixed(IntelRounding::TowardZero)),
         "round_integral_negative" => {

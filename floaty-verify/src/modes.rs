@@ -21,17 +21,24 @@
 macro_rules! with_rounding_mode {
     ($rounding:expr, $base:ty, $mode:ident => $body:expr) => {
         match $rounding {
-            $crate::__floaty::Rounding::NearestEven => {
+            $crate::__floaty::Rounding::TiesToEven => {
                 type $mode = $crate::__floaty::mode::Rounded<
                     $base,
-                    $crate::__floaty::mode::direction::NearestEven,
+                    $crate::__floaty::mode::direction::TiesToEven,
                 >;
                 $body
             }
-            $crate::__floaty::Rounding::NearestAway => {
+            $crate::__floaty::Rounding::TiesToAway => {
                 type $mode = $crate::__floaty::mode::Rounded<
                     $base,
-                    $crate::__floaty::mode::direction::NearestAway,
+                    $crate::__floaty::mode::direction::TiesToAway,
+                >;
+                $body
+            }
+            $crate::__floaty::Rounding::TiesTowardZero => {
+                type $mode = $crate::__floaty::mode::Rounded<
+                    $base,
+                    $crate::__floaty::mode::direction::TiesTowardZero,
                 >;
                 $body
             }
@@ -53,6 +60,13 @@ macro_rules! with_rounding_mode {
                 type $mode = $crate::__floaty::mode::Rounded<
                     $base,
                     $crate::__floaty::mode::direction::TowardZero,
+                >;
+                $body
+            }
+            $crate::__floaty::Rounding::AwayFromZero => {
+                type $mode = $crate::__floaty::mode::Rounded<
+                    $base,
+                    $crate::__floaty::mode::direction::AwayFromZero,
                 >;
                 $body
             }

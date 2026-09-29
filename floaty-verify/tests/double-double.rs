@@ -380,7 +380,7 @@ fn qd_matches_the_qd_library() {
             // The operators and `sqrt` of the SSE mode, which rounds to
             // nearest even, return no flags and take the host paths of
             // binary64 where the build has them.
-            let operators = (rounding == Rounding::NearestEven).then(|| {
+            let operators = (rounding == Rounding::TiesToEven).then(|| {
                 let (x, y) = (
                     value_in::<Qd, floaty::mode::X86Sse>(a),
                     value_in::<Qd, floaty::mode::X86Sse>(b),

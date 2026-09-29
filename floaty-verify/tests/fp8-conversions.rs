@@ -5,7 +5,7 @@
 //! only has to be a NaN with the same sign. TestFloat checks NaN payloads for
 //! the IEEE formats.
 
-use floaty::{Env, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16};
+use floaty::{Env, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16};
 
 const TABLE: &[u8] = include_bytes!("../data/fp8-from-f16.bin");
 
@@ -38,7 +38,7 @@ fn every_binary16_encoding_converts_like_ml_dtypes() {
         4 * 65536,
         "the table has one block for each format"
     );
-    check_format!(F8E4M3, 0);
+    check_format!(F8E4M3Fn, 0);
     check_format!(F8E5M2, 1);
     check_format!(F8E4M3Fnuz, 2);
     check_format!(F8E5M2Fnuz, 3);

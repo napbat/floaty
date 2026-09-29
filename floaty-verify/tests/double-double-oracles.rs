@@ -89,20 +89,20 @@ fn check_libgcc(expected: &[(Case, Outcome)]) {
 #[test]
 fn libgcc_gives_known_values() {
     use Operation::{Add, Div};
-    use Rounding::NearestEven;
+    use Rounding::TiesToEven;
     check_libgcc(&[
         (
-            case(Add, NearestEven, single(ONE), single(ONE)),
+            case(Add, TiesToEven, single(ONE), single(ONE)),
             outcome(single(TWO), Flags::NONE),
         ),
         // 1 + 2^-60 needs two halves. The first binary64 addition rounds, so
         // the routine raises inexact although the pair is exact.
         (
-            case(Add, NearestEven, single(ONE), single(TWO_TO_MINUS_60)),
+            case(Add, TiesToEven, single(ONE), single(TWO_TO_MINUS_60)),
             outcome(Pair::new(ONE, TWO_TO_MINUS_60), Flags::INEXACT),
         ),
         (
-            case(Div, NearestEven, single(ONE), single(THREE)),
+            case(Div, TiesToEven, single(ONE), single(THREE)),
             outcome(THIRD, Flags::INEXACT),
         ),
     ]);
@@ -111,12 +111,12 @@ fn libgcc_gives_known_values() {
 #[test]
 fn libgcc_applies_each_rounding_direction() {
     use Operation::Div;
-    use Rounding::{NearestEven, TowardNegative, TowardPositive, TowardZero};
+    use Rounding::{TiesToEven, TowardNegative, TowardPositive, TowardZero};
     // 1/3 has the same pair to nearest, toward zero, and toward negative.
     // Only the upward direction rounds the high half up.
     let third_up = Pair::new(0x3FD5_5555_5555_5556, 0xBC85_5555_5555_5555);
     let expected = [
-        (NearestEven, THIRD),
+        (TiesToEven, THIRD),
         (TowardZero, THIRD),
         (TowardPositive, third_up),
         (TowardNegative, THIRD),
@@ -130,7 +130,7 @@ fn libgcc_applies_each_rounding_direction() {
     check_libgcc(&expected);
 
     let results = [
-        (NearestEven, 0x3FEE_3902_C02D_B5D4, 0x3C73_3221_DB20_34E8),
+        (TiesToEven, 0x3FEE_3902_C02D_B5D4, 0x3C73_3221_DB20_34E8),
         (TowardZero, 0x3FEE_3902_C02D_B5D4, 0x3C73_3221_DB20_34D8),
         (TowardPositive, 0x3FEE_3902_C02D_B5D5, 0xBC9B_3377_8937_F2C8),
         (TowardNegative, 0x3FEE_3902_C02D_B5D4, 0x3C73_3221_DB20_34E0),
@@ -148,32 +148,32 @@ fn libgcc_applies_each_rounding_direction() {
 #[test]
 fn libgcc_returns_the_flags_of_each_operation() {
     use Operation::{Add, Div, Mul, Sub};
-    use Rounding::{NearestEven, TowardPositive};
+    use Rounding::{TiesToEven, TowardPositive};
     check_libgcc(&[
         // `__gcc_qdiv` returns the first quotient when it is not finite.
         (
-            case(Div, NearestEven, single(ONE), single(ZERO)),
+            case(Div, TiesToEven, single(ONE), single(ZERO)),
             outcome(single(INFINITY), Flags::DIVIDE_BY_ZERO),
         ),
         (
-            case(Mul, NearestEven, single(MAX), single(TWO)),
+            case(Mul, TiesToEven, single(MAX), single(TWO)),
             outcome(single(INFINITY), Flags::OVERFLOW | Flags::INEXACT),
         ),
         // The default NaN of PowerPC is positive.
         (
-            case(Sub, NearestEven, single(INFINITY), single(INFINITY)),
+            case(Sub, TiesToEven, single(INFINITY), single(INFINITY)),
             outcome(single(0x7FF8_0000_0000_0000), Flags::INVALID),
         ),
         // The product is tiny and inexact, so it underflows.
         (
-            case(Mul, NearestEven, single(MIN_NORMAL_PLUS_ULP), single(HALF)),
+            case(Mul, TiesToEven, single(MIN_NORMAL_PLUS_ULP), single(HALF)),
             outcome(
                 single(0x0008_0000_0000_0000),
                 Flags::UNDERFLOW | Flags::INEXACT,
             ),
         ),
         (
-            case(Add, NearestEven, single(SIGNALING_NAN), single(ONE)),
+            case(Add, TiesToEven, single(SIGNALING_NAN), single(ONE)),
             outcome(single(0x7FFC_0000_0000_0000), Flags::INVALID),
         ),
         // Each case starts with clear flags and its own direction: an exact
@@ -187,11 +187,11 @@ fn libgcc_returns_the_flags_of_each_operation() {
             ),
         ),
         (
-            case(Add, NearestEven, single(ONE), single(ONE)),
+            case(Add, TiesToEven, single(ONE), single(ONE)),
             outcome(single(TWO), Flags::NONE),
         ),
         (
-            case(Div, NearestEven, single(ONE), single(THREE)),
+            case(Div, TiesToEven, single(ONE), single(THREE)),
             outcome(THIRD, Flags::INEXACT),
         ),
     ]);
@@ -233,18 +233,18 @@ fn libgcc_runs_a_large_batch_in_one_process() {
 
 #[test]
 fn qd_gives_known_values() {
-    use Rounding::NearestEven;
+    use Rounding::TiesToEven;
     let cases = [
         (
-            qd::add(single(ONE), single(ONE), NearestEven),
+            qd::add(single(ONE), single(ONE), TiesToEven),
             outcome(single(TWO), Flags::NONE),
         ),
         (
-            qd::add(single(ONE), single(TWO_TO_MINUS_60), NearestEven),
+            qd::add(single(ONE), single(TWO_TO_MINUS_60), TiesToEven),
             outcome(Pair::new(ONE, TWO_TO_MINUS_60), Flags::INEXACT),
         ),
         (
-            qd::div(single(ONE), single(THREE), NearestEven),
+            qd::div(single(ONE), single(THREE), TiesToEven),
             outcome(THIRD, Flags::INEXACT),
         ),
         // QD's square root is not correctly rounded. The correctly rounded
@@ -252,24 +252,24 @@ fn qd_gives_known_values() {
         // in its last place lower. Each step of QD's algorithm, run with
         // Python's binary64 arithmetic and `math.fma`, gives QD's pair.
         (
-            qd::sqrt(single(TWO), NearestEven),
+            qd::sqrt(single(TWO), TiesToEven),
             outcome(
                 Pair::new(0x3FF6_A09E_667F_3BCD, 0xBC9B_DD34_13B2_6458),
                 Flags::INEXACT,
             ),
         ),
         (
-            qd::sqrt(single(FOUR), NearestEven),
+            qd::sqrt(single(FOUR), TiesToEven),
             outcome(single(TWO), Flags::NONE),
         ),
         // QD returns +0 for the square root of a zero, and its own NaN
         // without a flag for the square root of a negative value.
         (
-            qd::sqrt(single(NEGATIVE_ZERO), NearestEven),
+            qd::sqrt(single(NEGATIVE_ZERO), TiesToEven),
             outcome(single(ZERO), Flags::NONE),
         ),
         (
-            qd::sqrt(single(NEGATIVE_ONE), NearestEven),
+            qd::sqrt(single(NEGATIVE_ONE), TiesToEven),
             outcome(
                 Pair::new(0x7FF8_0000_0000_0000, 0x7FF8_0000_0000_0000),
                 Flags::NONE,
@@ -285,7 +285,7 @@ fn qd_gives_known_values() {
 fn qd_applies_each_rounding_direction() {
     let results = [
         (
-            Rounding::NearestEven,
+            Rounding::TiesToEven,
             0x3FEE_3902_C02D_B5D4,
             0x3C73_3221_DB20_34E9,
         ),
@@ -317,25 +317,25 @@ fn qd_applies_each_rounding_direction() {
 
 #[test]
 fn qd_returns_the_flags_of_each_operation() {
-    use Rounding::{NearestEven, TowardPositive};
+    use Rounding::{TiesToEven, TowardPositive};
     // QD has no special cases in its arithmetic. The default NaN of x86 is
     // negative.
     let nan = Pair::new(0xFFF8_0000_0000_0000, 0xFFF8_0000_0000_0000);
     let cases = [
         (
-            qd::div(single(ONE), single(ZERO), NearestEven),
+            qd::div(single(ONE), single(ZERO), TiesToEven),
             outcome(nan, Flags::INVALID | Flags::DIVIDE_BY_ZERO),
         ),
         (
-            qd::mul(single(MAX), single(TWO), NearestEven),
+            qd::mul(single(MAX), single(TWO), TiesToEven),
             outcome(nan, Flags::INVALID | Flags::OVERFLOW | Flags::INEXACT),
         ),
         (
-            qd::sub(single(INFINITY), single(INFINITY), NearestEven),
+            qd::sub(single(INFINITY), single(INFINITY), TiesToEven),
             outcome(nan, Flags::INVALID),
         ),
         (
-            qd::mul(single(MIN_NORMAL_PLUS_ULP), single(HALF), NearestEven),
+            qd::mul(single(MIN_NORMAL_PLUS_ULP), single(HALF), TiesToEven),
             outcome(
                 single(0x0008_0000_0000_0000),
                 Flags::UNDERFLOW | Flags::INEXACT,
@@ -350,11 +350,11 @@ fn qd_returns_the_flags_of_each_operation() {
             ),
         ),
         (
-            qd::add(single(ONE), single(ONE), NearestEven),
+            qd::add(single(ONE), single(ONE), TiesToEven),
             outcome(single(TWO), Flags::NONE),
         ),
         (
-            qd::div(single(ONE), single(THREE), NearestEven),
+            qd::div(single(ONE), single(THREE), TiesToEven),
             outcome(THIRD, Flags::INEXACT),
         ),
     ];

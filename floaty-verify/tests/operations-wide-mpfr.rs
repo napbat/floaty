@@ -15,11 +15,9 @@
 use core::num::NonZeroU32;
 
 use floaty::format::Standard;
-use floaty::{
-    Binary, Decoded, Env, F80, F256, F512, Float, Fnuz, Int, NoInf, Rounding, TF32, UInt, X87,
-};
+use floaty::{Binary, Decoded, Env, F80, F256, F512, Float, Fnuz, Int, NoInf, TF32, UInt, X87};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs};
-use floaty_verify::mpfr::{Format, Specials};
+use floaty_verify::mpfr::{DIRECTIONS, Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
 use floaty_verify::operations::check::{self, Case, format};
 use floaty_verify::operations::integral::IntegerValue;
@@ -29,15 +27,6 @@ use rug::integer::Order;
 
 /// A 72-bit layout whose exponent field crosses a limb boundary.
 type Wide72 = Float<Binary<15>, 72>;
-
-const DIRECTIONS: [Rounding; 6] = [
-    Rounding::NearestEven,
-    Rounding::NearestAway,
-    Rounding::TowardPositive,
-    Rounding::TowardNegative,
-    Rounding::TowardZero,
-    Rounding::ToOdd,
-];
 
 /// The field layout of a format.
 #[derive(Clone, Copy, Debug)]

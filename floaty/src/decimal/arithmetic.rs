@@ -564,7 +564,7 @@ mod tests {
         assert!(infinity.is_infinite());
         assert_eq!(flags, Flags::OVERFLOW | Flags::INEXACT | Flags::ROUNDED_UP);
         // A far smaller addend only rounds: 1 + 1E-30 = 1 in each direction
-        // but toward positive, which gives the next value up.
+        // but toward positive and away from zero, which give the next value up.
         let tiny = number(false, 1, -30);
         assert_eq!(
             parts(number(false, 1, 0) + tiny),
@@ -572,6 +572,8 @@ mod tests {
         );
         let (up, _) = number(false, 1, 0).add_with(tiny, crate::Rounding::TowardPositive);
         assert_eq!(parts(up), (1_000_000_000_000_001, -15));
+        let (away, _) = number(false, 1, 0).add_with(tiny, crate::Rounding::AwayFromZero);
+        assert_eq!(parts(away), (1_000_000_000_000_001, -15));
         let (down, _) = number(false, 1, 0).sub_with(tiny, crate::Rounding::TowardZero);
         assert_eq!(parts(down), (9_999_999_999_999_999, -16));
     }

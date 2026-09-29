@@ -438,11 +438,11 @@ bid128_lrint 0 [00000000000000000000000000000001] 0 20 longintsize=32 -- MinDen\
         );
         assert_eq!(lines[2].long_int_size, Some(32));
         assert_eq!(
-            lines[0].operands[0].decimal::<Bid128>(Rounding::NearestEven),
+            lines[0].operands[0].decimal::<Bid128>(Rounding::TiesToEven),
             Ok(0x2049_1165_061c_532a_5350_89a5_c8f9_da39)
         );
         assert_eq!(
-            lines[1].operands[0].decimal::<Bid64>(Rounding::NearestEven),
+            lines[1].operands[0].decimal::<Bid64>(Rounding::TiesToEven),
             Ok(0x31a0_0000_0000_000f)
         );
     }
@@ -484,7 +484,7 @@ bid128_lrint 0 [00000000000000000000000000000001] 0 20 longintsize=32 -- MinDen\
         assert!(hex("1234").binary128().is_err());
         assert!(hex("1,2").binary128().is_err());
         assert_eq!(
-            hex("1,2").decimal::<Bid128>(Rounding::NearestEven),
+            hex("1,2").decimal::<Bid128>(Rounding::TiesToEven),
             Ok((1 << 64) | 2)
         );
     }

@@ -167,7 +167,7 @@ mod tests {
         };
         let (value, _) = F128::round(halfway, Env::IEEE);
         assert_eq!(
-            value.to_int_with::<u64>(Rounding::NearestEven),
+            value.to_int_with::<u64>(Rounding::TiesToEven),
             (ToInt::OutOfRange { negative: false }, Flags::INVALID)
         );
         assert_eq!(
@@ -185,11 +185,11 @@ mod tests {
     fn rounding_to_an_integral_value_follows_the_direction() {
         // 2.5 and -0.5.
         assert_eq!(
-            round(0x4020_0000, Rounding::NearestEven),
+            round(0x4020_0000, Rounding::TiesToEven),
             (0x4000_0000, Flags::INEXACT)
         );
         assert_eq!(
-            round(0x4020_0000, Rounding::NearestAway),
+            round(0x4020_0000, Rounding::TiesToAway),
             (0x4040_0000, Flags::INEXACT | Flags::ROUNDED_UP)
         );
         assert_eq!(
@@ -197,7 +197,7 @@ mod tests {
             (0x4040_0000, Flags::INEXACT | Flags::ROUNDED_UP)
         );
         assert_eq!(
-            round(0xBF00_0000, Rounding::NearestEven),
+            round(0xBF00_0000, Rounding::TiesToEven),
             (0x8000_0000, Flags::INEXACT)
         );
         assert_eq!(
@@ -218,7 +218,7 @@ mod tests {
         // Binary<3> at width 8 has 5 bits of precision and a largest value of
         // 15.5, so 15.5 rounds to 16, past the range.
         let largest = Float::<Binary<3>, 8>::from_bits(0x6F);
-        let (infinity, flags) = largest.round_to_integral_with(Rounding::NearestEven);
+        let (infinity, flags) = largest.round_to_integral_with(Rounding::TiesToEven);
         assert_eq!(
             (infinity.to_bits(), flags),
             (0x70, Flags::OVERFLOW | Flags::INEXACT | Flags::ROUNDED_UP)

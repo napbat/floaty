@@ -170,14 +170,14 @@ pub fn sqrt_f64x2(value: [f64; 2]) -> [f64; 2] {
 macro_rules! round_vector {
     ($rounding:expr, $arrangement:literal, $a:ident) => {
         match $rounding {
-            Rounding::NearestEven => {
+            Rounding::TiesToEven => {
                 vector!(
                     concat!("frintn {a:v}", $arrangement, ", {b:v}", $arrangement),
                     $a,
                     $a
                 )
             }
-            Rounding::NearestAway => {
+            Rounding::TiesToAway => {
                 vector!(
                     concat!("frinta {a:v}", $arrangement, ", {b:v}", $arrangement),
                     $a,
@@ -205,7 +205,7 @@ macro_rules! round_vector {
                     $a
                 )
             }
-            Rounding::ToOdd => return None,
+            Rounding::TiesTowardZero | Rounding::AwayFromZero | Rounding::ToOdd => return None,
         }
     };
 }

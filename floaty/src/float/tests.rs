@@ -5,7 +5,7 @@ extern crate std;
 use std::format;
 
 use super::{
-    BF16, Class, Decoded, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F256,
+    BF16, Class, Decoded, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F256,
     F512, TF32,
 };
 use crate::env::{Env, Flags, Mode, NanPropagation, NanRule, Rounding, mode};
@@ -86,7 +86,7 @@ fn nan_inputs_follow_the_nan_rule() {
     let (replaced, flags): (F32, _) = signaling.convert_with(default);
     assert_eq!((replaced.to_bits(), flags), (0xFFC0_0000, Flags::INVALID));
     let quiet = F64::from_bits(0x7FF8_0000_0000_0000);
-    let (fp8, flags): (F8E4M3, _) = quiet.convert_with(Env::IEEE);
+    let (fp8, flags): (F8E4M3Fn, _) = quiet.convert_with(Env::IEEE);
     assert_eq!((fp8.to_bits(), flags), (0x7F, Flags::NONE));
 }
 
@@ -100,9 +100,9 @@ fn an_unsupported_x87_input_gives_the_default_nan() {
 #[test]
 fn an_infinity_without_a_destination_infinity_is_invalid() {
     let infinity = F32::from_bits(0xFF80_0000);
-    let (nan, flags): (F8E4M3, _) = infinity.convert_with(Env::IEEE);
+    let (nan, flags): (F8E4M3Fn, _) = infinity.convert_with(Env::IEEE);
     assert_eq!((nan.to_bits(), flags), (0xFF, Flags::INVALID));
-    let (largest, flags): (F8E4M3, _) = infinity.convert_with(Env::IEEE.with_saturate(true));
+    let (largest, flags): (F8E4M3Fn, _) = infinity.convert_with(Env::IEEE.with_saturate(true));
     assert_eq!((largest.to_bits(), flags), (0xFE, Flags::INVALID));
     let (nan, _): (F8E4M3Fnuz, _) = infinity.convert_with(Env::IEEE);
     assert_eq!(nan.to_bits(), 0x80);
@@ -143,7 +143,10 @@ fn aliases_have_the_published_parameters() {
     );
     assert_eq!((BF16::PRECISION, BF16::EMAX, BF16::EMIN), (8, 127, -126));
     assert_eq!((TF32::PRECISION, TF32::EMAX, TF32::EMIN), (11, 127, -126));
-    assert_eq!((F8E4M3::PRECISION, F8E4M3::EMAX, F8E4M3::EMIN), (4, 8, -6));
+    assert_eq!(
+        (F8E4M3Fn::PRECISION, F8E4M3Fn::EMAX, F8E4M3Fn::EMIN),
+        (4, 8, -6)
+    );
     assert_eq!(
         (F8E5M2::PRECISION, F8E5M2::EMAX, F8E5M2::EMIN),
         (3, 15, -14)

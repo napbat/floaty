@@ -4,7 +4,7 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
-use floaty::{BF16, Binary, Class, F8E4M3, F8E5M2, F16, F32, F64, F80, F128, Float, NoInf, TF32};
+use floaty::{BF16, Binary, Class, F8E4M3Fn, F8E5M2, F16, F32, F64, F80, F128, Float, NoInf, TF32};
 use floaty_verify::apfloat::{Tf32, check_value, class};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};
 use floaty_verify::random::SplitMix64;
@@ -93,7 +93,7 @@ macro_rules! check {
 #[test]
 fn every_encoding_of_the_small_formats() {
     for bits in 0..1_u128 << 8 {
-        check!(F8E4M3, Float8E4M3FN, bits, false);
+        check!(F8E4M3Fn, Float8E4M3FN, bits, false);
         check!(F8E5M2, Float8E5M2, bits);
     }
     for bits in 0..1_u128 << 16 {

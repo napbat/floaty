@@ -7,20 +7,23 @@
 //!   the conversion to the same format, and `decode`.
 //! - [`random`]: seeded random operands, which [`operands`] biases toward
 //!   the edges of each format, run through floaty and through decNumber, in
-//!   the six rounding modes that both have. decimal64 and decimal128 use
+//!   the eight rounding modes of decNumber. decimal64 and decimal128 use
 //!   `decDouble` and `decQuad`. decimal32 uses decNumber's
 //!   arbitrary-precision numbers in the decimal32 context, because
 //!   `decSingle` has no arithmetic.
 //! - [`square_root`] and [`conversions`]: the square root and the
 //!   conversions between the widths, which decNumber's fixed-size formats
 //!   lack as operations, against the wrappers of `floaty_verify::decnumber`.
+//! - [`integers`]: the conversions to and from integers, against decNumber's
+//!   rounding to an integral value and its conversion from a string.
 //! - [`limit`]: the precision limit of `Env`, against decNumber's
 //!   arbitrary-precision numbers at fewer digits.
 //! - [`flush`]: flush-to-zero and denormals-are-zero.
 //!
-//! The rounding modes `ceiling`, `floor`, `down`, `half_even`, `half_up`,
-//! and `05up` are floaty's `TowardPositive`, `TowardNegative`, `TowardZero`,
-//! `NearestEven`, `NearestAway`, and `ToOdd`. The conditions map to the
+//! The rounding modes `ceiling`, `floor`, `down`, `up`, `half_even`,
+//! `half_up`, `half_down`, and `05up` are floaty's `TowardPositive`,
+//! `TowardNegative`, `TowardZero`, `AwayFromZero`, `TiesToEven`,
+//! `TiesToAway`, `TiesTowardZero`, and `ToOdd`. The conditions map to the
 //! IEEE 754 flags: `Invalid_operation` and the conditions that decNumber
 //! folds into it give `INVALID`, and `Division_by_zero`, `Overflow`,
 //! `Underflow`, and `Inexact` give the flag of that name. The fixed-size
@@ -37,7 +40,6 @@
 //!
 //! The test counts each case that it skips, with the reason:
 //!
-//! - The rounding modes `half_down` and `up` are not floaty directions.
 //! - Some decNumber operations are not IEEE 754 operations of floaty: the
 //!   rounding `abs`, `minus`, and `plus`, `reduce`, the logical operations,
 //!   the truncating `divideint` and `remainder`, `maxmag`, `minmag`,
@@ -77,6 +79,7 @@
 
 mod conversions;
 mod flush;
+mod integers;
 mod limit;
 mod operands;
 mod random;
@@ -211,28 +214,29 @@ impl Report {
     }
 }
 
-/// Returns the floaty direction of a decNumber rounding mode, or why it has
-/// none.
-fn direction(rounding: decnumber::Rounding) -> Result<Rounding, &'static str> {
+/// Returns the floaty direction of a decNumber rounding mode.
+fn direction(rounding: decnumber::Rounding) -> Rounding {
     match rounding {
-        decnumber::Rounding::Ceiling => Ok(Rounding::TowardPositive),
-        decnumber::Rounding::Floor => Ok(Rounding::TowardNegative),
-        decnumber::Rounding::Down => Ok(Rounding::TowardZero),
-        decnumber::Rounding::HalfEven => Ok(Rounding::NearestEven),
-        decnumber::Rounding::HalfUp => Ok(Rounding::NearestAway),
-        decnumber::Rounding::ZeroFiveUp => Ok(Rounding::ToOdd),
-        decnumber::Rounding::HalfDown => Err("rounding half_down: not a floaty direction"),
-        decnumber::Rounding::Up => Err("rounding up: not a floaty direction"),
+        decnumber::Rounding::Ceiling => Rounding::TowardPositive,
+        decnumber::Rounding::Floor => Rounding::TowardNegative,
+        decnumber::Rounding::Down => Rounding::TowardZero,
+        decnumber::Rounding::Up => Rounding::AwayFromZero,
+        decnumber::Rounding::HalfEven => Rounding::TiesToEven,
+        decnumber::Rounding::HalfUp => Rounding::TiesToAway,
+        decnumber::Rounding::HalfDown => Rounding::TiesTowardZero,
+        decnumber::Rounding::ZeroFiveUp => Rounding::ToOdd,
     }
 }
 
-/// The rounding modes that decNumber and floaty share.
-const SHARED_ROUNDINGS: [decnumber::Rounding; 6] = [
+/// The rounding modes of decNumber, which floaty shares.
+const SHARED_ROUNDINGS: [decnumber::Rounding; 8] = [
     decnumber::Rounding::Ceiling,
     decnumber::Rounding::Floor,
     decnumber::Rounding::Down,
+    decnumber::Rounding::Up,
     decnumber::Rounding::HalfEven,
     decnumber::Rounding::HalfUp,
+    decnumber::Rounding::HalfDown,
     decnumber::Rounding::ZeroFiveUp,
 ];
 

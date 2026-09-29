@@ -208,13 +208,13 @@ macro_rules! to_integer {
             ) -> Outcome<i128> {
                 let function: unsafe extern "C" fn($c, *mut u32) -> $integer =
                     match (inexact, rounding) {
-                        (Inexact::Ignored, Rounding::NearestEven) => rnint,
-                        (Inexact::Ignored, Rounding::NearestAway) => rninta,
+                        (Inexact::Ignored, Rounding::TiesToEven) => rnint,
+                        (Inexact::Ignored, Rounding::TiesToAway) => rninta,
                         (Inexact::Ignored, Rounding::TowardZero) => int,
                         (Inexact::Ignored, Rounding::TowardNegative) => floor,
                         (Inexact::Ignored, Rounding::TowardPositive) => ceil,
-                        (Inexact::Signaled, Rounding::NearestEven) => xrnint,
-                        (Inexact::Signaled, Rounding::NearestAway) => xrninta,
+                        (Inexact::Signaled, Rounding::TiesToEven) => xrnint,
+                        (Inexact::Signaled, Rounding::TiesToAway) => xrninta,
                         (Inexact::Signaled, Rounding::TowardZero) => xint,
                         (Inexact::Signaled, Rounding::TowardNegative) => xfloor,
                         (Inexact::Signaled, Rounding::TowardPositive) => xceil,
@@ -486,8 +486,8 @@ macro_rules! bid_format {
 
             fn round_integral(x: $bits, rounding: Rounding) -> Outcome<$bits> {
                 let function: unsafe extern "C" fn($c, *mut u32) -> $c = match rounding {
-                    Rounding::NearestEven => $module::round_integral_nearest_even,
-                    Rounding::NearestAway => $module::round_integral_nearest_away,
+                    Rounding::TiesToEven => $module::round_integral_nearest_even,
+                    Rounding::TiesToAway => $module::round_integral_nearest_away,
                     Rounding::TowardZero => $module::round_integral_zero,
                     Rounding::TowardNegative => $module::round_integral_negative,
                     Rounding::TowardPositive => $module::round_integral_positive,

@@ -533,8 +533,9 @@ pub type F512 = Float<Binary<23>, 512>;
 pub type BF16 = Float<Binary<8>, 16>;
 /// TF32: the exponent range of binary32 with the precision of binary16.
 pub type TF32 = Float<Binary<8>, 19>;
-/// OCP FP8 E4M3: no infinities, one NaN encoding for each sign.
-pub type F8E4M3 = Float<Binary<4, NoInf>, 8>;
+/// OCP FP8 E4M3: no infinities, one NaN encoding for each sign. LLVM and
+/// `ml_dtypes` call it E4M3FN, for finite values and a NaN.
+pub type F8E4M3Fn = Float<Binary<4, NoInf>, 8>;
 /// OCP FP8 E5M2: IEEE 754 special values.
 pub type F8E5M2 = Float<Binary<5>, 8>;
 /// FNUZ FP8 E4M3: no infinities, no negative zero, one NaN.

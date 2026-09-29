@@ -14,7 +14,8 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   the IBM `long double` of libgcc or the `dd_real` of QD, bit for bit.
 - **Correct rounding.** Addition, subtraction, multiplication, division,
   square root, fused multiply-add, and every conversion round correctly in
-  six directions, round to odd included.
+  eight directions: the five of IEEE 754, round to odd, and the two extra
+  directions of IBM POWER decimal floating point.
 - **The IEEE 754 operations.** Comparisons, total order, the IEEE 754-2019
   and IEEE 754-2008 minimum and maximum operations, the remainder, rounding
   to an integral value, integer conversions up to 512 bits, `scale_b`,
@@ -76,7 +77,7 @@ register. Type aliases name the common formats.
 | `F160` to `F512` | IEEE 754 binary formats in steps of 32 bits | 144 to 489 bits |
 | `BF16` | bfloat16 | 8 bits |
 | `TF32` | NVIDIA TensorFloat-32, 19 bits | 11 bits |
-| `F8E4M3`, `F8E5M2` | OCP FP8. E4M3 has no infinity. | 4, 3 bits |
+| `F8E4M3Fn`, `F8E5M2` | OCP FP8. E4M3 has no infinity, so LLVM and `ml_dtypes` call it E4M3FN. | 4, 3 bits |
 | `F8E4M3Fnuz`, `F8E5M2Fnuz` | FP8 with one NaN and no negative zero | 4, 3 bits |
 | `F80` | x87 extended precision, with an explicit integer bit | 64 bits |
 | `D32Bid`, `D64Bid`, `D128Bid` | IEEE 754 decimal formats, BID encoding | 7, 16, 34 digits |
@@ -102,13 +103,13 @@ The formats without an infinity overflow to the NaN, or to the largest
 finite value when the behavior saturates:
 
 ```rust
-use floaty::{F8E4M3, Flags};
+use floaty::{F8E4M3Fn, Flags};
 
-let largest = F8E4M3::from_bits(0x7E); // 448
-let (nan, flags) = largest.add_with(largest, F8E4M3::ENV);
+let largest = F8E4M3Fn::from_bits(0x7E); // 448
+let (nan, flags) = largest.add_with(largest, F8E4M3Fn::ENV);
 assert_eq!((nan.to_bits(), flags), (0x7F, Flags::OVERFLOW | Flags::INEXACT));
 
-let (saturated, _) = largest.add_with(largest, F8E4M3::ENV.with_saturate(true));
+let (saturated, _) = largest.add_with(largest, F8E4M3Fn::ENV.with_saturate(true));
 assert_eq!(saturated.to_bits(), 0x7E);
 ```
 
@@ -118,7 +119,7 @@ assert_eq!(saturated.to_bits(), 0x7E);
 
 | Field | Meaning |
 | --- | --- |
-| `rounding` | `NearestEven`, `NearestAway`, `TowardPositive`, `TowardNegative`, `TowardZero`, or `ToOdd` |
+| `rounding` | `TiesToEven`, `TiesToAway`, `TowardPositive`, `TowardNegative`, and `TowardZero` from IEEE 754; `ToOdd`; and `TiesTowardZero` and `AwayFromZero` from IBM POWER decimal |
 | `flush_to_zero` | A tiny result becomes a zero (FTZ). |
 | `denormals_are_zero` | A subnormal operand reads as a zero (DAZ). |
 | `tininess` | Tininess detection before or after rounding. |
@@ -159,7 +160,7 @@ use floaty::{Env, F32, Flags, Rounding};
 /// Runs `ADDSS` under an MXCSR value.
 fn addss(left: F32, right: F32, mxcsr: u32) -> (F32, Flags) {
     let rounding = match (mxcsr >> 13) & 3 {
-        0 => Rounding::NearestEven,
+        0 => Rounding::TiesToEven,
         1 => Rounding::TowardNegative,
         2 => Rounding::TowardPositive,
         _ => Rounding::TowardZero,
@@ -234,7 +235,7 @@ assert_eq!(three_hundred.to_int::<i8>(), ToInt::OutOfRange { negative: false });
 
 // binary64 0.1 is not 1/10. Its conversion to decimal64 rounds.
 let tenth = F64::from_bits(0x3FB9_9999_9999_999A);
-let (decimal, flags) = tenth.convert_with::<D64Bid>(Rounding::NearestEven);
+let (decimal, flags) = tenth.convert_with::<D64Bid>(Rounding::TiesToEven);
 let expected = Decoded::Finite {
     negative: false,
     exponent: -16,
@@ -255,7 +256,7 @@ use floaty::{D64Bid, D64Dpd, Decoded, Exact, Rounding};
 // Exact values round to a format. Here each price is exact.
 let price = |cents: u64| {
     let exact = Exact { negative: false, exponent: -2, significand: [cents], sticky: false };
-    D64Bid::round(exact, Rounding::NearestEven).0
+    D64Bid::round(exact, Rounding::TiesToEven).0
 };
 let total = price(110) + price(220);
 let expected = Decoded::Finite { negative: false, exponent: -2, significand: [330] };
@@ -329,14 +330,14 @@ path.
 | Host path | Target feature | Formats and operations | Also goes to the engine |
 | --- | --- | --- | --- |
 | SSE | x86-64 with SSE2 | binary32 and binary64: `+`, `-`, `*`, `/`, `sqrt`, `convert` between them, `to_int`, `from_int`, comparisons, and the minimum and maximum operations | The integer indefinite; an unordered comparison; a minimum or maximum of a NaN or of two zeros |
-| SSE4.1 rounding | x86-64 with SSE4.1 | `round_to_integral` of binary32 and binary64, and through binary32 of bfloat16 and of binary16 with F16C, in every direction but `NearestAway` and `ToOdd` | |
+| SSE4.1 rounding | x86-64 with SSE4.1 | `round_to_integral` of binary32 and binary64, and through binary32 of bfloat16 and of binary16 with F16C, in `TiesToEven`, `TowardPositive`, `TowardNegative`, and `TowardZero` | |
 | FMA | x86-64 with FMA | `mul_add` of binary32 and binary64 | |
 | F16C | x86-64 with F16C | binary16 through binary32: `+`, `-`, `*`, `/`, `sqrt`, `to_int`, `from_int`, comparisons, and the minimum and maximum operations. `convert` from binary16 to binary32 and binary64, and from binary32 to binary16. | `mul_add`, and `convert` from binary64, which two roundings can get wrong |
 | bfloat16 | x86-64 with SSE2, or AArch64 | bfloat16 widened by a shift: `convert` to binary32 and binary64, `to_int`, `round_to_integral` with SSE4.1 on x86-64, comparisons, and the minimum and maximum operations | `from_int`, and the arithmetic without `FEAT_BF16` |
 | x87 | x86-64 | x87 extended: `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral` to nearest even, `to_int`, `from_int`, and `convert` to and from binary32 and binary64 | A control word other than round to nearest at 64-bit precision; the integer indefinite |
 | x87 remainder | x86-64 | `remainder` of binary32, binary64, and x87 extended, by `FPREM1` | A dividend exponent more than 630 above the divisor exponent; a subnormal dividend, or a divisor small enough to give a subnormal result |
 | Packed SSE and AVX | x86-64 with SSE2, and AVX for 256 bits | `Lanes` of binary32 and binary64: the operators, `sqrt`, `mul_add` with FMA, `round_to_integral` with SSE4.1, `convert` between them, `compare_quiet`, and the minimum and maximum operations. binary16 lanes with F16C, and bfloat16 `round_to_integral` and `convert`. | A NaN in any lane, or for the minimum and maximum a NaN or two zeros in any pair of lanes, sends each lane to its scalar path |
-| AArch64 | AArch64 | binary32, binary64, and binary16: `+`, `-`, `*`, `/`, `sqrt`, `convert`, `to_int`, `from_int`, `round_to_integral` in every direction but `ToOdd`, comparisons, and the minimum and maximum operations. `mul_add` of binary32 and binary64. | FPCR with a nonzero `RMode`, FZ, FZ16, FIZ, AH, AHP, or a trap enable; a saturated integer |
+| AArch64 | AArch64 | binary32, binary64, and binary16: `+`, `-`, `*`, `/`, `sqrt`, `convert`, `to_int`, `from_int`, `round_to_integral` in the five IEEE 754 directions, comparisons, and the minimum and maximum operations. `mul_add` of binary32 and binary64. | FPCR with a nonzero `RMode`, FZ, FZ16, FIZ, AH, AHP, or a trap enable; a saturated integer |
 | `FEAT_FP16` | AArch64 with `+fp16` | `mul_add` of binary16 | |
 | `FEAT_BF16` | AArch64 with `+bf16` | bfloat16 through binary32: `+`, `-`, `*`, `/`, `sqrt`, and `convert` from binary32 | `mul_add` |
 | Packed AArch64 | AArch64 | As the packed SSE paths, at 128 bits | As the packed SSE paths |
@@ -357,31 +358,31 @@ Each cell gives floaty, then `rustc_apfloat` 0.2.3 where it has the format.
 
 | Format | add | mul | div | mul_add |
 | --- | --- | --- | --- | --- |
-| binary16 | 19.0 / 38.8 | 15.1 / 31.3 | 18.7 / 56.7 | 27.5 / 48.2 |
-| bfloat16 | 18.5 / 39.0 | 14.7 / 31.7 | 19.0 / 77.5 | 28.1 / 48.0 |
-| binary32 | 20.4 / 37.7 | 15.1 / 31.5 | 20.4 / 48.7 | 25.8 / 48.2 |
-| binary64 | 18.5 / 38.2 | 17.8 / 31.6 | 35.5 / 232.5 | 27.3 / 49.8 |
-| x87 extended | 28.1 / 36.2 | 19.8 / 31.8 | 55.5 / 279.5 | 39.0 / 47.1 |
-| binary128 | 24.3 / 33.3 | 22.9 / 31.4 | 68.8 / 460.6 | 39.9 / 49.0 |
-| binary256 | 45.0 | 43.2 | 132.8 | 69.8 |
-| binary512 | 64.2 | 91.0 | 269.2 | 153.5 |
-| decimal64, BID | 80.1 | 56.7 | 84.7 | 88.2 |
-| decimal128, BID | 82.8 | 75.0 | 120.5 | 129.5 |
-| decimal64, DPD | 102.4 | 77.3 | 111.6 | 109.3 |
-| decimal128, DPD | 123.1 | 115.3 | 163.2 | 172.9 |
+| binary16 | 19.8 / 38.1 | 14.6 / 32.3 | 19.1 / 54.8 | 27.5 / 48.2 |
+| bfloat16 | 19.9 / 37.3 | 15.1 / 31.7 | 18.5 / 73.7 | 27.2 / 49.3 |
+| binary32 | 20.2 / 38.5 | 15.7 / 32.0 | 20.6 / 45.2 | 26.9 / 48.5 |
+| binary64 | 20.5 / 38.3 | 17.4 / 32.2 | 35.8 / 202.2 | 25.8 / 48.0 |
+| x87 extended | 27.6 / 36.5 | 19.5 / 31.1 | 56.1 / 238.8 | 38.5 / 50.0 |
+| binary128 | 23.0 / 33.8 | 22.3 / 31.9 | 69.7 / 404.0 | 38.6 / 48.4 |
+| binary256 | 42.8 | 42.9 | 127.8 | 66.6 |
+| binary512 | 60.6 | 89.7 | 281.0 | 148.6 |
+| decimal64, BID | 80.3 | 57.8 | 84.8 | 87.5 |
+| decimal128, BID | 82.6 | 74.1 | 126.8 | 131.7 |
+| decimal64, DPD | 105.5 | 77.8 | 111.5 | 111.6 |
+| decimal128, DPD | 119.3 | 114.5 | 163.3 | 175.6 |
 
 The entry points without flags, which take a host path where the build has
 one. A `Lanes` figure is per lane.
 
 | Operation | Engine | Default build | x86-64-v3 build | Host `f32` or `f64`, x86-64-v3 |
 | --- | --- | --- | --- | --- |
-| binary32 `+` | 20.4 | 1.9 | 1.9 | 0.8 |
-| binary64 `/` | 35.5 | 1.9 | 1.9 | 0.9 |
-| binary32 `mul_add` | 25.8 | 24.4 | 1.8 | 1.1 |
-| binary16 `+` | 19.0 | 16.7 | 2.4 | |
-| x87 extended `/` | 55.5 | 4.4 | 4.0 | |
-| `Lanes<F32, 8>` `+` | 17.0 | 0.4 | 0.2 | |
-| `Lanes<F16, 8>` `+` | 14.3 | 12.0 | 0.3 | |
+| binary32 `+` | 20.2 | 1.9 | 1.9 | 0.8 |
+| binary64 `/` | 35.8 | 1.9 | 2.0 | 0.9 |
+| binary32 `mul_add` | 26.9 | 24.3 | 1.7 | 1.0 |
+| binary16 `+` | 19.8 | 16.1 | 2.3 | |
+| x87 extended `/` | 56.1 | 4.5 | 4.0 | |
+| `Lanes<F32, 8>` `+` | 17.1 | 0.4 | 0.3 | |
+| `Lanes<F16, 8>` `+` | 15.8 | 11.5 | 0.3 | |
 
 ## Verification
 
@@ -391,7 +392,7 @@ IEEE 754 or a vendor manual with MPFR or decNumber.
 
 | Reference | What it checks |
 | --- | --- |
-| Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in every direction, under four NaN rules |
+| Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in the six directions of TestFloat, under four NaN rules |
 | MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of the formats that TestFloat lacks. Conversions between those formats and the decimal formats. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, and `scale_b` |
 | `ml_dtypes` 0.6.0 | Every FP8 encoding and operand pair, as generated tables |
@@ -425,6 +426,10 @@ The minimum supported Rust version is 1.85. The crate uses edition 2024.
   stable Rust cannot call.
 - No traps. floaty reports flags and never traps.
 - Presets for x86 SSE and x87 only.
+- No OCP MX FP4 and FP6 formats yet. They need an encoding without an
+  infinity or a NaN.
+- No decimal formats wider than 128 bits. No hardware or major library
+  uses them.
 - QEMU stands in for POWER hardware in the `Gcc` tests.
 
 ## Development

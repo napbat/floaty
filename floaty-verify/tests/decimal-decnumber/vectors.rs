@@ -220,7 +220,7 @@ where
     if let Some(reason) = unmapped(&test.operation) {
         return Err(String::from(reason));
     }
-    let rounding = direction(test.context.rounding).map_err(String::from)?;
+    let rounding = direction(test.context.rounding);
     let operands = encodings(&case.operands)
         .expect("only the text conversions and null references have other operands");
     if let Some(reason) = excluded::<F>(&test.operation, &operands, test.conditions) {
@@ -275,16 +275,14 @@ const TEXT: &str = "apply of a string, tosci, toeng: text conversions; floaty ha
 
 /// Returns the skip counts of the `dd` or `dq` files. The two sets have
 /// the same vectors except for the text conversions, the logical
-/// operations, `reduce`, and the rounding modes of a few files.
+/// operations, and `reduce`.
 fn skips(
     text: usize,
     logical: usize,
     divide_integer: usize,
     reduce: usize,
-    half_down: usize,
-    up: usize,
     scale_limit: usize,
-) -> [(&'static str, usize); 14] {
+) -> [(&'static str, usize); 12] {
     [
         (
             "abs, minus, plus: decNumber rounds these; floaty has the quiet sign operations",
@@ -310,8 +308,6 @@ fn skips(
             "remaindernear: decNumber's Division_impossible; floaty follows IEEE 754",
             7,
         ),
-        ("rounding half_down: not a floaty direction", half_down),
-        ("rounding up: not a floaty direction", up),
         ("scaleb: a NaN scale operand", 17),
         (
             "scaleb: a scale operand beyond decNumber's limit of 2 * (emax + p)",
@@ -329,14 +325,14 @@ fn dectest_decimal64() {
     let tally = run_vectors::<Double, 64>("dd");
     tally.report("decTest dd, D64Dpd");
     // The archive is pinned, so the counts are exact.
-    tally.assert_counts(9743, &skips(1109, 1377, 874, 133, 49, 109, 8), &[]);
+    tally.assert_counts(9901, &skips(1109, 1377, 874, 133, 8), &[]);
 }
 
 #[test]
 fn dectest_decimal128() {
     let tally = run_vectors::<Quad, 128>("dq");
     tally.report("decTest dq, D128Dpd");
-    tally.assert_counts(9815, &skips(1088, 1735, 871, 133, 35, 91, 4), &[]);
+    tally.assert_counts(9941, &skips(1088, 1735, 871, 133, 4), &[]);
 }
 
 #[test]

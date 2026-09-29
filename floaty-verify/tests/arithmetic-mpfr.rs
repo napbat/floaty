@@ -12,12 +12,12 @@ use core::num::NonZeroU32;
 
 use floaty::env::{InvalidProduct, NanPropagation, NanRule, Tininess};
 use floaty::{
-    BF16, Binary, Class, Decoded, Env, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F80, F256, F512,
+    BF16, Binary, Class, Decoded, Env, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F80, F256, F512,
     Float, Rounding, TF32,
 };
 use floaty_verify::arithmetic::{self, Operand, Operation};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs};
-use floaty_verify::mpfr::{Format, Specials, Value};
+use floaty_verify::mpfr::{DIRECTIONS, Format, Specials, Value};
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
 use rug::integer::Order;
@@ -32,15 +32,6 @@ type Wide72 = Float<Binary<15>, 72>;
 type Edge64 = Float<Binary<5>, 64>;
 type Short64 = Float<Binary<4>, 64>;
 type Edge128 = Float<Binary<5>, 128>;
-
-const DIRECTIONS: [Rounding; 6] = [
-    Rounding::NearestEven,
-    Rounding::NearestAway,
-    Rounding::TowardPositive,
-    Rounding::TowardNegative,
-    Rounding::TowardZero,
-    Rounding::ToOdd,
-];
 
 /// Every direction, and the other behaviors with nearest-even rounding.
 fn behaviors() -> Vec<Env> {
@@ -193,7 +184,7 @@ macro_rules! fp8 {
 
 #[test]
 fn every_fp8_operand_pair() {
-    fp8!(F8E4M3, Specials::NoInf, 1);
+    fp8!(F8E4M3Fn, Specials::NoInf, 1);
     fp8!(F8E5M2, Specials::Ieee, 2);
     fp8!(F8E4M3Fnuz, Specials::Fnuz, 3);
     fp8!(F8E5M2Fnuz, Specials::Fnuz, 4);

@@ -33,10 +33,10 @@ pub mod integral;
 /// denormals-are-zero, saturation, and a precision limit. Each operation
 /// ignores the fields that its documentation says do not apply to it, so
 /// every behavior also checks that those fields change nothing.
-pub const BEHAVIORS: [Env; 8] = [
+pub const BEHAVIORS: [Env; 10] = [
     Env::IEEE,
     Env::IEEE
-        .with_rounding(Rounding::NearestAway)
+        .with_rounding(Rounding::TiesToAway)
         .with_denormals_are_zero(true)
         .with_nan(NanRule::new(NanPropagation::FirstOperand).with_default_negative(true)),
     Env::IEEE
@@ -60,6 +60,12 @@ pub const BEHAVIORS: [Env; 8] = [
     Env::IEEE
         .with_precision(NonZeroU32::new(2))
         .with_tininess(Tininess::BeforeRounding),
+    Env::IEEE
+        .with_rounding(Rounding::TiesTowardZero)
+        .with_tininess(Tininess::BeforeRounding),
+    Env::IEEE
+        .with_rounding(Rounding::AwayFromZero)
+        .with_saturate(true),
 ];
 
 /// The expected result of an operation that returns a float.

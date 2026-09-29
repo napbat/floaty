@@ -3,8 +3,9 @@
 //! MPFR rounds to any precision in five directions and emulates a subnormal
 //! range. The oracle composes those operations to give the IEEE 754 result
 //! of rounding an exact value to a binary format: the value, and the flags.
-//! Round to nearest with ties away from zero, and round to odd, come from the
-//! two directed results.
+//! The directions that MPFR lacks come from the results toward zero and away
+//! from zero: round to nearest with ties away from zero or toward zero, by
+//! the midpoint, and round to odd, by the parity.
 
 use core::cmp::Ordering;
 
@@ -198,6 +199,18 @@ fn nan(negative: bool, format: &Format) -> Value {
     }
 }
 
+/// Every rounding direction of floaty, which the oracle knows.
+pub const DIRECTIONS: [Rounding; 8] = [
+    Rounding::TiesToEven,
+    Rounding::TiesToAway,
+    Rounding::TiesTowardZero,
+    Rounding::TowardPositive,
+    Rounding::TowardNegative,
+    Rounding::TowardZero,
+    Rounding::AwayFromZero,
+    Rounding::ToOdd,
+];
+
 /// Returns the largest finite magnitude at `precision` bits.
 fn largest(format: &Format, precision: u32) -> BigFloat {
     let significand = if format.specials == Specials::NoInf && precision == format.precision {
@@ -212,10 +225,14 @@ fn largest(format: &Format, precision: u32) -> BigFloat {
 fn overflow(negative: bool, format: &Format, precision: u32, env: &Env) -> (Value, Flags) {
     let flags = Flags::OVERFLOW | Flags::INEXACT;
     let to_infinity = match env.rounding {
-        Rounding::NearestEven | Rounding::NearestAway => true,
+        Rounding::TiesToEven
+        | Rounding::TiesToAway
+        | Rounding::TiesTowardZero
+        | Rounding::AwayFromZero => true,
         Rounding::TowardPositive => !negative,
         Rounding::TowardNegative => negative,
-        _ => false,
+        Rounding::TowardZero | Rounding::ToOdd => false,
+        _ => panic!("the oracle knows every rounding direction"),
     };
     if to_infinity {
         if format.specials == Specials::Ieee {
@@ -245,18 +262,21 @@ fn round_to(exact: &BigFloat, precision: u32, emin: Option<i32>, rounding: Round
         value
     };
     match rounding {
-        Rounding::NearestEven => directed(Round::Nearest),
+        Rounding::TiesToEven => directed(Round::Nearest),
         Rounding::TowardPositive => directed(Round::Up),
         Rounding::TowardNegative => directed(Round::Down),
         Rounding::TowardZero => directed(Round::Zero),
-        Rounding::NearestAway => {
+        Rounding::AwayFromZero => directed(Round::AwayZero),
+        Rounding::TiesToAway | Rounding::TiesTowardZero => {
             let (toward, away) = (directed(Round::Zero), directed(Round::AwayZero));
             if toward == away {
                 return toward;
             }
             let working = precision + 2;
             let midpoint: BigFloat = (BigFloat::with_val(working, &toward) + &away) >> 1u32;
-            if exact.clone().abs() >= midpoint.abs() {
+            let (magnitude, midpoint) = (exact.clone().abs(), midpoint.abs());
+            let tie_goes_away = rounding == Rounding::TiesToAway;
+            if magnitude > midpoint || (magnitude == midpoint && tie_goes_away) {
                 away
             } else {
                 toward

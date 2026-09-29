@@ -554,7 +554,7 @@ where
 {
     let layout = F::LAYOUT;
     let name = |operation: &str| format!("{}_{operation}", F::NAME);
-    let env = intel_decimal::env(IntelRounding::NearestEven);
+    let env = intel_decimal::env(IntelRounding::TiesToEven);
     let flag = |holds: bool| plain(i128::from(holds), Flags::NONE, Signals::Ieee);
     let library = |holds: bool| Outcome {
         value: Value::Integer(i128::from(holds)),

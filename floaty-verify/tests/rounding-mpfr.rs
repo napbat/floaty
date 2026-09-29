@@ -1,5 +1,5 @@
 //! Compares the rounding routine with the MPFR oracle, for every binary
-//! format and every behavior: six rounding directions, both tininess rules,
+//! format and every behavior: eight rounding directions, both tininess rules,
 //! flush-to-zero, saturation, and precision control.
 
 // The references of this test build only for x86-64.
@@ -9,23 +9,14 @@ use core::num::NonZeroU32;
 
 use floaty::env::Tininess;
 use floaty::{
-    BF16, Env, Exact, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F256, F512,
-    Rounding, TF32,
+    BF16, Env, Exact, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F256,
+    F512, TF32,
 };
 use floaty_verify::encodings::to_limbs;
 use floaty_verify::mpfr::{self, Format, Input, Specials, Value};
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
 use rug::integer::Order;
-
-const ROUNDINGS: [Rounding; 6] = [
-    Rounding::NearestEven,
-    Rounding::NearestAway,
-    Rounding::TowardPositive,
-    Rounding::TowardNegative,
-    Rounding::TowardZero,
-    Rounding::ToOdd,
-];
 
 /// Inputs for each behavior of each format.
 const INPUTS: usize = 1000;
@@ -43,7 +34,7 @@ fn behaviors(specials: Specials, precisions: &[u32]) -> Vec<Env> {
         .chain(precisions.iter().map(|&bits| NonZeroU32::new(bits)))
         .collect();
     let mut envs = Vec::new();
-    for &rounding in &ROUNDINGS {
+    for &rounding in &mpfr::DIRECTIONS {
         for tininess in [Tininess::BeforeRounding, Tininess::AfterRounding] {
             for flush_to_zero in [false, true] {
                 for &saturate in saturations {
@@ -171,7 +162,7 @@ fn ieee_formats_up_to_binary128() {
 
 #[test]
 fn fp8_formats() {
-    check_format!(F8E4M3, Specials::NoInf, &[2], 43);
+    check_format!(F8E4M3Fn, Specials::NoInf, &[2], 43);
     check_format!(F8E5M2, Specials::Ieee, &[], 52);
     check_format!(F8E4M3Fnuz, Specials::Fnuz, &[], 431);
     check_format!(F8E5M2Fnuz, Specials::Fnuz, &[], 521);
@@ -237,7 +228,7 @@ fn every_small_input_to_the_fp8_formats() {
             }
         }};
     }
-    sweep!(F8E4M3, Specials::NoInf);
+    sweep!(F8E4M3Fn, Specials::NoInf);
     sweep!(F8E5M2, Specials::Ieee);
     sweep!(F8E4M3Fnuz, Specials::Fnuz);
     sweep!(F8E5M2Fnuz, Specials::Fnuz);

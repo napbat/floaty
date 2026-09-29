@@ -7,16 +7,16 @@
 //!
 //! A value has the type [`Float<S, W>`](Float): a standard `S` at a width of
 //! `W` bits. Type aliases name the common formats, for example [`F32`],
-//! [`BF16`], [`F8E4M3`], [`F80`], and [`D64Bid`]. A double-double value has
+//! [`BF16`], [`F8E4M3Fn`], [`F80`], and [`D64Bid`]. A double-double value has
 //! the type [`DoubleDouble<Alg>`](DoubleDouble), with the arithmetic of one
 //! reference implementation.
 //!
 //! ```
-//! use floaty::{Class, F8E4M3};
+//! use floaty::{Class, F8E4M3Fn};
 //!
 //! // OCP FP8 E4M3 has no infinity: 0x7F is its NaN.
-//! assert_eq!(F8E4M3::from_bits(0x7F).classify(), Class::QuietNan);
-//! assert_eq!(F8E4M3::from_bits(0x7E).classify(), Class::Normal);
+//! assert_eq!(F8E4M3Fn::from_bits(0x7F).classify(), Class::QuietNan);
+//! assert_eq!(F8E4M3Fn::from_bits(0x7E).classify(), Class::Normal);
 //! ```
 //!
 //! The operators `+`, `-`, `*`, and `/` round with the default mode of the
@@ -59,7 +59,7 @@ pub use double_double::{Algorithm, DoubleDouble, Gcc, Qd};
 pub use env::{Env, Flags, Rounding, TotalOrder, mode};
 pub use exact::Exact;
 pub use float::{
-    BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, F8E4M3, F8E4M3Fnuz,
+    BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, F8E4M3Fn, F8E4M3Fnuz,
     F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352, F384,
     F416, F448, F480, F512, Float, FloatType, TF32,
 };

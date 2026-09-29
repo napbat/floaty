@@ -183,13 +183,15 @@ fn rounds_up(rounding: Rounding, negative: bool, dropped: Dropped, kept: &Intege
     let inexact = dropped != Dropped::Nothing;
     let last = (kept.clone() % 10u32).to_u32().expect("a digit fits a u32");
     match rounding {
-        Rounding::NearestEven => {
+        Rounding::TiesToEven => {
             dropped == Dropped::AboveHalf || (dropped == Dropped::Half && last % 2 == 1)
         }
-        Rounding::NearestAway => matches!(dropped, Dropped::Half | Dropped::AboveHalf),
+        Rounding::TiesToAway => matches!(dropped, Dropped::Half | Dropped::AboveHalf),
+        Rounding::TiesTowardZero => dropped == Dropped::AboveHalf,
         Rounding::TowardPositive => inexact && !negative,
         Rounding::TowardNegative => inexact && negative,
         Rounding::TowardZero => false,
+        Rounding::AwayFromZero => inexact,
         // IBM's round to prepare for shorter precision.
         Rounding::ToOdd => inexact && (last == 0 || last == 5),
         _ => panic!("the oracle knows every rounding direction"),
@@ -289,10 +291,14 @@ fn overflow(
 ) -> (DecimalValue, Flags) {
     let flags = Flags::OVERFLOW | Flags::INEXACT;
     let to_infinity = match env.rounding {
-        Rounding::NearestEven | Rounding::NearestAway => true,
+        Rounding::TiesToEven
+        | Rounding::TiesToAway
+        | Rounding::TiesTowardZero
+        | Rounding::AwayFromZero => true,
         Rounding::TowardPositive => !negative,
         Rounding::TowardNegative => negative,
-        _ => false,
+        Rounding::TowardZero | Rounding::ToOdd => false,
+        _ => panic!("the oracle knows every rounding direction"),
     };
     if to_infinity {
         return (

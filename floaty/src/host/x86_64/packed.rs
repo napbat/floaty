@@ -154,11 +154,14 @@ pub fn sqrt_f64x2(value: [f64; 2]) -> [f64; 2] {
 macro_rules! round_packed {
     ($class:ident, $rounding:expr, [$even:expr, $down:expr, $up:expr, $zero:expr $(,)?], $a:ident) => {
         match $rounding {
-            Rounding::NearestEven => packed!($class, $even, $a, $a),
+            Rounding::TiesToEven => packed!($class, $even, $a, $a),
             Rounding::TowardNegative => packed!($class, $down, $a, $a),
             Rounding::TowardPositive => packed!($class, $up, $a, $a),
             Rounding::TowardZero => packed!($class, $zero, $a, $a),
-            Rounding::NearestAway | Rounding::ToOdd => return None,
+            Rounding::TiesToAway
+            | Rounding::TiesTowardZero
+            | Rounding::AwayFromZero
+            | Rounding::ToOdd => return None,
         }
     };
 }

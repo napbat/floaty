@@ -257,7 +257,7 @@ fn pair(random: &mut SplitMix64) -> (u64, u64) {
 }
 
 /// The behaviors of the conversions.
-fn behaviors() -> [Env; 5] {
+fn behaviors() -> [Env; 7] {
     [
         Env::IEEE,
         Env::IEEE.with_rounding(Rounding::TowardZero),
@@ -267,8 +267,10 @@ fn behaviors() -> [Env; 5] {
             .with_tininess(Tininess::BeforeRounding),
         Env::IEEE.with_rounding(Rounding::ToOdd),
         Env::IEEE
-            .with_rounding(Rounding::NearestAway)
+            .with_rounding(Rounding::TiesToAway)
             .with_precision(NonZeroU32::new(5)),
+        Env::IEEE.with_rounding(Rounding::TiesTowardZero),
+        Env::IEEE.with_rounding(Rounding::AwayFromZero),
     ]
 }
 

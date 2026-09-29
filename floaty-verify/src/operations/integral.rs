@@ -17,11 +17,29 @@ fn integral(value: &BigFloat, rounding: Rounding) -> BigFloat {
     // The integral value has at most one bit more than the value.
     let precision = value.prec() + 2;
     let result = match rounding {
-        Rounding::NearestEven => BigFloat::with_val(precision, value.round_even_ref()),
-        Rounding::NearestAway => BigFloat::with_val(precision, value.round_ref()),
+        Rounding::TiesToEven => BigFloat::with_val(precision, value.round_even_ref()),
+        Rounding::TiesToAway => BigFloat::with_val(precision, value.round_ref()),
         Rounding::TowardPositive => BigFloat::with_val(precision, value.ceil_ref()),
         Rounding::TowardNegative => BigFloat::with_val(precision, value.floor_ref()),
         Rounding::TowardZero => BigFloat::with_val(precision, value.trunc_ref()),
+        Rounding::TiesTowardZero => {
+            // The nearest integer, which `round` gives with a tie away from
+            // zero. At a tie the integer toward zero replaces it.
+            let toward = BigFloat::with_val(precision, value.trunc_ref());
+            let fraction = BigFloat::with_val(precision, value - &toward);
+            if fraction.abs() == 0.5 {
+                toward
+            } else {
+                BigFloat::with_val(precision, value.round_ref())
+            }
+        }
+        Rounding::AwayFromZero => {
+            if value.is_sign_negative() {
+                BigFloat::with_val(precision, value.floor_ref())
+            } else {
+                BigFloat::with_val(precision, value.ceil_ref())
+            }
+        }
         Rounding::ToOdd => {
             // Round to odd keeps an integral value, and otherwise takes the
             // odd one of the two nearest integers.

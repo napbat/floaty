@@ -51,7 +51,7 @@ const fn compatible(env: &Env, precision: u32) -> bool {
         None => true,
         Some(limit) => limit.get() >= precision,
     };
-    matches!(rounding, Rounding::NearestEven)
+    matches!(rounding, Rounding::TiesToEven)
         && !flush_to_zero
         && !denormals_are_zero
         && full_precision
@@ -280,7 +280,7 @@ pub fn mul_add<S: Standard<W>, const W: usize>(
 /// nearest even.
 #[inline]
 pub(super) fn ready_for_integral(host: Host, env: &Env, precision: u32) -> bool {
-    ready_for(host, &env.with_rounding(Rounding::NearestEven), precision)
+    ready_for(host, &env.with_rounding(Rounding::TiesToEven), precision)
 }
 
 /// Returns the value rounded to an integral value in the rounding direction
@@ -320,7 +320,7 @@ pub fn round_to_integral<S: Standard<W>, const W: usize>(
         // apply to `FRNDINT`, Intel SDM Volume 1, section 8.1.5.2, so the
         // integral value rounds once.
         Host::Extended => {
-            if !matches!(rounding, Rounding::NearestEven) {
+            if !matches!(rounding, Rounding::TiesToEven) {
                 return None;
             }
             environment::x87_round(&extended::<S, W>(value)).map(extended_encoding::<S, W>)

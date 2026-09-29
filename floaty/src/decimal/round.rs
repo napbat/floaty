@@ -333,7 +333,10 @@ fn overflow<L: Limbs>(
 ) -> (Unpacked<L>, Flags) {
     let flags = Flags::OVERFLOW | Flags::INEXACT;
     let to_infinity = match env.rounding {
-        Rounding::NearestEven | Rounding::NearestAway => true,
+        Rounding::TiesToEven
+        | Rounding::TiesToAway
+        | Rounding::TiesTowardZero
+        | Rounding::AwayFromZero => true,
         Rounding::TowardPositive => !negative,
         Rounding::TowardNegative => negative,
         Rounding::TowardZero | Rounding::ToOdd => false,
@@ -430,5 +433,29 @@ mod tests {
         let (value, flags) = D64Bid::round(exact, Env::IEEE);
         assert_eq!(parts(value), (3_235_914_409_624_613, -255));
         assert_eq!(flags, Flags::INEXACT);
+    }
+
+    #[test]
+    fn a_tie_toward_zero_at_the_overflow_threshold_stays_finite() {
+        // 9999999999999999.5E+369: halfway between the largest decimal64
+        // value and 10^385.
+        let (largest, flags) = rounded(
+            99_999_999_999_999_995,
+            368,
+            Env::IEEE.with_rounding(Rounding::TiesTowardZero),
+        );
+        assert_eq!(
+            (parts(largest), flags),
+            ((9_999_999_999_999_999, 369), Flags::INEXACT)
+        );
+        let (infinity, flags) = rounded(99_999_999_999_999_995, 368, Env::IEEE);
+        assert!(infinity.is_infinite());
+        assert!(flags.contains(Flags::OVERFLOW));
+        let (infinity, _) = rounded(
+            99_999_999_999_999_995,
+            368,
+            Env::IEEE.with_rounding(Rounding::AwayFromZero),
+        );
+        assert!(infinity.is_infinite());
     }
 }

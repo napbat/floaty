@@ -32,7 +32,7 @@ pub const MXCSR_FTZ: u32 = 1 << 15;
 
 /// The rounding directions and their MXCSR rounding-control field.
 pub const MXCSR_ROUNDINGS: [(Rounding, u32); 4] = [
-    (Rounding::NearestEven, 0),
+    (Rounding::TiesToEven, 0),
     (Rounding::TowardNegative, 1 << 13),
     (Rounding::TowardPositive, 2 << 13),
     (Rounding::TowardZero, 3 << 13),
@@ -40,7 +40,7 @@ pub const MXCSR_ROUNDINGS: [(Rounding, u32); 4] = [
 
 /// The rounding directions and their x87 rounding-control field.
 pub const X87_ROUNDINGS: [(Rounding, u16); 4] = [
-    (Rounding::NearestEven, 0),
+    (Rounding::TiesToEven, 0),
     (Rounding::TowardNegative, 1 << 10),
     (Rounding::TowardPositive, 2 << 10),
     (Rounding::TowardZero, 3 << 10),

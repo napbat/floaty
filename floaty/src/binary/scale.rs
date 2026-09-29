@@ -148,7 +148,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::env::{Env, Flags};
-    use crate::float::{F8E4M3, F8E4M3Fnuz, F32, F80};
+    use crate::float::{F8E4M3Fn, F8E4M3Fnuz, F32, F80};
 
     fn f32(bits: u32) -> F32 {
         F32::from_bits(bits)
@@ -186,7 +186,7 @@ mod tests {
 
         // A format without an infinity: the NaN, or the largest value when
         // saturating.
-        let largest = F8E4M3::from_bits(0x7E);
+        let largest = F8E4M3Fn::from_bits(0x7E);
         assert_eq!(largest.next_up().to_bits(), 0x7F);
         assert_eq!(
             largest
@@ -195,14 +195,17 @@ mod tests {
                 .to_bits(),
             0x7E
         );
-        assert_eq!(F8E4M3::from_bits(0xFE).next_down().to_bits(), 0xFF);
+        assert_eq!(F8E4M3Fn::from_bits(0xFE).next_down().to_bits(), 0xFF);
         // The precision limit does not shrink the largest value.
         let limited = Env::IEEE
             .with_saturate(true)
             .with_precision(core::num::NonZeroU32::new(2));
         assert_eq!(largest.next_up_with(limited).0.to_bits(), 0x7E);
         assert_eq!(
-            F8E4M3::from_bits(0xFE).next_down_with(limited).0.to_bits(),
+            F8E4M3Fn::from_bits(0xFE)
+                .next_down_with(limited)
+                .0
+                .to_bits(),
             0xFE
         );
         assert_eq!(F8E4M3Fnuz::from_bits(0x81).next_up().to_bits(), 0);

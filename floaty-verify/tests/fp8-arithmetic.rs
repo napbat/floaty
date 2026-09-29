@@ -9,7 +9,7 @@
 //! operand only has to be a NaN.
 
 use floaty::env::{NanPropagation, NanRule};
-use floaty::{Env, F8E4M3, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, Flags};
+use floaty::{Env, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, Flags};
 
 /// The behavior of the table: round to nearest even with the SSE NaN rule.
 const SSE: Env =
@@ -91,7 +91,7 @@ fn every_fp8_operand_pair_matches_ml_dtypes() {
         4 * FORMAT_BYTES,
         "the table has one block for each format"
     );
-    check_format!(F8E4M3, 0);
+    check_format!(F8E4M3Fn, 0);
     check_format!(F8E5M2, 1);
     check_format!(F8E4M3Fnuz, 2);
     check_format!(F8E5M2Fnuz, 3);

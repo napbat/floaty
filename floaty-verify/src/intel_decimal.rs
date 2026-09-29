@@ -28,7 +28,7 @@ pub use ffi::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Rounding {
     /// `BID_ROUNDING_TO_NEAREST`: to nearest, with a tie to an even digit.
-    NearestEven,
+    TiesToEven,
     /// `BID_ROUNDING_DOWN`: toward negative infinity.
     TowardNegative,
     /// `BID_ROUNDING_UP`: toward positive infinity.
@@ -36,17 +36,17 @@ pub enum Rounding {
     /// `BID_ROUNDING_TO_ZERO`: toward zero.
     TowardZero,
     /// `BID_ROUNDING_TIES_AWAY`: to nearest, with a tie away from zero.
-    NearestAway,
+    TiesToAway,
 }
 
 impl Rounding {
     /// Every rounding direction, in the order of the library values.
     pub const ALL: [Self; 5] = [
-        Self::NearestEven,
+        Self::TiesToEven,
         Self::TowardNegative,
         Self::TowardPositive,
         Self::TowardZero,
-        Self::NearestAway,
+        Self::TiesToAway,
     ];
 
     /// Returns the `BID_ROUNDING_*` value, which the tests of the library
@@ -54,11 +54,11 @@ impl Rounding {
     #[must_use]
     pub const fn code(self) -> u32 {
         match self {
-            Self::NearestEven => 0,
+            Self::TiesToEven => 0,
             Self::TowardNegative => 1,
             Self::TowardPositive => 2,
             Self::TowardZero => 3,
-            Self::NearestAway => 4,
+            Self::TiesToAway => 4,
         }
     }
 
@@ -74,11 +74,11 @@ impl Rounding {
 impl From<Rounding> for floaty::Rounding {
     fn from(rounding: Rounding) -> Self {
         match rounding {
-            Rounding::NearestEven => Self::NearestEven,
+            Rounding::TiesToEven => Self::TiesToEven,
             Rounding::TowardNegative => Self::TowardNegative,
             Rounding::TowardPositive => Self::TowardPositive,
             Rounding::TowardZero => Self::TowardZero,
-            Rounding::NearestAway => Self::NearestAway,
+            Rounding::TiesToAway => Self::TiesToAway,
         }
     }
 }

@@ -2,12 +2,12 @@
 //! multiply-add with Berkeley TestFloat, for binary16, binary32, binary64,
 //! x87 extended precision, and binary128.
 //!
-//! The ARM generator checks every rounding direction with both tininess rules,
-//! and x87 precision control at 32, 64, and 80 bits. The default-NaN, 8086,
-//! and 8086-SSE generators check the `DefaultNan`, `LargerSignificand`, and
-//! `FirstOperand`
-//! NaN rules, which do not depend on the direction. Two- and three-operand
-//! functions use TestFloat level 1, and square root uses level 2.
+//! The ARM generator checks each rounding direction of TestFloat with both
+//! tininess rules, and x87 precision control at 32, 64, and 80 bits. The
+//! default-NaN, 8086, and 8086-SSE generators check the `DefaultNan`,
+//! `LargerSignificand`, and `FirstOperand` NaN rules, which do not depend on
+//! the direction. Two- and three-operand functions use TestFloat level 1,
+//! and square root uses level 2.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -139,7 +139,7 @@ fn same_fused_rule(run: NanRule, mode: NanRule) -> bool {
 macro_rules! in_mode_of_run {
     ($alias:ty, $env:expr, $same:expr, [$($value:ident),+] => $body:expr) => {{
         let env: Env = $env;
-        if env.rounding != Rounding::NearestEven || env.precision.is_some() {
+        if env.rounding != Rounding::TiesToEven || env.precision.is_some() {
             None
         } else if $same(env.nan, Env::IEEE.nan) {
             Some(u128::from($body.to_bits()))
@@ -402,7 +402,7 @@ fn a_rounding_override_reaches_every_operation() {
         0x3F80_0001
     );
     assert_eq!(
-        one.add_with(tiny, Rounding::NearestEven).0.to_bits(),
+        one.add_with(tiny, Rounding::TiesToEven).0.to_bits(),
         0x3F80_0000
     );
 }

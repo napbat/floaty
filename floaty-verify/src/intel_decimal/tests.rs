@@ -24,15 +24,15 @@ fn maps_codes() {
 
 #[test]
 fn computes_each_width() {
-    let one = Bid64::from_string("1", Rounding::NearestEven);
+    let one = Bid64::from_string("1", Rounding::TiesToEven);
     assert_eq!(one.value, 0x31c0_0000_0000_0001);
     assert_eq!(one.flags, Flags::NONE);
-    let two = Bid64::add(one.value, one.value, Rounding::NearestEven);
+    let two = Bid64::add(one.value, one.value, Rounding::TiesToEven);
     assert_eq!(two.value, 0x31c0_0000_0000_0002);
     assert_eq!(Bid64::to_string(two.value).value, "+2E+0");
     let third = Bid32::div(
-        Bid32::from_int32(1, Rounding::NearestEven).value,
-        Bid32::from_int32(3, Rounding::NearestEven).value,
+        Bid32::from_int32(1, Rounding::TiesToEven).value,
+        Bid32::from_int32(3, Rounding::TiesToEven).value,
         Rounding::TowardZero,
     );
     assert_eq!(Bid32::to_string(third.value).value, "+3333333E-7");
@@ -47,34 +47,29 @@ fn computes_each_width() {
 
 #[test]
 fn converts_binary_and_integers() {
-    let one = Bid64::from_int64(1, Rounding::NearestEven).value;
+    let one = Bid64::from_int64(1, Rounding::TiesToEven).value;
     assert_eq!(
-        Bid64::to_binary64(one, Rounding::NearestEven).value,
+        Bid64::to_binary64(one, Rounding::TiesToEven).value,
         0x3ff0_0000_0000_0000
     );
     assert_eq!(
-        Bid64::to_binary32(one, Rounding::NearestEven).value,
+        Bid64::to_binary32(one, Rounding::TiesToEven).value,
         0x3f80_0000
     );
     assert_eq!(
-        Bid64::to_binary80(one, Rounding::NearestEven).value,
+        Bid64::to_binary80(one, Rounding::TiesToEven).value,
         0x3fff_8000_0000_0000_0000
     );
     assert_eq!(
-        Bid64::to_binary128(one, Rounding::NearestEven).value,
+        Bid64::to_binary128(one, Rounding::TiesToEven).value,
         0x3fff_0000_0000_0000_0000_0000_0000_0000
     );
     assert_eq!(
-        Bid64::from_binary80(0x3fff_8000_0000_0000_0000, Rounding::NearestEven).value,
+        Bid64::from_binary80(0x3fff_8000_0000_0000_0000, Rounding::TiesToEven).value,
         one
     );
-    let half = Bid64::from_string("-2.5", Rounding::NearestEven).value;
-    let rounded = Bid64::to_integer(
-        half,
-        Integer::Int8,
-        Rounding::NearestEven,
-        Inexact::Signaled,
-    );
+    let half = Bid64::from_string("-2.5", Rounding::TiesToEven).value;
+    let rounded = Bid64::to_integer(half, Integer::Int8, Rounding::TiesToEven, Inexact::Signaled);
     assert_eq!(rounded.value, -2);
     assert_eq!(rounded.flags, Flags::INEXACT);
     let invalid = Bid64::to_integer(half, Integer::UInt8, Rounding::TowardZero, Inexact::Ignored);
@@ -158,7 +153,7 @@ fn draws_operands_with_their_properties() {
         assert!(equal.value, "{x:#x} and {y:#x} compare equal");
         let root = Bid32::sqrt(
             decimal32(Bid32::LAYOUT.square(&mut rng)),
-            Rounding::NearestEven,
+            Rounding::TiesToEven,
         );
         exact_roots += usize::from(root.flags == Flags::NONE);
         bounds.insert(Bid32::LAYOUT.near_integer(&mut rng, Integer::Int32));

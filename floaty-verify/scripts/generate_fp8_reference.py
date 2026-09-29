@@ -37,7 +37,7 @@ import numpy as np
 
 # floaty alias name, ml_dtypes type.
 FORMATS = [
-    ("F8E4M3", ml_dtypes.float8_e4m3fn),
+    ("F8E4M3Fn", ml_dtypes.float8_e4m3fn),
     ("F8E5M2", ml_dtypes.float8_e5m2),
     ("F8E4M3Fnuz", ml_dtypes.float8_e4m3fnuz),
     ("F8E5M2Fnuz", ml_dtypes.float8_e5m2fnuz),

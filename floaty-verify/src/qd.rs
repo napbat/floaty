@@ -103,7 +103,7 @@ fn binary(function: BinaryFunction, a: Pair, b: Pair, rounding: Rounding) -> Out
 /// Returns the shim code of a rounding direction.
 const fn code(rounding: Rounding) -> c_int {
     match rounding {
-        Rounding::NearestEven => 0,
+        Rounding::TiesToEven => 0,
         Rounding::TowardZero => 1,
         Rounding::TowardPositive => 2,
         Rounding::TowardNegative => 3,

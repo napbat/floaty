@@ -201,7 +201,7 @@ fn integral_operands(random: &mut SplitMix64) -> Vec<u128> {
 /// from EFLAGS there.
 fn check_compare(a: u128, b: u128) {
     let (x, y) = (F80::from_bits(a), F80::from_bits(b));
-    let env = x87_env(Rounding::NearestEven);
+    let env = x87_env(Rounding::TiesToEven);
     let nan_operand = x.is_nan() || y.is_nan();
     let quiet = x.compare_quiet_with(y, env);
     let signaling = x.compare_signaling_with(y, env);

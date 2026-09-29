@@ -778,7 +778,7 @@ fn readtest_conversions() {
             .first()
             .ok_or_else(|| String::from("the operand is missing"))
             .and_then(|field| {
-                let read = conversion.source.read(field, IntelRounding::NearestEven);
+                let read = conversion.source.read(field, IntelRounding::TiesToEven);
                 read.map_err(|error| error.to_string())
             });
         let result = conversion.target.read(&line.result, line.rounding);
