@@ -1570,9 +1570,9 @@ The x87 paths:
   With subnormal operands, binary64 took 174 nanoseconds on the path and 50
   in the engine. A nonzero remainder is a multiple of half the unit in the
   last place of the divisor: half when the dividend lies one binade below
-  the divisor and the quotient is 1. So the remainder can be subnormal only
-  when the exponent field of the divisor is at most the precision. The path
-  therefore takes neither a dividend with exponent field 0 nor such a
+  the divisor and the quotient is 1 or -1. So the remainder can be subnormal
+  only when the exponent field of the divisor is at most the precision. The
+  path therefore takes neither a dividend with exponent field 0 nor such a
   divisor.
 
 The comparison and the minimum and maximum paths:
