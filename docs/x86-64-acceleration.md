@@ -166,7 +166,7 @@ remainder of close operands takes `FPREM1`: 14.7 and 14.8 per operation.
 
 ## Modes
 
-Every host path needs a mode without FTZ, DAZ, or a precision limit, and
+Every host path needs a mode without FTZ, DAZ, saturation, or a precision limit, and
 every path but `round_to_integral` needs a mode that rounds to nearest even.
 A mode is a type, so an operation in another mode compiles to the engine.
 

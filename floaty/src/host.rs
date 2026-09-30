@@ -7,12 +7,12 @@
 //! `--cfg floaty_engine_only`, has no host path, and each entry point returns
 //! `None`.
 //!
-//! A path serves only entry points that return no flags. The mode must round
-//! to nearest even without FTZ, DAZ, or a precision limit below the format
-//! precision, and the environment of the host must match it. The rounding to
-//! an integral value also takes a directed rounding, which its instructions
-//! take from their encoding. A NaN result goes back to the engine, which
-//! selects the NaN by the rule of the mode.
+//! A path serves only entry points that return no flags, in a mode that
+//! `compatible` in `paths` accepts. That function names every field of
+//! `Env`, and the README states the rule. The environment of the host must
+//! match the mode. The rounding to an integral value also takes a directed
+//! rounding, which its instructions take from their encoding. A NaN result
+//! goes back to the engine, which selects the NaN by the rule of the mode.
 
 use crate::format::EncodingKind;
 
