@@ -27,7 +27,7 @@ pub const INTEGERS: bool = true;
 
 /// `true` when the build has F16C, which widens binary16 lanes to binary32
 /// and rounds binary32 lanes to binary16.
-pub const HALF: bool = cfg!(target_feature = "f16c");
+pub const HALF: bool = super::HALF;
 
 /// Returns four binary32 lanes as the value of an SSE register.
 #[inline]

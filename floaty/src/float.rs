@@ -5,9 +5,10 @@ use core::marker::PhantomData;
 
 use crate::env::{Behavior, Env, Flags, Mode, Override, mode};
 use crate::exact::{Exact, Unrounded};
-use crate::format::internal::{Host, LimbConversion, Source};
+use crate::format::internal::{LimbConversion, Source};
 use crate::format::{B11Fnuz, Bid, Binary, Decimal, Dpd, Finite, Fnuz, NoInf, Standard, X87};
 use crate::host;
+use crate::host::Host;
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 use crate::unpacked::Unpacked;

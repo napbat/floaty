@@ -19,7 +19,8 @@ use super::{bfloat, chunk, double_lanes, doubles, half, in_chunks, single_lanes,
 use crate::env::Mode;
 use crate::float::Float;
 use crate::format::Standard;
-use crate::format::internal::{Host, MinMax};
+use crate::format::internal::MinMax;
+use crate::host::Host;
 
 /// Returns the lanes of a binary16 or bfloat16 array widened exactly to
 /// binary32, or `None` for another format or a build without the widening.

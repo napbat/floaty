@@ -30,17 +30,22 @@ use super::{Kind, Operation};
 use crate::env::{Env, Mode};
 use crate::float::Float;
 use crate::format::Standard;
-use crate::format::internal::{Host, MinMax};
+use crate::format::internal::MinMax;
+use crate::host::Host;
 
 /// Returns `true` when the packed paths compute the operations of `kind` on
-/// lanes of the host kind `host`. binary16 lanes compute in binary32 where
+/// lanes of the host kind `host`: the build has the scalar path, and the
+/// packed paths cover the lanes. binary16 lanes compute in binary32 where
 /// the build widens and narrows them, and bfloat16 lanes compute in binary32
 /// in every build. Neither has the fused multiply-add: two roundings of it
 /// through binary32 can differ from one. x87 extended lanes run the scalar
 /// instructions after one check of the control word. The answer is a
 /// constant.
 #[must_use]
-pub const fn lanes_of(host: Host, kind: Kind) -> bool {
+pub const fn available(host: Host, kind: Kind) -> bool {
+    if !super::available(host, kind) {
+        return false;
+    }
     match (host, kind) {
         (
             Host::Single | Host::Double,

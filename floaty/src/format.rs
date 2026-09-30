@@ -14,7 +14,8 @@ use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 use crate::unpacked::Unpacked;
 
-use self::internal::{FixedLayout, Host, LimbConversion, MinMax, Quotient, Source, Step};
+use self::internal::{FixedLayout, LimbConversion, MinMax, Quotient, Source, Step};
+use crate::host::Host;
 
 /// A floating-point format family at a width of `W` bits.
 ///
@@ -234,30 +235,6 @@ pub(crate) mod internal {
         pub payload_digits: u32,
         /// The width in bits of the field that holds a NaN payload.
         pub payload_bits: u32,
-    }
-
-    /// The host format with the same encoding as a floaty format.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum Host {
-        /// No host format.
-        None,
-        /// The host `f32`: IEEE 754 binary32.
-        Single,
-        /// The host `f64`: IEEE 754 binary64.
-        Double,
-        /// IEEE 754 binary16, which computes in the host `f32` and converts in
-        /// host instructions. binary32 holds 2p + 2 bits of binary16, so the
-        /// two roundings of add, subtract, multiply, divide, and square root
-        /// give the correctly rounded result.
-        Half,
-        /// x87 extended precision, which computes on the x87 unit of x86-64
-        /// at the 64-bit precision.
-        Extended,
-        /// bfloat16, which computes in the host `f32` and rounds in a host
-        /// instruction. binary32 holds 2p + 2 bits of bfloat16, so the two
-        /// roundings of add, subtract, multiply, divide, and square root give
-        /// the correctly rounded result.
-        BFloat,
     }
 
     /// How a remainder `x - n * y` rounds the quotient `n = x / y` to an

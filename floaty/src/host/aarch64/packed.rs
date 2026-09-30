@@ -23,7 +23,7 @@ pub const WIDE: bool = false;
 
 /// `true`: every AArch64 target widens binary16 lanes to binary32 and
 /// rounds binary32 lanes to binary16.
-pub const HALF: bool = true;
+pub const HALF: bool = super::HALF;
 
 /// `false`: no packed path converts lanes to integers on AArch64.
 pub const INTEGERS: bool = false;

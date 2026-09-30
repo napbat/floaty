@@ -26,7 +26,8 @@ use super::Operation;
 use super::environment::{self, default_environment};
 use crate::env::{Env, Rounding};
 use crate::format::Standard;
-use crate::format::internal::{Host, LimbConversion, MinMax};
+use crate::format::internal::{LimbConversion, MinMax};
+use crate::host::Host;
 use crate::limbs::Limbs;
 
 /// Returns `true` when the host unit gives the results of `env` for a format

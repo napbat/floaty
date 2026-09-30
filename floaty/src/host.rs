@@ -14,7 +14,7 @@
 //! take from their encoding. A NaN result goes back to the engine, which
 //! selects the NaN by the rule of the mode.
 
-use crate::format::internal::Host;
+use crate::format::EncodingKind;
 
 #[cfg(not(floaty_engine_only))]
 #[cfg(any(
@@ -64,6 +64,57 @@ mod aarch64;
 #[cfg(all(target_arch = "aarch64", not(floaty_engine_only)))]
 use self::aarch64 as environment;
 
+// A build without a host unit takes the capabilities of `none`, which are all
+// `false`.
+#[cfg(any(
+    floaty_engine_only,
+    not(any(
+        all(target_arch = "x86_64", target_feature = "sse2"),
+        target_arch = "aarch64"
+    ))
+))]
+use self::none as environment;
+
+/// The host format with the same encoding as a floaty format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Host {
+    /// No host format.
+    None,
+    /// The host `f32`: IEEE 754 binary32.
+    Single,
+    /// The host `f64`: IEEE 754 binary64.
+    Double,
+    /// IEEE 754 binary16, which computes in the host `f32` and converts in
+    /// host instructions. binary32 holds 2p + 2 bits of binary16, so the
+    /// two roundings of add, subtract, multiply, divide, and square root
+    /// give the correctly rounded result.
+    Half,
+    /// x87 extended precision, which computes on the x87 unit of x86-64
+    /// at the 64-bit precision.
+    Extended,
+    /// bfloat16, which computes in the host `f32` and rounds in a host
+    /// instruction. binary32 holds 2p + 2 bits of bfloat16, so the two
+    /// roundings of add, subtract, multiply, divide, and square root give
+    /// the correctly rounded result.
+    BFloat,
+}
+
+impl Host {
+    /// Returns the host format of the binary format with `exponent_bits`
+    /// exponent bits and `width` bits in the encoding rules `kind`.
+    #[must_use]
+    pub const fn of_binary(exponent_bits: u32, width: u32, kind: EncodingKind) -> Self {
+        match (exponent_bits, width, kind) {
+            (5, 16, EncodingKind::Ieee) => Self::Half,
+            (8, 16, EncodingKind::Ieee) => Self::BFloat,
+            (8, 32, EncodingKind::Ieee) => Self::Single,
+            (11, 64, EncodingKind::Ieee) => Self::Double,
+            (15, 80, EncodingKind::X87) => Self::Extended,
+            _ => Self::None,
+        }
+    }
+}
+
 /// An arithmetic operation of a host path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation {
@@ -103,27 +154,12 @@ pub enum Kind {
 /// a host path compiles to the engine.
 #[must_use]
 pub const fn available(host: Host, kind: Kind) -> bool {
-    let unit = !cfg!(floaty_engine_only)
-        && cfg!(any(
-            all(target_arch = "x86_64", target_feature = "sse2"),
-            target_arch = "aarch64"
-        ));
-    let fused = cfg!(any(
-        all(target_arch = "x86_64", target_feature = "fma"),
-        target_arch = "aarch64"
-    ));
-    let half = cfg!(any(
-        all(target_arch = "x86_64", target_feature = "f16c"),
-        target_arch = "aarch64"
-    ));
-    let rounding = cfg!(any(
-        all(target_arch = "x86_64", target_feature = "sse4.1"),
-        target_arch = "aarch64"
-    ));
-    // Every x86-64 processor has the x87 unit.
-    let x87 = cfg!(target_arch = "x86_64");
-    // `FEAT_FP16` computes binary16 in its own precision.
-    let fp16 = cfg!(all(target_arch = "aarch64", target_feature = "fp16"));
+    let unit = environment::UNIT;
+    let fused = environment::FUSED;
+    let half = environment::HALF;
+    let rounding = environment::ROUNDING;
+    let x87 = environment::X87;
+    let fp16 = environment::HALF_FUSED;
     match (host, kind) {
         // The x87 unit has no fused multiply-add. Two roundings of a bfloat16
         // fused multiply-add, or of an integer, through binary32 can differ
@@ -171,12 +207,8 @@ pub const fn available(host: Host, kind: Kind) -> bool {
 /// constant, so a conversion without a host path compiles to the engine.
 #[must_use]
 pub const fn convertible(from: Host, to: Host) -> bool {
-    let unit = !cfg!(floaty_engine_only)
-        && cfg!(any(
-            all(target_arch = "x86_64", target_feature = "sse2"),
-            target_arch = "aarch64"
-        ));
-    let x87 = cfg!(target_arch = "x86_64");
+    let unit = environment::UNIT;
+    let x87 = environment::X87;
     match (from, to) {
         // A shift widens bfloat16 to binary32 exactly, and integer
         // instructions round binary32 to bfloat16. binary16 widens and rounds
@@ -184,8 +216,7 @@ pub const fn convertible(from: Host, to: Host) -> bool {
         (Host::Single, Host::Double | Host::BFloat | Host::Half)
         | (Host::Double, Host::Single)
         | (Host::BFloat | Host::Half, Host::Single | Host::Double) => unit,
-        // Only AArch64 rounds binary64 to binary16 once.
-        (Host::Double, Host::Half) => unit && cfg!(target_arch = "aarch64"),
+        (Host::Double, Host::Half) => unit && environment::DOUBLE_TO_HALF,
         (Host::Single | Host::Double, Host::Extended)
         | (Host::Extended, Host::Single | Host::Double) => unit && x87,
         _ => false,
@@ -215,10 +246,25 @@ pub use self::none::{
 mod none {
     use core::cmp::Ordering;
 
-    use super::Operation;
+    use super::{Host, Operation};
     use crate::env::Env;
     use crate::format::Standard;
-    use crate::format::internal::{Host, MinMax};
+    use crate::format::internal::MinMax;
+
+    /// `false`: this build has no host unit.
+    pub const UNIT: bool = false;
+    /// `false`: this build has no fused multiply-add instruction.
+    pub const FUSED: bool = false;
+    /// `false`: this build has no binary16 conversion instruction.
+    pub const HALF: bool = false;
+    /// `false`: this build has no instruction that rounds to an integral value.
+    pub const ROUNDING: bool = false;
+    /// `false`: this build has no x87 unit.
+    pub const X87: bool = false;
+    /// `false`: this build has no binary16 fused multiply-add.
+    pub const HALF_FUSED: bool = false;
+    /// `false`: this build has no rounding of binary64 to binary16.
+    pub const DOUBLE_TO_HALF: bool = false;
 
     /// Returns `None`: this build has no host path.
     #[inline]
@@ -342,12 +388,12 @@ mod none {
         use crate::env::{Env, Mode};
         use crate::float::Float;
         use crate::format::Standard;
-        use crate::format::internal::{Host, MinMax};
-        use crate::host::{Kind, Operation};
+        use crate::format::internal::MinMax;
+        use crate::host::{Host, Kind, Operation};
 
         /// Returns `false`: this build has no host path.
         #[must_use]
-        pub const fn lanes_of(_host: Host, _kind: Kind) -> bool {
+        pub const fn available(_host: Host, _kind: Kind) -> bool {
             false
         }
 

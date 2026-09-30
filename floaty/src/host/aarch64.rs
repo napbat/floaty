@@ -8,6 +8,23 @@ use crate::env::Rounding;
 
 pub mod packed;
 
+/// `true`: the build has the floating-point unit.
+pub const UNIT: bool = true;
+/// `true`: every AArch64 target has the fused multiply-add.
+pub const FUSED: bool = true;
+/// `true`: every AArch64 target widens binary16 to binary32 and rounds
+/// binary32 to binary16 in `FCVT`.
+pub const HALF: bool = true;
+/// `true`: every AArch64 target rounds to an integral value in `FRINT`.
+pub const ROUNDING: bool = true;
+/// `false`: AArch64 has no x87 unit.
+pub const X87: bool = false;
+/// `true` when the build has `FEAT_FP16`, which computes the binary16 fused
+/// multiply-add in its own precision.
+pub const HALF_FUSED: bool = cfg!(target_feature = "fp16");
+/// `true`: `FCVT` rounds binary64 to binary16 once.
+pub const DOUBLE_TO_HALF: bool = true;
+
 /// Returns `true` when the floating-point unit rounds to nearest even without
 /// flushing, and enables no exception trap.
 ///

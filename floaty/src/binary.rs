@@ -14,8 +14,9 @@ mod scale;
 use crate::env::{Behavior, Env, Flags, TotalOrder};
 use crate::exact::{self, RoundingTarget, Target, Unrounded};
 use crate::float::Class;
-use crate::format::internal::{Host, LimbConversion, MinMax, Quotient, Source, Step};
+use crate::format::internal::{LimbConversion, MinMax, Quotient, Source, Step};
 use crate::format::{Binary, Encoding, EncodingKind, Standard, Storage, Width};
+use crate::host::Host;
 use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 use crate::unpacked::{Number, Unpacked};
@@ -106,14 +107,7 @@ where
     };
 
     /// The host format with the same encoding.
-    const HOST: Host = match (E, Self::WIDTH, Enc::KIND) {
-        (5, 16, EncodingKind::Ieee) => Host::Half,
-        (8, 16, EncodingKind::Ieee) => Host::BFloat,
-        (8, 32, EncodingKind::Ieee) => Host::Single,
-        (11, 64, EncodingKind::Ieee) => Host::Double,
-        (15, 80, EncodingKind::X87) => Host::Extended,
-        _ => Host::None,
-    };
+    const HOST: Host = Host::of_binary(E, Self::WIDTH, Enc::KIND);
 
     /// The number of NaN payload bits, below the quiet bit.
     const PAYLOAD_DIGITS: u32 = match Enc::KIND {

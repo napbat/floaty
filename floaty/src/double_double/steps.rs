@@ -5,7 +5,7 @@ use core::cmp::Ordering;
 
 use crate::env::{Behavior, Env, Flags, Rounding};
 use crate::float::F64;
-use crate::format::internal::Host;
+use crate::host::Host;
 use crate::host::{self, Kind, Operation, Ready};
 use crate::integer::ToInt;
 

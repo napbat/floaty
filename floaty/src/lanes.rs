@@ -132,9 +132,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn sqrt(self) -> Self {
-        if !host::available(S::HOST, Kind::SquareRoot)
-            || !host::packed::lanes_of(S::HOST, Kind::SquareRoot)
-        {
+        if !host::packed::available(S::HOST, Kind::SquareRoot) {
             return self.map(Float::sqrt);
         }
         match host::packed::sqrt(&self.lanes, &M::ENV) {
@@ -161,9 +159,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn mul_add(self, multiplier: Self, addend: Self) -> Self {
-        if !host::available(S::HOST, Kind::FusedMultiplyAdd)
-            || !host::packed::lanes_of(S::HOST, Kind::FusedMultiplyAdd)
-        {
+        if !host::packed::available(S::HOST, Kind::FusedMultiplyAdd) {
             return self.mul_add_lane_wise(multiplier, addend);
         }
         match host::packed::mul_add(&self.lanes, &multiplier.lanes, &addend.lanes, &M::ENV) {
@@ -199,9 +195,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn round_to_integral(self) -> Self {
-        if !host::available(S::HOST, Kind::RoundToIntegral)
-            || !host::packed::lanes_of(S::HOST, Kind::RoundToIntegral)
-        {
+        if !host::packed::available(S::HOST, Kind::RoundToIntegral) {
             return self.map(Float::round_to_integral);
         }
         match host::packed::round_to_integral(&self.lanes, &M::ENV) {
@@ -274,8 +268,7 @@ macro_rules! operator {
 
             #[inline]
             fn $method(self, other: Self) -> Self {
-                if !host::available(S::HOST, Kind::Arithmetic)
-                    || !host::packed::lanes_of(S::HOST, Kind::Arithmetic)
+                if !host::packed::available(S::HOST, Kind::Arithmetic)
                 {
                     return self.zip(other, ops::$trait::$method);
                 }
@@ -438,7 +431,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn to_int<I: Integer>(self) -> [ToInt<I>; N] {
-        if !host::available(S::HOST, Kind::ToInt) || !host::packed::lanes_of(S::HOST, Kind::ToInt) {
+        if !host::packed::available(S::HOST, Kind::ToInt) {
             return self.lanes.map(Float::to_int::<I>);
         }
         let Some(integers) = host::packed::to_int_i32(&self.lanes, &M::ENV) else {

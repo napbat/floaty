@@ -15,6 +15,24 @@ pub use self::x87::{
     x87_to_single,
 };
 
+/// `true`: the build has the SSE unit.
+pub const UNIT: bool = true;
+/// `true` when the build has FMA, the fused multiply-add of binary32 and
+/// binary64.
+pub const FUSED: bool = cfg!(target_feature = "fma");
+/// `true` when the build has F16C, which widens binary16 to binary32 and
+/// rounds binary32 to binary16.
+pub const HALF: bool = cfg!(target_feature = "f16c");
+/// `true` when the build has SSE4.1, which rounds to an integral value.
+pub const ROUNDING: bool = cfg!(target_feature = "sse4.1");
+/// `true`: every x86-64 processor has the x87 unit.
+pub const X87: bool = true;
+/// `false`: no x86-64 path computes a binary16 fused multiply-add.
+pub const HALF_FUSED: bool = false;
+/// `false`: x86-64 rounds binary64 to binary16 only through binary32, and
+/// two roundings can differ from one.
+pub const DOUBLE_TO_HALF: bool = false;
+
 /// Returns `true` when the SSE unit rounds to nearest even without FTZ or DAZ,
 /// and masks every exception.
 ///

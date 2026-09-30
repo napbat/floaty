@@ -34,9 +34,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn compare_quiet(self, other: Self) -> [Option<Ordering>; N] {
-        if !host::available(S::HOST, Kind::Comparison)
-            || !host::packed::lanes_of(S::HOST, Kind::Comparison)
-        {
+        if !host::packed::available(S::HOST, Kind::Comparison) {
             return self.each(other, |left, right| left.partial_cmp(&right));
         }
         match host::packed::compare(&self.lanes, &other.lanes, &M::ENV) {
@@ -107,8 +105,7 @@ macro_rules! min_max {
             #[must_use]
             #[inline]
             pub fn $name(self, other: Self) -> Self {
-                if !host::available(S::HOST, Kind::Comparison)
-                    || !host::packed::lanes_of(S::HOST, Kind::Comparison)
+                if !host::packed::available(S::HOST, Kind::Comparison)
                 {
                     return self.zip(other, Float::$name);
                 }
