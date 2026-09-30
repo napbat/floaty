@@ -26,6 +26,7 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
+use floaty::env::NanPropagation;
 use floaty::{
     BF16, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F4E2M1Fn,
     F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz,
@@ -44,11 +45,15 @@ use rug::integer::Order;
 /// floaty's rule. The payload value of a decimal NaN is a field of
 /// `trailing` bits. The binary payload is the fraction below the quiet bit.
 /// A format with one NaN encoding has no payload, and neither has a NaN that
-/// a finite value or an infinity gives.
-fn binary_payload(source: &Decoded<2>, trailing: u32, format: &Format) -> Integer {
+/// a finite value or an infinity gives, nor the default NaN of the
+/// `DefaultNan` rule.
+fn binary_payload(source: &Decoded<2>, trailing: u32, format: &Format, env: &Env) -> Integer {
     let Decoded::Nan { payload, .. } = *source else {
         return Integer::ZERO;
     };
+    if env.nan.propagation == NanPropagation::DefaultNan {
+        return Integer::ZERO;
+    }
     match format.specials {
         Specials::Ieee => align(
             Integer::from_digits(&payload, Order::Lsf),
@@ -162,7 +167,7 @@ macro_rules! check_to_binary {
                         assert!(!signaling, "{context}: a conversion quiets a NaN");
                         assert_eq!(
                             Integer::from_digits(&payload, Order::Lsf),
-                            binary_payload(&operand.decoded, trailing, &format),
+                            binary_payload(&operand.decoded, trailing, &format, &env),
                             "{context}: the NaN payload"
                         );
                     }

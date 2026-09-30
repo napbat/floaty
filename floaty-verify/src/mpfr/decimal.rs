@@ -11,20 +11,21 @@
 
 use core::num::NonZeroU32;
 
-use floaty::env::Tininess;
+use floaty::env::{NanPropagation, NanRule, Tininess};
 use floaty::{Decoded, Env, Flags, Rounding};
 use rug::float::Round;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
 use super::{
-    Operand, Parameters, Read, Underflow, limit_precision, overflows_to_infinity, underflow_flags,
+    Operand, Parameters, Read, Underflow, limit_precision, overflows_to_infinity, select_nan,
+    underflow_flags,
 };
 
 /// The behaviors of the conversion tests from a binary format to a decimal
 /// format. The tininess rule and `saturate` do not apply to a decimal
 /// destination.
-pub const TO_DECIMAL_BEHAVIORS: [Env; 9] = [
+pub const TO_DECIMAL_BEHAVIORS: [Env; 10] = [
     Env::IEEE,
     Env::IEEE.with_rounding(Rounding::TowardZero),
     Env::IEEE
@@ -42,11 +43,12 @@ pub const TO_DECIMAL_BEHAVIORS: [Env; 9] = [
     Env::IEEE
         .with_rounding(Rounding::AwayFromZero)
         .with_flush_to_zero(true),
+    Env::IEEE.with_nan(NanRule::new(NanPropagation::DefaultNan).with_default_negative(true)),
 ];
 
 /// The behaviors of the conversion tests from a decimal format to a binary
 /// format.
-pub const FROM_DECIMAL_BEHAVIORS: [Env; 9] = [
+pub const FROM_DECIMAL_BEHAVIORS: [Env; 10] = [
     Env::IEEE,
     Env::IEEE
         .with_rounding(Rounding::TowardZero)
@@ -68,6 +70,7 @@ pub const FROM_DECIMAL_BEHAVIORS: [Env; 9] = [
         .with_rounding(Rounding::TiesTowardZero)
         .with_tininess(Tininess::BeforeRounding),
     Env::IEEE.with_rounding(Rounding::AwayFromZero),
+    Env::IEEE.with_nan(NanRule::new(NanPropagation::DefaultNan).with_default_negative(true)),
 ];
 
 /// The parameters of a decimal format.
@@ -369,9 +372,10 @@ fn overflow(
 /// values by [`to_decimal`].
 ///
 /// A zero keeps its sign and gets exponent 0, the preferred exponent. An
-/// infinity keeps its sign. A NaN keeps its sign, and its payload follows
-/// [`decimal_payload`] from a field of `payload_bits` bits. A signaling NaN
-/// signals invalid.
+/// infinity keeps its sign. A NaN gives the NaN that the NaN rule selects
+/// from it, by [`select_nan`]: the NaN with its sign, or the default NaN.
+/// The payload of the selected NaN follows [`decimal_payload`] from a field
+/// of `payload_bits` bits. A signaling NaN signals invalid.
 ///
 /// # Panics
 ///
@@ -406,8 +410,9 @@ pub fn convert<const N: usize>(
             if nan.signaling {
                 flags |= Flags::INVALID;
             }
-            let payload = decimal_payload(nan.payload, payload_bits, format);
-            let negative = nan.negative;
+            let selected = select_nan(&[nan], env);
+            let payload = decimal_payload(selected.payload, payload_bits, format);
+            let negative = selected.negative;
             (DecimalValue::Nan { negative, payload }, flags)
         }
         Read::Unsupported => panic!("the oracle has no rule for an unsupported encoding"),

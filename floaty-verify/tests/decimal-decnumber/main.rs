@@ -90,7 +90,7 @@ mod vectors;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use floaty::env::{InvalidProduct, NanPropagation, NanRule};
+use floaty::env::InvalidProduct;
 use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
 use floaty::{Class, Env, Flags, Float, Rounding};
 use floaty_verify::decnumber::{self, Arithmetic, Binary, Format, Status, Unary};
@@ -494,8 +494,7 @@ where
             }
         }
         Operation::Fma => {
-            let nan = NanRule::new(NanPropagation::SignalingFirst)
-                .with_invalid_product(InvalidProduct::YieldsToNan);
+            let nan = env.nan.with_invalid_product(InvalidProduct::YieldsToNan);
             rounded(value(0).mul_add_with(value(1), value(2), env.with_nan(nan)))
         }
         Operation::Class => (Answer::Text(class_name(value(0))), Flags::NONE),

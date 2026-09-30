@@ -4,20 +4,86 @@
 //!
 //! decimal64 and decimal128 run against `decDouble` and `decQuad`, and
 //! decimal32 against decNumber's arbitrary-precision numbers in the decimal32
-//! context. The decimal32 operations leave out the copies, because
+//! context.
+//!
+//! Each case whose result is a NaN in the direction to nearest even also runs
+//! with the `DefaultNan` rule. It must give floaty's default NaN, quiet with
+//! a zero payload, with the flags of the case. The NaN rule selects only the
+//! NaN, so the flags do not change. The decimal32 operations leave out the copies, because
 //! decNumber's arbitrary-precision copies give a canonical encoding, and
 //! floaty's sign operations keep the bits. The `dd` and `dq` vectors and the
 //! decimal64 and decimal128 random cases check the copies.
 
+use floaty::Env;
+use floaty::env::{NanPropagation, NanRule};
 use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
 use floaty_verify::decnumber::{Arithmetic, Binary, Double, Quad, Single, Unary};
 use floaty_verify::dectest::Operation;
 
 use super::operands::{Generator, Shape};
 use super::{
-    Report, SHARED_ROUNDINGS, Tally, compared, describe, describe_operands, details, direction,
-    excluded, flags_of, keeps_encoding, noted, run_floaty, run_floaty_static, run_oracle,
+    Answer, Report, SHARED_ROUNDINGS, Tally, compared, describe, describe_operands, details,
+    direction, excluded, flags_of, keeps_encoding, noted, run_floaty, run_floaty_in,
+    run_floaty_static, run_oracle,
 };
+
+/// The behavior of the default-NaN cases: round to nearest even, with a
+/// negative default NaN, so that the sign of the result shows the rule.
+const DEFAULT_NAN: Env =
+    Env::IEEE.with_nan(NanRule::new(NanPropagation::DefaultNan).with_default_negative(true));
+
+/// Returns `true` for a DPD encoding of `W` bits that is a NaN: its five
+/// combination bits below the sign are all ones.
+fn is_nan<const W: usize>(bits: u128) -> bool {
+    let width = u32::try_from(W).expect("a width fits a u32");
+    (bits >> (width - 6)) & 0x1F == 0x1F
+}
+
+/// Returns the DPD encoding of `W` bits of the default NaN of
+/// [`DEFAULT_NAN`]: negative, quiet, and with a zero payload.
+fn default_nan<const W: usize>() -> u128 {
+    let width = u32::try_from(W).expect("a width fits a u32");
+    0xFC << (width - 8)
+}
+
+/// Runs a case whose decNumber result `expected` is a NaN with the
+/// `DefaultNan` rule, and records a failure when floaty does not give the
+/// default NaN with `expected_flags`. Returns `true` when the case runs.
+fn check_default_nan<F: Arithmetic, const W: usize>(
+    operation: &Operation,
+    operands: &[F::Bits],
+    (expected, expected_flags): (Answer<F::Bits>, floaty::Flags),
+    tally: &mut Tally,
+) -> bool
+where
+    Width<W>: Storage<Bits = F::Bits>,
+    Decimal<Dpd>: Standard<W, Bits = F::Bits>,
+{
+    // A copy keeps the bits of its operand under every NaN rule.
+    let nan_result = expected
+        .encoding()
+        .is_some_and(|bits| is_nan::<W>(bits.into()));
+    if keeps_encoding(operation) || !nan_result {
+        return false;
+    }
+    let (answer, flags) = run_floaty_in::<F, W>(operation, operands, DEFAULT_NAN);
+    let default = F::Bits::try_from(default_nan::<W>())
+        .ok()
+        .expect("the default NaN fits the storage of its format");
+    let flags = compared(flags);
+    if answer != Answer::Encoding(default) || flags != expected_flags {
+        tally.fail(|| {
+            format!(
+                "{operation:?} DefaultNan [{}]: floaty gives {} {flags:?}, expected {} \
+                 {expected_flags:?}",
+                describe_operands::<F>(operands),
+                describe::<F>(&answer),
+                describe::<F>(&Answer::Encoding(default)),
+            )
+        });
+    }
+    true
+}
 
 /// The arithmetic operations, which round.
 pub(super) fn arithmetic() -> Vec<Operation> {
@@ -79,6 +145,7 @@ where
     let mut generator = Generator::<F>::new(seed, Shape::of::<F>());
     let mut tally = Tally::default();
     let mut static_checks = 0_usize;
+    let mut default_nan_checks = 0_usize;
     for operation in operations {
         let report = Report::of(operation);
         for _ in 0..count {
@@ -117,6 +184,16 @@ where
                 let flags = compared(flags);
                 let expected_flags =
                     flags_of(status) | details::<F>(operation, (expected, status), toward_zero);
+                if rounding == floaty_verify::decnumber::Rounding::HalfEven
+                    && check_default_nan::<F, W>(
+                        operation,
+                        &operands,
+                        (expected, expected_flags),
+                        &mut tally,
+                    )
+                {
+                    default_nan_checks += 1;
+                }
                 if answer == expected && flags == expected_flags {
                     tally.passed += 1;
                     continue;
@@ -139,6 +216,10 @@ where
     assert!(
         static_checks > 0 || !has_addition,
         "the static modes checked arithmetic cases"
+    );
+    assert!(
+        default_nan_checks > 0,
+        "the DefaultNan rule checked cases with a NaN result"
     );
     tally
 }
