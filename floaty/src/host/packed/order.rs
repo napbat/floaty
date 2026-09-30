@@ -13,8 +13,9 @@
 
 use core::cmp::Ordering;
 
+use super::super::bits::{min_max_differs, min_max_differs_64};
 use super::super::environment::{self, packed};
-use super::super::paths::{min_max_differs, min_max_differs_64, min_max_f32, min_max_f64};
+use super::super::paths::{min_max_f32, min_max_f64};
 use super::{bfloat, chunk, double_lanes, doubles, half, in_chunks, single_lanes, singles};
 use crate::env::Mode;
 use crate::float::Float;

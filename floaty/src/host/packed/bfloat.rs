@@ -13,9 +13,9 @@
 //! the scalar path.
 
 use super::super::Operation;
+use super::super::bits::nan_bfloat;
 use super::super::environment::{self, packed};
 use super::super::narrow::round_to_bfloat;
-use super::super::paths::nan_bfloat;
 use super::{chunk, encodings_u16, in_chunks, lanes_u16, singles};
 use crate::env::{Mode, Rounding};
 use crate::float::Float;

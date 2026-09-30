@@ -23,6 +23,7 @@
 use core::cmp::Ordering;
 
 use super::Operation;
+use super::bits::{min_max_differs, min_max_differs_64, nan_16, nan_32, nan_64};
 use super::environment::{self, default_environment};
 use crate::env::{Env, Rounding};
 use crate::format::Standard;
@@ -59,71 +60,73 @@ const fn compatible(env: &Env, precision: u32) -> bool {
         && full_precision
 }
 
-/// Returns `true` for the bits of a binary32 NaN.
-#[inline]
-pub(super) const fn nan_32(bits: u32) -> bool {
-    bits & 0x7FFF_FFFF > 0x7F80_0000
-}
-
-/// Returns `true` for the bits of a binary16 NaN.
-#[inline]
-pub(super) const fn nan_16(bits: u16) -> bool {
-    bits & 0x7FFF > 0x7C00
-}
-
-/// Returns `true` for the bits of a bfloat16 NaN.
-#[inline]
-pub(super) const fn nan_bfloat(bits: u16) -> bool {
-    bits & 0x7FFF > 0x7F80
-}
-
-/// Returns `true` for the bits of a binary64 NaN.
-#[inline]
-pub(super) const fn nan_64(bits: u64) -> bool {
-    bits & 0x7FFF_FFFF_FFFF_FFFF > 0x7FF0_0000_0000_0000
-}
-
 /// Returns the host value of a binary32 encoding.
 #[inline]
 pub(super) fn single<S: Standard<W>, const W: usize>(bits: S::Bits) -> f32 {
-    let low = bits.to_limbs().limb(0);
-    f32::from_bits(u32::try_from(low).expect("a binary32 encoding has 32 bits"))
+    single_of(bits.to_limbs().limb(0))
 }
 
 /// Returns the host value of a binary16 encoding, widened exactly to
 /// binary32.
 #[inline]
 fn half<S: Standard<W>, const W: usize>(bits: S::Bits) -> f32 {
-    let low = bits.to_limbs().limb(0);
-    environment::widen_half(u16::try_from(low).expect("a binary16 encoding has 16 bits"))
+    half_of(bits.to_limbs().limb(0))
 }
 
 /// Returns the encoding of a binary32 result rounded to binary16, or `None`
 /// for a NaN, which goes back to the engine.
 #[inline]
 fn half_encoding<S: Standard<W>, const W: usize>(result: f32) -> Option<S::Bits> {
-    if nan_32(result.to_bits()) {
-        return None;
-    }
-    encoding::<S, W>(u64::from(environment::narrow_half(result)), false)
+    encoding::<S, W>(half_bits(result)?, false)
 }
 
 /// Returns the host value of a bfloat16 encoding, widened exactly to
-/// binary32: a bfloat16 encoding is the high half of a binary32 encoding.
+/// binary32.
 #[inline]
 fn bfloat<S: Standard<W>, const W: usize>(bits: S::Bits) -> f32 {
-    let low = bits.to_limbs().limb(0);
-    f32::from_bits(u32::try_from(low << 16).expect("a bfloat16 encoding has 16 bits"))
+    bfloat_of(bits.to_limbs().limb(0))
 }
 
 /// Returns the encoding of a binary32 result rounded to bfloat16, or `None`
 /// for a NaN, which goes back to the engine.
 #[inline]
 fn bfloat_encoding<S: Standard<W>, const W: usize>(result: f32) -> Option<S::Bits> {
-    if nan_32(result.to_bits()) {
-        return None;
-    }
-    encoding::<S, W>(u64::from(environment::narrow_bfloat(result)), false)
+    encoding::<S, W>(bfloat_bits(result)?, false)
+}
+
+/// Returns the host value of the binary32 encoding in the low bits of `low`.
+#[inline]
+fn single_of(low: u64) -> f32 {
+    f32::from_bits(u32::try_from(low).expect("a binary32 encoding has 32 bits"))
+}
+
+/// Returns the host value of the binary16 encoding in the low bits of `low`,
+/// widened exactly to binary32.
+#[inline]
+fn half_of(low: u64) -> f32 {
+    environment::widen_half(u16::try_from(low).expect("a binary16 encoding has 16 bits"))
+}
+
+/// Returns the host value of the bfloat16 encoding in the low bits of `low`,
+/// widened exactly to binary32: a bfloat16 encoding is the high half of a
+/// binary32 encoding.
+#[inline]
+fn bfloat_of(low: u64) -> f32 {
+    f32::from_bits(u32::try_from(low << 16).expect("a bfloat16 encoding has 16 bits"))
+}
+
+/// Returns the bits of a binary32 result rounded to binary16, or `None` for
+/// a NaN, which goes back to the engine.
+#[inline]
+fn half_bits(result: f32) -> Option<u64> {
+    (!nan_32(result.to_bits())).then(|| u64::from(environment::narrow_half(result)))
+}
+
+/// Returns the bits of a binary32 result rounded to bfloat16, or `None` for
+/// a NaN, which goes back to the engine.
+#[inline]
+fn bfloat_bits(result: f32) -> Option<u64> {
+    (!nan_32(result.to_bits())).then(|| u64::from(environment::narrow_bfloat(result)))
 }
 
 /// Returns the host value of a binary64 encoding.
@@ -393,30 +396,6 @@ pub fn compare<S: Standard<W>, const W: usize>(
     }
 }
 
-/// Returns `true` for two binary32 encodings where the minimum and maximum
-/// instructions of the host differ from the operations: a NaN operand, or two
-/// zeros. `MINSS` then gives the second operand, and every operation orders
-/// `-0` below `+0`. The test has no branch, so LLVM tests the lanes of a
-/// packed path at once.
-#[inline]
-pub(super) fn min_max_differs(left: u32, right: u32) -> bool {
-    let nan = (left & 0x7FFF_FFFF).max(right & 0x7FFF_FFFF) > 0x7F80_0000;
-    // The shift drops the sign bits, so the result is zero for two zeros.
-    let zeros = (left | right) << 1 == 0;
-    nan | zeros
-}
-
-/// Returns `true` for two binary64 encodings where the minimum and maximum
-/// instructions of the host differ from the operations, as
-/// `min_max_differs` does for binary32.
-#[inline]
-pub(super) fn min_max_differs_64(left: u64, right: u64) -> bool {
-    let magnitude = 0x7FFF_FFFF_FFFF_FFFF;
-    let nan = (left & magnitude).max(right & magnitude) > 0x7FF0_0000_0000_0000;
-    let zeros = (left | right) << 1 == 0;
-    nan | zeros
-}
-
 /// Returns the smaller or the larger of two binary32 values from the host
 /// unit, as `operation` selects.
 #[inline]
@@ -515,7 +494,7 @@ fn remainder_fits(dividend: u64, divisor: u64, precision: u32) -> bool {
 #[inline]
 fn widened_remainder(dividend: u32, divisor: u32) -> Option<f32> {
     let field = |bits: u32| u64::from((bits >> 23) & 0xFF);
-    if !remainder_fits(field(dividend), field(divisor), 24) {
+    if !remainder_fits(field(dividend), field(divisor), Host::Single.precision()) {
         return None;
     }
     environment::x87_remainder_single(dividend, divisor).map(f32::from_bits)
@@ -574,18 +553,6 @@ pub fn remainder<S: Standard<W>, const W: usize>(
     }
 }
 
-/// Returns the precision of a host kind.
-pub(super) const fn precision_of(host: Host) -> u32 {
-    match host {
-        Host::None => 0,
-        Host::BFloat => 8,
-        Host::Half => 11,
-        Host::Single => 24,
-        Host::Double => 53,
-        Host::Extended => 64,
-    }
-}
-
 /// Returns an encoding of the host kind `from` converted to the host kind
 /// `to` by the host unit, or `None` when the path does not apply or the
 /// value is a NaN. A widening is exact, and a narrowing rounds once. The
@@ -598,37 +565,28 @@ pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 
     } else {
         to
     };
-    if !ready_for(unit, env, precision_of(to)) {
+    if !ready_for(unit, env, to.precision()) {
         return None;
     }
     let low = bits[0];
-    let single = |bits: u64| f32::from_bits(u32::try_from(bits).expect("a binary32 encoding"));
-    let half =
-        |bits: u64| environment::widen_half(u16::try_from(bits).expect("a binary16 encoding"));
     let result = match (from, to) {
         (Host::Single, Host::Double) => {
-            let value = single(low);
+            let value = single_of(low);
             (!nan_32(value.to_bits())).then(|| environment::widen_single(value).to_bits())
         }
         (Host::Half, Host::Single) => {
-            let bits = half(low).to_bits();
+            let bits = half_of(low).to_bits();
             (!nan_32(bits)).then_some(u64::from(bits))
         }
         (Host::Half, Host::Double) => {
-            let value = half(low);
+            let value = half_of(low);
             (!nan_32(value.to_bits())).then(|| environment::widen_single(value).to_bits())
         }
         (Host::Double, Host::Single) => {
             let value = f64::from_bits(low);
             (!nan_64(low)).then(|| u64::from(environment::narrow_double(value).to_bits()))
         }
-        (Host::Single, Host::Half) => {
-            let value = single(low);
-            if nan_32(value.to_bits()) {
-                return None;
-            }
-            Some(u64::from(environment::narrow_half(value)))
-        }
+        (Host::Single, Host::Half) => half_bits(single_of(low)),
         (Host::Double, Host::Half) => {
             if nan_64(low) {
                 return None;
@@ -636,21 +594,14 @@ pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 
             environment::narrow_double_to_half(f64::from_bits(low)).map(u64::from)
         }
         (Host::BFloat, Host::Single) => {
-            let bits = u32::try_from(low << 16).expect("a bfloat16 encoding has 16 bits");
+            let bits = bfloat_of(low).to_bits();
             (!nan_32(bits)).then_some(u64::from(bits))
         }
         (Host::BFloat, Host::Double) => {
-            let bits = u32::try_from(low << 16).expect("a bfloat16 encoding has 16 bits");
-            let value = f32::from_bits(bits);
-            (!nan_32(bits)).then(|| environment::widen_single(value).to_bits())
+            let value = bfloat_of(low);
+            (!nan_32(value.to_bits())).then(|| environment::widen_single(value).to_bits())
         }
-        (Host::Single, Host::BFloat) => {
-            let value = single(low);
-            if nan_32(value.to_bits()) {
-                return None;
-            }
-            Some(u64::from(environment::narrow_bfloat(value)))
-        }
+        (Host::Single, Host::BFloat) => bfloat_bits(single_of(low)),
         (Host::Single, Host::Extended) => {
             let encoding = u32::try_from(low).expect("a binary32 encoding");
             return environment::x87_from_single(encoding);
@@ -673,7 +624,7 @@ pub struct Ready(());
 /// `None`.
 #[inline]
 pub fn ready(env: &Env) -> Option<Ready> {
-    ready_for(Host::Double, env, 53).then_some(Ready(()))
+    ready_for(Host::Double, env, Host::Double.precision()).then_some(Ready(()))
 }
 
 // `self` is the proof that the host paths apply. The methods need the proof,

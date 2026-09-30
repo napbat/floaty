@@ -21,6 +21,12 @@ use crate::format::EncodingKind;
     all(target_arch = "x86_64", target_feature = "sse2"),
     target_arch = "aarch64"
 ))]
+mod bits;
+#[cfg(not(floaty_engine_only))]
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "sse2"),
+    target_arch = "aarch64"
+))]
 mod paths;
 #[cfg(not(floaty_engine_only))]
 #[cfg(any(
@@ -100,6 +106,20 @@ pub enum Host {
 }
 
 impl Host {
+    /// Returns the precision of the host format, or 0 for `None`, which has
+    /// no host path.
+    #[must_use]
+    pub const fn precision(self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::BFloat => 8,
+            Self::Half => 11,
+            Self::Single => 24,
+            Self::Double => 53,
+            Self::Extended => 64,
+        }
+    }
+
     /// Returns the host format of the binary format with `exponent_bits`
     /// exponent bits and `width` bits in the encoding rules `kind`.
     #[must_use]
@@ -420,7 +440,7 @@ mod none {
 
         /// Returns `false`: this build has no host path.
         #[must_use]
-        pub const fn converts(_from: Host, _to: Host) -> bool {
+        pub const fn convertible(_from: Host, _to: Host) -> bool {
             false
         }
 

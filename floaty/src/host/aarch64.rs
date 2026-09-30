@@ -3,7 +3,7 @@
 
 use core::cmp::Ordering;
 
-use super::Operation;
+use super::{Operation, bits};
 use crate::env::Rounding;
 
 pub mod packed;
@@ -443,7 +443,7 @@ pub fn to_int_f32(value: f32) -> Option<i64> {
     }
     // FCVTNS gives zero for a NaN. The NaN test uses integer instructions, as
     // the paths do.
-    let nan = value.to_bits() & 0x7FFF_FFFF > 0x7F80_0000;
+    let nan = bits::nan_32(value.to_bits());
     (result != i64::MIN && result != i64::MAX && !nan).then_some(result)
 }
 
@@ -466,7 +466,7 @@ pub fn to_int_f64(value: f64) -> Option<i64> {
     }
     // FCVTNS gives zero for a NaN. The NaN test uses integer instructions, as
     // the paths do.
-    let nan = value.to_bits() & 0x7FFF_FFFF_FFFF_FFFF > 0x7FF0_0000_0000_0000;
+    let nan = bits::nan_64(value.to_bits());
     (result != i64::MIN && result != i64::MAX && !nan).then_some(result)
 }
 

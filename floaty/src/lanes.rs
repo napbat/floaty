@@ -220,7 +220,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn convert<T: FloatType>(self) -> Lanes<T, N> {
-        if !host::packed::converts(S::HOST, T::HOST) {
+        if !host::packed::convertible(S::HOST, T::HOST) {
             return Lanes::new(self.lanes.map(Float::convert::<T>));
         }
         match host::packed::convert(&self.lanes, T::HOST, &<T::Mode as Mode>::ENV) {

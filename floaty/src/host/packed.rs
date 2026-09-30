@@ -22,10 +22,9 @@ mod order;
 
 use core::cmp::Ordering;
 
+use super::bits::{nan_16, nan_32, nan_64, nan_bfloat};
 use super::environment::{self, packed};
-use super::paths::{
-    nan_16, nan_32, nan_64, nan_bfloat, precision_of, ready_for, ready_for_integral,
-};
+use super::paths::{ready_for, ready_for_integral};
 use super::{Kind, Operation};
 use crate::env::{Env, Mode};
 use crate::float::Float;
@@ -70,11 +69,15 @@ pub const fn available(host: Host, kind: Kind) -> bool {
 }
 
 /// Returns `true` when the packed paths convert lanes from the host kind
-/// `from` to the host kind `to`. The answer is a constant. binary64 lanes do
+/// `from` to the host kind `to`: the build has the scalar conversion, and the
+/// packed paths cover the lanes. The answer is a constant. binary64 lanes do
 /// not round to binary16 or bfloat16: two roundings through binary32 can
 /// differ from one.
 #[must_use]
-pub const fn converts(from: Host, to: Host) -> bool {
+pub const fn convertible(from: Host, to: Host) -> bool {
+    if !super::convertible(from, to) {
+        return false;
+    }
     match (from, to) {
         (Host::Single, Host::Double | Host::BFloat)
         | (Host::Double, Host::Single)
@@ -489,7 +492,7 @@ pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     to: Host,
     env: &Env,
 ) -> Option<[u64; N]> {
-    if !ready_for(to, env, precision_of(to)) {
+    if !ready_for(to, env, to.precision()) {
         return None;
     }
     match (S::HOST, to) {

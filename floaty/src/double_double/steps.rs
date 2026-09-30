@@ -5,8 +5,7 @@ use core::cmp::Ordering;
 
 use crate::env::{Behavior, Env, Flags, Rounding};
 use crate::float::F64;
-use crate::host::Host;
-use crate::host::{self, Kind, Operation, Ready};
+use crate::host::{self, Operation, Ready};
 use crate::integer::ToInt;
 
 /// Runs binary64 operations under one behavior and collects their flags, as
@@ -40,11 +39,7 @@ impl<B: Behavior> Steps<B> {
     /// allows them, which one check decides for every step.
     pub fn without_flags(behavior: B) -> Self {
         let behavior = behavior.without_saturation();
-        let host = if host::available(Host::Double, Kind::Arithmetic) {
-            host::ready(&behavior.env())
-        } else {
-            None
-        };
+        let host = host::ready(&behavior.env());
         Self {
             behavior,
             flags: Flags::NONE,

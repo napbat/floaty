@@ -2,6 +2,7 @@
 //! extended paths.
 
 use super::super::Operation;
+use crate::host::bits;
 
 /// Returns `true` when the x87 unit rounds to nearest even at the 64-bit
 /// precision, and masks every exception.
@@ -184,7 +185,7 @@ pub fn x87_to_single(value: &[u64; 2]) -> Option<u32> {
         u32, "fld tbyte ptr [{value}]", "fstp dword ptr [{result}]"; value.as_ptr()
     );
     // The NaN test uses integer instructions, as the paths do.
-    let nan = result & 0x7FFF_FFFF > 0x7F80_0000;
+    let nan = bits::nan_32(result);
     (!nan).then_some(result)
 }
 
@@ -196,7 +197,7 @@ pub fn x87_to_double(value: &[u64; 2]) -> Option<u64> {
         u64, "fld tbyte ptr [{value}]", "fstp qword ptr [{result}]"; value.as_ptr()
     );
     // The NaN test uses integer instructions, as the paths do.
-    let nan = result & 0x7FFF_FFFF_FFFF_FFFF > 0x7FF0_0000_0000_0000;
+    let nan = bits::nan_64(result);
     (!nan).then_some(result)
 }
 
@@ -250,7 +251,7 @@ macro_rules! x87_remainder {
 pub fn x87_remainder_single(dividend: u32, divisor: u32) -> Option<u32> {
     let result = x87_remainder!(u32, "dword"; &raw const dividend, &raw const divisor);
     // The NaN test uses integer instructions, as the paths do.
-    let nan = result & 0x7FFF_FFFF > 0x7F80_0000;
+    let nan = bits::nan_32(result);
     (!nan).then_some(result)
 }
 
@@ -260,7 +261,7 @@ pub fn x87_remainder_single(dividend: u32, divisor: u32) -> Option<u32> {
 pub fn x87_remainder_double(dividend: u64, divisor: u64) -> Option<u64> {
     let result = x87_remainder!(u64, "qword"; &raw const dividend, &raw const divisor);
     // The NaN test uses integer instructions, as the paths do.
-    let nan = result & 0x7FFF_FFFF_FFFF_FFFF > 0x7FF0_0000_0000_0000;
+    let nan = bits::nan_64(result);
     (!nan).then_some(result)
 }
 

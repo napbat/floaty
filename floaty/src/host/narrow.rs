@@ -88,7 +88,7 @@ fn round_to_subnormal_half(magnitude: u32) -> u32 {
 #[inline]
 pub fn round_to_bfloat(bits: u32) -> u16 {
     let high = bits >> 16;
-    let rounded = if super::paths::nan_32(bits) {
+    let rounded = if super::bits::nan_32(bits) {
         high | 0x0040
     } else {
         (bits + 0x7FFF + (high & 1)) >> 16
@@ -119,8 +119,8 @@ mod tests {
         for bits in encodings() {
             let ours = super::round_to_bfloat(bits);
             let (engine, _) = F32::from_bits(bits).convert_with::<BF16>(Env::IEEE);
-            if super::super::paths::nan_32(bits) {
-                assert!(super::super::paths::nan_bfloat(ours), "{bits:#010x}");
+            if super::super::bits::nan_32(bits) {
+                assert!(super::super::bits::nan_bfloat(ours), "{bits:#010x}");
             } else {
                 assert_eq!(ours, engine.to_bits(), "{bits:#010x}");
             }
@@ -134,8 +134,8 @@ mod tests {
         for bits in 0..=u16::MAX {
             let ours = super::widen_half_bits(bits);
             let (engine, _) = F16::from_bits(bits).convert_with::<F32>(Env::IEEE);
-            if super::super::paths::nan_16(bits) {
-                assert!(super::super::paths::nan_32(ours), "{bits:#06x}");
+            if super::super::bits::nan_16(bits) {
+                assert!(super::super::bits::nan_32(ours), "{bits:#06x}");
             } else {
                 assert_eq!(ours, engine.to_bits(), "{bits:#06x}");
             }
@@ -149,8 +149,8 @@ mod tests {
         for bits in encodings() {
             let ours = super::round_to_half(bits);
             let (engine, _) = F32::from_bits(bits).convert_with::<F16>(Env::IEEE);
-            if super::super::paths::nan_32(bits) {
-                assert!(super::super::paths::nan_16(ours), "{bits:#010x}");
+            if super::super::bits::nan_32(bits) {
+                assert!(super::super::bits::nan_16(ours), "{bits:#010x}");
             } else {
                 assert_eq!(ours, engine.to_bits(), "{bits:#010x}");
             }

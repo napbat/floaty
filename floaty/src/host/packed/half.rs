@@ -10,8 +10,8 @@
 //! path.
 
 use super::super::Operation;
+use super::super::bits::nan_16;
 use super::super::environment::{self, packed};
-use super::super::paths::nan_16;
 use super::{chunk, encodings_u16, in_chunks, lanes_u16, singles};
 use crate::env::{Mode, Rounding};
 use crate::float::Float;
