@@ -31,8 +31,8 @@ use core::num::NonZeroU32;
 use floaty::env::Tininess;
 use floaty::{
     BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F4E2M1Fn,
-    F6E2M3Fn, F6E3M2Fn, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F256, F512, Flags, Rounding,
-    TF32,
+    F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz,
+    F16, F256, F512, Flags, Rounding, TF32,
 };
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs, to_u128};
 use floaty_verify::mpfr::decimal::{
@@ -418,6 +418,9 @@ fn from_the_fp8_formats_to_decimal() {
     check_to_decimal!(F8E5M2, every => D32Dpd, D64Bid, D128Dpd);
     check_to_decimal!(F8E4M3Fnuz, every => D32Bid, D64Bid);
     check_to_decimal!(F8E5M2Fnuz, every => D32Dpd, D128Bid);
+    check_to_decimal!(F8E4M3, every => D32Bid, D64Dpd);
+    check_to_decimal!(F8E3M4, every => D32Dpd, D128Bid);
+    check_to_decimal!(F8E4M3B11Fnuz, every => D32Bid, D64Bid);
     let four: Vec<u8> = (0..16).collect();
     let six: Vec<u8> = (0..64).collect();
     check_to_decimal!(F4E2M1Fn, four => D32Bid, D64Dpd);
@@ -561,6 +564,7 @@ fn from_decimal32_to_binary() {
         F16: Specials::Ieee, BF16: Specials::Ieee, TF32: Specials::Ieee,
         F8E4M3Fn: Specials::NoInf, F8E5M2: Specials::Ieee,
         F8E4M3Fnuz: Specials::Fnuz, F8E5M2Fnuz: Specials::Fnuz,
+        F8E4M3: Specials::Ieee, F8E3M4: Specials::Ieee, F8E4M3B11Fnuz: Specials::Fnuz,
         F4E2M1Fn: Specials::Finite, F6E2M3Fn: Specials::Finite, F6E3M2Fn: Specials::Finite,
         F256: Specials::Ieee, F512: Specials::Ieee);
 }

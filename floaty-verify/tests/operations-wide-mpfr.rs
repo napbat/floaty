@@ -20,8 +20,8 @@ use core::num::NonZeroU32;
 
 use floaty::format::Standard;
 use floaty::{
-    Binary, Decoded, Env, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352, F384,
-    F416, F448, F480, F512, Finite, Float, Fnuz, Int, NoInf, TF32, UInt, X87,
+    B11Fnuz, Binary, Decoded, Env, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352,
+    F384, F416, F448, F480, F512, Finite, Float, Fnuz, Int, NoInf, TF32, UInt, X87,
 };
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs};
 use floaty_verify::mpfr::{DIRECTIONS, Format, Specials};
@@ -545,6 +545,9 @@ fn integers_convert_to_every_format() {
     from_ints::<Binary<2, Finite>, 4>(Specials::Finite, &BEHAVIORS, 5);
     from_ints::<Binary<2, Finite>, 6>(Specials::Finite, &BEHAVIORS, 6);
     from_ints::<Binary<3, Finite>, 6>(Specials::Finite, &BEHAVIORS, 7);
+    from_ints::<Binary<4>, 8>(Specials::Ieee, &BEHAVIORS, 8);
+    from_ints::<Binary<3>, 8>(Specials::Ieee, &BEHAVIORS, 9);
+    from_ints::<Binary<4, B11Fnuz>, 8>(Specials::Fnuz, &BEHAVIORS, 10);
     from_ints::<Binary<5>, 16>(Specials::Ieee, &BEHAVIORS, 0x0F16);
     from_ints::<Binary<8>, 16>(Specials::Ieee, &BEHAVIORS, 16);
     from_ints::<Binary<8>, 19>(Specials::Ieee, &BEHAVIORS, 19);

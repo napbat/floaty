@@ -14,9 +14,9 @@ use core::num::NonZeroU32;
 
 use floaty::env::{NanPropagation, NanRule, Tininess};
 use floaty::{
-    BF16, Class, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E4M3Fn, F8E4M3Fnuz, F8E5M2,
-    F8E5M2Fnuz, F16, F32, F64, F128, F160, F192, F224, F256, F288, F320, F352, F384, F416, F448,
-    F480, F512, Rounding, TF32,
+    BF16, Class, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz,
+    F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F128, F160, F192, F224, F256, F288,
+    F320, F352, F384, F416, F448, F480, F512, Rounding, TF32,
 };
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs, to_u128};
 use floaty_verify::mpfr::{self, Format, Specials, Value};
@@ -134,6 +134,9 @@ fn from_the_fp8_formats() {
     check!(F8E5M2, every => F8E4M3Fn: Specials::NoInf, F8E4M3Fnuz: Specials::Fnuz, TF32: Specials::Ieee);
     check!(F8E4M3Fnuz, every => F8E4M3Fn: Specials::NoInf, F8E5M2: Specials::Ieee, F64: Specials::Ieee);
     check!(F8E5M2Fnuz, every => F8E4M3Fnuz: Specials::Fnuz, F8E4M3Fn: Specials::NoInf, BF16: Specials::Ieee);
+    check!(F8E4M3, every => F8E3M4: Specials::Ieee, F8E4M3B11Fnuz: Specials::Fnuz, F8E4M3Fn: Specials::NoInf, F16: Specials::Ieee);
+    check!(F8E3M4, every => F8E4M3: Specials::Ieee, F8E5M2Fnuz: Specials::Fnuz, BF16: Specials::Ieee);
+    check!(F8E4M3B11Fnuz, every => F8E4M3Fnuz: Specials::Fnuz, F8E4M3: Specials::Ieee, F8E3M4: Specials::Ieee, F32: Specials::Ieee);
 }
 
 #[test]

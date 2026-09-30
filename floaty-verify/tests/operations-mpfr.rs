@@ -14,7 +14,7 @@
 #![cfg(target_arch = "x86_64")]
 
 use floaty::format::Standard;
-use floaty::{Binary, Finite, Float, Fnuz, Int, NoInf, UInt};
+use floaty::{B11Fnuz, Binary, Finite, Float, Fnuz, Int, NoInf, UInt};
 use floaty_verify::mpfr::Specials;
 use floaty_verify::operations::BEHAVIORS;
 use floaty_verify::operations::check::{self, Case, format};
@@ -42,6 +42,9 @@ macro_rules! each_format {
         $check::<Binary<5>, 8>(Specials::Ieee);
         $check::<Binary<4, Fnuz>, 8>(Specials::Fnuz);
         $check::<Binary<5, Fnuz>, 8>(Specials::Fnuz);
+        $check::<Binary<4>, 8>(Specials::Ieee);
+        $check::<Binary<3>, 8>(Specials::Ieee);
+        $check::<Binary<4, B11Fnuz>, 8>(Specials::Fnuz);
         $check::<Binary<2, Finite>, 4>(Specials::Finite);
         $check::<Binary<2, Finite>, 6>(Specials::Finite);
         $check::<Binary<3, Finite>, 6>(Specials::Finite);
