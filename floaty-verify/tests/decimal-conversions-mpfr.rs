@@ -40,8 +40,8 @@ use floaty_verify::mpfr::decimal::{
 };
 use floaty_verify::mpfr::{self, Format, Input, Specials, Value};
 use floaty_verify::random::SplitMix64;
+use rug::Integer;
 use rug::integer::Order;
-use rug::{Float as BigFloat, Integer};
 
 /// Returns the payload of a binary NaN converted from a decimal value, by
 /// floaty's rule. The payload value of a decimal NaN is a field of
@@ -97,12 +97,7 @@ fn binary_to_decimal<const N: usize>(
             exponent,
             significand,
         } => {
-            let integer = Integer::from_digits(&significand, Order::Lsf);
-            let bits = integer.significant_bits();
-            let mut exact = BigFloat::with_val(bits, integer) << exponent;
-            if negative {
-                exact = -exact;
-            }
+            let exact = mpfr::exact(negative, exponent, &significand);
             let (value, flags) = to_decimal(&exact, format, env);
             (value, flags | input)
         }

@@ -22,7 +22,7 @@ use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
 use crate::arithmetic::Operand;
-use crate::mpfr::{self, Format, Input, Specials, Value};
+use crate::mpfr::{self, Format, Input, Nan, Specials, Value, exact, select_nan};
 
 pub mod check;
 pub mod compare;
@@ -215,14 +215,6 @@ impl Read {
     }
 }
 
-/// Returns `significand * 2^exponent` exactly.
-fn exact(negative: bool, exponent: i32, significand: &[u64]) -> BigFloat {
-    let integer = Integer::from_digits(significand, Order::Lsf);
-    let bits = integer.significant_bits().max(1);
-    let value = BigFloat::with_val(bits, integer) << exponent;
-    if negative { -value } else { value }
-}
-
 /// Returns a zero or an infinity with a sign, as an MPFR value.
 fn special(value: Special) -> BigFloat {
     BigFloat::with_val(2, value)
@@ -275,9 +267,7 @@ fn zero(negative: bool) -> BigFloat {
 /// A format without a negative zero gives `+0`.
 fn number(value: &BigFloat, format: &Format) -> Outcome {
     if value.is_zero() {
-        Outcome::Zero {
-            negative: value.is_sign_negative() && format.specials != Specials::Fnuz,
-        }
+        Outcome::from_value(format.zero(value.is_sign_negative()))
     } else if value.is_infinite() {
         Outcome::Infinity {
             negative: value.is_sign_negative(),
@@ -287,63 +277,44 @@ fn number(value: &BigFloat, format: &Format) -> Outcome {
     }
 }
 
-/// Returns the default NaN of the NaN rule. The one NaN of `Fnuz` is
-/// negative. A format without a NaN gives positive zero instead.
+/// Returns the default NaN of the NaN rule, by [`Format::nan`].
 fn default_nan(format: &Format, env: &Env) -> Outcome {
-    if format.specials == Specials::Finite {
-        return Outcome::Zero { negative: false };
-    }
-    Outcome::Nan {
-        negative: env.nan.default_negative || format.specials == Specials::Fnuz,
-        signaling: false,
-        payload: Integer::ZERO,
-    }
+    Outcome::from_value(format.nan(env.nan.default_negative))
 }
 
-/// Returns the NaN that the NaN rule of `env` selects among the operands,
-/// made quiet, and `INVALID` when an operand is a signaling NaN. At least one
-/// operand is a NaN.
-///
-/// The rules are those of the documentation of `NanPropagation`:
-/// `SignalingFirst` takes the first signaling NaN, or else the first NaN.
-/// `FirstOperand` takes the first NaN. `LargerSignificand` takes a quiet NaN
-/// before a signaling NaN, then the larger payload, then the positive sign.
-/// `DefaultNan` gives the default NaN.
+/// Returns the NaN that the NaN rule of `env` selects among the operands by
+/// [`select_nan`], and `INVALID` when an operand is a signaling NaN. The
+/// result is the NaN of the format, by [`Format::nan`], with the payload of
+/// the selected NaN. At least one operand is a NaN.
 fn propagate(operands: &[Read], format: &Format, env: &Env) -> (Outcome, Flags) {
-    let nans: Vec<(bool, bool, &Integer)> = operands
+    let nans: Vec<Nan> = operands
         .iter()
         .filter_map(|operand| match operand {
             Read::Nan {
                 negative,
                 signaling,
                 payload,
-            } => Some((*negative, *signaling, payload)),
+            } => Some(Nan {
+                negative: *negative,
+                signaling: *signaling,
+                payload: payload.clone(),
+            }),
             _ => None,
         })
         .collect();
-    let flags = if nans.iter().any(|&(_, signaling, _)| signaling) {
+    let flags = if nans.iter().any(|nan| nan.signaling) {
         Flags::INVALID
     } else {
         Flags::NONE
     };
-    let first = nans.first().expect("an operand is a NaN");
-    let (negative, _, payload) = match env.nan.propagation {
-        NanPropagation::DefaultNan => return (default_nan(format, env), flags),
-        NanPropagation::SignalingFirst => nans
-            .iter()
-            .find(|&&(_, signaling, _)| signaling)
-            .unwrap_or(first),
-        NanPropagation::FirstOperand => first,
-        NanPropagation::LargerSignificand => nans
-            .iter()
-            .max_by(|a, b| (!a.1, a.2, !a.0).cmp(&(!b.1, b.2, !b.0)))
-            .expect("an operand is a NaN"),
-        _ => panic!("the oracle knows every NaN rule"),
-    };
-    let nan = Outcome::Nan {
-        negative: *negative || format.specials == Specials::Fnuz,
-        signaling: false,
-        payload: (*payload).clone(),
+    let selected = select_nan(&nans, env);
+    let nan = match format.nan(selected.negative) {
+        Value::Nan { negative } => Outcome::Nan {
+            negative,
+            signaling: false,
+            payload: selected.payload,
+        },
+        value => Outcome::from_value(value),
     };
     (nan, flags)
 }

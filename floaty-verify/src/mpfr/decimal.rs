@@ -11,7 +11,7 @@ use rug::float::Round;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
-use super::Parameters;
+use super::{Parameters, limit_precision, overflows_to_infinity};
 
 /// The parameters of a decimal format.
 #[derive(Clone, Copy, Debug)]
@@ -218,9 +218,7 @@ fn rounds_up(rounding: Rounding, negative: bool, dropped: Dropped, kept: &Intege
 #[must_use]
 pub fn to_decimal(exact: &BigFloat, format: DecimalFormat, env: &Env) -> (DecimalValue, Flags) {
     let negative = exact.is_sign_negative();
-    let precision = env
-        .precision
-        .map_or(format.precision, |limit| limit.get().min(format.precision));
+    let precision = limit_precision(format.precision, env);
     let emin = i64::from(1 - format.emax);
     let (full_lowest, full_highest) = format.exponents();
     let (_, top_plus_one, _) = leading_digits(exact, 1);
@@ -301,17 +299,7 @@ fn overflow(
     env: &Env,
 ) -> (DecimalValue, Flags) {
     let flags = Flags::OVERFLOW | Flags::INEXACT;
-    let to_infinity = match env.rounding {
-        Rounding::TiesToEven
-        | Rounding::TiesToAway
-        | Rounding::TiesTowardZero
-        | Rounding::AwayFromZero => true,
-        Rounding::TowardPositive => !negative,
-        Rounding::TowardNegative => negative,
-        Rounding::TowardZero | Rounding::ToOdd => false,
-        _ => panic!("the oracle knows every rounding direction"),
-    };
-    if to_infinity {
+    if overflows_to_infinity(env.rounding, negative) {
         return (
             DecimalValue::Infinity { negative },
             flags | Flags::ROUNDED_UP,

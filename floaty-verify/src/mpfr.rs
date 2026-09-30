@@ -6,6 +6,10 @@
 //! The directions that MPFR lacks come from the results toward zero and away
 //! from zero: round to nearest with ties away from zero or toward zero, by
 //! the midpoint, and round to odd, by the parity.
+//!
+//! The module also holds the special-value rules that every oracle of the
+//! harness shares: the zero, the NaN, and the largest value of a [`Format`],
+//! and the NaN that a NaN rule selects, [`select_nan`].
 
 use core::cmp::Ordering;
 
@@ -89,8 +93,134 @@ impl Format {
     /// behavior, when it is below the format precision.
     #[must_use]
     pub fn precision_in(&self, env: &Env) -> u32 {
-        env.precision
-            .map_or(self.precision, |limit| limit.get().min(self.precision))
+        limit_precision(self.precision, env)
+    }
+
+    /// Returns a zero with the sign `negative`. A format without a negative
+    /// zero, `Fnuz`, gives `+0`.
+    #[must_use]
+    pub fn zero(&self, negative: bool) -> Value {
+        Value::Zero {
+            negative: negative && self.specials != Specials::Fnuz,
+        }
+    }
+
+    /// Returns the NaN with the sign `negative`. The one NaN of `Fnuz` is
+    /// negative, and a format without a NaN, `Finite`, gives `+0`.
+    #[must_use]
+    pub fn nan(&self, negative: bool) -> Value {
+        if self.specials == Specials::Finite {
+            return Value::Zero { negative: false };
+        }
+        Value::Nan {
+            negative: negative || self.specials == Specials::Fnuz,
+        }
+    }
+
+    /// Returns the largest finite magnitude at `precision` bits. At the full
+    /// precision, the all-ones significand at `emax` of `NoInf` is the NaN,
+    /// so the largest significand is one below it.
+    ///
+    /// # Panics
+    ///
+    /// Panics for a precision that does not fit an `i32`.
+    #[must_use]
+    pub fn largest(&self, precision: u32) -> BigFloat {
+        let significand = if self.specials == Specials::NoInf && precision == self.precision {
+            (Integer::from(1) << precision) - 2u32
+        } else {
+            (Integer::from(1) << precision) - 1u32
+        };
+        let shift = self.emax - i32::try_from(precision - 1).expect("a precision fits an i32");
+        BigFloat::with_val(precision, significand) << shift
+    }
+}
+
+/// Returns the precision that `env` rounds to in a format of `precision`
+/// digits: the precision limit of the behavior, when it is below.
+pub(crate) fn limit_precision(precision: u32, env: &Env) -> u32 {
+    env.precision
+        .map_or(precision, |limit| limit.get().min(precision))
+}
+
+/// Returns `true` when an overflow with the sign `negative` rounds to an
+/// infinity in the direction `rounding`, and `false` when it rounds to the
+/// largest finite value.
+///
+/// # Panics
+///
+/// Panics for a rounding direction that a later floaty adds.
+pub(crate) fn overflows_to_infinity(rounding: Rounding, negative: bool) -> bool {
+    match rounding {
+        Rounding::TiesToEven
+        | Rounding::TiesToAway
+        | Rounding::TiesTowardZero
+        | Rounding::AwayFromZero => true,
+        Rounding::TowardPositive => !negative,
+        Rounding::TowardNegative => negative,
+        Rounding::TowardZero | Rounding::ToOdd => false,
+        _ => panic!("the oracle knows every rounding direction"),
+    }
+}
+
+/// Returns `significand * 2^exponent` exactly, with the sign `negative`. The
+/// significand is in limbs from the low bits up.
+#[must_use]
+pub fn exact(negative: bool, exponent: i32, significand: &[u64]) -> BigFloat {
+    let integer = Integer::from_digits(significand, Order::Lsf);
+    let bits = integer.significant_bits().max(1);
+    let value = BigFloat::with_val(bits, integer) << exponent;
+    if negative { -value } else { value }
+}
+
+/// A NaN that a NaN rule can select: a NaN operand, or the default NaN.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Nan {
+    /// The sign.
+    pub negative: bool,
+    /// `true` for a signaling NaN.
+    pub signaling: bool,
+    /// The payload, below the quiet bit.
+    pub payload: Integer,
+}
+
+/// Selects a NaN among `offered`, in the order of the list, by the
+/// propagation rule of `env`, and makes it quiet.
+///
+/// The rules are those of the documentation of `NanPropagation`:
+/// `SignalingFirst` takes the first signaling NaN, or else the first NaN.
+/// `FirstOperand` takes the first NaN. `LargerSignificand` takes a quiet NaN
+/// before a signaling NaN, then the larger payload, then the positive sign.
+/// `DefaultNan` gives the default NaN of the rule, with a zero payload.
+///
+/// # Panics
+///
+/// Panics when `offered` is empty, and for a propagation rule that a later
+/// floaty adds.
+#[must_use]
+pub fn select_nan(offered: &[Nan], env: &Env) -> Nan {
+    let first = offered
+        .first()
+        .expect("the rule selects from at least one NaN");
+    let chosen = match env.nan.propagation {
+        NanPropagation::DefaultNan => {
+            return Nan {
+                negative: env.nan.default_negative,
+                signaling: false,
+                payload: Integer::ZERO,
+            };
+        }
+        NanPropagation::SignalingFirst => offered.iter().find(|nan| nan.signaling).unwrap_or(first),
+        NanPropagation::FirstOperand => first,
+        NanPropagation::LargerSignificand => offered
+            .iter()
+            .max_by_key(|&nan| (!nan.signaling, &nan.payload, !nan.negative))
+            .expect("the rule selects from at least one NaN"),
+        _ => panic!("the oracle knows every propagation rule"),
+    };
+    Nan {
+        signaling: false,
+        ..chosen.clone()
     }
 }
 
@@ -130,15 +260,7 @@ impl Value {
                 negative,
                 exponent,
                 significand,
-            } => {
-                let integer = Integer::from_digits(&significand, Order::Lsf);
-                let bits = integer.significant_bits().max(1);
-                let mut value = BigFloat::with_val(bits, integer) << exponent;
-                if negative {
-                    value = -value;
-                }
-                Self::Finite(value)
-            }
+            } => Self::Finite(exact(negative, exponent, &significand)),
             Decoded::Infinity { negative } => Self::Infinity { negative },
             Decoded::Nan { negative, .. } => Self::Nan { negative },
             Decoded::Unsupported => panic!("rounding never gives an unsupported encoding"),
@@ -168,7 +290,7 @@ pub struct Input {
 pub fn round(input: &Input, format: &Format, env: &Env) -> (Value, Flags) {
     let negative = input.negative;
     if input.significand.is_zero() {
-        return (zero(negative, format), Flags::NONE);
+        return (format.zero(negative), Flags::NONE);
     }
     let precision = format.precision_in(env);
     let width = input.significand.significant_bits();
@@ -206,7 +328,7 @@ pub fn round(input: &Input, format: &Format, env: &Env) -> (Value, Flags) {
         flags |= Flags::TINY;
         if env.flush_to_zero {
             return (
-                zero(negative, format),
+                format.zero(negative),
                 flags | Flags::UNDERFLOW | Flags::INEXACT,
             );
         }
@@ -219,31 +341,15 @@ pub fn round(input: &Input, format: &Format, env: &Env) -> (Value, Flags) {
         }
     }
     if rounded.is_zero() {
-        return (zero(negative, format), flags);
+        return (format.zero(negative), flags);
     }
-    if rounded.clone().abs() > largest(format, precision) {
+    if rounded.clone().abs() > format.largest(precision) {
         return overflow(negative, format, precision, env);
     }
     if rounded.clone().abs() > exact.abs() {
         flags |= Flags::ROUNDED_UP;
     }
     (Value::Finite(rounded), flags)
-}
-
-fn zero(negative: bool, format: &Format) -> Value {
-    Value::Zero {
-        negative: negative && format.specials != Specials::Fnuz,
-    }
-}
-
-/// Returns the NaN of a format, or positive zero in a format without a NaN.
-fn nan(negative: bool, format: &Format) -> Value {
-    if format.specials == Specials::Finite {
-        return Value::Zero { negative: false };
-    }
-    Value::Nan {
-        negative: negative || format.specials == Specials::Fnuz,
-    }
 }
 
 /// Every rounding direction of floaty, which the oracle knows.
@@ -258,38 +364,18 @@ pub const DIRECTIONS: [Rounding; 8] = [
     Rounding::ToOdd,
 ];
 
-/// Returns the largest finite magnitude at `precision` bits.
-fn largest(format: &Format, precision: u32) -> BigFloat {
-    let significand = if format.specials == Specials::NoInf && precision == format.precision {
-        (Integer::from(1) << precision) - 2u32
-    } else {
-        (Integer::from(1) << precision) - 1u32
-    };
-    let shift = format.emax - i32::try_from(precision - 1).expect("a precision fits an i32");
-    BigFloat::with_val(precision, significand) << shift
-}
-
 fn overflow(negative: bool, format: &Format, precision: u32, env: &Env) -> (Value, Flags) {
     let flags = Flags::OVERFLOW | Flags::INEXACT;
-    let to_infinity = match env.rounding {
-        Rounding::TiesToEven
-        | Rounding::TiesToAway
-        | Rounding::TiesTowardZero
-        | Rounding::AwayFromZero => true,
-        Rounding::TowardPositive => !negative,
-        Rounding::TowardNegative => negative,
-        Rounding::TowardZero | Rounding::ToOdd => false,
-        _ => panic!("the oracle knows every rounding direction"),
-    };
+    let to_infinity = overflows_to_infinity(env.rounding, negative);
     // A saturating behavior gives the largest finite value, as the OCP FP8
     // saturation mode does for an overflow.
     if to_infinity && !env.saturate && format.specials != Specials::Finite {
         if format.specials == Specials::Ieee {
             return (Value::Infinity { negative }, flags | Flags::ROUNDED_UP);
         }
-        return (nan(negative, format), flags);
+        return (format.nan(negative), flags);
     }
-    let mut value = largest(format, precision);
+    let mut value = format.largest(precision);
     if negative {
         value = -value;
     }
@@ -388,9 +474,9 @@ pub fn convert<const N: usize>(
         Flags::NONE
     };
     match *source {
-        Decoded::Zero { negative, .. } => (zero(negative, format), Flags::NONE),
+        Decoded::Zero { negative, .. } => (format.zero(negative), Flags::NONE),
         Decoded::Finite { negative, .. } if subnormal && env.denormals_are_zero => {
-            (zero(negative, format), input)
+            (format.zero(negative), input)
         }
         Decoded::Finite {
             negative,
@@ -410,13 +496,13 @@ pub fn convert<const N: usize>(
             (Value::Infinity { negative }, Flags::NONE)
         }
         Decoded::Infinity { negative } if env.saturate || format.specials == Specials::Finite => {
-            let mut value = largest(format, format.precision_in(env));
+            let mut value = format.largest(format.precision_in(env));
             if negative {
                 value = -value;
             }
             (Value::Finite(value), Flags::INVALID)
         }
-        Decoded::Infinity { negative } => (nan(negative, format), Flags::INVALID),
+        Decoded::Infinity { negative } => (format.nan(negative), Flags::INVALID),
         Decoded::Nan {
             negative,
             signaling,
@@ -434,7 +520,7 @@ pub fn convert<const N: usize>(
             } else {
                 negative
             };
-            (nan(negative, format), flags)
+            (format.nan(negative), flags)
         }
         Decoded::Unsupported => panic!("the oracle has no rule for an unsupported encoding"),
     }
