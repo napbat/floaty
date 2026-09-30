@@ -26,6 +26,8 @@ pub mod encodings;
 pub mod ibm_ldouble;
 #[cfg(target_arch = "x86_64")]
 pub mod intel_decimal;
+#[cfg(target_arch = "x86_64")]
+pub mod mesa;
 pub mod modes;
 #[cfg(target_arch = "x86_64")]
 pub mod mpfr;

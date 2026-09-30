@@ -118,6 +118,40 @@ let (saturated, flags) = largest.add_with(largest, F8E5M2::ENV.with_saturate(tru
 assert_eq!((saturated.to_bits(), flags), (0x7B, Flags::OVERFLOW | Flags::INEXACT));
 ```
 
+### Unsigned floats of R11G11B10
+
+The packed format R11G11B10 of Direct3D, Vulkan, and OpenGL holds unsigned
+floats of 11 and 10 bits, with 5 exponent bits and no sign bit. Their values
+are the non-negative values of `Float<Binary<5>, 12>` and
+`Float<Binary<5>, 11>`, so floaty builds them from those formats. The
+example follows GL_EXT_packed_float as Mesa implements it: round to nearest
+even, saturate, map a negative value to zero, and give one NaN.
+`floaty-verify` checks it against Mesa for every rounding case.
+
+```rust
+use floaty::{Binary, Env, F32, Float};
+
+type Eleven = Float<Binary<5>, 12>;
+
+/// Returns the 11-bit channel of a binary32 value.
+fn to_channel(value: F32) -> u16 {
+    let (signed, _) = value.convert_with::<Eleven>(Env::IEEE.with_saturate(true));
+    if signed.is_nan() {
+        0x7C1
+    } else if signed.is_sign_negative() {
+        0
+    } else {
+        signed.to_bits()
+    }
+}
+
+assert_eq!(to_channel(F32::from_bits(0x3F80_0000)), 0x3C0); // 1.0
+assert_eq!(to_channel(F32::from_bits(0xBF80_0000)), 0); // -1.0 gives zero
+assert_eq!(to_channel(F32::from_bits(0x4E6E_6B28)), 0x7BF); // 1e9 gives 65024
+let one: F32 = Eleven::from_bits(0x3C0).convert();
+assert_eq!(one.to_bits(), 0x3F80_0000);
+```
+
 ## Behavior
 
 `Env` holds every setting that changes the bits of a result:
@@ -410,6 +444,7 @@ IEEE 754 or a vendor manual with MPFR or decNumber.
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
 | QD 2.3.24 | `DoubleDouble<Qd>` |
+| Mesa 25.2.0, `format_r11g11b10f.h` | The R11G11B10 recipe: every rounding case of both channels, and every channel code |
 
 The normal test run tests every FP8 operand pair of every operation. Ignored
 sweeps test every binary16 and bfloat16 operand pair of the host paths,
@@ -452,8 +487,8 @@ The workspace has two packages:
 
 `floaty-verify` builds its C references on Linux x86-64 only. It needs the
 submodules, a C and C++ toolchain, the PowerPC cross compiler, and QEMU.
-The first build downloads the decimal and QD archives. The AArch64 gates
-also need the AArch64 cross compiler.
+The first build downloads the decimal and QD archives and two Mesa headers.
+The AArch64 gates also need the AArch64 cross compiler.
 
 ```text
 git submodule update --init

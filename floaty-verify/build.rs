@@ -44,6 +44,8 @@ enum Packing {
     Zip,
     /// A tar file compressed with gzip.
     GzipTar,
+    /// One source file, which the extraction copies under this name.
+    File(&'static str),
 }
 
 /// A pinned release archive.
@@ -167,6 +169,25 @@ const QD: Archive = Archive {
     sha256: "a47b6c73f86e6421e86a883568dd08e299b20e36c11a99bdfbe50e01bde60e38",
 };
 
+/// Mesa's conversions of the unsigned 11-bit and 10-bit floats of
+/// R11G11B10, from its release 25.2.0, under the MIT license. They follow
+/// GL_EXT_packed_float.
+const MESA_R11G11B10: Archive = Archive {
+    file: "mesa-25.2.0-format_r11g11b10f.h",
+    packing: Packing::File("format_r11g11b10f.h"),
+    url: "https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-25.2.0/src/util/format_r11g11b10f.h",
+    sha256: "b0beabfa138da9c4935227e7d4d392c677007d84b7ec90e776f16ac68a79cf19",
+};
+
+/// The rounding functions of Mesa 25.2.0 that the R11G11B10 conversions
+/// call, under the MIT license.
+const MESA_ROUNDING: Archive = Archive {
+    file: "mesa-25.2.0-rounding.h",
+    packing: Packing::File("rounding.h"),
+    url: "https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-25.2.0/src/util/rounding.h",
+    sha256: "4265b083f0424e5243c6a81771e1fc077203d2fa829e43a6caafa26f20fb1a02",
+};
+
 /// The `configure` options of QD. The first three select the arithmetic
 /// that floaty's `Qd` follows.
 ///
@@ -249,6 +270,7 @@ fn main() {
     build_decimal(&manifest, &out.join("decimal"));
     build_ibm_ldouble(&manifest, &out.join("ibm_ldouble"));
     build_qd(&manifest, &out.join("qd"));
+    build_mesa(&manifest, &out.join("mesa"));
 }
 
 /// Builds `testfloat_gen` for each specialization and names each one in an
@@ -672,6 +694,10 @@ fn unpack(path: &Path, archive: &Archive, destination: &Path) {
         }
         fs::create_dir_all(destination).expect("the extraction directory can be created");
         let status = match archive.packing {
+            Packing::File(name) => {
+                fs::copy(path, destination.join(name)).expect("the source file can be copied");
+                return;
+            }
             Packing::Zip => Command::new("python3")
                 .args(["-m", "zipfile", "-e"])
                 .arg(path)
@@ -741,6 +767,48 @@ fn build_shim(shim: &Path, intel_source: &Path, libraries: &Path) {
         compile("gcc", shim, &flags, &object);
         archive(&libraries.join("libfloaty_binary80.a"), &[object]);
     });
+}
+
+/// Fetches Mesa's R11G11B10 header and the rounding header that it includes,
+/// and compiles the shim that exposes its inline functions into
+/// `libfloaty_mesa.a`.
+fn build_mesa(manifest: &Path, out: &Path) {
+    let shim = manifest.join("shim").join("mesa_r11g11b10.c");
+    println!("cargo:rerun-if-changed={}", shim.display());
+    let downloads = manifest.join("reference").join("downloads");
+    let format = out.join("format");
+    unpack(
+        &fetch(&MESA_R11G11B10, &downloads),
+        &MESA_R11G11B10,
+        &format,
+    );
+    let rounding = out.join("rounding");
+    unpack(
+        &fetch(&MESA_ROUNDING, &downloads),
+        &MESA_ROUNDING,
+        &rounding,
+    );
+    let content = fs::read_to_string(&shim).expect("the Mesa shim can be read");
+    let key = format!(
+        "{} {}\n{content}",
+        MESA_R11G11B10.sha256, MESA_ROUNDING.sha256
+    );
+    run_once(&out.join("floaty_mesa.stamp"), &key, || {
+        let format_include = format!("-I{}", format.display());
+        let rounding_include = format!("-I{}", rounding.display());
+        let flags = [
+            "-std=gnu11",
+            "-O2",
+            "-fPIC",
+            format_include.as_str(),
+            rounding_include.as_str(),
+        ];
+        let object = out.join("floaty_mesa.o");
+        compile("gcc", &shim, &flags, &object);
+        archive(&out.join("libfloaty_mesa.a"), &[object]);
+    });
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=floaty_mesa");
 }
 
 /// Runs `step` unless the stamp file holds `key`, then records `key`. The key

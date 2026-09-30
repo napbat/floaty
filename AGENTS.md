@@ -54,7 +54,7 @@ crate documentation records each rule of its behavior. The
   reach the rounding routine.
 - Test every behavior against an established oracle: TestFloat, MPFR,
   `rustc_apfloat`, `ml_dtypes`, the host processor, decTest and decNumber,
-  the Intel decimal library and its tests, QD, or libgcc. Where no
+  the Intel decimal library and its tests, QD, libgcc, or Mesa. Where no
   implementation exists, evaluate the published definition from IEEE 754 or
   a vendor manual, or the documented rule of floaty, with MPFR or decNumber.
   A behavior without an oracle test is not finished.
@@ -115,7 +115,8 @@ RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo +1.85 clippy -p flo
   binutils (package gcc-powerpc64le-linux-gnu), and `qemu-ppc64le` 10.2.1
   (package qemu-user). The build compiles TestFloat, MPFR, decNumber, the Intel
   decimal library, and QD from source. The first build downloads the
-  decimal and QD archives, so it needs network access once. The `Qd` tests
+  decimal and QD archives and two Mesa headers, so it needs network access
+  once. The `Qd` tests
   need a processor on which glibc's `fma` is the FMA3 instruction. On
   another host, run the gates with `-p floaty` instead of `--workspace`.
 - Keep the submodules under `floaty-verify/reference/`, the pinned archives
