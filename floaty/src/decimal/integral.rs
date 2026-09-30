@@ -268,21 +268,15 @@ where
             let (quotient, rest) = limbs::divide(coefficient, divisor);
             (rest, divisor, quotient.bit(0))
         };
-        // `rest` is the remainder of the truncated quotient. To round the
-        // quotient to nearest even, n grows by one past half of the divisor,
-        // and the remainder changes sign.
-        let above_half = quotient == Quotient::Nearest
-            && match limbs::multiply_small(rest, 2).compare(&divisor) {
-                Ordering::Greater => true,
-                Ordering::Equal => odd,
-                Ordering::Less => false,
-            };
-        let magnitude = if above_half { divisor.sub(rest) } else { rest };
+        // `rest` is the remainder of the truncated quotient. When n rounds up,
+        // the remainder is `rest - divisor`, with the other sign.
+        let rounded_up = quotient.rounds_up(&rest, &divisor, odd);
+        let magnitude = if rounded_up { divisor.sub(rest) } else { rest };
         if magnitude.is_zero() {
             return Self::exact(Self::zero(negative, i64::from(lowest)), flags);
         }
         let value = Unrounded {
-            negative: negative != above_half,
+            negative: negative != rounded_up,
             exponent: lowest,
             significand: magnitude,
             sticky: false,

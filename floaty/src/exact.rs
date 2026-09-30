@@ -4,6 +4,7 @@ use core::cmp::Ordering;
 
 use crate::binary::Unpacked;
 use crate::env::{Behavior, Env, Flags, Rounding, Tininess};
+use crate::format::internal::Quotient;
 use crate::limbs::Limbs;
 
 /// An exact value to round: `significand * RADIX^exponent`, plus a sticky
@@ -176,6 +177,25 @@ pub fn rounds_up(
         Rounding::TowardZero => false,
         Rounding::AwayFromZero => inexact,
         Rounding::ToOdd => inexact && (last_digit == 0 || (radix == 10 && last_digit == 5)),
+    }
+}
+
+impl Quotient {
+    /// Returns `true` when the quotient `n` of a remainder `x - n * y` rounds
+    /// to one above the truncated quotient. `rest` is the remainder of the
+    /// truncated quotient, and `odd` is its lowest bit. The nearest quotient
+    /// grows past half of the divisor, and at a tie when it is odd. The
+    /// truncated quotient never grows.
+    #[inline]
+    pub fn rounds_up<L: Limbs>(self, rest: &L, divisor: &L, odd: bool) -> bool {
+        match self {
+            Self::Nearest => match rest.shl(1).compare(divisor) {
+                Ordering::Greater => true,
+                Ordering::Equal => odd,
+                Ordering::Less => false,
+            },
+            Self::Truncated => false,
+        }
     }
 }
 
