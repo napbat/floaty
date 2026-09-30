@@ -536,7 +536,7 @@ fn check_qemu() {
     let text = String::from_utf8_lossy(&output.stdout);
     let first = text.lines().next().unwrap_or_default();
     assert!(
-        first.starts_with(&format!("qemu-ppc64le version {QEMU_VERSION} ")),
+        first.starts_with(&format!("{QEMU} version {QEMU_VERSION} ")),
         "{first:?} is not the pinned QEMU {QEMU_VERSION}. QEMU executes the libgcc reference and \
          gives its flags"
     );
