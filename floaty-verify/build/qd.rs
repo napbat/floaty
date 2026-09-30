@@ -5,10 +5,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use crate::archive::{Archive, Packing, fetch, sha256, unpack};
-use crate::tools::{
-    COMPILER_VARIABLES, archive, check_gcc, compile, extract_member, make, run_once,
-};
+use crate::archive::{Archive, Packing, sha256};
+use crate::tools::{COMPILER_VARIABLES, check_gcc, extract_member, make, run_once, shim_library};
 
 /// QD 2.3.24, under the BSD-LBNL license.
 const QD: Archive = Archive {
@@ -86,9 +84,8 @@ pub(super) fn build(manifest: &Path, out: &Path) {
     let shim = manifest.join("shim").join("qd_shim.cpp");
     println!("cargo:rerun-if-changed={}", shim.display());
     let compiler = check_gcc(QD_CXX, QD_CXX_VERSION, "Qd", "install the g++ package");
-    let downloads = manifest.join("reference").join("downloads");
     let source = out.join("source");
-    let root = unpack(&fetch(&QD, &downloads), &QD, &source);
+    let root = QD.extract(manifest, &source);
 
     // configure records the compiler and its options in the Makefiles, so
     // a new setting starts from `make clean`. The stamp lives in the
@@ -106,25 +103,19 @@ pub(super) fn build(manifest: &Path, out: &Path) {
     });
 
     let libraries = out.join("lib");
-    let content = fs::read_to_string(&shim).expect("the QD shim can be read");
-    run_once(
+    let include = format!("-I{}", root.join("include").display());
+    let mut flags = QD_CXXFLAGS.to_vec();
+    flags.extend(["-fPIC", include.as_str()]);
+    let shim_object = shim_library(
+        QD_CXX,
+        &shim,
+        &flags,
+        &settings,
         &out.join("shim.stamp"),
-        &format!("{settings}\n{content}"),
-        || {
-            fs::create_dir_all(&libraries).expect("the library directory can be created");
-            let include = format!("-I{}", root.join("include").display());
-            let mut flags = QD_CXXFLAGS.to_vec();
-            flags.extend(["-fPIC", include.as_str()]);
-            let object = libraries.join("floaty_qd.o");
-            compile(QD_CXX, &shim, &flags, &object);
-            archive(&libraries.join("libfloaty_qd.a"), &[object]);
-        },
+        &libraries,
+        "floaty_qd",
     );
-    check_machine_code(
-        &libraries.join("floaty_qd.o"),
-        &QD_SHIM_SECTIONS,
-        QD_SHIM_SHA256,
-    );
+    check_machine_code(&shim_object, &QD_SHIM_SECTIONS, QD_SHIM_SHA256);
     let library = root.join("src").join(".libs").join("libqd.a");
     let object = out.join("dd_real.o");
     extract_member("ar", &library, &object, "install the binutils package");

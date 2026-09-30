@@ -1,11 +1,10 @@
 //! Mesa's R11G11B10 conversions, from two pinned release headers, and the
 //! shim that exposes them.
 
-use std::fs;
 use std::path::Path;
 
-use crate::archive::{Archive, Packing, fetch, unpack};
-use crate::tools::{archive, compile, run_once};
+use crate::archive::{Archive, Packing};
+use crate::tools::{HOST_CC, shim_library};
 
 /// Mesa's conversions of the unsigned 11-bit and 10-bit floats of
 /// R11G11B10, from its release 25.2.0, under the MIT license. They follow
@@ -38,33 +37,27 @@ const MESA_FLAGS: [&str; 3] = ["-std=gnu11", "-O2", "-fPIC"];
 pub(super) fn build(manifest: &Path, out: &Path) {
     let shim = manifest.join("shim").join("mesa_r11g11b10.c");
     println!("cargo:rerun-if-changed={}", shim.display());
-    let downloads = manifest.join("reference").join("downloads");
-    let format = unpack(
-        &fetch(&MESA_R11G11B10, &downloads),
-        &MESA_R11G11B10,
-        &out.join("format"),
-    );
-    let rounding = unpack(
-        &fetch(&MESA_ROUNDING, &downloads),
-        &MESA_ROUNDING,
-        &out.join("rounding"),
-    );
-    let content = fs::read_to_string(&shim).expect("the Mesa shim can be read");
-    let key = format!(
-        "{} {} {}\n{content}",
+    let format = MESA_R11G11B10.extract(manifest, &out.join("format"));
+    let rounding = MESA_ROUNDING.extract(manifest, &out.join("rounding"));
+    let format_include = format!("-I{}", format.display());
+    let rounding_include = format!("-I{}", rounding.display());
+    let mut flags = MESA_FLAGS.to_vec();
+    flags.extend([format_include.as_str(), rounding_include.as_str()]);
+    let key_prefix = format!(
+        "{} {} {}",
         MESA_R11G11B10.sha256,
         MESA_ROUNDING.sha256,
         MESA_FLAGS.join(" ")
     );
-    run_once(&out.join("floaty_mesa.stamp"), &key, || {
-        let format_include = format!("-I{}", format.display());
-        let rounding_include = format!("-I{}", rounding.display());
-        let mut flags = MESA_FLAGS.to_vec();
-        flags.extend([format_include.as_str(), rounding_include.as_str()]);
-        let object = out.join("floaty_mesa.o");
-        compile("gcc", &shim, &flags, &object);
-        archive(&out.join("libfloaty_mesa.a"), &[object]);
-    });
+    shim_library(
+        HOST_CC,
+        &shim,
+        &flags,
+        &key_prefix,
+        &out.join("floaty_mesa.stamp"),
+        out,
+        "floaty_mesa",
+    );
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=floaty_mesa");
 }

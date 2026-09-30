@@ -3,8 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::archive::{Archive, Packing, fetch, unpack};
-use crate::tools::{archive, compile, run_once};
+use crate::archive::{Archive, Packing};
+use crate::tools::{HOST_CC, compile, run_once, static_library};
 
 /// The decTest vectors, version 2.62.
 const DECTEST: Archive = Archive {
@@ -41,16 +41,10 @@ const DECNUMBER_FLAGS: [&str; 3] = ["-std=gnu99", "-O2", "-fPIC"];
 /// Fetches the decTest vectors and names them in `FLOATY_DECTEST_DIR`.
 /// Fetches decNumber, compiles it into `libraries`, and links it.
 pub(super) fn build(manifest: &Path, out: &Path, libraries: &Path) {
-    let downloads = manifest.join("reference").join("downloads");
-
-    let dectest = unpack(&fetch(&DECTEST, &downloads), &DECTEST, &out.join("dectest"));
+    let dectest = DECTEST.extract(manifest, &out.join("dectest"));
     println!("cargo:rustc-env=FLOATY_DECTEST_DIR={}", dectest.display());
 
-    let decnumber = unpack(
-        &fetch(&DECNUMBER, &downloads),
-        &DECNUMBER,
-        &out.join("decnumber"),
-    );
+    let decnumber = DECNUMBER.extract(manifest, &out.join("decnumber"));
     build_library(&decnumber, libraries);
     println!("cargo:rustc-link-lib=static=decnumber");
 }
@@ -66,7 +60,7 @@ fn build_library(source: &Path, libraries: &Path) {
             .map(|name| {
                 let object = objects.join(format!("{name}.o"));
                 compile(
-                    "gcc",
+                    HOST_CC,
                     &source.join(format!("{name}.c")),
                     &DECNUMBER_FLAGS,
                     &object,
@@ -74,6 +68,6 @@ fn build_library(source: &Path, libraries: &Path) {
                 object
             })
             .collect();
-        archive(&libraries.join("libdecnumber.a"), &objects);
+        static_library(&libraries.join("libdecnumber.a"), &objects);
     });
 }

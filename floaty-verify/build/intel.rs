@@ -1,11 +1,10 @@
 //! The Intel Decimal Floating-Point Math Library, its tests, and the
 //! binary80 shim, from a pinned release archive.
 
-use std::fs;
 use std::path::Path;
 
-use crate::archive::{Archive, Packing, fetch, unpack};
-use crate::tools::{archive, compile, make, run_once};
+use crate::archive::{Archive, Packing};
+use crate::tools::{HOST_CC, make, run_once, shim_library};
 
 /// The Intel Decimal Floating-Point Math Library 2.0 Update 2, under the
 /// BSD 3-clause license, with its tests.
@@ -53,7 +52,7 @@ const INTEL_HOST_DEFINES: [&str; 4] = [
 fn make_settings() -> Vec<String> {
     let interface = INTEL_INTERFACE.map(|(variable, _)| format!("{variable}=0"));
     let build = INTEL_BUILD_SETTINGS.map(String::from);
-    [String::from("CC=gcc")]
+    [format!("CC={HOST_CC}")]
         .into_iter()
         .chain(interface)
         .chain(build)
@@ -75,9 +74,7 @@ fn defines() -> Vec<String> {
 pub(super) fn build(manifest: &Path, out: &Path, libraries: &Path) {
     let shim = manifest.join("shim").join("intel_binary80.c");
     println!("cargo:rerun-if-changed={}", shim.display());
-    let downloads = manifest.join("reference").join("downloads");
-
-    let intel = unpack(&fetch(&INTEL, &downloads), &INTEL, &out.join("intel"));
+    let intel = INTEL.extract(manifest, &out.join("intel"));
     println!(
         "cargo:rustc-env=FLOATY_INTEL_READTEST={}",
         intel.join("TESTS").join("readtest.in").display()
@@ -109,15 +106,17 @@ fn build_library(library: &Path, libraries: &Path) {
 /// the C `long double` values of the Intel library, which Rust has no type
 /// for.
 fn build_shim(shim: &Path, intel_source: &Path, libraries: &Path) {
-    let content = fs::read_to_string(shim).expect("the binary80 shim can be read");
     let defines = defines();
-    let key = format!("{} {}\n{content}", INTEL.sha256, defines.join(" "));
-    run_once(&libraries.join("floaty_binary80.stamp"), &key, || {
-        let include = format!("-I{}", intel_source.display());
-        let mut flags = vec!["-std=gnu99", "-O2", "-fPIC", include.as_str()];
-        flags.extend(defines.iter().map(String::as_str));
-        let object = libraries.join("floaty_binary80.o");
-        compile("gcc", shim, &flags, &object);
-        archive(&libraries.join("libfloaty_binary80.a"), &[object]);
-    });
+    let include = format!("-I{}", intel_source.display());
+    let mut flags = vec!["-std=gnu99", "-O2", "-fPIC", include.as_str()];
+    flags.extend(defines.iter().map(String::as_str));
+    shim_library(
+        HOST_CC,
+        shim,
+        &flags,
+        &format!("{} {}", INTEL.sha256, defines.join(" ")),
+        &libraries.join("floaty_binary80.stamp"),
+        libraries,
+        "floaty_binary80",
+    );
 }

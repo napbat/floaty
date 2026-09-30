@@ -34,10 +34,20 @@ pub(super) struct Archive {
     pub(super) root: Option<&'static str>,
 }
 
+impl Archive {
+    /// Fetches the archive into the download cache `reference/downloads` of
+    /// the package at `manifest`, and extracts it into `destination`. Returns
+    /// the directory that holds the files of the archive.
+    pub(super) fn extract(&self, manifest: &Path, destination: &Path) -> PathBuf {
+        let downloads = manifest.join("reference").join("downloads");
+        unpack(&fetch(self, &downloads), self, destination)
+    }
+}
+
 /// Returns the cached archive, and downloads it first when the cache does
 /// not hold it. Stops the build when the archive does not match its pinned
 /// SHA-256.
-pub(super) fn fetch(archive: &Archive, downloads: &Path) -> PathBuf {
+fn fetch(archive: &Archive, downloads: &Path) -> PathBuf {
     let path = downloads.join(archive.file);
     if path.is_file() {
         let actual = sha256(&path);
@@ -101,7 +111,7 @@ pub(super) fn sha256(path: &Path) -> String {
 /// Extracts an archive into an empty `destination`, unless the destination
 /// already holds this archive. Returns the directory that holds the files of
 /// the archive.
-pub(super) fn unpack(path: &Path, archive: &Archive, destination: &Path) -> PathBuf {
+fn unpack(path: &Path, archive: &Archive, destination: &Path) -> PathBuf {
     run_once(&destination.with_extension("stamp"), archive.sha256, || {
         if destination.exists() {
             fs::remove_dir_all(destination).expect("an old extraction can be removed");

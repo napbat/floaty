@@ -5,12 +5,17 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::slice;
 
 /// The compiler variables that the build removes from the environment of
 /// `make` and `configure`, so that an exported value cannot replace a pinned
 /// setting.
 pub(super) const COMPILER_VARIABLES: [&str; 6] =
     ["CFLAGS", "CPPFLAGS", "LDFLAGS", "CC", "CXX", "CXXFLAGS"];
+
+/// The C compiler of the host, which builds the C references and their
+/// shims. The pinned Makefiles name `gcc`.
+pub(super) const HOST_CC: &str = "gcc";
 
 /// Runs a tool that the build needs and returns its standard output. Stops
 /// the build with `advice` when the tool cannot run or fails.
@@ -69,8 +74,37 @@ pub(super) fn compile(compiler: &str, source: &Path, flags: &[&str], object: &Pa
     );
 }
 
+/// Compiles one shim source file into the static library `lib{name}.a` in
+/// `directory`, with the object `{name}.o` beside it. Returns the object.
+///
+/// The step runs unless `stamp` holds its key: `key_prefix`, a newline, and
+/// the text of the shim. `key_prefix` must name every other input of the
+/// step.
+pub(super) fn shim_library(
+    compiler: &str,
+    shim: &Path,
+    flags: &[&str],
+    key_prefix: &str,
+    stamp: &Path,
+    directory: &Path,
+    name: &str,
+) -> PathBuf {
+    let content = fs::read_to_string(shim)
+        .unwrap_or_else(|error| panic!("the shim {} cannot be read ({error})", shim.display()));
+    let object = directory.join(format!("{name}.o"));
+    run_once(stamp, &format!("{key_prefix}\n{content}"), || {
+        fs::create_dir_all(directory).expect("the library directory can be created");
+        compile(compiler, shim, flags, &object);
+        static_library(
+            &directory.join(format!("lib{name}.a")),
+            slice::from_ref(&object),
+        );
+    });
+    object
+}
+
 /// Replaces a static library with the given objects.
-pub(super) fn archive(library: &Path, objects: &[PathBuf]) {
+pub(super) fn static_library(library: &Path, objects: &[PathBuf]) {
     if library.exists() {
         fs::remove_file(library).expect("an old library can be removed");
     }
