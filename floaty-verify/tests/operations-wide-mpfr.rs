@@ -1,8 +1,12 @@
 //! Compares the operations beyond arithmetic with the oracle in
-//! `floaty_verify::operations`, for the wider formats: bfloat16, TF32, a
-//! 72-bit layout whose exponent field crosses a limb boundary, x87 extended
-//! precision with precision control, binary256, and binary512. It also
-//! converts random integers to every format, the FP8 formats included.
+//! `floaty_verify::operations`, for the wider formats: binary16, bfloat16,
+//! TF32, binary32, binary64, a 72-bit layout whose exponent field crosses a
+//! limb boundary, x87 extended precision with precision control, binary128,
+//! and every wide format from binary160 to binary512. TestFloat and
+//! `rustc_apfloat` check some of these operations for the IEEE formats in
+//! their own behaviors. This test runs them in every behavior of
+//! `BEHAVIORS`. It also converts random integers to every format, the FP8
+//! and MX formats included.
 //!
 //! The operands are the boundary encodings of each format, random encodings,
 //! values near the integers that rounding and integer conversion reach, and
@@ -16,7 +20,8 @@ use core::num::NonZeroU32;
 
 use floaty::format::Standard;
 use floaty::{
-    Binary, Decoded, Env, F80, F256, F512, Finite, Float, Fnuz, Int, NoInf, TF32, UInt, X87,
+    Binary, Decoded, Env, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352, F384,
+    F416, F448, F480, F512, Finite, Float, Fnuz, Int, NoInf, TF32, UInt, X87,
 };
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs};
 use floaty_verify::mpfr::{DIRECTIONS, Format, Specials};
@@ -325,6 +330,48 @@ fn bfloat16_and_tf32() {
 }
 
 #[test]
+fn binary16_binary32_binary64_and_binary128() {
+    check_format(&Plan {
+        layout: Layout::new(16, 5, IntegerBit::Implicit),
+        make: &from_u16::<Binary<5>, 16>,
+        count: 4_000,
+        pair_envs: &BEHAVIORS,
+        single_envs: &BEHAVIORS,
+        seed: 0x0F16,
+    });
+    check_format(&Plan {
+        layout: Layout::new(32, 8, IntegerBit::Implicit),
+        make: &|bits: &Integer| {
+            F32::from_bits(bits.to_u32().expect("a binary32 encoding fits a u32"))
+        },
+        count: 4_000,
+        pair_envs: &BEHAVIORS,
+        single_envs: &BEHAVIORS,
+        seed: 0x1F32,
+    });
+    check_format(&Plan {
+        layout: Layout::new(64, 11, IntegerBit::Implicit),
+        make: &|bits: &Integer| {
+            F64::from_bits(bits.to_u64().expect("a binary64 encoding fits a u64"))
+        },
+        count: 3_000,
+        pair_envs: &BEHAVIORS,
+        single_envs: &BEHAVIORS,
+        seed: 0x0F64,
+    });
+    check_format(&Plan {
+        layout: Layout::new(128, 15, IntegerBit::Implicit),
+        make: &|bits: &Integer| {
+            F128::from_bits(bits.to_u128().expect("a binary128 encoding fits a u128"))
+        },
+        count: 2_000,
+        pair_envs: &BEHAVIORS,
+        single_envs: &BEHAVIORS,
+        seed: 0x0128,
+    });
+}
+
+#[test]
 fn a_layout_whose_exponent_crosses_a_limb() {
     check_format(&Plan {
         layout: Layout::new(72, 15, IntegerBit::Implicit),
@@ -391,6 +438,34 @@ fn binary256_and_binary512() {
         single_envs: &BEHAVIORS,
         seed: 0x0512,
     });
+}
+
+/// Checks one wide format of `$width` bits in `$limbs` limbs.
+macro_rules! wide_format {
+    ($alias:ty, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+        check_format(&Plan {
+            layout: Layout::new($width, $exponent_bits, IntegerBit::Implicit),
+            make: &|bits: &Integer| <$alias>::from_bits(to_limbs::<$limbs>(bits)),
+            count: 500,
+            pair_envs: &BEHAVIORS,
+            single_envs: &BEHAVIORS,
+            seed: $width,
+        })
+    };
+}
+
+#[test]
+fn the_other_wide_formats() {
+    wide_format!(F160, 160, 16, 3);
+    wide_format!(F192, 192, 17, 3);
+    wide_format!(F224, 224, 18, 4);
+    wide_format!(F288, 288, 20, 5);
+    wide_format!(F320, 320, 20, 5);
+    wide_format!(F352, 352, 21, 6);
+    wide_format!(F384, 384, 21, 6);
+    wide_format!(F416, 416, 22, 7);
+    wide_format!(F448, 448, 22, 7);
+    wide_format!(F480, 480, 23, 8);
 }
 
 /// Returns edge and random integers of type `I`: zero, one, the limits, the
@@ -470,12 +545,26 @@ fn integers_convert_to_every_format() {
     from_ints::<Binary<2, Finite>, 4>(Specials::Finite, &BEHAVIORS, 5);
     from_ints::<Binary<2, Finite>, 6>(Specials::Finite, &BEHAVIORS, 6);
     from_ints::<Binary<3, Finite>, 6>(Specials::Finite, &BEHAVIORS, 7);
+    from_ints::<Binary<5>, 16>(Specials::Ieee, &BEHAVIORS, 0x0F16);
     from_ints::<Binary<8>, 16>(Specials::Ieee, &BEHAVIORS, 16);
     from_ints::<Binary<8>, 19>(Specials::Ieee, &BEHAVIORS, 19);
+    from_ints::<Binary<8>, 32>(Specials::Ieee, &BEHAVIORS, 32);
+    from_ints::<Binary<11>, 64>(Specials::Ieee, &BEHAVIORS, 64);
     from_ints::<Binary<15>, 72>(Specials::Ieee, &BEHAVIORS, 72);
+    from_ints::<Binary<15>, 128>(Specials::Ieee, &BEHAVIORS, 128);
     let mut x87 = BEHAVIORS.to_vec();
     x87.extend(precision_control());
     from_ints::<Binary<15, X87>, 80>(Specials::Ieee, &x87, 80);
+    from_ints::<Binary<16>, 160>(Specials::Ieee, &BEHAVIORS, 160);
+    from_ints::<Binary<17>, 192>(Specials::Ieee, &BEHAVIORS, 192);
+    from_ints::<Binary<18>, 224>(Specials::Ieee, &BEHAVIORS, 224);
     from_ints::<Binary<19>, 256>(Specials::Ieee, &BEHAVIORS, 256);
+    from_ints::<Binary<20>, 288>(Specials::Ieee, &BEHAVIORS, 288);
+    from_ints::<Binary<20>, 320>(Specials::Ieee, &BEHAVIORS, 320);
+    from_ints::<Binary<21>, 352>(Specials::Ieee, &BEHAVIORS, 352);
+    from_ints::<Binary<21>, 384>(Specials::Ieee, &BEHAVIORS, 384);
+    from_ints::<Binary<22>, 416>(Specials::Ieee, &BEHAVIORS, 416);
+    from_ints::<Binary<22>, 448>(Specials::Ieee, &BEHAVIORS, 448);
+    from_ints::<Binary<23>, 480>(Specials::Ieee, &BEHAVIORS, 480);
     from_ints::<Binary<23>, 512>(Specials::Ieee, &BEHAVIORS, 512);
 }

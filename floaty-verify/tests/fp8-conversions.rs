@@ -2,8 +2,8 @@
 //! with `ml_dtypes`, rounding to nearest even, in `data/fp8-from-f16.bin`.
 //!
 //! `ml_dtypes` gives every NaN result a canonical payload, so a NaN result
-//! only has to be a NaN with the same sign. TestFloat checks NaN payloads for
-//! the IEEE formats.
+//! only has to be a NaN with the same sign. `conversions-mpfr.rs` checks the
+//! payload rule of floaty, binary16 to E5M2 included.
 
 use floaty::{Env, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16};
 

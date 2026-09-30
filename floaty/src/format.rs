@@ -486,7 +486,8 @@ impl Encoding for Ieee {
 ///
 /// An exponent field and a fraction field of all ones hold a NaN, with either
 /// sign. Every other encoding is a number. The bias is `2^(E-1) - 1`. The
-/// format has no signaling NaN, so its NaN is quiet.
+/// format has no signaling NaN, so its NaN is quiet. An overflow, and an
+/// infinite result, give the NaN with the sign of the result.
 pub enum NoInf {}
 
 impl Sealed for NoInf {}

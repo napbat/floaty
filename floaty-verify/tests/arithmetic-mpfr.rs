@@ -1,19 +1,25 @@
 //! Compares add, subtract, multiply, divide, square root, and fused
-//! multiply-add with the MPFR arithmetic oracle, for the formats that
-//! TestFloat lacks: the FP8 formats, bfloat16, TF32, binary256, binary512,
-//! and a layout whose exponent field crosses a limb boundary.
+//! multiply-add with the MPFR arithmetic oracle. The formats are those that
+//! TestFloat lacks: the FP8 and MX formats, bfloat16, TF32, the wide formats
+//! from binary160 to binary512, and a layout whose exponent field crosses a
+//! limb boundary. binary16, binary32, binary64, and binary128 run here too,
+//! for the behaviors that TestFloat lacks. These are two rounding directions,
+//! saturation, precision limits, flush-to-zero with tininess before rounding,
+//! and the NaN rules of x87, PowerPC, and Arm.
 //!
-//! Every FP8 operand pair runs in every rounding direction.
+//! Every FP8, FP6, and FP4 operand pair runs in every behavior of
+//! `behaviors`.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
 use core::num::NonZeroU32;
 
-use floaty::env::{InvalidProduct, NanPropagation, NanRule, Tininess};
+use floaty::env::{FusedNanOrder, InvalidProduct, NanPropagation, NanRule, Tininess};
 use floaty::{
     BF16, Binary, Class, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E4M3Fn, F8E4M3Fnuz, F8E5M2,
-    F8E5M2Fnuz, F80, F256, F512, Float, Rounding, TF32,
+    F8E5M2Fnuz, F16, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352, F384, F416,
+    F448, F480, F512, Float, Rounding, TF32,
 };
 use floaty_verify::arithmetic::{self, Operand, Operation};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs};
@@ -58,16 +64,27 @@ fn behaviors() -> Vec<Env> {
         Env::IEEE
             .with_precision(NonZeroU32::new(2))
             .with_tininess(Tininess::BeforeRounding),
+        // The other NaN rules: the x87 rule, the larger significand with the
+        // addend first, the PowerPC rule, the rule of the Arm `FPMulAdd`
+        // pseudocode, and the default NaN.
+        Env::IEEE.with_nan(Env::X87.nan),
+        Env::IEEE.with_nan(
+            NanRule::new(NanPropagation::LargerSignificand)
+                .with_default_negative(true)
+                .with_fused_order(FusedNanOrder::AddendFirst),
+        ),
+        Env::IEEE.with_nan(
+            NanRule::new(NanPropagation::FirstOperand)
+                .with_fused_order(FusedNanOrder::AddendSecond)
+                .with_invalid_product(InvalidProduct::SignalsAndYieldsToNan),
+        ),
+        Env::IEEE.with_nan(
+            NanRule::new(NanPropagation::SignalingFirst)
+                .with_fused_order(FusedNanOrder::AddendFirst),
+        ),
+        Env::IEEE.with_nan(NanRule::new(NanPropagation::DefaultNan).with_default_negative(true)),
     ]);
     envs
-}
-
-/// Normalizes a result for comparison: a NaN only has to be a NaN.
-fn normalize(value: Value) -> Value {
-    match value {
-        Value::Nan { .. } => Value::Nan { negative: false },
-        other => other,
-    }
 }
 
 /// Returns the oracle parameters of a format.
@@ -92,51 +109,32 @@ macro_rules! operand {
     };
 }
 
-/// Compares one operation on one operand list.
+/// Compares one operation on one operand list. A NaN result must be the NaN
+/// that the NaN rule gives, with its sign and payload.
 macro_rules! compare {
     ($format:expr, $env:expr, $operation:expr, $ours:expr, [$($operand:expr),+]) => {{
         let (result, flags) = $ours;
         assert!(result.is_canonical(), "{result:?} is canonical");
-        let ours = (normalize(Value::from_decoded(result.decode::<8>())), flags);
+        let decoded = result.decode::<8>();
+        let payload = match decoded {
+            Decoded::Nan { signaling, payload, .. } => {
+                assert!(!signaling, "{result:?}: a NaN result is quiet");
+                payload
+            }
+            _ => [0; 8],
+        };
+        let ours = (Value::from_decoded(decoded), payload, flags);
         let operands = [$(operand!($operand)),+];
-        let (expected, expected_flags) = arithmetic::compute($operation, &operands, &$format, &$env);
-        assert_eq!(ours, (normalize(expected), expected_flags), "{:?} {:?} {:?}", $operation, $env, [$($operand),+]);
-        check_nan(&result.decode::<8>(), &operands, flags, &$env);
+        let expected = arithmetic::compute($operation, &operands, &$format, &$env);
+        assert_eq!(
+            ours,
+            (expected.value, expected.payload, expected.flags),
+            "{:?} {:?} {:?}",
+            $operation,
+            $env,
+            [$($operand),+]
+        );
     }};
-}
-
-/// Checks the NaN that an operation with a NaN operand returns: one of the
-/// NaN operands made quiet, with its sign and payload, or the default NaN of
-/// an invalid operation. Every rule of these tests propagates a NaN operand.
-fn check_nan(result: &Decoded<8>, operands: &[Operand<8>], flags: floaty::Flags, env: &Env) {
-    let Decoded::Nan {
-        negative,
-        signaling,
-        payload,
-    } = *result
-    else {
-        return;
-    };
-    let inputs: Vec<(bool, [u64; 8])> = operands
-        .iter()
-        .filter_map(|operand| match operand.decoded {
-            Decoded::Nan {
-                negative, payload, ..
-            } => Some((negative, payload)),
-            _ => None,
-        })
-        .collect();
-    if inputs.is_empty() {
-        return;
-    }
-    assert!(!signaling, "a NaN result is quiet");
-    let default = negative == env.nan.default_negative
-        && payload == [0; 8]
-        && flags.contains(floaty::Flags::INVALID);
-    assert!(
-        default || inputs.contains(&(negative, payload)),
-        "the NaN result {result:?} is an operand NaN or the default NaN"
-    );
 }
 
 /// Checks every operand pair and every operand of a format of `$width`
@@ -242,11 +240,18 @@ fn encodings(
     random: &mut SplitMix64,
 ) -> Vec<Integer> {
     let mask: Integer = (Integer::from(1) << width) - 1u32;
+    let nan_field: Integer =
+        ((Integer::from(1) << exponent_bits) - 1u32) << (width - 1 - exponent_bits);
     let mut values = boundary_encodings(width, exponent_bits, IntegerBit::Implicit);
     let limbs = width.div_ceil(64);
-    for _ in 0..count {
+    for index in 0..count {
         let digits: Vec<u64> = (0..limbs).map(|_| random.next_u64()).collect();
-        let value: Integer = Integer::from_digits(&digits, Order::Lsf) & &mask;
+        let mut value: Integer = Integer::from_digits(&digits, Order::Lsf) & &mask;
+        // One encoding in 16 gets the exponent field of the NaNs, so that NaNs
+        // with random payloads occur in every format.
+        if index % 16 == 0 {
+            value |= &nan_field;
+        }
         let flip = Integer::from(random.next_u64() & 0xFF);
         let near: Integer = (value.clone() ^ flip) ^ (Integer::from(1) << (width - 1));
         values.push(value);
@@ -347,9 +352,99 @@ fn layouts_at_the_width_of_the_addition() {
 }
 
 #[test]
+fn binary16_to_binary128() {
+    wide!(F16, 16, 5, to_u16, 20_000, 0x16);
+    wide!(F32, 32, 8, to_u32, 20_000, 0x32);
+    wide!(F64, 64, 11, to_u64, 20_000, 0x64);
+    wide!(F128, 128, 15, to_u128, 10_000, 0x128);
+}
+
+#[test]
 fn binary256_and_binary512() {
     wide!(F256, 256, 19, to_limbs::<4>, 3_000, 256);
     wide!(F512, 512, 23, to_limbs::<8>, 3_000, 512);
+}
+
+#[test]
+fn the_other_wide_formats() {
+    wide!(F160, 160, 16, to_limbs::<3>, 1_000, 160);
+    wide!(F192, 192, 17, to_limbs::<3>, 1_000, 192);
+    wide!(F224, 224, 18, to_limbs::<4>, 1_000, 224);
+    wide!(F288, 288, 20, to_limbs::<5>, 1_000, 288);
+    wide!(F320, 320, 20, to_limbs::<5>, 1_000, 320);
+    wide!(F352, 352, 21, to_limbs::<6>, 1_000, 352);
+    wide!(F384, 384, 21, to_limbs::<6>, 1_000, 384);
+    wide!(F416, 416, 22, to_limbs::<7>, 1_000, 416);
+    wide!(F448, 448, 22, to_limbs::<7>, 1_000, 448);
+    wide!(F480, 480, 23, to_limbs::<8>, 1_000, 480);
+}
+
+/// Checks the arithmetic of the values of one format in the static mode
+/// `$mode`, which must name the behavior `$env`.
+macro_rules! in_mode {
+    ($values:expr, $alias:ty, $mode:ty, $env:expr) => {{
+        let env: Env = $env;
+        assert_eq!(
+            <$mode as floaty::env::Mode>::ENV,
+            env,
+            "the mode names the behavior"
+        );
+        let format = format_of!($alias, Specials::Ieee);
+        let mode = <$mode>::default();
+        let values: Vec<_> = $values
+            .iter()
+            .map(|value| value.with_mode::<$mode>())
+            .collect();
+        for pair in values.chunks_exact(2) {
+            let [x, y] = [pair[0], pair[1]];
+            compare!(format, env, Operation::Add, x.add_with(y, mode), [x, y]);
+            compare!(format, env, Operation::Sub, x.sub_with(y, mode), [x, y]);
+            compare!(format, env, Operation::Mul, x.mul_with(y, mode), [x, y]);
+            compare!(format, env, Operation::Div, x.div_with(y, mode), [x, y]);
+            compare!(format, env, Operation::Sqrt, x.sqrt_with(mode), [x]);
+        }
+        for triple in values.chunks_exact(3) {
+            let [a, b, c] = [triple[0], triple[1], triple[2]];
+            compare!(
+                format,
+                env,
+                Operation::MulAdd,
+                a.mul_add_with(b, c, mode),
+                [a, b, c]
+            );
+        }
+    }};
+}
+
+/// Checks static modes against the oracle. `Rounded<Ieee, R>` runs in every
+/// direction, with the two directions that TestFloat and the processor lack.
+/// `mode::X87` limits binary128 to 64 bits, and `FullPrecision<X87>` keeps the
+/// NaN rule of x87 without the limit.
+#[test]
+fn static_modes() {
+    let mut random = SplitMix64::new(0x0057_471C);
+    let doubles: Vec<F64> = encodings(64, 11, 2_000, &mut random)
+        .iter()
+        .map(|encoding| F64::from_bits(to_u64(encoding)))
+        .collect();
+    let quads: Vec<F128> = encodings(128, 15, 1_000, &mut random)
+        .iter()
+        .map(|encoding| F128::from_bits(to_u128(encoding)))
+        .collect();
+    for rounding in DIRECTIONS {
+        let env = Env::IEEE.with_rounding(rounding);
+        floaty_verify::with_rounding_mode!(rounding, floaty::mode::Ieee, Mode => {
+            in_mode!(doubles, F64, Mode, env);
+            in_mode!(quads, F128, Mode, env);
+        });
+    }
+    in_mode!(quads, F128, floaty::mode::X87, Env::X87);
+    in_mode!(
+        quads,
+        F128,
+        floaty::mode::FullPrecision<floaty::mode::X87>,
+        Env::X87.with_precision(None)
+    );
 }
 
 /// Checks x87 arithmetic and fused multiply-add with precision control at 24,

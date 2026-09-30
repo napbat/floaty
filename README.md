@@ -102,9 +102,10 @@ assert_eq!(largest, Decoded::Finite { negative: false, exponent: 4, significand:
 ```
 
 An overflow in a format without an infinity gives the NaN when the format
-has one. A saturating behavior gives the largest finite value instead, in
-every binary format. The MX formats have neither an infinity nor a NaN, so
-they always saturate, and an invalid operation gives `+0` with `INVALID`:
+has one, with the sign of the result. A saturating behavior gives the
+largest finite value instead, in every binary format. The MX formats have
+neither an infinity nor a NaN, so they always saturate, and an invalid
+operation gives `+0` with `INVALID`:
 
 ```rust
 use floaty::{F4E2M1Fn, F8E4M3Fn, F8E5M2, Flags};
@@ -445,7 +446,7 @@ IEEE 754 or a vendor manual with MPFR or decNumber.
 | Reference | What it checks |
 | --- | --- |
 | Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in the six directions of TestFloat, under four NaN rules |
-| MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of the formats that TestFloat lacks. Conversions between those formats and the decimal formats. |
+| MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, and between those formats and the decimal formats. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, and `scale_b` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, as generated tables |
 | The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 tests run under QEMU 10.2.1. |

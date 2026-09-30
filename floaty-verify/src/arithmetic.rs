@@ -6,13 +6,15 @@
 //! [`crate::mpfr`] then rounds that value. The extra bits make the second
 //! rounding give the correctly rounded result, by the round-to-odd property.
 //!
-//! The oracle does not select NaNs: TestFloat and the processor check the NaN
-//! rules. Its NaN result stands for any NaN; the tests that use it check that
-//! floaty returns a NaN operand made quiet, or the default NaN.
+//! A NaN result follows the NaN rule of the `Env`, as its documentation
+//! states. The rule has a propagation rule and a default NaN. For a fused
+//! multiply-add, it also has a rule for `0 * inf + NaN` and an order of the
+//! NaN operands. An overflow in a format without an infinity gives the NaN of
+//! that format, with the sign of the result.
 
 use core::cmp::Ordering;
 
-use floaty::env::InvalidProduct;
+use floaty::env::{FusedNanOrder, InvalidProduct, NanPropagation};
 use floaty::{Decoded, Env, Flags, Rounding};
 use rug::float::Round;
 use rug::integer::Order;
@@ -46,6 +48,25 @@ pub struct Operand<const N: usize> {
     pub subnormal: bool,
 }
 
+/// The expected result of an operation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Expected<const N: usize> {
+    /// The value. A NaN has the sign that the NaN rule gives.
+    pub value: Value,
+    /// The payload of a NaN value, and zero for every other value.
+    pub payload: [u64; N],
+    /// The flags.
+    pub flags: Flags,
+}
+
+/// A NaN that the propagation rule can select.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Candidate<const N: usize> {
+    negative: bool,
+    signaling: bool,
+    payload: [u64; N],
+}
+
 /// A value that is not a NaN, as the oracle computes with it.
 #[derive(Clone, Debug)]
 enum Number {
@@ -68,14 +89,15 @@ impl Number {
 ///
 /// # Panics
 ///
-/// Panics for an unsupported operand, which these formats do not have.
+/// Panics for an unsupported operand, which these formats do not have, and
+/// for a NaN rule that a later floaty adds.
 #[must_use]
 pub fn compute<const N: usize>(
     operation: Operation,
     operands: &[Operand<N>],
     format: &Format,
     env: &Env,
-) -> (Value, Flags) {
+) -> Expected<N> {
     let mut flags = Flags::NONE;
     let mut numbers = Vec::new();
     let mut signaling = false;
@@ -130,7 +152,14 @@ pub fn compute<const N: usize>(
         {
             flags |= Flags::INVALID;
         }
-        return (Value::Nan { negative: false }, flags);
+        let nan = propagate(operation, operands, &numbers, env);
+        return Expected {
+            value: Value::Nan {
+                negative: nan.negative || format.specials == Specials::Fnuz,
+            },
+            payload: nan.payload,
+            flags,
+        };
     }
     let (value, special) = match operation {
         Operation::Add => add(&numbers[0], &numbers[1], format, env),
@@ -140,7 +169,123 @@ pub fn compute<const N: usize>(
         Operation::Sqrt => sqrt(&numbers[0], format, env),
         Operation::MulAdd => mul_add(&numbers[0], &numbers[1], &numbers[2], format, env),
     };
-    (value, flags | special)
+    Expected {
+        value,
+        payload: [0; N],
+        flags: flags | special,
+    }
+}
+
+/// Returns an operand as a NaN that the propagation rule can select, or
+/// `None` for a number.
+fn candidate<const N: usize>(operand: &Operand<N>) -> Option<Candidate<N>> {
+    match operand.decoded {
+        Decoded::Nan {
+            negative,
+            signaling,
+            payload,
+        } => Some(Candidate {
+            negative,
+            signaling,
+            payload,
+        }),
+        _ => None,
+    }
+}
+
+/// Selects a NaN among `offered`, in the order of the list, by the
+/// propagation rule of `env`, and makes it quiet. `DefaultNan` gives the
+/// default NaN. `LargerSignificand` takes a quiet NaN before a signaling NaN,
+/// then the larger payload, then the positive sign.
+fn select<const N: usize>(offered: &[Candidate<N>], env: &Env) -> Candidate<N> {
+    let first = offered
+        .first()
+        .expect("the rule selects from at least one NaN");
+    let chosen = match env.nan.propagation {
+        NanPropagation::DefaultNan => Candidate {
+            negative: env.nan.default_negative,
+            signaling: false,
+            payload: [0; N],
+        },
+        NanPropagation::SignalingFirst => {
+            *offered.iter().find(|nan| nan.signaling).unwrap_or(first)
+        }
+        NanPropagation::FirstOperand => *first,
+        NanPropagation::LargerSignificand => *offered
+            .iter()
+            .max_by(|a, b| {
+                (!a.signaling)
+                    .cmp(&!b.signaling)
+                    .then_with(|| a.payload.iter().rev().cmp(b.payload.iter().rev()))
+                    .then_with(|| (!a.negative).cmp(&!b.negative))
+            })
+            .expect("the rule selects from at least one NaN"),
+        _ => panic!("the oracle knows every propagation rule"),
+    };
+    Candidate {
+        signaling: false,
+        ..chosen
+    }
+}
+
+/// Returns the NaN result of an operation with a NaN operand.
+///
+/// A fused multiply-add whose product is the invalid `0 * inf` follows the
+/// rule for `0 * inf + NaN`. `Signals` offers the default NaN and then the
+/// addend. The other rules offer the addend alone.
+///
+/// Otherwise the fused order decides. `ProductFirst` selects among the
+/// factors and makes that NaN quiet. It then selects between that NaN and the
+/// addend. `AddendFirst` offers the addend and the factors. `AddendSecond`
+/// offers the first factor, the addend, and the second factor.
+fn propagate<const N: usize>(
+    operation: Operation,
+    operands: &[Operand<N>],
+    numbers: &[Number],
+    env: &Env,
+) -> Candidate<N> {
+    let offer = |indices: &[usize]| -> Vec<Candidate<N>> {
+        indices
+            .iter()
+            .filter_map(|&index| candidate(&operands[index]))
+            .collect()
+    };
+    if operation != Operation::MulAdd {
+        let every: Vec<usize> = (0..operands.len()).collect();
+        return select(&offer(&every), env);
+    }
+    let product = offer(&[0, 1]);
+    if product.is_empty() && is_zero_times_infinity(&numbers[0], &numbers[1]) {
+        return match env.nan.invalid_product {
+            InvalidProduct::Signals => {
+                let default = Candidate {
+                    negative: env.nan.default_negative,
+                    signaling: false,
+                    payload: [0; N],
+                };
+                let mut offered = vec![default];
+                offered.extend(offer(&[2]));
+                select(&offered, env)
+            }
+            InvalidProduct::YieldsToNan | InvalidProduct::SignalsAndYieldsToNan => {
+                select(&offer(&[2]), env)
+            }
+            _ => panic!("the oracle knows every rule for 0 * inf + NaN"),
+        };
+    }
+    match env.nan.fused_order {
+        FusedNanOrder::ProductFirst => {
+            let mut offered = Vec::new();
+            if !product.is_empty() {
+                offered.push(select(&product, env));
+            }
+            offered.extend(offer(&[2]));
+            select(&offered, env)
+        }
+        FusedNanOrder::AddendFirst => select(&offer(&[2, 0, 1]), env),
+        FusedNanOrder::AddendSecond => select(&offer(&[0, 2, 1]), env),
+        _ => panic!("the oracle knows every fused NaN order"),
+    }
 }
 
 fn negate(number: &Number) -> Number {
@@ -158,13 +303,14 @@ fn is_zero_times_infinity(first: &Number, second: &Number) -> bool {
     )
 }
 
-/// Returns the result of an invalid operation: a NaN, or positive zero in a
-/// format without a NaN.
-fn invalid(format: &Format) -> (Value, Flags) {
+/// Returns the result of an invalid operation: the default NaN, or positive
+/// zero in a format without a NaN. The one NaN of `Fnuz` is negative.
+fn invalid(format: &Format, env: &Env) -> (Value, Flags) {
     if format.specials == Specials::Finite {
         return (Value::Zero { negative: false }, Flags::INVALID);
     }
-    (Value::Nan { negative: false }, Flags::INVALID)
+    let negative = env.nan.default_negative || format.specials == Specials::Fnuz;
+    (Value::Nan { negative }, Flags::INVALID)
 }
 
 fn zero(negative: bool, format: &Format) -> Value {
@@ -180,7 +326,9 @@ fn infinity(negative: bool, format: &Format, env: &Env) -> Value {
         return Value::Infinity { negative };
     }
     if !env.saturate && format.specials != Specials::Finite {
-        return Value::Nan { negative: false };
+        return Value::Nan {
+            negative: negative || format.specials == Specials::Fnuz,
+        };
     }
     let precision = format.precision_in(env);
     let significand = if format.specials == Specials::NoInf && precision == format.precision {
@@ -223,7 +371,7 @@ fn working(format: &Format) -> u32 {
 
 fn add(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, Flags) {
     match (first, second) {
-        (Number::Infinity(a), Number::Infinity(b)) if a != b => invalid(format),
+        (Number::Infinity(a), Number::Infinity(b)) if a != b => invalid(format, env),
         (Number::Infinity(negative), _) | (_, Number::Infinity(negative)) => {
             (infinity(*negative, format, env), Flags::NONE)
         }
@@ -247,7 +395,7 @@ fn add(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, F
 fn mul(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, Flags) {
     let negative = first.negative() != second.negative();
     match (first, second) {
-        _ if is_zero_times_infinity(first, second) => invalid(format),
+        _ if is_zero_times_infinity(first, second) => invalid(format, env),
         (Number::Infinity(_), _) | (_, Number::Infinity(_)) => {
             (infinity(negative, format, env), Flags::NONE)
         }
@@ -263,7 +411,7 @@ fn div(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, F
     let negative = first.negative() != second.negative();
     match (first, second) {
         (Number::Infinity(_), Number::Infinity(_)) | (Number::Zero(_), Number::Zero(_)) => {
-            invalid(format)
+            invalid(format, env)
         }
         (Number::Infinity(_), _) => (infinity(negative, format, env), Flags::NONE),
         (_, Number::Infinity(_)) | (Number::Zero(_), _) => (zero(negative, format), Flags::NONE),
@@ -280,8 +428,8 @@ fn sqrt(value: &Number, format: &Format, env: &Env) -> (Value, Flags) {
     match value {
         Number::Zero(negative) => (zero(*negative, format), Flags::NONE),
         Number::Infinity(false) => (infinity(false, format, env), Flags::NONE),
-        Number::Infinity(true) => invalid(format),
-        Number::Finite(value) if value.is_sign_negative() => invalid(format),
+        Number::Infinity(true) => invalid(format, env),
+        Number::Finite(value) if value.is_sign_negative() => invalid(format, env),
         Number::Finite(value) => {
             let (root, ordering) =
                 BigFloat::with_val_round(working(format), value.sqrt_ref(), Round::Zero);
@@ -298,7 +446,7 @@ fn mul_add(
     env: &Env,
 ) -> (Value, Flags) {
     if is_zero_times_infinity(first, second) {
-        return invalid(format);
+        return invalid(format, env);
     }
     let product_negative = first.negative() != second.negative();
     let product_infinite =
@@ -306,7 +454,7 @@ fn mul_add(
     let product_zero = matches!(first, Number::Zero(_)) || matches!(second, Number::Zero(_));
     match addend {
         _ if product_infinite => match addend {
-            Number::Infinity(negative) if *negative != product_negative => invalid(format),
+            Number::Infinity(negative) if *negative != product_negative => invalid(format, env),
             _ => (infinity(product_negative, format, env), Flags::NONE),
         },
         Number::Infinity(negative) => (infinity(*negative, format, env), Flags::NONE),

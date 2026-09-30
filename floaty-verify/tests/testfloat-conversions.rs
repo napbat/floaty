@@ -2,11 +2,14 @@
 //! extended precision, and binary128 with Berkeley TestFloat.
 //!
 //! `testfloat_gen` writes each test case with the result and the flags that
-//! Berkeley SoftFloat computes. Two SoftFloat builds give the expected
-//! results: the ARM NaN specialization, which follows the NaN rule of the
-//! default mode, and the ARM default-NaN specialization, which follows the
-//! `DefaultNan` rule. A run with the default mode in one rounding direction
-//! also converts with the static mode `Rounded<Ieee, R>` as the behavior.
+//! Berkeley SoftFloat computes. Four SoftFloat builds give the expected
+//! results, one for each NaN rule: the ARM specialization, which follows the
+//! NaN rule of the default mode, the ARM default-NaN specialization, the 8086
+//! specialization of x87, and the 8086-SSE specialization. The ARM, 8086, and
+//! 8086-SSE builds share their NaN conversion code, so the 8086 and 8086-SSE
+//! runs check that the propagation rule does not change a conversion. A run
+//! with the default mode in one rounding direction also converts with the
+//! static mode `Rounded<Ieee, R>` as the behavior.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -14,11 +17,17 @@
 use floaty::env::NanRule;
 use floaty::{Env, F16, F32, F64, F80, F128, Flags};
 use floaty_verify::testfloat::{
-    self, ARM, ARM_DEFAULT_NAN, ARM_RULE, DEFAULT_NAN_RULE, ROUNDINGS, TININESS, fields, flag_bits,
+    self, ARM, ARM_DEFAULT_NAN, ARM_RULE, DEFAULT_NAN_RULE, ROUNDINGS, SSE, SSE_RULE, TININESS,
+    X87, X87_RULE, fields, flag_bits,
 };
 
 /// The generators, and the NaN rule that each one follows.
-const GENERATORS: [(&str, NanRule); 2] = [(ARM, ARM_RULE), (ARM_DEFAULT_NAN, DEFAULT_NAN_RULE)];
+const GENERATORS: [(&str, NanRule); 4] = [
+    (ARM, ARM_RULE),
+    (ARM_DEFAULT_NAN, DEFAULT_NAN_RULE),
+    (X87, X87_RULE),
+    (SSE, SSE_RULE),
+];
 
 /// Converts one encoding and returns the result bits and the flags.
 macro_rules! convert {
@@ -39,7 +48,7 @@ macro_rules! convert_default {
     }};
 }
 
-/// Defines one test that checks one conversion against both generators, in
+/// Defines one test that checks one conversion against every generator, in
 /// every rounding direction and with both tininess rules. The runs of the
 /// default mode also check `convert`.
 macro_rules! conversion_test {

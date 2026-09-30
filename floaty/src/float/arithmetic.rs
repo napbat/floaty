@@ -37,9 +37,9 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
 
     /// Divides by `other`. Returns the quotient and the flags.
     ///
-    /// A division by zero in a format without an infinity gives the NaN, or
-    /// the largest finite value when the behavior saturates or the format has
-    /// no NaN, and signals divide-by-zero.
+    /// A division by zero in a format without an infinity gives the NaN with
+    /// the sign of the quotient, or the largest finite value when the behavior
+    /// saturates or the format has no NaN, and signals divide-by-zero.
     #[must_use]
     pub fn div_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) = S::div(self.bits, other.bits, behavior.apply::<M>());

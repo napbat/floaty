@@ -11,7 +11,7 @@ use core::cmp::Ordering;
 
 pub mod decimal;
 
-use floaty::env::Tininess;
+use floaty::env::{NanPropagation, Tininess};
 use floaty::{Decoded, Env, Flags, Rounding};
 use rug::float::Round;
 use rug::integer::Order;
@@ -387,6 +387,12 @@ pub fn convert<const N: usize>(
                 Flags::INVALID
             } else {
                 Flags::NONE
+            };
+            // `DefaultNan` gives the default NaN. The other rules keep the sign.
+            let negative = if env.nan.propagation == NanPropagation::DefaultNan {
+                env.nan.default_negative
+            } else {
+                negative
             };
             (nan(negative, format), flags)
         }
