@@ -11,37 +11,12 @@ use crate::format::internal::MinMax;
 use crate::host::{self, Kind};
 
 impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {
-    /// Applies `operation` to each pair of lanes, and returns its results.
-    fn each<R>(
-        self,
-        other: Self,
-        mut operation: impl FnMut(Float<S, W, M>, Float<S, W, M>) -> R,
-    ) -> [R; N] {
-        core::array::from_fn(|index| operation(self.lanes[index], other.lanes[index]))
-    }
-
-    /// Applies `operation`, which returns a result and flags, to each pair of
-    /// lanes, and returns the results and the union of the flags.
-    fn pairs_with<R>(
-        self,
-        other: Self,
-        mut operation: impl FnMut(Float<S, W, M>, Float<S, W, M>) -> (R, Flags),
-    ) -> ([R; N], Flags) {
-        let mut flags = Flags::NONE;
-        let results = self.each(other, |left, right| {
-            let (result, lane_flags) = operation(left, right);
-            flags |= lane_flags;
-            result
-        });
-        (results, flags)
-    }
-
     /// Compares each pair of lanes in the engine or the scalar paths, for
     /// lanes whose packed host path declines.
     #[cold]
     #[inline(never)]
     fn compare_out_of_line(self, other: Self) -> [Option<Ordering>; N] {
-        self.each(other, |left, right| left.partial_cmp(&right))
+        self.pairs(other, |left, right| left.partial_cmp(&right))
     }
 
     /// Compares each pair of lanes as the IEEE 754 quiet predicates do, with
@@ -51,7 +26,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[inline]
     pub fn compare_quiet(self, other: Self) -> [Option<Ordering>; N] {
         if !host::packed::available(S::HOST, Kind::Comparison) {
-            return self.each(other, |left, right| left.partial_cmp(&right));
+            return self.pairs(other, |left, right| left.partial_cmp(&right));
         }
         match host::packed::compare(&self.lanes, &other.lanes, &M::ENV) {
             Some(orders) => orders,
@@ -91,7 +66,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     /// of the default mode for two encodings of one datum.
     #[must_use]
     pub fn total_cmp(self, other: Self) -> [Ordering; N] {
-        self.each(other, Float::total_cmp)
+        self.pairs(other, Float::total_cmp)
     }
 
     /// Orders each pair of lanes as IEEE 754 `totalOrder` does, with the
@@ -99,7 +74,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     pub fn total_cmp_with(self, other: Self, behavior: impl Override) -> [Ordering; N] {
         let behavior = behavior.apply::<M>();
-        self.each(other, |left, right| left.total_cmp_with(right, behavior))
+        self.pairs(other, |left, right| left.total_cmp_with(right, behavior))
     }
 }
 

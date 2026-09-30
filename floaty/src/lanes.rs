@@ -88,6 +88,15 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         Self::new(lanes)
     }
 
+    /// Applies `operation` to each pair of lanes, and returns its results.
+    fn pairs<R>(
+        self,
+        other: Self,
+        mut operation: impl FnMut(Float<S, W, M>, Float<S, W, M>) -> R,
+    ) -> [R; N] {
+        core::array::from_fn(|index| operation(self.lanes[index], other.lanes[index]))
+    }
+
     /// Applies `operation` to each lane, for lanes whose packed host path
     /// declines at run time or gives a NaN lane. Each lane can still take a
     /// scalar host path, which sends a NaN to the engine. The call stays out
@@ -172,16 +181,16 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         behavior: impl Override,
     ) -> (Self, Flags) {
         let behavior = behavior.apply::<M>();
-        let mut flags = Flags::NONE;
-        let mut lanes = self.lanes;
-        lanes
-            .iter_mut()
-            .zip(multiplier.lanes.into_iter().zip(addend.lanes))
-            .for_each(|(lane, (multiplier, addend))| {
-                let (value, lane_flags) = lane.mul_add_with(multiplier, addend, behavior);
-                flags |= lane_flags;
-                *lane = value;
-            });
+        let triples: [_; N] = core::array::from_fn(|index| {
+            (
+                self.lanes[index],
+                multiplier.lanes[index],
+                addend.lanes[index],
+            )
+        });
+        let (lanes, flags) = with_flags(triples, |(lane, multiplier, addend)| {
+            lane.mul_add_with(multiplier, addend, behavior)
+        });
         (Self::new(lanes), flags)
     }
 
@@ -362,17 +371,19 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
 
     /// Applies `operation`, which returns a result and flags, to each lane,
     /// and returns the results and the union of the flags.
-    fn each_with<R>(
+    fn each_with<R>(self, operation: impl FnMut(Float<S, W, M>) -> (R, Flags)) -> ([R; N], Flags) {
+        with_flags(self.lanes, operation)
+    }
+
+    /// Applies `operation`, which returns a result and flags, to each pair of
+    /// lanes, and returns the results and the union of the flags.
+    fn pairs_with<R>(
         self,
-        mut operation: impl FnMut(Float<S, W, M>) -> (R, Flags),
+        other: Self,
+        mut operation: impl FnMut(Float<S, W, M>, Float<S, W, M>) -> (R, Flags),
     ) -> ([R; N], Flags) {
-        let mut flags = Flags::NONE;
-        let results = self.lanes.map(|lane| {
-            let (result, lane_flags) = operation(lane);
-            flags |= lane_flags;
-            result
-        });
-        (results, flags)
+        let pairs: [_; N] = self.pairs(other, |left, right| (left, right));
+        with_flags(pairs, |(left, right)| operation(left, right))
     }
 
     /// Applies `operation`, which returns flags, to each pair of lanes, and
@@ -380,15 +391,10 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     fn zip_with(
         self,
         other: Self,
-        mut operation: impl FnMut(Float<S, W, M>, Float<S, W, M>) -> (Float<S, W, M>, Flags),
+        operation: impl FnMut(Float<S, W, M>, Float<S, W, M>) -> (Float<S, W, M>, Flags),
     ) -> (Self, Flags) {
-        let mut flags = Flags::NONE;
-        let lanes = self.zip(other, |left, right| {
-            let (value, lane_flags) = operation(left, right);
-            flags |= lane_flags;
-            value
-        });
-        (lanes, flags)
+        let (lanes, flags) = self.pairs_with(other, operation);
+        (Self::new(lanes), flags)
     }
 
     /// Returns the absolute value of each lane. Only the sign bit changes.
@@ -455,12 +461,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     pub fn from_int_with<I: Integer>(values: [I; N], behavior: impl Override) -> (Self, Flags) {
         let behavior = behavior.apply::<M>();
-        let mut flags = Flags::NONE;
-        let lanes = values.map(|value| {
-            let (lane, lane_flags) = Float::from_int_with(value, behavior);
-            flags |= lane_flags;
-            lane
-        });
+        let (lanes, flags) = with_flags(values, |value| Float::from_int_with(value, behavior));
         (Self::new(lanes), flags)
     }
 
@@ -508,13 +509,8 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     pub fn scale_b_with(self, scales: [i32; N], behavior: impl Override) -> (Self, Flags) {
         let behavior = behavior.apply::<M>();
-        let mut flags = Flags::NONE;
-        let mut lanes = self.lanes;
-        lanes.iter_mut().zip(scales).for_each(|(lane, scale)| {
-            let (value, lane_flags) = lane.scale_b_with(scale, behavior);
-            flags |= lane_flags;
-            *lane = value;
-        });
+        let pairs: [_; N] = core::array::from_fn(|index| (self.lanes[index], scales[index]));
+        let (lanes, flags) = with_flags(pairs, |(lane, scale)| lane.scale_b_with(scale, behavior));
         (Self::new(lanes), flags)
     }
 
@@ -562,4 +558,20 @@ fn convert_out_of_line<S: Standard<W>, const W: usize, M: Mode, const N: usize, 
     lanes: Lanes<Float<S, W, M>, N>,
 ) -> Lanes<T, N> {
     Lanes::new(lanes.lanes.map(Float::convert::<T>))
+}
+
+/// Applies `operation`, which returns a result and flags, to each item, and
+/// returns the results and the union of the flags. Every `_with` method of
+/// `Lanes` reports its flags through this function.
+fn with_flags<T, R, const N: usize>(
+    items: [T; N],
+    mut operation: impl FnMut(T) -> (R, Flags),
+) -> ([R; N], Flags) {
+    let mut flags = Flags::NONE;
+    let results = items.map(|item| {
+        let (result, item_flags) = operation(item);
+        flags |= item_flags;
+        result
+    });
+    (results, flags)
 }
