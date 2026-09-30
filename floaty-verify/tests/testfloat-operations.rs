@@ -23,14 +23,12 @@
 
 use core::cmp::Ordering;
 use core::fmt::Debug;
-use core::num::NonZeroU32;
 
-use floaty::env::NanRule;
 use floaty::format::Standard;
-use floaty::{Binary, Env, Flags, Float, Integer, ToInt, X87};
+use floaty::{Binary, Env, Flags, Float, Integer, Rounding, ToInt, X87};
 use floaty_verify::testfloat::{
-    self, ARM, ARM_DEFAULT_NAN, DEFAULT_NAN_RULE, ROUNDINGS, SSE, SSE_RULE, X87_RULE, fields,
-    flag_bits, quiet_extended_nan,
+    self, Exactness, Generator, Level, Options, PRECISION_CONTROL, PrecisionControl, ROUNDINGS,
+    fields, flag_bits, quiet_extended_nan,
 };
 
 /// The storage of a format that TestFloat covers. It converts to and from the
@@ -38,14 +36,6 @@ use floaty_verify::testfloat::{
 trait Field: TryFrom<u128, Error: Debug> + Into<u128> {}
 
 impl<T: TryFrom<u128, Error: Debug> + Into<u128>> Field for T {}
-
-/// The x87 precision control settings: the precision limit and the
-/// `testfloat_gen` option.
-const PRECISION_CONTROL: [(Option<NonZeroU32>, &str); 3] = [
-    (None, "-precision80"),
-    (NonZeroU32::new(24), "-precision32"),
-    (NonZeroU32::new(53), "-precision64"),
-];
 
 /// The kind of a format under test.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,28 +54,23 @@ struct Format {
 }
 
 impl Format {
-    /// Returns the precision control settings: the precision limit and the
-    /// `testfloat_gen` option. Only x87 extended precision has precision
-    /// control. The generator ignores the option for the other formats.
-    fn precisions(self) -> &'static [(Option<NonZeroU32>, &'static str)] {
+    /// Returns the precision control settings. Only x87 extended precision
+    /// has precision control.
+    fn precisions(self) -> &'static [PrecisionControl] {
         match self.family {
-            Family::Interchange => &[(None, "-precision80")],
+            Family::Interchange => &[PrecisionControl::FULL],
             Family::Extended => &PRECISION_CONTROL,
         }
     }
 
-    /// Returns the generators of the NaN rules other than the ARM rule, and
-    /// their rules. The 8086-SSE code for x87 extended precision is the 8086
-    /// code, so the 8086-SSE generator does not run for that format.
-    fn nan_generators(self) -> Vec<(&'static str, NanRule)> {
-        let mut generators = vec![
-            (ARM_DEFAULT_NAN, DEFAULT_NAN_RULE),
-            (testfloat::X87, X87_RULE),
-        ];
-        if self.family == Family::Interchange {
-            generators.push((SSE, SSE_RULE));
-        }
-        generators
+    /// Returns the generators of the NaN rules other than the ARM rule whose
+    /// rule covers the format.
+    fn nan_generators(self) -> impl Iterator<Item = Generator> {
+        Generator::OTHER_NAN_RULES
+            .into_iter()
+            .filter(move |generator| {
+                self.family == Family::Interchange || generator.covers_extended
+            })
     }
 
     /// Returns the result bits that floaty must give for the result field of
@@ -99,60 +84,36 @@ impl Format {
     }
 }
 
-/// Whether TestFloat raises inexact when a result rounds to an integer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Exactness {
-    /// `-exact`: the expected flags include inexact, as floaty reports it.
-    Exact,
-    /// `-notexact`: the expected flags never include inexact. The IEEE 754
-    /// operation that does not signal inexact is floaty's operation with
-    /// `INEXACT` ignored.
-    NotExact,
-}
-
-impl Exactness {
-    /// Returns the `testfloat_gen` option.
-    fn option(self) -> &'static str {
-        match self {
-            Self::Exact => "-exact",
-            Self::NotExact => "-notexact",
-        }
-    }
-
-    /// Returns the part of floaty's flags that the TestFloat case reports.
-    fn reported(self, flags: Flags) -> Flags {
-        match self {
-            Self::Exact => flags,
-            Self::NotExact => flags.difference(Flags::INEXACT),
-        }
-    }
-}
-
 /// One run of a generator: the generator, the behavior, the exactness, and
 /// the options.
 struct Run {
-    generator: &'static str,
+    generator: Generator,
     env: Env,
     exactness: Exactness,
-    options: Vec<&'static str>,
+    options: Options,
 }
 
 /// Returns the runs of `generator` in every rounding direction with each
 /// exactness. `base` gives every field of the behavior but the direction.
 fn directions(
-    generator: &'static str,
+    generator: Generator,
     base: Env,
     exactness: &[Exactness],
-    precision_option: &'static str,
+    precision: PrecisionControl,
 ) -> Vec<Run> {
     exactness
         .iter()
         .flat_map(|&exactness| {
-            ROUNDINGS.map(|(rounding, rounding_option)| Run {
+            ROUNDINGS.map(|(rounding, _)| Run {
                 generator,
                 env: base.with_rounding(rounding),
                 exactness,
-                options: vec![rounding_option, exactness.option(), precision_option],
+                options: Options {
+                    rounding: Some(rounding),
+                    exactness: Some(exactness),
+                    precision: Some(precision),
+                    ..Options::default()
+                },
             })
         })
         .collect()
@@ -164,15 +125,20 @@ fn directions(
 /// the format.
 fn float_runs(format: Format, exactness: &[Exactness]) -> Vec<Run> {
     let mut runs = Vec::new();
-    for &(precision, precision_option) in format.precisions() {
-        let base = Env::IEEE.with_precision(precision);
-        runs.extend(directions(ARM, base, exactness, precision_option));
-        for (generator, rule) in format.nan_generators() {
+    for &precision in format.precisions() {
+        let base = Env::IEEE.with_precision(precision.limit);
+        runs.extend(directions(Generator::ARM, base, exactness, precision));
+        for generator in format.nan_generators() {
             runs.push(Run {
                 generator,
-                env: base.with_nan(rule),
+                env: base.with_nan(generator.rule),
                 exactness: Exactness::Exact,
-                options: vec!["-rnear_even", "-exact", precision_option],
+                options: Options {
+                    rounding: Some(Rounding::TiesToEven),
+                    exactness: Some(Exactness::Exact),
+                    precision: Some(precision),
+                    ..Options::default()
+                },
             });
         }
     }
@@ -181,12 +147,11 @@ fn float_runs(format: Format, exactness: &[Exactness]) -> Vec<Run> {
 
 /// Runs `function` at TestFloat `level` for each run, and calls `compare` on
 /// each case.
-fn check(function: &str, level: &str, runs: &[Run], compare: impl Fn(&str, &Run)) {
+fn check(function: &str, level: Level, runs: &[Run], compare: impl Fn(&str, &Run)) {
     for run in runs {
-        let mut arguments = vec!["-level", level];
-        arguments.extend(&run.options);
-        arguments.push(function);
-        let count = testfloat::run(run.generator, &arguments, None, |line| compare(line, run));
+        let count = testfloat::run(run.generator, level, function, &run.options, None, |line| {
+            compare(line, run);
+        });
         assert!(count > 0, "{function} {:?} gave test cases", run.options);
     }
 }
@@ -267,28 +232,33 @@ const PREDICATES: [(&str, Form, Relation); 6] = [
 /// predicate has the value of its quiet form.
 fn check_comparisons<S: Standard<W, Bits: Field>, const W: usize>(format: Format) {
     let run = Run {
-        generator: ARM,
+        generator: Generator::ARM,
         env: Env::IEEE,
         exactness: Exactness::Exact,
-        options: Vec::new(),
+        options: Options::default(),
     };
     for (suffix, form, relation) in PREDICATES {
         let function = format!("{}_{suffix}", format.name);
-        check(&function, "1", core::slice::from_ref(&run), |line, run| {
-            let [a, b, result, flags] = fields::<4>(line);
-            let (a, b) = (decode::<S, W>(a), decode::<S, W>(b));
-            let (order, ours_flags) = match form {
-                Form::Quiet => a.compare_quiet_with(b, run.env),
-                Form::Signaling => a.compare_signaling_with(b, run.env),
-            };
-            let ours = u128::from(relation.holds(order));
-            assert_case(&function, line, run, (ours, ours_flags), [result, flags]);
-            assert_eq!(
-                u128::from(relation.by_operator(a, b)),
-                result,
-                "{function} {line}: operator"
-            );
-        });
+        check(
+            &function,
+            Level::One,
+            core::slice::from_ref(&run),
+            |line, run| {
+                let [a, b, result, flags] = fields::<4>(line);
+                let (a, b) = (decode::<S, W>(a), decode::<S, W>(b));
+                let (order, ours_flags) = match form {
+                    Form::Quiet => a.compare_quiet_with(b, run.env),
+                    Form::Signaling => a.compare_signaling_with(b, run.env),
+                };
+                let ours = u128::from(relation.holds(order));
+                assert_case(&function, line, run, (ours, ours_flags), [result, flags]);
+                assert_eq!(
+                    u128::from(relation.by_operator(a, b)),
+                    result,
+                    "{function} {line}: operator"
+                );
+            },
+        );
     }
 }
 
@@ -297,7 +267,7 @@ fn check_comparisons<S: Standard<W, Bits: Field>, const W: usize>(format: Format
 fn check_remainder<S: Standard<W, Bits: Field>, const W: usize>(format: Format) {
     let function = format!("{}_rem", format.name);
     let runs = float_runs(format, &[Exactness::Exact]);
-    check(&function, "1", &runs, |line, run| {
+    check(&function, Level::One, &runs, |line, run| {
         let [a, b, result, flags] = fields::<4>(line);
         let (ours, ours_flags) = decode::<S, W>(a).remainder_with(decode(b), run.env);
         let ours = (ours.to_bits().into(), ours_flags);
@@ -313,7 +283,7 @@ fn check_round_to_integral<S: Standard<W, Bits: Field>, const W: usize>(format: 
     let function = format!("{}_roundToInt", format.name);
     let runs = float_runs(format, &[Exactness::Exact, Exactness::NotExact]);
     let defaults = core::cell::Cell::new(0_usize);
-    check(&function, "2", &runs, |line, run| {
+    check(&function, Level::Two, &runs, |line, run| {
         let [a, result, flags] = fields::<3>(line);
         let (ours, ours_flags) = decode::<S, W>(a).round_to_integral_with(run.env);
         let ours = (ours.to_bits().into(), ours_flags);
@@ -414,14 +384,24 @@ where
 {
     let function = format!("{}_to_{}", format.name, integer_name::<I>());
     let exactness = [Exactness::Exact, Exactness::NotExact];
-    let arm = directions(ARM, Env::IEEE, &exactness, "-precision80");
-    let sse = directions(SSE, Env::IEEE, &[Exactness::Exact], "-precision80");
+    let arm = directions(
+        Generator::ARM,
+        Env::IEEE,
+        &exactness,
+        PrecisionControl::FULL,
+    );
+    let sse = directions(
+        Generator::SSE,
+        Env::IEEE,
+        &[Exactness::Exact],
+        PrecisionControl::FULL,
+    );
     let defaults = core::cell::Cell::new(0_usize);
     for (runs, encoding) in [
         (arm, IntegerEncoding::Saturating),
         (sse, IntegerEncoding::Indefinite),
     ] {
-        check(&function, "2", &runs, |line, run| {
+        check(&function, Level::Two, &runs, |line, run| {
             let [a, result, flags] = fields::<3>(line);
             let (ours, ours_flags) = decode::<S, W>(a).to_int_with::<I>(run.env);
             let ours = (encoding.bits(ours), ours_flags);
@@ -453,9 +433,14 @@ where
     I: Integer + TryFrom<i128, Error: Debug>,
 {
     let function = format!("{}_to_{}", integer_name::<I>(), format.name);
-    let runs = directions(ARM, Env::IEEE, &[Exactness::Exact], "-precision80");
+    let runs = directions(
+        Generator::ARM,
+        Env::IEEE,
+        &[Exactness::Exact],
+        PrecisionControl::FULL,
+    );
     let defaults = core::cell::Cell::new(0_usize);
-    check(&function, "2", &runs, |line, run| {
+    check(&function, Level::Two, &runs, |line, run| {
         let [a, result, flags] = fields::<3>(line);
         let value = integer_from_field::<I>(a);
         let (ours, ours_flags) = Float::<S, W>::from_int_with(value, run.env);

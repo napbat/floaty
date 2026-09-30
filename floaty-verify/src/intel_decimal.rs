@@ -10,9 +10,11 @@
 //! [`Bid32`], [`Bid64`], and [`Bid128`] implement [`Format`], which holds the
 //! operations of one width. An operation returns its result and the flags
 //! that it raised in an [`Outcome`]. [`Layout`] builds encodings and draws
-//! random operands.
+//! random operands. [`Signals`], [`Value`], [`narrow`], [`encoding`], and
+//! [`to_integer`] map floaty's results to the results of the library.
 
 mod ffi;
+mod mapping;
 mod operands;
 
 use core::cmp::Ordering;
@@ -23,6 +25,7 @@ pub use ffi::{
     bid32_to_bid64, bid32_to_bid128, bid64_to_bid32, bid64_to_bid128, bid128_to_bid32,
     bid128_to_bid64,
 };
+pub use mapping::{EQUAL_OPERANDS, Signals, Value, encoding, narrow, to_integer};
 
 /// A rounding direction of the library, with its `BID_ROUNDING_*` value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -125,6 +128,16 @@ impl Flags {
     pub const UNDERFLOW: Self = Self(0x10);
     /// `BID_INEXACT_EXCEPTION`.
     pub const INEXACT: Self = Self(0x20);
+
+    /// The names of the flags, by bit.
+    pub const NAMES: [&str; 6] = [
+        "invalid",
+        "denormal",
+        "zero-divide",
+        "overflow",
+        "underflow",
+        "inexact",
+    ];
 
     /// Returns the flags with the library bits, which `readtest.in` also
     /// uses. Unknown bits stay set.

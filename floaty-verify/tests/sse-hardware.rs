@@ -15,24 +15,9 @@ use floaty::{BF16, Env, F16, F32, F64, mode};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
-    self, MXCSR_DAZ, MXCSR_FTZ, MXCSR_MASKED, MXCSR_ROUNDINGS, mxcsr_flags, sse_env,
+    self, MXCSR_DAZ, MXCSR_EXCEPTION_MASKS, MXCSR_FTZ, MXCSR_MASKED, MXCSR_TOWARD_NEGATIVE,
+    MXCSR_TOWARD_POSITIVE, MXCSR_TOWARD_ZERO, mxcsr_flags,
 };
-
-/// Every MXCSR setting of the tests: each rounding direction with FTZ and DAZ
-/// on and off. Returns the control value, the matching behavior, and DAZ.
-fn settings() -> Vec<(u32, Env, bool)> {
-    let mut settings = Vec::new();
-    for (rounding, field) in MXCSR_ROUNDINGS {
-        for (ftz, daz) in [(false, false), (true, false), (false, true), (true, true)] {
-            let control = MXCSR_MASKED
-                | field
-                | if ftz { MXCSR_FTZ } else { 0 }
-                | if daz { MXCSR_DAZ } else { 0 };
-            settings.push((control, sse_env(rounding, ftz, daz), daz));
-        }
-    }
-    settings
-}
 
 /// Returns the low-bit patterns of `dropped` discarded bits that decide a
 /// rounding: exact, just below halfway, halfway, just above halfway, and all
@@ -80,7 +65,8 @@ fn binary64_to_binary32_inputs() -> Vec<u64> {
 #[test]
 fn cvtsd2ss_matches_in_every_mode() {
     let inputs = binary64_to_binary32_inputs();
-    for (control, env, daz) in settings() {
+    for setting in x86::sse_settings() {
+        let (control, env, daz) = (setting.control, setting.env(), setting.daz);
         for &input in &inputs {
             let (expected, expected_flags) = x86::cvtsd2ss(input, 0, control);
             let (ours, flags): (F32, _) = F64::from_bits(input).convert_with(env);
@@ -112,7 +98,8 @@ fn cvtss2sd_matches_with_and_without_daz() {
     ];
     let samples = (0..200_000).map(|_| u32::try_from(random.next_u64() >> 32).expect("32 bits"));
     let inputs: Vec<u32> = special.into_iter().chain(samples).collect();
-    for (control, env, daz) in settings() {
+    for setting in x86::sse_settings() {
+        let (control, env, daz) = (setting.control, setting.env(), setting.daz);
         for &input in &inputs {
             let (expected, expected_flags) = x86::cvtss2sd(u64::from(input), 0, control);
             let (ours, flags): (F64, _) = F32::from_bits(input).convert_with(env);
@@ -201,7 +188,8 @@ fn double_operands(random: &mut SplitMix64, count: usize) -> Vec<u64> {
 /// host fast path, so this checks that path.
 macro_rules! arithmetic {
     ($pairs:expr, $alias:ty, $instruction:path, $method:ident, $operator:tt) => {
-        for (control, env, daz) in settings() {
+        for setting in x86::sse_settings() {
+            let (control, env, daz) = (setting.control, setting.env(), setting.daz);
             for &(a, b) in &$pairs {
                 let (expected, expected_flags) = $instruction(a, b, control);
                 let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
@@ -273,7 +261,8 @@ fn binary32_arithmetic_matches_in_every_mode() {
     arithmetic!(pairs, F32, x86::subss, sub_with, -);
     arithmetic!(pairs, F32, x86::mulss, mul_with, *);
     arithmetic!(pairs, F32, x86::divss, div_with, /);
-    for (control, env, daz) in settings() {
+    for setting in x86::sse_settings() {
+        let (control, env, daz) = (setting.control, setting.env(), setting.daz);
         for &a in &operands {
             let (expected, expected_flags) = x86::sqrtss(a, 0, control);
             let value = F32::from_bits(a);
@@ -313,7 +302,8 @@ fn binary64_arithmetic_matches_in_every_mode() {
     arithmetic!(pairs, F64, x86::subsd, sub_with, -);
     arithmetic!(pairs, F64, x86::mulsd, mul_with, *);
     arithmetic!(pairs, F64, x86::divsd, div_with, /);
-    for (control, env, daz) in settings() {
+    for setting in x86::sse_settings() {
+        let (control, env, daz) = (setting.control, setting.env(), setting.daz);
         for &a in &operands {
             let (expected, expected_flags) = x86::sqrtsd(a, 0, control);
             let value = F64::from_bits(a);
@@ -358,7 +348,8 @@ fn fused_multiply_add_matches_in_every_mode() {
     let single = single_operands(&mut random, 30_000);
     let double = double_operands(&mut random, 30_000);
     let specials = SINGLE_SPECIALS.len();
-    for (control, env, daz) in settings() {
+    for setting in x86::sse_settings() {
+        let (control, env, daz) = (setting.control, setting.env(), setting.daz);
         for &a in &single[..specials] {
             for &b in &single[..specials] {
                 for &c in &single[..specials] {
@@ -497,16 +488,15 @@ macro_rules! conversions_under {
 fn operators_read_mxcsr_before_the_host_unit() {
     // FTZ, DAZ, and each directed rounding change the host results, and an
     // unmasked exception traps in the host unit. Under each, the operators
-    // still give the engine results of the default mode. The masks IM, DM,
-    // ZM, OM, UM, and PM are bits 7 to 12.
+    // still give the engine results of the default mode.
     let directions = [
         MXCSR_MASKED | MXCSR_FTZ,
         MXCSR_MASKED | MXCSR_DAZ,
-        MXCSR_MASKED | (1 << 13),
-        MXCSR_MASKED | (2 << 13),
-        MXCSR_MASKED | (3 << 13),
+        MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
+        MXCSR_MASKED | MXCSR_TOWARD_POSITIVE,
+        MXCSR_MASKED | MXCSR_TOWARD_ZERO,
     ];
-    let unmasked = (7..=12).map(|mask| MXCSR_MASKED & !(1 << mask));
+    let unmasked = MXCSR_EXCEPTION_MASKS.map(|mask| MXCSR_MASKED & !mask);
     let controls: Vec<u32> = directions.into_iter().chain(unmasked).collect();
     let mut random = SplitMix64::new(0x00C5_0000);
     let single = single_operands(&mut random, 4_000);
@@ -605,9 +595,9 @@ fn comparisons_read_mxcsr_before_the_host_unit() {
         MXCSR_MASKED,
         MXCSR_MASKED | MXCSR_FTZ,
         MXCSR_MASKED | MXCSR_DAZ,
-        MXCSR_MASKED | (1 << 13),
+        MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
     ];
-    let unmasked = (7..=12).map(|mask| MXCSR_MASKED & !(1 << mask));
+    let unmasked = MXCSR_EXCEPTION_MASKS.map(|mask| MXCSR_MASKED & !mask);
     let controls: Vec<u32> = directions.into_iter().chain(unmasked).collect();
     let mut random = SplitMix64::new(0x00C5_C0AA);
     let single = single_operands(&mut random, 2_000);

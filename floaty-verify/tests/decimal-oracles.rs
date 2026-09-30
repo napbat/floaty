@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 
 use floaty_verify::decnumber::{Arithmetic, Double, Format, Outcome, Quad, Single, Status};
-use floaty_verify::dectest::{self, Case, EncodeError, Expected, Operand, Operation, Test};
+use floaty_verify::dectest::{self, Case, Expected, Operand, Operation, Test};
 
 /// The result that decNumber gives for a case.
 #[derive(Debug)]
@@ -124,18 +124,6 @@ fn matches<F: Format>(expected: &Expected<F::Bits>, actual: &Actual<F::Bits>) ->
     }
 }
 
-/// Returns the skip reason of a test that has no case in a format.
-fn encode_reason(error: &EncodeError) -> String {
-    match error {
-        EncodeError::Context => String::from("directives differ from the format"),
-        EncodeError::Width(_) => String::from("explicit encoding of another width"),
-        EncodeError::Unsupported(_) => String::from("unsupported token form"),
-        EncodeError::Operand(_, status) => format!("operand conversion raises {status}"),
-        EncodeError::Result(_, status) => format!("result conversion raises {status}"),
-        _ => format!("{error}"),
-    }
-}
-
 /// Runs every test of the decTest files with `prefix` in format `F`.
 /// `compute` runs the tests that are not conversions.
 fn run_dectest<F: Format>(
@@ -152,7 +140,7 @@ fn run_dectest<F: Format>(
             let case = match test.encode::<F>() {
                 Ok(case) => case,
                 Err(error) => {
-                    tally.skip(encode_reason(&error));
+                    tally.skip(error.skip_reason());
                     continue;
                 }
             };

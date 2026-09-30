@@ -44,10 +44,11 @@ use std::collections::BTreeMap;
 use std::panic;
 
 use floaty::format::{Bid, Decimal, Standard, Storage, Width};
-use floaty::{Decoded, Env, Flags, Float, Integer, ToInt};
+use floaty::{Decoded, Env, Flags, Float, Integer};
 use floaty_verify::intel_decimal::{
-    self, Bid32, Bid64, Bid128, Class as IntelClass, Extremum, Flags as IntelFlags, Format,
-    Inexact, Integer as IntelInteger, Outcome, Predicate, Rounding as IntelRounding,
+    self, Bid32, Bid64, Bid128, Class as IntelClass, EQUAL_OPERANDS, Extremum, Format, Inexact,
+    Integer as IntelInteger, Outcome, Predicate, Rounding as IntelRounding, Signals, Value,
+    encoding, to_integer,
 };
 use floaty_verify::readtest::{self, Field, Line};
 
@@ -56,35 +57,6 @@ type Bits<const W: usize> = <Width<W> as Storage>::Bits;
 
 /// The BID format of width `W`.
 type BidFloat<const W: usize> = Float<Decimal<Bid>, W>;
-
-/// The flags that a library function reports, as floaty's flags map to them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Signals {
-    /// The five IEEE flags.
-    Ieee,
-    /// The IEEE flags without inexact, which the function does not signal.
-    NoInexact,
-}
-
-impl Signals {
-    /// Returns the library flags of floaty's flags.
-    fn map(self, flags: Flags) -> IntelFlags {
-        let dropped = match self {
-            Self::Ieee => Flags::DENORMAL_INPUT,
-            Self::NoInexact => Flags::DENORMAL_INPUT | Flags::INEXACT,
-        };
-        IntelFlags::from_floaty(flags.difference(dropped))
-    }
-}
-
-/// A result: an encoding or an integer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Value {
-    /// An encoding.
-    Bits(u128),
-    /// An integer, or a predicate as 0 or 1.
-    Integer(i128),
-}
 
 /// The form of an expected result.
 #[derive(Clone, Copy, Debug)]
@@ -113,10 +85,6 @@ struct Verdict {
     /// The rule that changes the expected result of the line, if any.
     rule: Option<&'static str>,
 }
-
-/// The rule for `minnum` and `maxnum` of operands that compare equal.
-const EQUAL_OPERANDS: &str = "floaty's rule for operands that compare equal: -0 below +0, and \
-     the members of a cohort in totalOrder";
 
 /// The comparison of a line, or why its fields cannot be read.
 type Checked = Result<Verdict, String>;
@@ -263,7 +231,7 @@ where
     let Value::Bits(expected) = verdict.expected.value else {
         unreachable!("a decimal result is an encoding");
     };
-    let expected = narrow::<F>(expected);
+    let expected = encoding::<F>(expected);
     // `readtest.in` is the oracle for the value and the flags. IEEE 754 lets
     // either operand be the result, so floaty's rule, with the order of the
     // library's `totalOrder`, decides the bits.
@@ -277,13 +245,6 @@ where
         verdict.passed = verdict.actual == verdict.expected;
     }
     Ok(verdict)
-}
-
-/// Returns an encoding of format `F` from its bits.
-fn narrow<F: Format>(bits: u128) -> F::Bits {
-    F::Bits::try_from(bits)
-        .ok()
-        .expect("an encoding of the format fits its storage")
 }
 
 /// Runs an operation with one decimal operand and an integer result, or a
@@ -372,23 +333,6 @@ where
         }
         _ => (i128::from(i32::MIN), Flags::INVALID),
     }
-}
-
-/// Converts to an integer of type `I`, and maps an invalid conversion to the
-/// integer indefinite of `integer`.
-fn to_integer<I, const W: usize>(x: BidFloat<W>, integer: IntelInteger, env: Env) -> (i128, Flags)
-where
-    I: Integer + Into<i128>,
-    Width<W>: Storage,
-    Decimal<Bid>: Standard<W, Bits = Bits<W>>,
-    Bits<W>: Into<u128>,
-{
-    let (result, flags) = x.to_int_with::<I>(env);
-    let value = match result {
-        ToInt::Value(value) => value.into(),
-        ToInt::OutOfRange { .. } | ToInt::Nan => integer.indefinite(),
-    };
-    (value, flags)
 }
 
 /// Runs a conversion to an integer type.

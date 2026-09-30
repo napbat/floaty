@@ -15,6 +15,7 @@ const MESA_R11G11B10: Archive = Archive {
     packing: Packing::File("format_r11g11b10f.h"),
     url: "https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-25.2.0/src/util/format_r11g11b10f.h",
     sha256: "b0beabfa138da9c4935227e7d4d392c677007d84b7ec90e776f16ac68a79cf19",
+    root: None,
 };
 
 /// The rounding functions of Mesa 25.2.0 that the R11G11B10 conversions
@@ -24,6 +25,7 @@ const MESA_ROUNDING: Archive = Archive {
     packing: Packing::File("rounding.h"),
     url: "https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-25.2.0/src/util/rounding.h",
     sha256: "4265b083f0424e5243c6a81771e1fc077203d2fa829e43a6caafa26f20fb1a02",
+    root: None,
 };
 
 /// The compiler options of the Mesa shim. `-fPIC` lets the object link into
@@ -37,17 +39,15 @@ pub(super) fn build(manifest: &Path, out: &Path) {
     let shim = manifest.join("shim").join("mesa_r11g11b10.c");
     println!("cargo:rerun-if-changed={}", shim.display());
     let downloads = manifest.join("reference").join("downloads");
-    let format = out.join("format");
-    unpack(
+    let format = unpack(
         &fetch(&MESA_R11G11B10, &downloads),
         &MESA_R11G11B10,
-        &format,
+        &out.join("format"),
     );
-    let rounding = out.join("rounding");
-    unpack(
+    let rounding = unpack(
         &fetch(&MESA_ROUNDING, &downloads),
         &MESA_ROUNDING,
-        &rounding,
+        &out.join("rounding"),
     );
     let content = fs::read_to_string(&shim).expect("the Mesa shim can be read");
     let key = format!(

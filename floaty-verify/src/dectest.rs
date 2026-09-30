@@ -268,6 +268,21 @@ impl fmt::Display for EncodeError {
 
 impl std::error::Error for EncodeError {}
 
+impl EncodeError {
+    /// Returns the reason to skip the test, without the token, so that a
+    /// tally counts the skips of one kind together.
+    #[must_use]
+    pub fn skip_reason(&self) -> String {
+        match self {
+            Self::Context => String::from("directives differ from the format"),
+            Self::Width(_) => String::from("explicit encoding of another width"),
+            Self::Unsupported(_) => String::from("unsupported token form"),
+            Self::Operand(_, status) => format!("operand conversion raises {status}"),
+            Self::Result(_, status) => format!("result conversion raises {status}"),
+        }
+    }
+}
+
 impl Test {
     /// Converts the operands and the result to the encodings of format `F`.
     ///

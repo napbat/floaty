@@ -31,8 +31,8 @@ use floaty::env::{FusedNanOrder, InvalidProduct, NanPropagation, NanRule, Tinine
 /// The batch program, a static powerpc64le executable.
 pub const PROGRAM: &str = env!("FLOATY_IBM_LDOUBLE");
 
-/// The emulator that runs [`PROGRAM`].
-pub const QEMU: &str = "qemu-ppc64le";
+/// The emulator that runs [`PROGRAM`], which the build script checks.
+pub const QEMU: &str = env!("FLOATY_QEMU");
 
 /// The pinned QEMU release. The build script checks it when it builds
 /// [`PROGRAM`].

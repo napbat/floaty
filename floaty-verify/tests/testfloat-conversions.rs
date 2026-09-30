@@ -14,20 +14,10 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
-use floaty::env::NanRule;
 use floaty::{Env, F16, F32, F64, F80, F128, Flags};
 use floaty_verify::testfloat::{
-    self, ARM, ARM_DEFAULT_NAN, ARM_RULE, DEFAULT_NAN_RULE, ROUNDINGS, SSE, SSE_RULE, TININESS,
-    X87, X87_RULE, fields, flag_bits,
+    self, Generator, Level, Options, ROUNDINGS, TININESS, fields, flag_bits,
 };
-
-/// The generators, and the NaN rule that each one follows.
-const GENERATORS: [(&str, NanRule); 4] = [
-    (ARM, ARM_RULE),
-    (ARM_DEFAULT_NAN, DEFAULT_NAN_RULE),
-    (X87, X87_RULE),
-    (SSE, SSE_RULE),
-];
 
 /// Converts one encoding and returns the result bits and the flags.
 macro_rules! convert {
@@ -57,13 +47,20 @@ macro_rules! conversion_test {
         fn $name() {
             let fixed_count = core::cell::Cell::new(0_usize);
             let default_count = core::cell::Cell::new(0_usize);
-            for (generator, nan) in GENERATORS {
+            for generator in Generator::ALL {
                 let mut count = 0_usize;
-                for (rounding, rounding_option) in ROUNDINGS {
-                    for (tininess, tininess_option) in TININESS {
-                        let env = Env::IEEE.with_rounding(rounding).with_tininess(tininess).with_nan(nan);
-                        let arguments = ["-level", "2", rounding_option, tininess_option, $function];
-                        count += testfloat::run(generator, &arguments, None, |line| {
+                for (rounding, _) in ROUNDINGS {
+                    for (tininess, _) in TININESS {
+                        let env = Env::IEEE
+                            .with_rounding(rounding)
+                            .with_tininess(tininess)
+                            .with_nan(generator.rule);
+                        let options = Options {
+                            rounding: Some(rounding),
+                            tininess: Some(tininess),
+                            ..Options::default()
+                        };
+                        count += testfloat::run(generator, Level::Two, $function, &options, None, |line| {
                             let [operand, result, flags] = fields::<3>(line);
                             let (ours, ours_flags) = convert!($source => $destination, operand, env);
                             let context = format!("{} {env:?} {line}", $function);
@@ -90,7 +87,7 @@ macro_rules! conversion_test {
                         });
                     }
                 }
-                assert!(count > 0, "{generator} gave test cases");
+                assert!(count > 0, "{} gave test cases", generator.path);
             }
             assert!(fixed_count.get() > 0, "the static modes converted test cases");
             assert!(default_count.get() > 0, "convert converted test cases");

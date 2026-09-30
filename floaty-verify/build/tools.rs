@@ -27,6 +27,21 @@ pub(super) fn tool_output(program: &str, arguments: &[&str], advice: &str) -> St
     String::from_utf8(output.stdout).expect("the tool writes text")
 }
 
+/// Stops the build when `compiler` is not the pinned GCC `version`, whose
+/// machine code floaty's `algorithm` algorithm follows. Returns the first
+/// line of `--version`, which names the distribution build of GCC.
+pub(super) fn check_gcc(compiler: &str, version: &str, algorithm: &str, advice: &str) -> String {
+    let found = tool_output(compiler, &["-dumpfullversion"], advice);
+    assert!(
+        found.trim() == version,
+        "{compiler} is GCC {}, not the pinned GCC {version}. floaty's {algorithm} algorithm \
+         follows the machine code of the pinned compiler",
+        found.trim()
+    );
+    let banner = tool_output(compiler, &["--version"], advice);
+    banner.lines().next().unwrap_or_default().to_owned()
+}
+
 /// Runs `step` unless the stamp file holds `key`, then records `key`. The key
 /// names every input of the step, so a changed input runs the step again.
 pub(super) fn run_once(stamp: &Path, key: &str, step: impl FnOnce()) {

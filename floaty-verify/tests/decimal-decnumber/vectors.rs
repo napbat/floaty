@@ -18,25 +18,13 @@
 use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
 use floaty::{Decoded, Env, Flags};
 use floaty_verify::decnumber::{self, Arithmetic, Double, Format, Quad, Single, Unary};
-use floaty_verify::dectest::{self, EncodeError, Expected, Operand, Operation, Test};
+use floaty_verify::dectest::{self, Expected, Operand, Operation, Test};
 
 use super::operands::Number;
 use super::{
     Answer, DpdFloat, Tally, comparison, describe, direction, excluded, flags_of, ieee,
     keeps_encoding, noted, run_floaty, unmapped,
 };
-
-/// Returns the skip reason of a test that has no case in a format.
-fn encode_reason(error: &EncodeError) -> String {
-    match error {
-        EncodeError::Context => String::from("directives differ from the format"),
-        EncodeError::Width(_) => String::from("explicit encoding of another width"),
-        EncodeError::Unsupported(_) => String::from("unsupported token form"),
-        EncodeError::Operand(_, status) => format!("operand conversion raises {status}"),
-        EncodeError::Result(_, status) => format!("result conversion raises {status}"),
-        _ => format!("{error}"),
-    }
-}
 
 /// Returns whether floaty's answer matches the expected result of a vector.
 fn matches<F: Format>(
@@ -183,7 +171,7 @@ where
     Width<W>: Storage<Bits = F::Bits>,
     Decimal<Dpd>: Standard<W, Bits = F::Bits>,
 {
-    let case = test.encode::<F>().map_err(|error| encode_reason(&error))?;
+    let case = test.encode::<F>().map_err(|error| error.skip_reason())?;
     if case.operands.contains(&Operand::Null) {
         return Err(String::from("null reference operand"));
     }

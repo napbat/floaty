@@ -10,53 +10,11 @@
 
 use core::ops::{Range, RangeInclusive};
 
-use floaty::{Env, F32, F64, Flags, Rounding, ToInt};
+use floaty::{F32, F64, Flags, Rounding};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
-    self, MXCSR_DAZ, MXCSR_FTZ, MXCSR_MASKED, MXCSR_ROUNDINGS, mxcsr_flags, sse_env,
+    self, MXCSR_ROUNDINGS, ROUND_USE_MXCSR, mxcsr_flags, mxcsr_round_flags, stored,
 };
-
-/// One MXCSR setting of the tests.
-#[derive(Clone, Copy, Debug)]
-struct Setting {
-    /// The MXCSR value.
-    control: u32,
-    /// The direction of the MXCSR rounding-control field.
-    rounding: Rounding,
-    /// The flush-to-zero bit.
-    ftz: bool,
-    /// The denormals-are-zero bit.
-    daz: bool,
-}
-
-impl Setting {
-    /// Returns the behavior of the SSE unit in this setting, with the
-    /// rounding direction `rounding`.
-    fn env(self, rounding: Rounding) -> Env {
-        sse_env(rounding, self.ftz, self.daz)
-    }
-}
-
-/// Every MXCSR setting of the tests: each rounding direction with FTZ and DAZ
-/// on and off.
-fn settings() -> Vec<Setting> {
-    let mut settings = Vec::new();
-    for (rounding, field) in MXCSR_ROUNDINGS {
-        for (ftz, daz) in [(false, false), (true, false), (false, true), (true, true)] {
-            let control = MXCSR_MASKED
-                | field
-                | if ftz { MXCSR_FTZ } else { 0 }
-                | if daz { MXCSR_DAZ } else { 0 };
-            settings.push(Setting {
-                control,
-                rounding,
-                ftz,
-                daz,
-            });
-        }
-    }
-    settings
-}
 
 /// The fields of binary32 or binary64.
 #[derive(Clone, Copy, Debug)]
@@ -256,8 +214,8 @@ fn compare_pairs<T: Copy + core::ops::BitXor<Output = T>>(
 /// operand.
 macro_rules! compare {
     ($pairs:expr, $alias:ty, $quiet:path, $signaling:path) => {
-        for setting in settings() {
-            let env = setting.env(setting.rounding);
+        for setting in x86::sse_settings() {
+            let env = setting.env();
             for &(a, b) in &$pairs {
                 let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
                 let nan_operand = x.is_nan() || y.is_nan();
@@ -297,17 +255,6 @@ fn ucomis_and_comis_match_the_quiet_and_signaling_compares() {
     compare!(pairs, F64, x86::ucomisd, x86::comisd);
 }
 
-/// Returns the integer that an x86 conversion stores: the value, or the
-/// integer indefinite for a value out of range or a NaN (Intel SDM Volume 1,
-/// Table 11-1 on page 11-15). The indefinite is the smallest integer, which
-/// has only the sign bit set.
-fn stored<I: Copy>(result: ToInt<I>, indefinite: I) -> I {
-    match result {
-        ToInt::Value(value) => value,
-        ToInt::OutOfRange { .. } | ToInt::Nan => indefinite,
-    }
-}
-
 /// Returns the MXCSR flags of a conversion between a float and an integer.
 ///
 /// The conversions never signal DE (Intel SDM Volume 1, section 11.5.2.2 on
@@ -331,7 +278,7 @@ fn to_int_operands(layout: Layout, random: &mut SplitMix64, specials: &[u64]) ->
 /// (Intel SDM Volume 1, section 4.8.4.2 on page 4-19).
 macro_rules! to_int {
     ($operands:expr, $alias:ty, $integer:ty, $rounded:path, $truncated:path) => {
-        for setting in settings() {
+        for setting in x86::sse_settings() {
             for &input in &$operands {
                 let value = <$alias>::from_bits(input);
                 for (instruction, rounding, (expected, expected_flags)) in [
@@ -346,7 +293,8 @@ macro_rules! to_int {
                         $truncated(input, setting.control),
                     ),
                 ] {
-                    let (ours, flags) = value.to_int_with::<$integer>(setting.env(rounding));
+                    let (ours, flags) =
+                        value.to_int_with::<$integer>(setting.env().with_rounding(rounding));
                     let context =
                         format!("{instruction} {input:#x} {setting:?} {ours:?} {flags:?}");
                     assert_eq!(stored(ours, <$integer>::MIN), expected, "{context}: result");
@@ -411,8 +359,8 @@ fn integer_operands(random: &mut SplitMix64, bits: u32, precision: u32) -> Vec<i
 /// result cannot be tiny.
 macro_rules! from_int {
     ($operands:expr, $alias:ty, $instruction:path) => {
-        for setting in settings() {
-            let env = setting.env(setting.rounding);
+        for setting in x86::sse_settings() {
+            let env = setting.env();
             for &input in &$operands {
                 let (expected, expected_flags) = $instruction(input, setting.control);
                 let (ours, flags) = <$alias>::from_int_with(input, env);
@@ -447,38 +395,17 @@ fn cvtsi2ss_and_cvtsi2sd_match_conversions_from_integers() {
     from_int!(operands, F64, x86::cvtsi2sd_r64);
 }
 
-/// Bit 2 of a `ROUNDSS` or `ROUNDSD` immediate: round in the MXCSR direction.
-const USE_MXCSR: u8 = 1 << 2;
-/// Bit 3 of a `ROUNDSS` or `ROUNDSD` immediate: suppress the precision
-/// exception.
-const SUPPRESS_PRECISION: u8 = 1 << 3;
-
 /// Returns the rounding direction of a `ROUNDSS` or `ROUNDSD` immediate.
 ///
 /// Bits 1 and 0 use the encoding of the rounding-control field (Intel SDM
 /// Volume 1, Table 4-9 on page 4-19). Bit 2 selects the MXCSR direction
 /// instead (Volume 2B, `ROUNDSS`; the test confirms both on hardware).
 fn immediate_rounding(immediate: u8, mxcsr: Rounding) -> Rounding {
-    if immediate & USE_MXCSR == 0 {
+    if immediate & ROUND_USE_MXCSR == 0 {
         MXCSR_ROUNDINGS[usize::from(immediate & 3)].0
     } else {
         mxcsr
     }
-}
-
-/// Returns the MXCSR flags of `ROUNDSS` or `ROUNDSD`.
-///
-/// The round instructions signal only IE and PE (Intel SDM Volume 1, section
-/// 12.8.4 and Table 12-1 on page 12-10), so the consumer drops
-/// `DENORMAL_INPUT`. The hardware shows that DAZ still reads a subnormal
-/// operand as zero. With bit 3 of the immediate, the consumer also drops
-/// `INEXACT`, as for IEEE 754 `roundToIntegral` without `Exact`.
-fn round_flags(flags: Flags, immediate: u8, daz: bool) -> u32 {
-    let mut ignored = Flags::DENORMAL_INPUT;
-    if immediate & SUPPRESS_PRECISION != 0 {
-        ignored |= Flags::INEXACT;
-    }
-    mxcsr_flags(flags.difference(ignored), daz, false)
 }
 
 /// Compares `ROUNDSS` or `ROUNDSD` with floaty for each immediate in every
@@ -490,8 +417,10 @@ macro_rules! round {
     };
     ($operands:expr, $alias:ty, $instruction:ident, [$($immediate:literal),+]) => {
         $(
-            for setting in settings() {
-                let env = setting.env(immediate_rounding($immediate, setting.rounding));
+            for setting in x86::sse_settings() {
+                let env = setting
+                    .env()
+                    .with_rounding(immediate_rounding($immediate, setting.rounding));
                 for &input in &$operands {
                     let (expected, expected_flags) =
                         x86::$instruction::<$immediate>(input, setting.control);
@@ -503,7 +432,7 @@ macro_rules! round {
                     );
                     assert_eq!(ours.to_bits(), expected, "{context}: result");
                     assert_eq!(
-                        round_flags(flags, $immediate, setting.daz),
+                        mxcsr_round_flags(flags, $immediate, setting.daz),
                         expected_flags,
                         "{context}: flags"
                     );

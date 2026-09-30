@@ -5,46 +5,70 @@
 //! specialization. Each line of the output holds the operands, the expected
 //! result, and the expected flags, all in hexadecimal.
 
+use core::fmt::Debug;
+use core::num::NonZeroU32;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 
 use floaty::env::{NanPropagation, NanRule, Tininess};
 use floaty::{Flags, Rounding};
 
-/// The generator built against SoftFloat's ARM-VFPv2 specialization, which
-/// follows [`ARM_RULE`].
-pub const ARM: &str = env!("FLOATY_TESTFLOAT_GEN_ARM");
+/// A `testfloat_gen` built against one SoftFloat NaN specialization, and the
+/// NaN rule that the specialization follows.
+#[derive(Clone, Copy, Debug)]
+pub struct Generator {
+    /// The path of the generator.
+    pub path: &'static str,
+    /// The NaN rule of the specialization.
+    pub rule: NanRule,
+    /// Whether the rule holds for x87 extended precision. The 8086-SSE
+    /// specialization has the x87 code of the 8086 specialization, so its
+    /// rule does not.
+    pub covers_extended: bool,
+}
 
-/// The generator built against SoftFloat's ARM-VFPv2-defaultNaN
-/// specialization, which follows [`DEFAULT_NAN_RULE`].
-pub const ARM_DEFAULT_NAN: &str = env!("FLOATY_TESTFLOAT_GEN_ARM_DEFAULT_NAN");
+impl Generator {
+    /// The ARM-VFPv2 specialization: a signaling NaN first and a positive
+    /// default NaN. `Env::IEEE` uses this rule.
+    pub const ARM: Self = Self {
+        path: env!("FLOATY_TESTFLOAT_GEN_ARM"),
+        rule: NanRule::new(NanPropagation::SignalingFirst),
+        covers_extended: true,
+    };
 
-/// The NaN rule of the ARM-VFPv2 specialization: a signaling NaN first and a
-/// positive default NaN. `Env::IEEE` uses this rule.
-pub const ARM_RULE: NanRule = NanRule::new(NanPropagation::SignalingFirst);
+    /// The ARM-VFPv2-defaultNaN specialization: the default NaN for every
+    /// NaN result.
+    pub const ARM_DEFAULT_NAN: Self = Self {
+        path: env!("FLOATY_TESTFLOAT_GEN_ARM_DEFAULT_NAN"),
+        rule: NanRule::new(NanPropagation::DefaultNan),
+        covers_extended: true,
+    };
 
-/// The NaN rule of the default-NaN specialization.
-pub const DEFAULT_NAN_RULE: NanRule = NanRule::new(NanPropagation::DefaultNan);
+    /// The 8086 specialization: the larger significand and a negative default
+    /// NaN.
+    pub const X87: Self = Self {
+        path: env!("FLOATY_TESTFLOAT_GEN_X87"),
+        rule: NanRule::new(NanPropagation::LargerSignificand).with_default_negative(true),
+        covers_extended: true,
+    };
 
-/// The generator built against SoftFloat's 8086 specialization, which
-/// follows [`X87_RULE`].
-pub const X87: &str = env!("FLOATY_TESTFLOAT_GEN_X87");
+    /// The 8086-SSE specialization: the first NaN operand and a negative
+    /// default NaN. SoftFloat signals invalid for `0 * inf + NaN`; the
+    /// processor does not, and [`crate::x86::sse_env`] follows the processor.
+    pub const SSE: Self = Self {
+        path: env!("FLOATY_TESTFLOAT_GEN_SSE"),
+        rule: NanRule::new(NanPropagation::FirstOperand).with_default_negative(true),
+        covers_extended: false,
+    };
 
-/// The NaN rule of the 8086 specialization: the larger significand and a
-/// negative default NaN.
-pub const X87_RULE: NanRule =
-    NanRule::new(NanPropagation::LargerSignificand).with_default_negative(true);
+    /// Every generator.
+    pub const ALL: [Self; 4] = [Self::ARM, Self::ARM_DEFAULT_NAN, Self::X87, Self::SSE];
 
-/// The generator built against SoftFloat's 8086-SSE specialization, which
-/// follows [`SSE_RULE`] for every format but x87 extended precision. Its x87
-/// code is the 8086 code.
-pub const SSE: &str = env!("FLOATY_TESTFLOAT_GEN_SSE");
-
-/// The NaN rule of the 8086-SSE specialization: the first NaN operand and a
-/// negative default NaN. SoftFloat signals invalid for `0 * inf + NaN`; the
-/// processor does not, and [`crate::x86::sse_env`] follows the processor.
-pub const SSE_RULE: NanRule =
-    NanRule::new(NanPropagation::FirstOperand).with_default_negative(true);
+    /// The generators of the NaN rules other than the rule of `Env::IEEE`.
+    /// A NaN rule does not depend on the rounding direction, so a test can
+    /// run them at the default behavior only.
+    pub const OTHER_NAN_RULES: [Self; 3] = [Self::ARM_DEFAULT_NAN, Self::X87, Self::SSE];
+}
 
 /// The rounding directions and their `testfloat_gen` options.
 pub const ROUNDINGS: [(Rounding, &str); 6] = [
@@ -61,6 +85,125 @@ pub const TININESS: [(Tininess, &str); 2] = [
     (Tininess::BeforeRounding, "-tininessbefore"),
     (Tininess::AfterRounding, "-tininessafter"),
 ];
+
+/// A TestFloat test level. Level 2 has more cases than level 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Level {
+    /// `-level 1`.
+    One,
+    /// `-level 2`.
+    Two,
+}
+
+/// Whether TestFloat raises inexact when a result rounds to an integer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Exactness {
+    /// `-exact`: the expected flags include inexact, as floaty reports it.
+    Exact,
+    /// `-notexact`: the expected flags never include inexact. The IEEE 754
+    /// operation that does not signal inexact is floaty's operation with
+    /// `INEXACT` ignored.
+    NotExact,
+}
+
+impl Exactness {
+    /// Returns the part of floaty's flags that a TestFloat case reports.
+    #[must_use]
+    pub fn reported(self, flags: Flags) -> Flags {
+        match self {
+            Self::Exact => flags,
+            Self::NotExact => flags.difference(Flags::INEXACT),
+        }
+    }
+}
+
+/// An x87 precision-control setting of `testfloat_gen`, with the precision
+/// limit of floaty that matches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrecisionControl {
+    /// The precision limit, or `None` for the full 64 bits.
+    pub limit: Option<NonZeroU32>,
+    /// The `testfloat_gen` option.
+    option: &'static str,
+}
+
+impl PrecisionControl {
+    /// `-precision80`: the full precision. The generator ignores the option
+    /// for the formats other than x87 extended precision.
+    pub const FULL: Self = Self {
+        limit: None,
+        option: "-precision80",
+    };
+}
+
+/// Every x87 precision-control setting: 80, 32, and 64 bits.
+pub const PRECISION_CONTROL: [PrecisionControl; 3] = [
+    PrecisionControl::FULL,
+    PrecisionControl {
+        limit: NonZeroU32::new(24),
+        option: "-precision32",
+    },
+    PrecisionControl {
+        limit: NonZeroU32::new(53),
+        option: "-precision64",
+    },
+];
+
+/// The options of one `testfloat_gen` run beside its level. The generator
+/// takes its default for an option at `None`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Options {
+    /// The rounding direction, one of [`ROUNDINGS`].
+    pub rounding: Option<Rounding>,
+    /// The tininess rule.
+    pub tininess: Option<Tininess>,
+    /// Whether a rounding to an integer raises inexact.
+    pub exactness: Option<Exactness>,
+    /// The x87 precision control.
+    pub precision: Option<PrecisionControl>,
+}
+
+impl Options {
+    /// Returns the arguments of `testfloat_gen` for `function` at `level`.
+    ///
+    /// # Panics
+    ///
+    /// Panics for a rounding direction that is not in [`ROUNDINGS`].
+    fn arguments<'a>(&self, level: Level, function: &'a str) -> Vec<&'a str> {
+        let level = match level {
+            Level::One => "1",
+            Level::Two => "2",
+        };
+        let rounding = self.rounding.map(|rounding| option(&ROUNDINGS, rounding));
+        let tininess = self.tininess.map(|tininess| option(&TININESS, tininess));
+        let exactness = self.exactness.map(|exactness| match exactness {
+            Exactness::Exact => "-exact",
+            Exactness::NotExact => "-notexact",
+        });
+        let precision = self.precision.map(|precision| precision.option);
+        ["-level", level]
+            .into_iter()
+            .chain(
+                [rounding, tininess, exactness, precision]
+                    .into_iter()
+                    .flatten(),
+            )
+            .chain([function])
+            .collect()
+    }
+}
+
+/// Returns the `testfloat_gen` option of `value` in `table`.
+///
+/// # Panics
+///
+/// Panics when `table` has no entry for `value`.
+fn option<T: Copy + PartialEq + Debug>(table: &[(T, &'static str)], value: T) -> &'static str {
+    let Some(&(_, option)) = table.iter().find(|&&(entry, _)| entry == value) else {
+        panic!("testfloat_gen has no option for {value:?}");
+    };
+    option
+}
 
 /// Returns the TestFloat flag bits of the IEEE flags: inexact 1, underflow 2,
 /// overflow 4, infinite 8, and invalid 16.
@@ -96,20 +239,24 @@ pub fn fields<const N: usize>(line: &str) -> [u128; N] {
         .unwrap_or_else(|_| panic!("a test case has {N} fields: {line}"))
 }
 
-/// Runs `generator` with `arguments` and calls `check` on each test case.
-/// With a `limit`, it stops after that many cases. Returns the case count.
+/// Runs `generator` on `function` at `level` with `options`, and calls
+/// `check` on each test case. With a `limit`, it stops after that many
+/// cases. Returns the case count.
 ///
 /// # Panics
 ///
-/// Panics when the generator does not run or fails.
+/// Panics when the generator does not run or fails, and for a rounding
+/// direction that is not in [`ROUNDINGS`].
 pub fn run(
-    generator: &str,
-    arguments: &[&str],
+    generator: Generator,
+    level: Level,
+    function: &str,
+    options: &Options,
     limit: Option<usize>,
     mut check: impl FnMut(&str),
 ) -> usize {
-    let mut child = Command::new(generator)
-        .args(arguments)
+    let mut child = Command::new(generator.path)
+        .args(options.arguments(level, function))
         .stdout(Stdio::piped())
         .spawn()
         .expect("testfloat_gen can run");

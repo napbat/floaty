@@ -12,6 +12,7 @@ const DECTEST: Archive = Archive {
     packing: Packing::Zip,
     url: "https://speleotrove.com/decimal/dectest.zip",
     sha256: "b70a224cd52e82b7a8150aedac5efa2d0cb3941696fd829bdbe674f9f65c3926",
+    root: None,
 };
 
 /// decNumber 3.68, under the ICU license.
@@ -20,6 +21,7 @@ const DECNUMBER: Archive = Archive {
     packing: Packing::Zip,
     url: "https://speleotrove.com/decimal/decNumber-icu-368.zip",
     sha256: "14ec2cf30b58758493a7661b78b80abfb281652b61a425b85cda83173518fe25",
+    root: Some("decNumber"),
 };
 
 /// The decNumber sources that the harness links: the context, the
@@ -41,13 +43,15 @@ const DECNUMBER_FLAGS: [&str; 3] = ["-std=gnu99", "-O2", "-fPIC"];
 pub(super) fn build(manifest: &Path, out: &Path, libraries: &Path) {
     let downloads = manifest.join("reference").join("downloads");
 
-    let dectest = out.join("dectest");
-    unpack(&fetch(&DECTEST, &downloads), &DECTEST, &dectest);
+    let dectest = unpack(&fetch(&DECTEST, &downloads), &DECTEST, &out.join("dectest"));
     println!("cargo:rustc-env=FLOATY_DECTEST_DIR={}", dectest.display());
 
-    let decnumber = out.join("decnumber");
-    unpack(&fetch(&DECNUMBER, &downloads), &DECNUMBER, &decnumber);
-    build_library(&decnumber.join("decNumber"), libraries);
+    let decnumber = unpack(
+        &fetch(&DECNUMBER, &downloads),
+        &DECNUMBER,
+        &out.join("decnumber"),
+    );
+    build_library(&decnumber, libraries);
     println!("cargo:rustc-link-lib=static=decnumber");
 }
 

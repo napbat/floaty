@@ -37,10 +37,11 @@ use core::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use floaty::format::{Bid, Decimal, Standard, Storage, Width};
-use floaty::{Env, Flags, Float, Integer, ToInt};
+use floaty::{Flags, Float};
 use floaty_verify::intel_decimal::{
-    self, Bid32, Bid64, Bid128, Class as IntelClass, Extremum, Flags as IntelFlags, Format,
-    Inexact, Integer as IntelInteger, Layout, Outcome, Predicate, Rounding as IntelRounding,
+    self, Bid32, Bid64, Bid128, Class as IntelClass, EQUAL_OPERANDS, Extremum, Flags as IntelFlags,
+    Format, Inexact, Integer as IntelInteger, Layout, Outcome, Predicate,
+    Rounding as IntelRounding, Signals, Value, encoding, narrow, to_integer,
 };
 use floaty_verify::random::SplitMix64;
 
@@ -49,36 +50,6 @@ type Bits<const W: usize> = <Width<W> as Storage>::Bits;
 
 /// The BID format of width `W`.
 type BidFloat<const W: usize> = Float<Decimal<Bid>, W>;
-
-/// The flags that a library function reports, as floaty's flags map to them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Signals {
-    /// The five IEEE flags.
-    Ieee,
-    /// The IEEE flags without inexact, which the function does not signal.
-    NoInexact,
-}
-
-impl Signals {
-    /// Returns the library flags of floaty's flags. The library sets its
-    /// denormal flag only in a conversion from a binary format.
-    fn map(self, flags: Flags) -> IntelFlags {
-        let dropped = match self {
-            Self::Ieee => Flags::DENORMAL_INPUT,
-            Self::NoInexact => Flags::DENORMAL_INPUT | Flags::INEXACT,
-        };
-        IntelFlags::from_floaty(flags.difference(dropped))
-    }
-}
-
-/// A result: an encoding or an integer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Value {
-    /// An encoding.
-    Bits(u128),
-    /// An integer, or a predicate as 0 or 1.
-    Integer(i128),
-}
 
 /// The failures of one operation: their count and the first few.
 #[derive(Default)]
@@ -135,15 +106,7 @@ impl Report {
         let cases: usize = self.cases.values().sum();
         let failed: usize = self.failures.values().map(|failures| failures.count).sum();
         println!("{title}: {cases} cases, {failed} failed");
-        let names = [
-            "invalid",
-            "denormal",
-            "zero-divide",
-            "overflow",
-            "underflow",
-            "inexact",
-        ];
-        let flags: Vec<String> = names
+        let flags: Vec<String> = IntelFlags::NAMES
             .iter()
             .zip(self.flags)
             .map(|(name, count)| format!("{name} {count}"))
@@ -227,13 +190,6 @@ fn plain(value: i128, flags: Flags, signals: Signals) -> Outcome<Value> {
     }
 }
 
-/// Returns an encoding of format `F` from its bits.
-fn narrow<F: Format>(bits: u128) -> F::Bits {
-    F::Bits::try_from(bits)
-        .ok()
-        .expect("an encoding of the format fits its storage")
-}
-
 /// Returns whether an encoding is a NaN.
 fn is_nan<F: Format>(bits: F::Bits) -> bool {
     matches!(
@@ -248,7 +204,7 @@ fn addend<F: Format>(rng: &mut SplitMix64, x: u128, y: u128) -> u128 {
     let layout = F::LAYOUT;
     match below(rng, 3) {
         0 => {
-            let product = F::mul(narrow::<F>(x), narrow::<F>(y), rounding(rng)).value;
+            let product = F::mul(encoding::<F>(x), encoding::<F>(y), rounding(rng)).value;
             F::negate(product).into()
         }
         1 => layout.related(rng, x),
@@ -273,7 +229,7 @@ where
         let x = layout.random(rng);
         let y = layout.related(rng, x);
         let z = addend::<F>(rng, x, y);
-        let (xb, yb, zb) = (narrow::<F>(x), narrow::<F>(y), narrow::<F>(z));
+        let (xb, yb, zb) = (encoding::<F>(x), encoding::<F>(y), encoding::<F>(z));
         let (xf, yf, zf) = (
             BidFloat::<W>::from_bits(xb),
             BidFloat::<W>::from_bits(yb),
@@ -323,7 +279,7 @@ where
             );
         }
         let root = layout.square(rng);
-        let rootb = narrow::<F>(root);
+        let rootb = encoding::<F>(root);
         report.check(
             &name("sqrt"),
             &|| format!("{root:#x} {rounding:?}"),
@@ -354,21 +310,21 @@ fn fused<F: Format>(
     rounding: IntelRounding,
 ) -> (Outcome<Value>, Option<&'static str>) {
     let direct = theirs(F::fma(
-        narrow::<F>(x),
-        narrow::<F>(y),
-        narrow::<F>(z),
+        encoding::<F>(x),
+        encoding::<F>(y),
+        encoding::<F>(z),
         rounding,
     ));
     let wider = match F::LAYOUT.width {
         32 => {
-            let widen = |v: u128| intel_decimal::bid32_to_bid64(narrow::<Bid32>(v));
+            let widen = |v: u128| intel_decimal::bid32_to_bid64(narrow(v));
             let (x, y, z) = (widen(x), widen(y), widen(z));
             let product = Bid64::fma(x.value, y.value, z.value, rounding);
             let back = intel_decimal::bid64_to_bid32(product.value, rounding);
             (x.flags | y.flags | z.flags, product.flags, theirs(back))
         }
         64 => {
-            let widen = |v: u128| intel_decimal::bid64_to_bid128(narrow::<Bid64>(v));
+            let widen = |v: u128| intel_decimal::bid64_to_bid128(narrow(v));
             let (x, y, z) = (widen(x), widen(y), widen(z));
             let product = Bid128::fma(x.value, y.value, z.value, rounding);
             let back = intel_decimal::bid128_to_bid64(product.value, rounding);
@@ -430,7 +386,7 @@ where
         let x = layout.random(rng);
         let y = layout.related(rng, x);
         let n = scale(rng, layout);
-        let (xb, yb) = (narrow::<F>(x), narrow::<F>(y));
+        let (xb, yb) = (encoding::<F>(x), encoding::<F>(y));
         let (xf, yf) = (BidFloat::<W>::from_bits(xb), BidFloat::<W>::from_bits(yb));
         let operands = || format!("{x:#x} {y:#x} {n} {rounding:?}");
         let (ieee, quiet) = (Signals::Ieee, Signals::NoInexact);
@@ -520,7 +476,7 @@ where
 /// the one `nextup` of the library gives, which follows section 6.2.
 fn quantum<F: Format>(x: u128) -> (Outcome<Value>, Option<&'static str>) {
     let layout = F::LAYOUT;
-    let xb = narrow::<F>(x);
+    let xb = encoding::<F>(x);
     let library = theirs(F::quantum(xb));
     let number = |value: u128| Outcome {
         value: Value::Bits(value),
@@ -572,7 +528,7 @@ where
             let x = layout.random(rng);
             (x, layout.related(rng, x))
         };
-        let (xb, yb) = (narrow::<F>(x), narrow::<F>(y));
+        let (xb, yb) = (encoding::<F>(x), encoding::<F>(y));
         let (xf, yf) = (BidFloat::<W>::from_bits(xb), BidFloat::<W>::from_bits(yb));
         let operands = || format!("{x:#x} {y:#x}");
         for predicate in Predicate::ALL {
@@ -653,10 +609,6 @@ where
     }
 }
 
-/// The rule for `minnum` and `maxnum` of operands that compare equal.
-const EQUAL_OPERANDS: &str = "floaty's rule for operands that compare equal: -0 below +0, and \
-     the members of a cohort in totalOrder";
-
 /// Returns the expected `minnum` or `maxnum` outcome, and the rule that gives
 /// it when the choice of the library differs.
 ///
@@ -689,22 +641,6 @@ fn min_max<F: Format>(
     (theirs(decided), Some(EQUAL_OPERANDS))
 }
 
-/// Converts to an integer of type `I`, and maps an invalid conversion to the
-/// integer indefinite of `integer`.
-fn to_integer<I, const W: usize>(x: BidFloat<W>, integer: IntelInteger, env: Env) -> (i128, Flags)
-where
-    I: Integer + Into<i128>,
-    Width<W>: Storage,
-    Decimal<Bid>: Standard<W, Bits = Bits<W>>,
-{
-    let (result, flags) = x.to_int_with::<I>(env);
-    let value = match result {
-        ToInt::Value(value) => value.into(),
-        ToInt::OutOfRange { .. } | ToInt::Nan => integer.indefinite(),
-    };
-    (value, flags)
-}
-
 /// Compares the conversions to and from integers of one format.
 fn integers<F, const W: usize>(report: &mut Report, rng: &mut SplitMix64, cases: usize)
 where
@@ -717,7 +653,7 @@ where
     for _ in 0..cases {
         for integer in IntelInteger::ALL {
             let x = layout.near_integer(rng, integer);
-            let xb = narrow::<F>(x);
+            let xb = encoding::<F>(x);
             let xf = BidFloat::<W>::from_bits(xb);
             for (direction, inexact) in IntelRounding::ALL.into_iter().flat_map(|direction| {
                 [

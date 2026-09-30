@@ -8,28 +8,13 @@
 
 use std::hint::black_box;
 
-use floaty::{BF16, Env, F16, F32, F64, Flags, Lanes};
+use floaty::{BF16, F16, F32, F64, Flags, Lanes};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
-    self, MXCSR_DAZ, MXCSR_FTZ, MXCSR_MASKED, MXCSR_ROUNDINGS, mxcsr_flags, sse_env,
+    self, MXCSR_DAZ, MXCSR_EXCEPTION_MASKS, MXCSR_FTZ, MXCSR_MASKED, MXCSR_TOWARD_NEGATIVE,
+    MXCSR_TOWARD_POSITIVE, MXCSR_TOWARD_ZERO, ROUND_USE_MXCSR, mxcsr_flags, mxcsr_round_flags,
 };
-
-/// Every MXCSR setting of the test: each rounding direction with FTZ and DAZ
-/// on and off. Returns the control value, the matching behavior, and DAZ.
-fn settings() -> Vec<(u32, Env, bool)> {
-    let mut settings = Vec::new();
-    for (rounding, field) in MXCSR_ROUNDINGS {
-        for (ftz, daz) in [(false, false), (true, false), (false, true), (true, true)] {
-            let control = MXCSR_MASKED
-                | field
-                | if ftz { MXCSR_FTZ } else { 0 }
-                | if daz { MXCSR_DAZ } else { 0 };
-            settings.push((control, sse_env(rounding, ftz, daz), daz));
-        }
-    }
-    settings
-}
 
 /// Returns boundary and random encodings of a binary format in chunks of
 /// `C` lanes. Consecutive chunks shift by one encoding, so each special
@@ -68,7 +53,8 @@ fn double_chunks(random: &mut SplitMix64) -> Vec<[u64; 2]> {
 /// flags of the lanes.
 macro_rules! packed_binary {
     ($pairs:expr, $alias:ty, $lanes:literal, $instruction:path, $method:ident) => {
-        for (control, env, daz) in settings() {
+        for setting in x86::sse_settings() {
+            let (control, env, daz) = (setting.control, setting.env(), setting.daz);
             for &(a, b) in $pairs {
                 let (expected, expected_flags) = $instruction(a, b, control);
                 let (x, y) = (
@@ -96,7 +82,8 @@ macro_rules! packed_binary {
 /// operand, and DAZ to MXCSR flags.
 macro_rules! packed_unary {
     ($values:expr, $alias:ty, $lanes:literal, $instruction:path, $method:ident, $flags:expr) => {
-        for (control, env, daz) in settings() {
+        for setting in x86::sse_settings() {
+            let (control, env, daz) = (setting.control, setting.env(), setting.daz);
             for &a in $values {
                 let (expected, expected_flags) = $instruction(a, a, control);
                 let x = Lanes::<$alias, $lanes>::from_bits(a);
@@ -114,12 +101,6 @@ macro_rules! packed_unary {
             }
         }
     };
-}
-
-/// Returns the MXCSR flags of a rounding lane: `ROUNDPS` and `ROUNDPD` signal
-/// only IE and PE, as their scalar forms do.
-fn round_flags(flags: Flags, daz: bool) -> u32 {
-    mxcsr_flags(flags.difference(Flags::DENORMAL_INPUT), daz, false)
 }
 
 #[test]
@@ -177,7 +158,7 @@ fn packed_rounding_and_fused_multiply_add_give_the_lanes_and_their_flags() {
         4,
         x86::roundps,
         round_to_integral_with,
-        |flags, _: F32, daz| { round_flags(flags, daz) }
+        |flags, _: F32, daz| { mxcsr_round_flags(flags, ROUND_USE_MXCSR, daz) }
     );
     let doubles = double_chunks(&mut random);
     packed_unary!(
@@ -186,9 +167,10 @@ fn packed_rounding_and_fused_multiply_add_give_the_lanes_and_their_flags() {
         2,
         x86::roundpd,
         round_to_integral_with,
-        |flags, _: F64, daz| { round_flags(flags, daz) }
+        |flags, _: F64, daz| { mxcsr_round_flags(flags, ROUND_USE_MXCSR, daz) }
     );
-    for (control, env, daz) in settings() {
+    for setting in x86::sse_settings() {
+        let (control, env, daz) = (setting.control, setting.env(), setting.daz);
         for ((&a, &b), &c) in singles
             .iter()
             .zip(singles.iter().rev())
@@ -219,7 +201,8 @@ fn packed_rounding_and_fused_multiply_add_give_the_lanes_and_their_flags() {
 #[test]
 fn packed_conversions_give_the_lanes_and_their_flags() {
     let mut random = SplitMix64::new(0x00C5_C0F7);
-    for (control, env, daz) in settings() {
+    for setting in x86::sse_settings() {
+        let (control, env, daz) = (setting.control, setting.env(), setting.daz);
         for chunk in single_chunks(&mut random).into_iter().step_by(3) {
             let (expected, expected_flags) = x86::cvtps2pd(chunk, chunk, control);
             let expected = [0, 1].map(|lane| {
@@ -346,18 +329,17 @@ fn engine_results(singles: [[u32; 8]; 2], doubles: [[u64; 5]; 2]) -> Vec<u64> {
 /// Returns the MXCSR values under which the paths of `Lanes` must give the
 /// engine results: the default, FTZ, DAZ, each directed rounding, and each
 /// unmasked exception. FTZ, DAZ, and each directed rounding change the packed
-/// results, and an unmasked exception traps. The masks IM, DM, ZM, OM, UM,
-/// and PM are bits 7 to 12.
+/// results, and an unmasked exception traps.
 fn controls() -> Vec<u32> {
     let directions = [
         MXCSR_MASKED,
         MXCSR_MASKED | MXCSR_FTZ,
         MXCSR_MASKED | MXCSR_DAZ,
-        MXCSR_MASKED | (1 << 13),
-        MXCSR_MASKED | (2 << 13),
-        MXCSR_MASKED | (3 << 13),
+        MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
+        MXCSR_MASKED | MXCSR_TOWARD_POSITIVE,
+        MXCSR_MASKED | MXCSR_TOWARD_ZERO,
     ];
-    let unmasked = (7..=12).map(|mask| MXCSR_MASKED & !(1 << mask));
+    let unmasked = MXCSR_EXCEPTION_MASKS.map(|mask| MXCSR_MASKED & !mask);
     directions.into_iter().chain(unmasked).collect()
 }
 

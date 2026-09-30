@@ -29,6 +29,9 @@ pub(super) struct Archive {
     pub(super) url: &'static str,
     /// The SHA-256 of the archive, in lowercase hexadecimal.
     pub(super) sha256: &'static str,
+    /// The directory at the top of the archive that holds its files, or
+    /// `None` when the files sit at the top.
+    pub(super) root: Option<&'static str>,
 }
 
 /// Returns the cached archive, and downloads it first when the cache does
@@ -96,8 +99,9 @@ pub(super) fn sha256(path: &Path) -> String {
 }
 
 /// Extracts an archive into an empty `destination`, unless the destination
-/// already holds this archive.
-pub(super) fn unpack(path: &Path, archive: &Archive, destination: &Path) {
+/// already holds this archive. Returns the directory that holds the files of
+/// the archive.
+pub(super) fn unpack(path: &Path, archive: &Archive, destination: &Path) -> PathBuf {
     run_once(&destination.with_extension("stamp"), archive.sha256, || {
         if destination.exists() {
             fs::remove_dir_all(destination).expect("an old extraction can be removed");
@@ -127,4 +131,8 @@ pub(super) fn unpack(path: &Path, archive: &Archive, destination: &Path) {
         };
         assert!(status.success(), "{} cannot be extracted", path.display());
     });
+    match archive.root {
+        Some(root) => destination.join(root),
+        None => destination.to_path_buf(),
+    }
 }

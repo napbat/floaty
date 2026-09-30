@@ -12,13 +12,11 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
-use core::num::NonZeroU32;
-
 use floaty::env::{NanPropagation, NanRule, Tininess};
 use floaty::{Env, F16, F32, F64, F80, F128, Rounding, mode};
 use floaty_verify::testfloat::{
-    self, ARM, ARM_DEFAULT_NAN, DEFAULT_NAN_RULE, ROUNDINGS, SSE, SSE_RULE, TININESS, X87,
-    X87_RULE, fields, flag_bits, quiet_extended_nan,
+    self, Generator, Level, Options, PRECISION_CONTROL, PrecisionControl, ROUNDINGS, TININESS,
+    fields, flag_bits, quiet_extended_nan,
 };
 
 /// The fused multiply-add cases for each behavior in the normal test run.
@@ -28,9 +26,9 @@ const MUL_ADD_LIMIT: usize = 1_000_000;
 
 /// One run of the generator: the generator, the behavior, and its options.
 struct Run {
-    generator: &'static str,
+    generator: Generator,
     env: Env,
-    options: Vec<&'static str>,
+    options: Options,
 }
 
 /// Returns the runs for a function. `precision_control` adds the x87
@@ -39,48 +37,53 @@ struct Run {
 /// tininess rule; otherwise only the default behavior runs.
 ///
 /// The other generators check the other NaN rules at the default behavior,
-/// because a NaN rule does not depend on the direction. The 8086-SSE
-/// generator runs for every format but x87 extended precision, whose code in
-/// that specialization is the 8086 code.
+/// for each format that their rule covers.
 fn runs(precision_control: bool, every_direction: bool) -> Vec<Run> {
-    let precisions: &[(Option<u32>, &'static str)] = if precision_control {
-        &[
-            (None, "-precision80"),
-            (Some(24), "-precision32"),
-            (Some(53), "-precision64"),
-        ]
+    let precisions: &[PrecisionControl] = if precision_control {
+        &PRECISION_CONTROL
     } else {
-        &[(None, "-precision80")]
+        &[PrecisionControl::FULL]
     };
-    let mut rules = vec![(ARM_DEFAULT_NAN, DEFAULT_NAN_RULE), (X87, X87_RULE)];
-    if !precision_control {
-        rules.push((SSE, SSE_RULE));
-    }
     let mut runs = Vec::new();
-    for &(precision, precision_option) in precisions {
-        let base = Env::IEEE.with_precision(precision.and_then(NonZeroU32::new));
+    for &precision in precisions {
+        let base = Env::IEEE.with_precision(precision.limit);
+        let default = Options {
+            rounding: Some(Rounding::TiesToEven),
+            tininess: Some(Tininess::AfterRounding),
+            precision: Some(precision),
+            ..Options::default()
+        };
         if every_direction {
-            for (rounding, rounding_option) in ROUNDINGS {
-                for (tininess, tininess_option) in TININESS {
+            for (rounding, _) in ROUNDINGS {
+                for (tininess, _) in TININESS {
                     runs.push(Run {
-                        generator: ARM,
+                        generator: Generator::ARM,
                         env: base.with_rounding(rounding).with_tininess(tininess),
-                        options: vec![rounding_option, tininess_option, precision_option],
+                        options: Options {
+                            rounding: Some(rounding),
+                            tininess: Some(tininess),
+                            ..default
+                        },
                     });
                 }
             }
         } else {
             runs.push(Run {
-                generator: ARM,
+                generator: Generator::ARM,
                 env: base,
-                options: vec!["-rnear_even", "-tininessafter", precision_option],
+                options: default,
             });
         }
-        for &(generator, rule) in &rules {
+        let others = Generator::OTHER_NAN_RULES
+            .into_iter()
+            .filter(|generator| !precision_control || generator.covers_extended);
+        for generator in others {
             runs.push(Run {
                 generator,
-                env: base.with_nan(rule).with_tininess(Tininess::AfterRounding),
-                options: vec!["-rnear_even", "-tininessafter", precision_option],
+                env: base
+                    .with_nan(generator.rule)
+                    .with_tininess(Tininess::AfterRounding),
+                options: default,
             });
         }
     }
@@ -90,7 +93,7 @@ fn runs(precision_control: bool, every_direction: bool) -> Vec<Run> {
 /// Checks one function against every run.
 fn check(
     function: &str,
-    level: &str,
+    level: Level,
     runs: &[Run],
     limit: Option<usize>,
     compare: impl Fn(&str, Env),
@@ -100,12 +103,16 @@ fn check(
         "{function} has a run that checks a static mode"
     );
     for run in runs {
-        let mut arguments = vec!["-level", level];
-        arguments.extend(&run.options);
-        arguments.push(function);
-        let count = testfloat::run(run.generator, &arguments, limit, |line| {
-            compare(line, run.env);
-        });
+        let count = testfloat::run(
+            run.generator,
+            level,
+            function,
+            &run.options,
+            limit,
+            |line| {
+                compare(line, run.env);
+            },
+        );
         assert!(count > 0, "{function} {:?} gave test cases", run.options);
     }
 }
@@ -222,7 +229,7 @@ macro_rules! format_tests {
                 let function = concat!($prefix, "_add");
                 check(
                     function,
-                    "1",
+                    Level::One,
                     &runs($precision_control, true),
                     None,
                     two_operands!($alias, add_with, +, function, $expected),
@@ -234,7 +241,7 @@ macro_rules! format_tests {
                 let function = concat!($prefix, "_sub");
                 check(
                     function,
-                    "1",
+                    Level::One,
                     &runs($precision_control, true),
                     None,
                     two_operands!($alias, sub_with, -, function, $expected),
@@ -246,7 +253,7 @@ macro_rules! format_tests {
                 let function = concat!($prefix, "_mul");
                 check(
                     function,
-                    "1",
+                    Level::One,
                     &runs($precision_control, true),
                     None,
                     two_operands!($alias, mul_with, *, function, $expected),
@@ -258,7 +265,7 @@ macro_rules! format_tests {
                 let function = concat!($prefix, "_div");
                 check(
                     function,
-                    "1",
+                    Level::One,
                     &runs($precision_control, true),
                     None,
                     two_operands!($alias, div_with, /, function, $expected),
@@ -270,7 +277,7 @@ macro_rules! format_tests {
                 let function = concat!($prefix, "_sqrt");
                 check(
                     function,
-                    "2",
+                    Level::Two,
                     &runs($precision_control, true),
                     None,
                     |line: &str, env: Env| {
@@ -362,28 +369,28 @@ fn mul_add_prefix() {
     let runs = runs(false, false);
     check(
         "f16_mulAdd",
-        "1",
+        Level::One,
         &runs,
         Some(MUL_ADD_LIMIT),
         mul_add!(F16, "f16_mulAdd"),
     );
     check(
         "f32_mulAdd",
-        "1",
+        Level::One,
         &runs,
         Some(MUL_ADD_LIMIT),
         mul_add!(F32, "f32_mulAdd"),
     );
     check(
         "f64_mulAdd",
-        "1",
+        Level::One,
         &runs,
         Some(MUL_ADD_LIMIT),
         mul_add!(F64, "f64_mulAdd"),
     );
     check(
         "f128_mulAdd",
-        "1",
+        Level::One,
         &runs,
         Some(MUL_ADD_LIMIT),
         mul_add!(F128, "f128_mulAdd"),
@@ -396,12 +403,30 @@ fn mul_add_prefix() {
 #[ignore = "exhaustive sweep; run with --ignored"]
 fn mul_add_level_1() {
     let runs = runs(false, true);
-    check("f16_mulAdd", "1", &runs, None, mul_add!(F16, "f16_mulAdd"));
-    check("f32_mulAdd", "1", &runs, None, mul_add!(F32, "f32_mulAdd"));
-    check("f64_mulAdd", "1", &runs, None, mul_add!(F64, "f64_mulAdd"));
+    check(
+        "f16_mulAdd",
+        Level::One,
+        &runs,
+        None,
+        mul_add!(F16, "f16_mulAdd"),
+    );
+    check(
+        "f32_mulAdd",
+        Level::One,
+        &runs,
+        None,
+        mul_add!(F32, "f32_mulAdd"),
+    );
+    check(
+        "f64_mulAdd",
+        Level::One,
+        &runs,
+        None,
+        mul_add!(F64, "f64_mulAdd"),
+    );
     check(
         "f128_mulAdd",
-        "1",
+        Level::One,
         &runs,
         None,
         mul_add!(F128, "f128_mulAdd"),

@@ -9,15 +9,13 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use core::num::NonZeroU32;
 use core::ops::RangeInclusive;
 
-use floaty::{Env, F80, Flags, Rounding, ToInt};
+use floaty::{F80, Flags, Rounding};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
-    self, X87_C1, X87_MASKED, X87_PRECISIONS, X87_ROUNDINGS, X87_STATUS_FLAGS,
-    x87_arithmetic_status, x87_env, x87_status,
+    self, X87_C1, X87_STATUS_FLAGS, stored, x87_arithmetic_status, x87_env, x87_status,
 };
 
 /// The control word after `FNINIT`: every exception masked, rounding to
@@ -31,47 +29,6 @@ const C2: u16 = 1 << 10;
 
 /// The bits of an 80-bit encoding.
 const MASK: u128 = (1 << 80) - 1;
-
-/// One x87 control setting of the tests.
-#[derive(Clone, Copy, Debug)]
-struct Setting {
-    /// The control word.
-    control: u16,
-    /// The direction of the rounding-control field.
-    rounding: Rounding,
-    /// The limit of the precision-control field.
-    precision: Option<NonZeroU32>,
-}
-
-impl Setting {
-    /// Returns the behavior with the limit of the precision-control field.
-    fn env(self) -> Env {
-        x87_env(self.rounding).with_precision(self.precision)
-    }
-
-    /// Returns the behavior of an instruction that precision control does
-    /// not affect. Precision control affects only the add, subtract,
-    /// multiply, divide, and square root instructions (Intel SDM Volume 1,
-    /// section 8.1.5.2 on page 8-8).
-    fn full_precision(self) -> Env {
-        x87_env(self.rounding)
-    }
-}
-
-/// Every x87 control setting: each rounding direction at each precision.
-fn settings() -> Vec<Setting> {
-    let mut settings = Vec::new();
-    for (rounding, rounding_field) in X87_ROUNDINGS {
-        for (precision, precision_field) in X87_PRECISIONS {
-            settings.push(Setting {
-                control: X87_MASKED | rounding_field | precision_field,
-                rounding,
-                precision: NonZeroU32::new(precision),
-            });
-        }
-    }
-    settings
-}
 
 /// The x87 special operands: zeros, infinities, quiet and signaling NaNs of
 /// both signs, the real indefinite, unsupported encodings, pseudo-denormals,
@@ -251,7 +208,7 @@ fn compares_match_the_quiet_and_signaling_compares() {
 fn frndint_matches_rounding_to_an_integral_value() {
     let mut random = SplitMix64::new(0x0087_12D1);
     let operands = integral_operands(&mut random);
-    for setting in settings() {
+    for setting in x86::x87_settings() {
         for &input in &operands {
             let (expected, status) = x86::frndint(input, setting.control);
             let value = F80::from_bits(input);
@@ -267,17 +224,6 @@ fn frndint_matches_rounding_to_an_integral_value() {
     }
 }
 
-/// Returns the integer that `FISTP` or `FISTTP` stores: the value, or the
-/// integer indefinite for a value out of range or a NaN (Intel SDM Volume 1,
-/// Table 8-10 on page 8-27). The indefinite is the smallest integer, which
-/// has only the sign bit set.
-fn stored<I: Copy>(result: ToInt<I>, indefinite: I) -> I {
-    match result {
-        ToInt::Value(value) => value,
-        ToInt::OutOfRange { .. } | ToInt::Nan => indefinite,
-    }
-}
-
 /// Returns the status bits of `FISTP` or `FISTTP`: IE, PE, and C1 for a
 /// rounding that grew the magnitude. The stores never report DE (Intel SDM
 /// Volume 1, Table C-2 on page C-2, and the hardware shows it), so the
@@ -290,7 +236,7 @@ fn integer_store_status(flags: Flags) -> u16 {
 /// and one that truncates, with floaty in every setting.
 macro_rules! integer_store {
     ($operands:expr, $integer:ty, $rounded:path, $truncated:path) => {
-        for setting in settings() {
+        for setting in x86::x87_settings() {
             for &input in &$operands {
                 let value = F80::from_bits(input);
                 for (instruction, rounding, (expected, status)) in [
@@ -362,7 +308,7 @@ fn integer_operands(random: &mut SplitMix64, bits: u32) -> Vec<i64> {
 /// flag (Intel SDM Volume 1, Table C-2 on page C-2), and C1 is clear.
 macro_rules! integer_load {
     ($operands:expr, $instruction:path) => {
-        for setting in settings() {
+        for setting in x86::x87_settings() {
             let env = setting.full_precision();
             for &input in &$operands {
                 let (expected, status) = $instruction(input, setting.control);
@@ -467,7 +413,7 @@ fn remainder_pairs(random: &mut SplitMix64) -> Vec<(u128, u128)> {
 fn fprem1_matches_the_ieee_remainder() {
     let mut random = SplitMix64::new(0x0087_2E31);
     let pairs = remainder_pairs(&mut random);
-    for setting in settings() {
+    for setting in x86::x87_settings() {
         for &(a, b) in &pairs {
             let (expected, status) = x86::fprem1(a, b, setting.control);
             let (x, y) = (F80::from_bits(a), F80::from_bits(b));
@@ -492,7 +438,7 @@ fn fprem1_matches_the_ieee_remainder() {
 fn fprem_matches_the_truncated_remainder() {
     let mut random = SplitMix64::new(0x0087_2E30);
     let pairs = remainder_pairs(&mut random);
-    for setting in settings() {
+    for setting in x86::x87_settings() {
         for &(a, b) in &pairs {
             let (expected, status) = x86::fprem(a, b, setting.control);
             let (x, y) = (F80::from_bits(a), F80::from_bits(b));
@@ -552,7 +498,7 @@ fn scale_pairs(random: &mut SplitMix64) -> Vec<(u128, i32)> {
 fn fscale_matches_scale_b_without_precision_control() {
     let mut random = SplitMix64::new(0x0087_5CA1);
     let pairs = scale_pairs(&mut random);
-    for setting in settings() {
+    for setting in x86::x87_settings() {
         let env = setting.full_precision();
         for &(input, scale) in &pairs {
             let (expected, status) = x86::fscale(input, scale, setting.control);

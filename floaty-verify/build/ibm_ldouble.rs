@@ -6,19 +6,26 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::archive::sha256;
-use crate::tools::{extract_member, run_once, tool_output};
+use crate::tools::{check_gcc, extract_member, run_once, tool_output};
 
 /// The cross compiler of the libgcc reference.
 const POWERPC_GCC: &str = "powerpc64le-linux-gnu-gcc";
 
+/// The `ar` program of the cross compiler.
+const POWERPC_AR: &str = "powerpc64le-linux-gnu-ar";
+
 /// The pinned GCC release of the libgcc reference.
 const POWERPC_GCC_VERSION: &str = "15.2.0";
 
-/// The SHA-256 of `ibm-ldouble.o` in the pinned libgcc: its machine code,
-/// its constants, and its relocations. floaty's `Gcc` algorithm follows this
-/// object one instruction at a time, so a libgcc that compiles the routines
-/// differently is another reference.
-const IBM_LDOUBLE_SHA256: &str = "c484948ee6c0e1a9b7b4a54f31820707afbbb90ce33564aee121e0f1082d154c";
+/// The member of the pinned libgcc that floaty's `Gcc` algorithm follows,
+/// with its SHA-256: `ibm-ldouble.o`, its machine code, its constants, and
+/// its relocations. The algorithm follows this object one instruction at a
+/// time, so a libgcc that compiles the routines differently is another
+/// reference.
+const LIBGCC_OBJECTS: [(&str, &str); 1] = [(
+    "ibm-ldouble.o",
+    "c484948ee6c0e1a9b7b4a54f31820707afbbb90ce33564aee121e0f1082d154c",
+)];
 
 /// The glibc 2.43 release of the pinned cross C library, package
 /// `libc6-dev-ppc64el-cross` 2.43-2ubuntu2cross1.
@@ -115,28 +122,27 @@ pub(super) fn build(manifest: &Path, out: &Path) {
     let source = manifest.join("shim").join("ibm_ldouble.c");
     println!("cargo:rerun-if-changed={}", source.display());
     let cross_advice = "install the gcc-powerpc64le-linux-gnu package";
-    let version = tool_output(POWERPC_GCC, &["-dumpfullversion"], cross_advice);
-    assert!(
-        version.trim() == POWERPC_GCC_VERSION,
-        "{POWERPC_GCC} is GCC {}, not the pinned GCC {POWERPC_GCC_VERSION}. floaty's Gcc \
-         algorithm follows the machine code of the pinned compiler",
-        version.trim()
-    );
-    // The first line of `--version` names the distribution build of GCC.
-    let compiler = tool_output(POWERPC_GCC, &["--version"], cross_advice);
-    let compiler = compiler.lines().next().unwrap_or_default();
+    let compiler = check_gcc(POWERPC_GCC, POWERPC_GCC_VERSION, "Gcc", cross_advice);
     let libgcc = tool_output(POWERPC_GCC, &["-print-libgcc-file-name"], cross_advice);
     let libgcc = PathBuf::from(libgcc.trim());
     println!("cargo:rerun-if-changed={}", libgcc.display());
-    check_ibm_ldouble(&libgcc, out, cross_advice);
+    let libgcc_release = format!("libgcc {POWERPC_GCC_VERSION}");
+    check_members(&libgcc, &LIBGCC_OBJECTS, &libgcc_release, out, cross_advice);
+    let glibc_release = format!("glibc {POWERPC_GLIBC_VERSION}");
     let math_library = tool_output(POWERPC_GCC, &["-print-file-name=libm.a"], cross_advice);
     let math_library = PathBuf::from(math_library.trim());
     println!("cargo:rerun-if-changed={}", math_library.display());
-    check_glibc_members(&math_library, &LIBM_OBJECTS, out, cross_advice);
+    check_members(
+        &math_library,
+        &LIBM_OBJECTS,
+        &glibc_release,
+        out,
+        cross_advice,
+    );
     let c_library = tool_output(POWERPC_GCC, &["-print-file-name=libc.a"], cross_advice);
     let c_library = PathBuf::from(c_library.trim());
     println!("cargo:rerun-if-changed={}", c_library.display());
-    check_glibc_members(&c_library, &LIBC_OBJECTS, out, cross_advice);
+    check_members(&c_library, &LIBC_OBJECTS, &glibc_release, out, cross_advice);
     let emulator = tool_output(
         QEMU_POWERPC,
         &["--version"],
@@ -144,12 +150,13 @@ pub(super) fn build(manifest: &Path, out: &Path) {
     );
     let emulator = emulator.lines().next().unwrap_or_default();
     assert!(
-        emulator.starts_with(&format!("qemu-ppc64le version {QEMU_VERSION} ")),
+        emulator.starts_with(&format!("{QEMU_POWERPC} version {QEMU_VERSION} ")),
         "{emulator:?} is not the pinned QEMU {QEMU_VERSION}. QEMU executes the libgcc reference \
          and gives its flags"
     );
-    // The tests check the release again, because QEMU can change after the
-    // build.
+    // The tests run the same emulator, and check the release again, because
+    // QEMU can change after the build.
+    println!("cargo:rustc-env=FLOATY_QEMU={QEMU_POWERPC}");
     println!("cargo:rustc-env=FLOATY_QEMU_VERSION={QEMU_VERSION}");
 
     let program = out.join("ibm_ldouble");
@@ -180,33 +187,24 @@ pub(super) fn build(manifest: &Path, out: &Path) {
     println!("cargo:rustc-env=FLOATY_IBM_LDOUBLE={}", program.display());
 }
 
-/// Stops the build when `ibm-ldouble.o` in `libgcc` differs from the pinned
-/// object.
-fn check_ibm_ldouble(libgcc: &Path, out: &Path, advice: &str) {
-    fs::create_dir_all(out).expect("the program directory can be created");
-    let object = out.join("ibm-ldouble.o");
-    extract_member("powerpc64le-linux-gnu-ar", libgcc, &object, advice);
-    let digest = sha256(&object);
-    assert!(
-        digest == IBM_LDOUBLE_SHA256,
-        "ibm-ldouble.o in {} has SHA-256 {digest}, not the pinned {IBM_LDOUBLE_SHA256}. floaty's \
-         Gcc algorithm follows the pinned object",
-        libgcc.display()
-    );
-}
-
-/// Stops the build when a member of a glibc archive that floaty's `Gcc`
-/// algorithm follows differs from the pinned object.
-fn check_glibc_members(archive: &Path, members: &[(&str, &str)], out: &Path, advice: &str) {
+/// Stops the build when a member of a static library of `release` that
+/// floaty's `Gcc` algorithm follows differs from the pinned object.
+fn check_members(
+    archive: &Path,
+    members: &[(&str, &str)],
+    release: &str,
+    out: &Path,
+    advice: &str,
+) {
     fs::create_dir_all(out).expect("the program directory can be created");
     for &(member, pinned) in members {
         let object = out.join(member);
-        extract_member("powerpc64le-linux-gnu-ar", archive, &object, advice);
+        extract_member(POWERPC_AR, archive, &object, advice);
         let digest = sha256(&object);
         assert!(
             digest == pinned,
-            "{member} in {} has SHA-256 {digest}, not the pinned {pinned} of glibc \
-             {POWERPC_GLIBC_VERSION}. floaty's Gcc algorithm follows the pinned object",
+            "{member} in {} has SHA-256 {digest}, not the pinned {pinned} of {release}. floaty's \
+             Gcc algorithm follows the pinned object",
             archive.display()
         );
     }

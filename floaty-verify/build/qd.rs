@@ -7,7 +7,7 @@ use std::process::Command;
 
 use crate::archive::{Archive, Packing, fetch, sha256, unpack};
 use crate::tools::{
-    COMPILER_VARIABLES, archive, compile, extract_member, make, run_once, tool_output,
+    COMPILER_VARIABLES, archive, check_gcc, compile, extract_member, make, run_once,
 };
 
 /// QD 2.3.24, under the BSD-LBNL license.
@@ -16,6 +16,7 @@ const QD: Archive = Archive {
     packing: Packing::GzipTar,
     url: "https://www.davidhbailey.com/dhbsoftware/qd-2.3.24.tar.gz",
     sha256: "a47b6c73f86e6421e86a883568dd08e299b20e36c11a99bdfbe50e01bde60e38",
+    root: Some("qd-2.3.24"),
 };
 
 /// The `configure` options of QD. The first three select the arithmetic
@@ -84,20 +85,10 @@ const QD_LIBRARY_SHA256: &str = "0bcc95f145495cde281ad918b8aa6f1a841eeb879c4049b
 pub(super) fn build(manifest: &Path, out: &Path) {
     let shim = manifest.join("shim").join("qd_shim.cpp");
     println!("cargo:rerun-if-changed={}", shim.display());
-    let advice = "install the g++ package";
-    let version = tool_output(QD_CXX, &["-dumpfullversion"], advice);
-    assert!(
-        version.trim() == QD_CXX_VERSION,
-        "{QD_CXX} is GCC {}, not the pinned GCC {QD_CXX_VERSION}. floaty's Qd algorithm \
-         follows the machine code of the pinned compiler",
-        version.trim()
-    );
-    let compiler = tool_output(QD_CXX, &["--version"], advice);
-    let compiler = compiler.lines().next().unwrap_or_default().to_owned();
+    let compiler = check_gcc(QD_CXX, QD_CXX_VERSION, "Qd", "install the g++ package");
     let downloads = manifest.join("reference").join("downloads");
     let source = out.join("source");
-    unpack(&fetch(&QD, &downloads), &QD, &source);
-    let root = source.join("qd-2.3.24");
+    let root = unpack(&fetch(&QD, &downloads), &QD, &source);
 
     // configure records the compiler and its options in the Makefiles, so
     // a new setting starts from `make clean`. The stamp lives in the

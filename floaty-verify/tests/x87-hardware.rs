@@ -241,19 +241,6 @@ fn operands(random: &mut SplitMix64, count: usize) -> Vec<u128> {
     operands
 }
 
-/// Every x87 control setting: each rounding direction at each precision.
-fn settings() -> Vec<(u16, Env)> {
-    let mut settings = Vec::new();
-    for (rounding, rounding_field) in X87_ROUNDINGS {
-        for (precision, precision_field) in X87_PRECISIONS {
-            let control = X87_MASKED | rounding_field | precision_field;
-            let limit = NonZeroU32::new(precision);
-            settings.push((control, x87_env(rounding).with_precision(limit)));
-        }
-    }
-    settings
-}
-
 /// Returns the precision limit of an x87 setting in bits.
 fn precision(env: Env) -> u32 {
     env.precision.map_or(64, NonZeroU32::get)
@@ -264,7 +251,8 @@ fn precision(env: Env) -> u32 {
 /// setting, which `with_x87_mode!` selects as an emulator would.
 macro_rules! arithmetic {
     ($pairs:expr, $instruction:path, $method:ident) => {
-        for (control, env) in settings() {
+        for setting in x86::x87_settings() {
+            let (control, env) = (setting.control, setting.env());
             for &(a, b) in &$pairs {
                 let (expected, status) = $instruction(a, b, control);
                 let (x, y) = (F80::from_bits(a), F80::from_bits(b));
@@ -320,7 +308,8 @@ fn arithmetic_matches_at_every_rounding_and_precision() {
     arithmetic!(pairs, x86::fsub, sub_with);
     arithmetic!(pairs, x86::fmul, mul_with);
     arithmetic!(pairs, x86::fdiv, div_with);
-    for (control, env) in settings() {
+    for setting in x86::x87_settings() {
+        let (control, env) = (setting.control, setting.env());
         for &a in &operands {
             let (expected, status) = x86::fsqrt(a, control);
             let value = F80::from_bits(a);

@@ -36,7 +36,7 @@ use floaty::format::{Bid, Binary, Decimal, Dpd, Standard, X87};
 use floaty::{Env, Flags, Float};
 use floaty_verify::intel_decimal::{
     self, Bid32, Bid64, Bid128, Flags as IntelFlags, Format, Layout, Outcome,
-    Rounding as IntelRounding,
+    Rounding as IntelRounding, narrow,
 };
 use floaty_verify::random::SplitMix64;
 use floaty_verify::readtest::{self, Field, FieldError};
@@ -373,11 +373,6 @@ struct Conversion {
     target: Side,
     floaty: Floaty,
     library: Library,
-}
-
-/// Returns an encoding in its storage type.
-fn narrow<T: TryFrom<u128>>(bits: u128) -> T {
-    T::try_from(bits).unwrap_or_else(|_| panic!("the encoding {bits:#x} fits its storage"))
 }
 
 /// Converts the encoding `bits` of `Float<S, V>` to `Float<T, W>` with
@@ -735,16 +730,6 @@ impl Report {
     }
 }
 
-/// The names of the library flags, by bit.
-const FLAG_NAMES: [&str; 6] = [
-    "invalid",
-    "denormal",
-    "zero-divide",
-    "overflow",
-    "underflow",
-    "inexact",
-];
-
 /// Counts the flags of an expected outcome.
 fn count_flags(counts: &mut [usize; 6], flags: IntelFlags) {
     for (bit, count) in counts.iter_mut().enumerate() {
@@ -754,7 +739,7 @@ fn count_flags(counts: &mut [usize; 6], flags: IntelFlags) {
 
 /// Prints how many expected outcomes raise each flag.
 fn print_flags(counts: &[usize; 6]) {
-    let counts: Vec<String> = FLAG_NAMES
+    let counts: Vec<String> = IntelFlags::NAMES
         .iter()
         .zip(counts)
         .map(|(name, count)| format!("{name} {count}"))
