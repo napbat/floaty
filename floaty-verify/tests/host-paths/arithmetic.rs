@@ -2,39 +2,25 @@
 
 use floaty::{BF16, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F80, TF32};
 use floaty_verify::encodings::Layout;
+use floaty_verify::entry_points::{arithmetic, arithmetic_with};
 use floaty_verify::random::SplitMix64;
 
 use super::operands::{every_16_bit_pair, random_pairs, triples};
 
-/// Checks that each operator gives the result of its `_with` method under the
-/// default mode. The operands are random and boundary encodings, and every
-/// pair of an FP8 format. An operator takes a host path where the build has
-/// one, and the engine otherwise.
+/// Checks that each arithmetic entry point of [`arithmetic`] gives the result
+/// of its `_with` method under the default mode, for each pair `x` and `y`,
+/// with `x` as the addend. The operands are random and boundary encodings,
+/// and every pair of an FP8 format. An entry point takes a host path where the
+/// build has one, and the engine otherwise.
 macro_rules! operators_match {
     ($alias:ty, $bits:ty, $pairs:expr) => {{
         for (a, b) in $pairs {
             let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
-            let env = <$alias>::ENV;
-            let context = format!("{} {x:?} {y:?}", stringify!($alias));
             assert_eq!(
-                (x + y).to_bits(),
-                x.add_with(y, env).0.to_bits(),
-                "{context} +"
-            );
-            assert_eq!(
-                (x - y).to_bits(),
-                x.sub_with(y, env).0.to_bits(),
-                "{context} -"
-            );
-            assert_eq!(
-                (x * y).to_bits(),
-                x.mul_with(y, env).0.to_bits(),
-                "{context} *"
-            );
-            assert_eq!(
-                (x / y).to_bits(),
-                x.div_with(y, env).0.to_bits(),
-                "{context} /"
+                arithmetic(x, y, x),
+                arithmetic_with(x, y, x),
+                "{} {x:?} {y:?}",
+                stringify!($alias)
             );
         }
     }};
@@ -85,25 +71,19 @@ fn operators_give_the_default_mode_results() {
     );
 }
 
-/// Checks that `sqrt` and `mul_add` give the results of `sqrt_with` and
-/// `mul_add_with` under the default mode. Each case takes the square root of
-/// its first operand. `sqrt` and `mul_add` take a host path where the build
-/// has one, and the engine otherwise.
+/// Checks that each arithmetic entry point of [`arithmetic`] gives the result
+/// of its `_with` method under the default mode, for each triple `x`, `y`,
+/// and the addend `z`. An entry point takes a host path where the build has
+/// one, and the engine otherwise.
 macro_rules! methods_match {
     ($alias:ty, $triples:expr) => {{
         for (a, b, c) in $triples {
             let [x, y, z] = [a, b, c].map(<$alias>::from_bits);
-            let env = <$alias>::ENV;
-            let context = format!("{} {x:?} {y:?} {z:?}", stringify!($alias));
             assert_eq!(
-                x.sqrt().to_bits(),
-                x.sqrt_with(env).0.to_bits(),
-                "{context} sqrt"
-            );
-            assert_eq!(
-                x.mul_add(y, z).to_bits(),
-                x.mul_add_with(y, z, env).0.to_bits(),
-                "{context} mul_add"
+                arithmetic(x, y, z),
+                arithmetic_with(x, y, z),
+                "{} {x:?} {y:?} {z:?}",
+                stringify!($alias)
             );
         }
     }};
@@ -187,7 +167,9 @@ fn every_bfloat16_square_root_gives_the_default_mode_result() {
 
 /// Checks that the four operators of the 16-bit format `$alias` give the
 /// results of their `_with` methods under the default mode, for every pair of
-/// operands.
+/// operands. The sweep checks the operators alone, not every entry point of
+/// [`arithmetic`], which keeps its run time. The other tests of this module
+/// check every entry point.
 macro_rules! every_pair_matches {
     ($alias:ty) => {
         every_16_bit_pair(|high, low| {

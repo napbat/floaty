@@ -10,6 +10,7 @@ use std::hint::black_box;
 
 use floaty::{BF16, F16, F32, F64, Flags, Lanes};
 use floaty_verify::encodings::{Layout, boundary_encodings_u128};
+use floaty_verify::entry_points::{LaneArithmetic, lane_arithmetic, lane_arithmetic_with};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, MXCSR_DAZ, MXCSR_EXCEPTION_MASKS, MXCSR_FTZ, MXCSR_MASKED, MXCSR_TOWARD_NEGATIVE,
@@ -240,85 +241,49 @@ fn packed_conversions_give_the_lanes_and_their_flags() {
     }
 }
 
+/// The results of the operations of `Lanes` on eight binary32 lanes and on
+/// five binary64 lanes, which the packed host paths compute in chunks and
+/// single lanes: the arithmetic of each format, and the conversions between
+/// them.
+#[derive(Debug, PartialEq, Eq)]
+struct LaneResults {
+    singles: LaneArithmetic<u32, 8>,
+    doubles: LaneArithmetic<u64, 5>,
+    /// The binary32 lanes converted to binary64.
+    widened: [u64; 8],
+    /// The binary64 lanes converted to binary32.
+    narrowed: [u32; 5],
+}
+
 /// Returns the results of the operations of `Lanes` without flags on eight
-/// binary32 lanes and on five binary64 lanes, which the packed host paths
-/// compute in chunks and single lanes.
-fn lanes_without_flags(singles: [[u32; 8]; 2], doubles: [[u64; 5]; 2]) -> Vec<u64> {
+/// binary32 lanes and on five binary64 lanes, with the first lanes of each
+/// format as the addends.
+fn lanes_without_flags(singles: [[u32; 8]; 2], doubles: [[u64; 5]; 2]) -> LaneResults {
     let [x, y] = singles.map(Lanes::<F32, 8>::from_bits);
     let [u, v] = doubles.map(Lanes::<F64, 5>::from_bits);
-    let singles = [
-        x + y,
-        x - y,
-        x * y,
-        x / y,
-        x.sqrt(),
-        x.mul_add(y, x),
-        x.round_to_integral(),
-    ];
-    let doubles = [
-        u + v,
-        u - v,
-        u * v,
-        u / v,
-        u.sqrt(),
-        u.mul_add(v, u),
-        u.round_to_integral(),
-    ];
     let widened: Lanes<F64, 8> = x.convert();
     let narrowed: Lanes<F32, 5> = u.convert();
-    let mut bits: Vec<u64> = singles
-        .iter()
-        .flat_map(|lanes| lanes.to_bits().map(u64::from))
-        .collect();
-    bits.extend(doubles.iter().flat_map(|lanes| lanes.to_bits()));
-    bits.extend(widened.to_bits());
-    bits.extend(narrowed.to_bits().map(u64::from));
-    bits
+    LaneResults {
+        singles: lane_arithmetic(x, y, x),
+        doubles: lane_arithmetic(u, v, u),
+        widened: widened.to_bits(),
+        narrowed: narrowed.to_bits(),
+    }
 }
 
 /// Returns the results of `lanes_without_flags` from the `_with` methods of
-/// each lane in the default mode, which always run the engine.
-fn engine_results(singles: [[u32; 8]; 2], doubles: [[u64; 5]; 2]) -> Vec<u64> {
-    let [x, y] = singles.map(|lanes| lanes.map(F32::from_bits));
-    let [u, v] = doubles.map(|lanes| lanes.map(F64::from_bits));
-    let mut bits = Vec::new();
-    let single_operations: [fn(F32, F32) -> F32; 7] = [
-        |x, y| x.add_with(y, F32::ENV).0,
-        |x, y| x.sub_with(y, F32::ENV).0,
-        |x, y| x.mul_with(y, F32::ENV).0,
-        |x, y| x.div_with(y, F32::ENV).0,
-        |x, _| x.sqrt_with(F32::ENV).0,
-        |x, y| x.mul_add_with(y, x, F32::ENV).0,
-        |x, _| x.round_to_integral_with(F32::ENV).0,
-    ];
-    for operation in single_operations {
-        bits.extend(
-            x.iter()
-                .zip(&y)
-                .map(|(&x, &y)| u64::from(operation(x, y).to_bits())),
-        );
+/// `Lanes` in the default mode, which always run the engine on each lane.
+fn engine_results(singles: [[u32; 8]; 2], doubles: [[u64; 5]; 2]) -> LaneResults {
+    let [x, y] = singles.map(Lanes::<F32, 8>::from_bits);
+    let [u, v] = doubles.map(Lanes::<F64, 5>::from_bits);
+    let widened: Lanes<F64, 8> = x.convert_with(F64::ENV).0;
+    let narrowed: Lanes<F32, 5> = u.convert_with(F32::ENV).0;
+    LaneResults {
+        singles: lane_arithmetic_with(x, y, x),
+        doubles: lane_arithmetic_with(u, v, u),
+        widened: widened.to_bits(),
+        narrowed: narrowed.to_bits(),
     }
-    let double_operations: [fn(F64, F64) -> F64; 7] = [
-        |x, y| x.add_with(y, F64::ENV).0,
-        |x, y| x.sub_with(y, F64::ENV).0,
-        |x, y| x.mul_with(y, F64::ENV).0,
-        |x, y| x.div_with(y, F64::ENV).0,
-        |x, _| x.sqrt_with(F64::ENV).0,
-        |x, y| x.mul_add_with(y, x, F64::ENV).0,
-        |x, _| x.round_to_integral_with(F64::ENV).0,
-    ];
-    for operation in double_operations {
-        bits.extend(u.iter().zip(&v).map(|(&x, &y)| operation(x, y).to_bits()));
-    }
-    bits.extend(
-        x.iter()
-            .map(|&x| x.convert_with::<F64>(F64::ENV).0.to_bits()),
-    );
-    bits.extend(
-        u.iter()
-            .map(|&x| u64::from(x.convert_with::<F32>(F32::ENV).0.to_bits())),
-    );
-    bits
 }
 
 /// Returns the MXCSR values under which the paths of `Lanes` must give the
@@ -361,67 +326,51 @@ fn lanes_read_mxcsr_before_the_packed_unit() {
     }
 }
 
+/// The results of the operations of `Lanes` on 13 binary16 lanes, which the
+/// packed paths compute in binary32 chunks and single lanes: the arithmetic,
+/// and the conversions of the lanes.
+#[derive(Debug, PartialEq, Eq)]
+struct HalfLaneResults {
+    halves: LaneArithmetic<u16, 13>,
+    /// 13 binary32 lanes converted to binary16.
+    narrowed: [u16; 13],
+    /// The binary16 lanes converted to binary32.
+    widened: [u32; 13],
+    /// The binary16 lanes converted to binary64.
+    doubled: [u64; 13],
+}
+
 /// Returns the results of the operations of `Lanes` without flags on 13
-/// binary16 lanes, which the packed paths compute in binary32 chunks and
-/// single lanes, and of the conversions of the lanes.
-fn binary16_lanes_without_flags(halves: [[u16; 13]; 2], singles: [u32; 13]) -> Vec<u64> {
+/// binary16 lanes, with the first lanes as the addends, and of the
+/// conversions to and from the lanes.
+fn binary16_lanes_without_flags(halves: [[u16; 13]; 2], singles: [u32; 13]) -> HalfLaneResults {
     let [x, y] = halves.map(Lanes::<F16, 13>::from_bits);
-    let lanes = [
-        x + y,
-        x - y,
-        x * y,
-        x / y,
-        x.sqrt(),
-        x.round_to_integral(),
-        Lanes::<F32, 13>::from_bits(singles).convert(),
-    ];
+    let narrowed: Lanes<F16, 13> = Lanes::<F32, 13>::from_bits(singles).convert();
     let (widened, doubled): (Lanes<F32, 13>, Lanes<F64, 13>) = (x.convert(), x.convert());
-    let mut bits: Vec<u64> = lanes
-        .iter()
-        .flat_map(|lanes| lanes.to_bits().map(u64::from))
-        .collect();
-    bits.extend(widened.to_bits().map(u64::from));
-    bits.extend(doubled.to_bits());
-    bits
+    HalfLaneResults {
+        halves: lane_arithmetic(x, y, x),
+        narrowed: narrowed.to_bits(),
+        widened: widened.to_bits(),
+        doubled: doubled.to_bits(),
+    }
 }
 
 /// Returns the results of `binary16_lanes_without_flags` from the `_with`
-/// methods of each lane in the default mode, which always run the engine.
-fn binary16_engine_results(halves: [[u16; 13]; 2], singles: [u32; 13]) -> Vec<u64> {
-    let [x, y] = halves.map(|lanes| lanes.map(F16::from_bits));
-    let operations: [fn(F16, F16) -> F16; 6] = [
-        |x, y| x.add_with(y, F16::ENV).0,
-        |x, y| x.sub_with(y, F16::ENV).0,
-        |x, y| x.mul_with(y, F16::ENV).0,
-        |x, y| x.div_with(y, F16::ENV).0,
-        |x, _| x.sqrt_with(F16::ENV).0,
-        |x, _| x.round_to_integral_with(F16::ENV).0,
-    ];
-    let mut bits = Vec::new();
-    for operation in operations {
-        bits.extend(
-            x.iter()
-                .zip(&y)
-                .map(|(&x, &y)| u64::from(operation(x, y).to_bits())),
-        );
+/// methods of `Lanes` in the default mode, which always run the engine on
+/// each lane.
+fn binary16_engine_results(halves: [[u16; 13]; 2], singles: [u32; 13]) -> HalfLaneResults {
+    let [x, y] = halves.map(Lanes::<F16, 13>::from_bits);
+    let narrowed: Lanes<F16, 13> = Lanes::<F32, 13>::from_bits(singles)
+        .convert_with(F16::ENV)
+        .0;
+    let widened: Lanes<F32, 13> = x.convert_with(F32::ENV).0;
+    let doubled: Lanes<F64, 13> = x.convert_with(F64::ENV).0;
+    HalfLaneResults {
+        halves: lane_arithmetic_with(x, y, x),
+        narrowed: narrowed.to_bits(),
+        widened: widened.to_bits(),
+        doubled: doubled.to_bits(),
     }
-    bits.extend(singles.iter().map(|&bits| {
-        u64::from(
-            F32::from_bits(bits)
-                .convert_with::<F16>(F16::ENV)
-                .0
-                .to_bits(),
-        )
-    }));
-    bits.extend(
-        x.iter()
-            .map(|&x| u64::from(x.convert_with::<F32>(F32::ENV).0.to_bits())),
-    );
-    bits.extend(
-        x.iter()
-            .map(|&x| x.convert_with::<F64>(F64::ENV).0.to_bits()),
-    );
-    bits
 }
 
 #[test]

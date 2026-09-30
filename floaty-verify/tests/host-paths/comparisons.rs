@@ -2,44 +2,19 @@
 
 use floaty::{BF16, F64};
 use floaty_verify::encodings::Layout;
+use floaty_verify::entry_points::{comparisons, comparisons_with};
 use floaty_verify::random::SplitMix64;
 
 use super::operands::{boundary_pairs, random_pairs};
 
-/// Checks that the comparison and each minimum and maximum operation of the
-/// type `$alias` give the results of their `_with` methods in the default
-/// mode, for each pair of `$pairs`.
+/// Checks that the comparison entry points of [`comparisons`] of the type
+/// `$alias` give the results of their `_with` methods in the default mode,
+/// for each pair of `$pairs`.
 macro_rules! comparisons_match {
     ($alias:ty, $pairs:expr) => {
         for &(a, b) in $pairs {
             let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
-            let env = <$alias>::ENV;
-            let order = x.compare_quiet_with(y, env).0;
-            assert_eq!(x.partial_cmp(&y), order, "{a:#x} {b:#x}: partial_cmp");
-            assert_eq!(
-                x == y,
-                order == Some(core::cmp::Ordering::Equal),
-                "{a:#x} {b:#x}: eq"
-            );
-            let ours = [
-                x.minimum(y),
-                x.maximum(y),
-                x.minimum_number(y),
-                x.maximum_number(y),
-                x.min_num(y),
-                x.max_num(y),
-            ]
-            .map(|value| value.to_bits());
-            let engine = [
-                x.minimum_with(y, env).0,
-                x.maximum_with(y, env).0,
-                x.minimum_number_with(y, env).0,
-                x.maximum_number_with(y, env).0,
-                x.min_num_with(y, env).0,
-                x.max_num_with(y, env).0,
-            ]
-            .map(|value| value.to_bits());
-            assert_eq!(ours, engine, "{a:#x} {b:#x}: minimum and maximum");
+            assert_eq!(comparisons(x, y), comparisons_with(x, y), "{a:#x} {b:#x}");
         }
     };
 }

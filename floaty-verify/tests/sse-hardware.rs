@@ -13,6 +13,9 @@ use std::hint::black_box;
 
 use floaty::{BF16, Env, F16, F32, F64, mode};
 use floaty_verify::encodings::{Layout, boundary_encodings_u128};
+use floaty_verify::entry_points::{
+    arithmetic, arithmetic_with, comparisons, comparisons_with, conversions, conversions_with,
+};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, MXCSR_DAZ, MXCSR_EXCEPTION_MASKS, MXCSR_FTZ, MXCSR_MASKED, MXCSR_TOWARD_NEGATIVE,
@@ -403,31 +406,17 @@ fn check_single(first: u32, second: u32, third: u32, control: u32, env: Env, daz
     );
 }
 
-/// Checks the four operators, `sqrt`, and `mul_add` of one type under one
-/// MXCSR value against the engine results of the default mode.
+/// Checks the arithmetic entry points of [`arithmetic`] of one type under one
+/// MXCSR value against the engine results of the default mode, with the
+/// first operand as the addend.
 macro_rules! operators_under {
     ($alias:ty, $control:expr, $pairs:expr) => {
         for &(a, b) in $pairs {
             let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
-            let env = <$alias>::ENV;
-            let expected = [
-                x.add_with(y, env).0.to_bits(),
-                x.sub_with(y, env).0.to_bits(),
-                x.mul_with(y, env).0.to_bits(),
-                x.div_with(y, env).0.to_bits(),
-                x.sqrt_with(env).0.to_bits(),
-                x.mul_add_with(y, x, env).0.to_bits(),
-            ];
+            let expected = arithmetic_with(x, y, x);
             let ours = x86::with_mxcsr($control, || {
                 let (x, y) = (black_box(x), black_box(y));
-                [
-                    (x + y).to_bits(),
-                    (x - y).to_bits(),
-                    (x * y).to_bits(),
-                    (x / y).to_bits(),
-                    x.sqrt().to_bits(),
-                    x.mul_add(y, x).to_bits(),
-                ]
+                arithmetic(x, y, x)
             });
             assert_eq!(ours, expected, "{a:#x} {b:#x} under MXCSR {:#x}", $control);
         }
@@ -448,37 +437,16 @@ macro_rules! remainders_under {
     };
 }
 
-/// Checks `round_to_integral`, `to_int`, `from_int`, and the conversions to
-/// binary16, binary32, and binary64 of one type under one control value
-/// against the engine results of the default mode.
+/// Checks the conversion entry points of [`conversions`] of one type under
+/// one control value against the engine results of the default mode.
 macro_rules! conversions_under {
     ($alias:ty, $control:expr, $values:expr) => {
         for &bits in $values {
             let x = <$alias>::from_bits(bits);
             let integer =
                 i64::from_ne_bytes(u64::from(bits).to_ne_bytes()) >> (u64::from(bits) % 64);
-            let env = <$alias>::ENV;
-            let expected = (
-                u64::from(x.round_to_integral_with(env).0.to_bits()),
-                x.to_int_with::<i64>(env).0,
-                x.to_int_with::<u32>(env).0,
-                u64::from(<$alias>::from_int_with(integer, env).0.to_bits()),
-                x.convert_with::<F16>(F16::ENV).0.to_bits(),
-                x.convert_with::<F32>(F32::ENV).0.to_bits(),
-                x.convert_with::<F64>(F64::ENV).0.to_bits(),
-            );
-            let ours = x86::with_mxcsr($control, || {
-                let x = black_box(x);
-                (
-                    u64::from(x.round_to_integral().to_bits()),
-                    x.to_int::<i64>(),
-                    x.to_int::<u32>(),
-                    u64::from(<$alias>::from_int(black_box(integer)).to_bits()),
-                    x.convert::<F16>().to_bits(),
-                    x.convert::<F32>().to_bits(),
-                    x.convert::<F64>().to_bits(),
-                )
-            });
+            let expected = conversions_with(x, integer);
+            let ours = x86::with_mxcsr($control, || conversions(black_box(x), black_box(integer)));
             assert_eq!(ours, expected, "{bits:#x} {integer} under {:#x}", $control);
         }
     };
@@ -548,38 +516,14 @@ fn operators_read_mxcsr_before_the_host_unit() {
     }
 }
 
-/// Checks the comparison and the minimum and maximum operations of one type
-/// under one MXCSR value against the engine results of the default mode.
+/// Checks the comparison entry points of [`comparisons`] of one type under
+/// one MXCSR value against the engine results of the default mode.
 macro_rules! comparisons_under {
     ($alias:ty, $control:expr, $pairs:expr) => {
         for &(a, b) in $pairs {
             let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
-            let env = <$alias>::ENV;
-            let expected = (
-                x.compare_quiet_with(y, env).0,
-                [
-                    x.minimum_with(y, env).0.to_bits(),
-                    x.maximum_with(y, env).0.to_bits(),
-                    x.minimum_number_with(y, env).0.to_bits(),
-                    x.maximum_number_with(y, env).0.to_bits(),
-                    x.min_num_with(y, env).0.to_bits(),
-                    x.max_num_with(y, env).0.to_bits(),
-                ],
-            );
-            let ours = x86::with_mxcsr($control, || {
-                let (x, y) = (black_box(x), black_box(y));
-                (
-                    x.partial_cmp(&y),
-                    [
-                        x.minimum(y).to_bits(),
-                        x.maximum(y).to_bits(),
-                        x.minimum_number(y).to_bits(),
-                        x.maximum_number(y).to_bits(),
-                        x.min_num(y).to_bits(),
-                        x.max_num(y).to_bits(),
-                    ],
-                )
-            });
+            let expected = comparisons_with(x, y);
+            let ours = x86::with_mxcsr($control, || comparisons(black_box(x), black_box(y)));
             assert_eq!(ours, expected, "{a:#x} {b:#x} under MXCSR {:#x}", $control);
         }
     };
