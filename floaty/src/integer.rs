@@ -320,6 +320,10 @@ pub fn fit<I: Integer, M: Limbs>(negative: bool, magnitude: &M) -> Option<Parts>
 /// Each instruction set maps an out-of-range value and a NaN to its own
 /// integer. For example, x86 gives the integer indefinite for both, and ARM
 /// saturates an out-of-range value and gives zero for a NaN.
+///
+/// The enum is exhaustive on purpose. A match can map each result to the
+/// integer of an instruction set, and a new result would fail to compile in
+/// that match instead of falling into a wildcard arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToInt<I> {
     /// The rounded value, which fits the integer type.

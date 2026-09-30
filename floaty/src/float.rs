@@ -449,6 +449,10 @@ impl<S: Standard<W>, const W: usize, M: Mode> FloatType for Float<S, W, M> {
 /// decimal value keeps the coefficient and the exponent of its encoding, so
 /// 1.0 and 1.00 decode apart. Limb 0 of an array holds the least significant
 /// 64 bits.
+///
+/// The enum is exhaustive on purpose. A match can list every kind of value,
+/// and a new kind would fail to compile in that match instead of falling
+/// into a wildcard arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Decoded<const N: usize> {
     /// A zero.
