@@ -139,8 +139,9 @@ pub enum Dropped {
 }
 
 impl Dropped {
-    /// Returns the dropped part from the first dropped digit against half a
-    /// unit, and `true` when a later dropped digit is nonzero.
+    /// Returns the dropped part from the order of the highest dropped digits
+    /// against half a unit, and `true` when a dropped digit below them, or a
+    /// dropped part below half, is nonzero.
     #[inline]
     pub fn new(first: Ordering, rest: bool) -> Self {
         match (first, rest) {

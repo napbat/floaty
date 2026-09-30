@@ -28,6 +28,7 @@ pub struct DecimalTarget {
 impl DecimalTarget {
     /// Returns the precision that `env` rounds to: the precision limit of the
     /// behavior, in digits, when it is below the format precision.
+    #[inline]
     pub fn precision_in(&self, env: &Env) -> u32 {
         env.precision
             .map_or(self.precision, |limit| limit.get().min(self.precision))
@@ -35,6 +36,7 @@ impl DecimalTarget {
 
     /// Returns the smallest and the largest exponent of a coefficient of
     /// `precision` digits.
+    #[inline]
     fn exponents(&self, precision: u32) -> (i64, i64) {
         let digits = i64::from(precision);
         (
@@ -54,6 +56,7 @@ pub trait DecimalRoundingTarget {
 }
 
 /// Returns an exponent that fits an `i32`.
+#[inline]
 fn narrow(exponent: i64) -> i32 {
     i32::try_from(exponent).expect("a decimal exponent of a format fits an i32")
 }
@@ -181,28 +184,24 @@ fn cut<In: Limbs, Out: Limbs>(value: &Unrounded<In>, drop: i64, digits: u32) -> 
     }
     let mut quotient = value.significand;
     let mut rest = value.sticky;
-    let mut first = 0;
+    let mut order = Ordering::Less;
     let mut left = drop;
     while left > 0 {
         let chunk = left.min(CHUNK);
         let (next, remainder) = limbs::divide_small(quotient, digits::power_divisor(chunk));
         left -= chunk;
         if left == 0 {
-            // The last chunk holds the first dropped digit.
-            let (digit, below) = digits::power_divisor(chunk - 1).divide_u64(remainder);
-            first = digit;
-            rest |= below != 0;
+            // The last chunk holds the highest dropped digits, which compare
+            // with half a unit of the kept digits. At exactly half, `rest`
+            // keeps only the lower digits. Above half, `rest` has no effect.
+            order = remainder.cmp(&digits::half_power(chunk));
+            rest |= order == Ordering::Less && remainder != 0;
         } else {
             rest |= remainder != 0;
         }
         quotient = next;
     }
-    let dropped = match first {
-        0 => Dropped::new(Ordering::Less, rest),
-        1..=4 => Dropped::BelowHalf,
-        _ => Dropped::new(first.cmp(&5), rest),
-    };
-    (quotient.resize(), dropped)
+    (quotient.resize(), Dropped::new(order, rest))
 }
 
 /// Rounds `significand * 10^exponent`, with a negative exponent, to an

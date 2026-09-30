@@ -16,7 +16,8 @@ mod integral;
 mod round;
 mod scale;
 
-/// The limbs of an exact decimal result: twice the storage limbs `L`.
+/// The limbs of an exact decimal result: twice the storage limbs `L`. An
+/// addition is the exception: its sums stay in the storage limbs.
 ///
 /// The widest intermediate is the radicand of a square root, which has at
 /// most `2p + 3` digits. decimal32 and decimal64 compute on 128 bits, which
@@ -44,6 +45,7 @@ pub struct DecimalLayout<Enc, const W: usize> {
 }
 
 /// Returns `value` as an `i32` in a constant.
+#[inline]
 const fn signed(value: u32) -> i32 {
     match 0_i32.checked_add_unsigned(value) {
         Some(result) => result,
@@ -229,10 +231,17 @@ where
     /// trailing significand field. `value` is below `10^(3 * declets + 1)`.
     fn declets(value: u128) -> (u128, u128) {
         // A u64 holds six groups of three digits, and divides by 1000 with a
-        // multiplication. One division by 10^18 splits the value into two
-        // such parts.
-        let ([high, above], low) = limbs::divide_small(limbs::split_u128(value), power_divisor(18));
-        debug_assert!(above == 0, "the value has at most 34 digits");
+        // multiplication. A value of at least 10^18 takes one division by
+        // 10^18, which splits it into two such parts.
+        let (high, low) = match u64::try_from(value) {
+            Ok(low) if value < GROUP_WEIGHT => (0, low),
+            _ => {
+                let ([high, above], low) =
+                    limbs::divide_small(limbs::split_u128(value), power_divisor(18));
+                debug_assert!(above == 0, "the value has at most 34 digits");
+                (high, low)
+            }
+        };
         let mut groups = [low, high].into_iter().flat_map(|part| {
             (0..6).scan(part, |rest, _| {
                 let group = *rest % 1000;

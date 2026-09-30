@@ -670,13 +670,6 @@ impl Divisor {
         let (quotient, remainder) = self.divide_normalized(high, low);
         (quotient, remainder >> self.shift)
     }
-
-    /// Divides a `u64` by the divisor. Returns the quotient and the remainder.
-    #[inline]
-    #[must_use]
-    pub fn divide_u64(self, value: u64) -> (u64, u64) {
-        self.divide_limb(0, value)
-    }
 }
 
 /// Divides `value` by a divisor of one limb. Returns the quotient and the

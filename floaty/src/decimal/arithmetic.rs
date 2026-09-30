@@ -7,7 +7,7 @@
 //! the round digit, and keeps one more digit that stands for the lost part,
 //! as the binary engine jams its lowest bit.
 
-use super::digits::{digit_count, power_of_ten};
+use super::digits::{self, digit_count, power_of_ten};
 use super::{DecimalLayout, Wide, round};
 use crate::env::{Behavior, Env, Flags, Rounding};
 use crate::exact::Unrounded;
@@ -52,12 +52,14 @@ enum Sum<L> {
 }
 
 /// Returns an exponent that fits an `i32`.
+#[inline]
 fn narrow(exponent: i64) -> i32 {
     i32::try_from(exponent).expect("an exponent of an exact decimal result fits an i32")
 }
 
 /// Returns the sign of an exact zero sum of values with different signs:
 /// negative only when rounding toward negative.
+#[inline]
 fn zero_sum_sign(env: &Env) -> bool {
     env.rounding == Rounding::TowardNegative
 }
@@ -121,6 +123,21 @@ fn sum<L: Limbs>(first: Term<L>, second: Term<L>, precision: u32) -> Sum<L> {
     })
 }
 
+/// Returns `true` when limbs `L` hold every result of `sum` of two terms of
+/// at most `precision` digits.
+///
+/// Without a cut, the aligned terms have at most `precision + 2` digits.
+/// After a cut, the dominant term has `precision + 3` digits, and the other
+/// term fewer. So every sum is below `101 * 10^(precision + 1)`. Limbs of 128
+/// bits or more hold every bound that a `u128` holds, and the compiler
+/// rejects a bound that overflows a `u128`. The limbs of every decimal
+/// format have at least 64 bits, which hold the bounds of decimal32 and
+/// decimal64.
+const fn holds_sums<L: Limbs>(precision: u32) -> bool {
+    let bound = 101 * digits::power_of_ten_u128(precision + 1);
+    L::BITS >= 128 || bound >> L::BITS == 0
+}
+
 /// Divides by `10^exponent`. Returns the quotient and `true` when the
 /// remainder is not zero.
 fn divide_by_power<L: Limbs>(value: L, exponent: u32) -> (L, bool) {
@@ -160,15 +177,14 @@ where
 
     /// Rounds an exact result with a preferred exponent, and encodes it.
     #[inline]
-    pub(super) fn finish<L: Widen, B: Behavior>(
-        value: &Unrounded<Wide<L>>,
+    pub(super) fn finish<L: Widen, In: Limbs, B: Behavior>(
+        value: &Unrounded<In>,
         preferred: i64,
         behavior: B,
         flags: Flags,
     ) -> (L, Flags) {
         let preferred = narrow(preferred.clamp(i64::from(i32::MIN), i64::from(i32::MAX)));
-        let (rounded, round_flags) =
-            round::round::<Wide<L>, L, Self, B>(value, preferred, behavior);
+        let (rounded, round_flags) = round::round::<In, L, Self, B>(value, preferred, behavior);
         (Self::encode(rounded), flags | round_flags)
     }
 
@@ -188,14 +204,13 @@ where
         }
     }
 
-    /// Returns the term of a zero or a finite value, in the limbs of an exact
-    /// result.
-    fn term<L: Widen>(value: &Unpacked<L>) -> Term<Wide<L>> {
+    /// Returns the term of a zero or a finite value, in the limbs `Out`.
+    fn term<L: Limbs, Out: Limbs>(value: &Unpacked<L>) -> Term<Out> {
         match *value {
             Unpacked::Zero { negative, exponent } => Term {
                 negative,
                 exponent: i64::from(exponent),
-                coefficient: Wide::<L>::ZERO,
+                coefficient: Out::ZERO,
             },
             Unpacked::Finite {
                 negative,
@@ -232,8 +247,8 @@ where
 
     /// Rounds a sum with a preferred exponent, or encodes an exact zero sum.
     #[inline]
-    fn finish_sum<L: Widen, B: Behavior>(
-        sum: &Sum<Wide<L>>,
+    fn finish_sum<L: Widen, In: Limbs, B: Behavior>(
+        sum: &Sum<In>,
         negative_zero: bool,
         preferred: i64,
         behavior: B,
@@ -269,7 +284,7 @@ where
             (_, Unpacked::Infinity { .. }) => Self::exact(y, flags),
             _ => {
                 let preferred = Self::exponent_of(&x).min(Self::exponent_of(&y));
-                let (a, b) = (Self::term(&x), Self::term(&y));
+                let (a, b) = (Self::term::<L, L>(&x), Self::term::<L, L>(&y));
                 // An exact zero sum keeps the sign that the signs share, or
                 // takes the sign of the rounding direction.
                 let zero_sign = if a.negative == b.negative {
@@ -277,6 +292,8 @@ where
                 } else {
                     zero_sum_sign(env)
                 };
+                // The sum stays in the limbs of the operands.
+                const { assert!(holds_sums::<L>(Self::PRECISION), "the limbs hold every sum") };
                 let sum = sum(a, b, Self::PRECISION);
                 Self::finish_sum(&sum, zero_sign, preferred, behavior, flags)
             }
@@ -304,8 +321,10 @@ where
             }
             _ => {
                 let exponent = Self::exponent_of(&x) + Self::exponent_of(&y);
-                let product =
-                    limbs::multiply_fit(Self::term(&x).coefficient, Self::term(&y).coefficient);
+                let product = limbs::multiply_fit(
+                    Self::term::<L, Wide<L>>(&x).coefficient,
+                    Self::term::<L, Wide<L>>(&y).coefficient,
+                );
                 let value = Unrounded {
                     negative,
                     exponent: narrow(exponent),
@@ -347,7 +366,10 @@ where
                 Self::exact(Self::zero(negative, exponent), flags)
             }
             _ => {
-                let (dividend, divisor) = (Self::term(&x).coefficient, Self::term(&y).coefficient);
+                let (dividend, divisor) = (
+                    Self::term::<L, Wide<L>>(&x).coefficient,
+                    Self::term::<L, Wide<L>>(&y).coefficient,
+                );
                 let precision = Self::TARGET.precision_in(env);
                 // Scale the dividend so that the quotient has at least
                 // precision + 1 digits.
@@ -388,7 +410,7 @@ where
                 Self::exact(default_nan(env), flags | Flags::INVALID)
             }
             Unpacked::Finite { exponent, .. } => {
-                let coefficient = Self::term(&x).coefficient;
+                let coefficient = Self::term::<L, Wide<L>>(&x).coefficient;
                 let precision = Self::TARGET.precision_in(env);
                 let exponent = i64::from(exponent);
                 // Scale to at least 2 * precision + 2 digits and an even
@@ -463,11 +485,11 @@ where
                     negative: product_negative,
                     exponent: product_exponent,
                     coefficient: limbs::multiply_fit(
-                        Self::term(&x).coefficient,
-                        Self::term(&y).coefficient,
+                        Self::term::<L, Wide<L>>(&x).coefficient,
+                        Self::term::<L, Wide<L>>(&y).coefficient,
                     ),
                 };
-                let addend = Self::term(&z);
+                let addend = Self::term::<L, Wide<L>>(&z);
                 let preferred = product_exponent.min(addend.exponent);
                 let zero_sign = if product.negative == addend.negative {
                     product.negative
@@ -491,6 +513,17 @@ mod tests {
     use crate::env::{Env, Flags};
     use crate::exact::Exact;
     use crate::float::{D64Bid, D64Dpd, Decoded};
+
+    #[test]
+    fn the_largest_sum_stays_in_one_limb() {
+        // 9999999999999999E3 + 9999999999999999E0 cuts the second term. The
+        // cut sum, 10009999999999998991 at 10^0, is the largest of decimal64
+        // and uses 64 bits. It rounds up to 1001000000000000E4.
+        let largest = 9_999_999_999_999_999;
+        let (sum, flags) = number(false, largest, 3).add_with(number(false, largest, 0), Env::IEEE);
+        assert_eq!(parts(sum), (1_001_000_000_000_000, 4));
+        assert_eq!(flags, Flags::INEXACT | Flags::ROUNDED_UP);
+    }
 
     /// Returns `coefficient * 10^exponent` in decimal64, exactly.
     fn number(negative: bool, coefficient: u64, exponent: i32) -> D64Bid {

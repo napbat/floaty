@@ -52,6 +52,14 @@ pub fn power_of_ten<L: Limbs>(exponent: u32) -> L {
     limbs::multiply_small(power, small)
 }
 
+/// Returns half of 10^`exponent`, 5 * 10^(`exponent` - 1), for an exponent
+/// from 1 to 19.
+#[inline]
+pub fn half_power(exponent: u32) -> u64 {
+    let index = usize::try_from(exponent - 1).expect("an exponent fits a usize");
+    u64::try_from(POWERS[index] * 5).expect("half of 10^19 fits a u64")
+}
+
 /// Returns 10^`exponent` as a `u128`. The exponent is at most 38.
 pub const fn power_of_ten_u128(exponent: u32) -> u128 {
     10_u128.pow(exponent)
@@ -106,8 +114,15 @@ pub fn last_digit<L: Limbs>(value: &L) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{digit_count, last_digit, power_of_ten};
+    use super::{digit_count, half_power, last_digit, power_of_ten};
     use crate::limbs::Limbs;
+
+    #[test]
+    fn half_powers_span_every_chunk() {
+        assert_eq!(half_power(1), 5);
+        assert_eq!(half_power(4), 5_000);
+        assert_eq!(half_power(19), 5_000_000_000_000_000_000);
+    }
 
     #[test]
     fn digits_of_wide_values() {
