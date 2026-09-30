@@ -228,13 +228,30 @@ pub(crate) mod internal {
 
     /// The format of the value that a conversion reads.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub struct Source {
-        /// The radix of the source format.
-        pub radix: u32,
-        /// The number of NaN payload digits of the source format.
-        pub payload_digits: u32,
-        /// The width in bits of the field that holds a NaN payload.
-        pub payload_bits: u32,
+    pub enum Source {
+        /// A binary format.
+        Binary {
+            /// The bits of a NaN payload, below the quiet bit.
+            payload_bits: u32,
+        },
+        /// A decimal format.
+        Decimal {
+            /// The digits of a NaN payload.
+            payload_digits: u32,
+            /// The width in bits of the trailing significand field, which
+            /// holds a NaN payload.
+            payload_bits: u32,
+        },
+    }
+
+    impl Source {
+        /// Returns the width in bits of the field that holds a NaN payload.
+        #[must_use]
+        pub fn payload_bits(self) -> u32 {
+            match self {
+                Self::Binary { payload_bits } | Self::Decimal { payload_bits, .. } => payload_bits,
+            }
+        }
     }
 
     /// How a remainder `x - n * y` rounds the quotient `n = x / y` to an

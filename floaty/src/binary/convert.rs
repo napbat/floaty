@@ -40,10 +40,9 @@ where
                     significand,
                     sticky: false,
                 };
-                if source.radix == 10 {
-                    Self::from_decimal(&value, env)
-                } else {
-                    Self::finish(&value, behavior, Flags::NONE)
+                match source {
+                    Source::Decimal { .. } => Self::from_decimal(&value, env),
+                    Source::Binary { .. } => Self::finish(&value, behavior, Flags::NONE),
                 }
             }
             Unpacked::Infinity { negative } => Self::convert_infinity(negative, env),
@@ -83,7 +82,7 @@ where
             | NanPropagation::LargerSignificand => Self::encode(Unpacked::Nan {
                 negative,
                 signaling: false,
-                payload: nan::align_payload(payload, source.payload_bits, Self::PAYLOAD_DIGITS),
+                payload: nan::align_payload(payload, source.payload_bits(), Self::PAYLOAD_BITS),
             }),
         };
         (nan, flags)

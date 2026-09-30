@@ -55,10 +55,10 @@ where
                 Self::exact(Unpacked::Infinity { negative }, Flags::NONE)
             }
             Unpacked::Zero { negative, exponent } => {
-                let exponent = if source.radix == 10 {
-                    i64::from(exponent)
-                } else {
-                    0
+                // A binary zero has no quantum, and takes the exponent 0.
+                let exponent = match source {
+                    Source::Decimal { .. } => i64::from(exponent),
+                    Source::Binary { .. } => 0,
                 };
                 Self::exact(Self::zero(negative, exponent), Flags::NONE)
             }
@@ -67,8 +67,8 @@ where
                 negative,
                 exponent,
                 significand,
-            } => {
-                if source.radix == 10 {
+            } => match source {
+                Source::Decimal { .. } => {
                     let value = Unrounded {
                         negative,
                         exponent,
@@ -76,26 +76,28 @@ where
                         sticky: false,
                     };
                     Self::finish(&value, i64::from(exponent), *env, Flags::NONE)
-                } else {
-                    Self::from_binary(negative, exponent, &significand, env)
                 }
-            }
+                Source::Binary { .. } => Self::from_binary(negative, exponent, &significand, env),
+            },
         }
     }
 
     /// Returns the payload of a NaN of another format, in this format.
     fn payload<In: Limbs>(payload: In, source: Source) -> u128 {
-        let payload = if source.radix == 10 {
-            let (from, to) = (source.payload_digits, Self::PRECISION - 1);
-            let value = limbs::to_u128(&payload);
-            if to >= from {
-                value * power_of_ten_u128(to - from)
-            } else {
-                value / power_of_ten_u128(from - to)
+        let payload = match source {
+            Source::Decimal { payload_digits, .. } => {
+                let (from, to) = (payload_digits, Self::PRECISION - 1);
+                let value = limbs::to_u128(&payload);
+                if to >= from {
+                    value * power_of_ten_u128(to - from)
+                } else {
+                    value / power_of_ten_u128(from - to)
+                }
             }
-        } else {
-            let field: [u64; 2] = nan::align_payload(payload, source.payload_bits, Self::TRAILING);
-            limbs::to_u128(&field)
+            Source::Binary { payload_bits } => {
+                let field: [u64; 2] = nan::align_payload(payload, payload_bits, Self::TRAILING);
+                limbs::to_u128(&field)
+            }
         };
         if payload > Self::LARGEST_PAYLOAD {
             0

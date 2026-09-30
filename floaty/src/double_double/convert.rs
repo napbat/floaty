@@ -72,10 +72,9 @@ pub(super) fn round_value<L: Limbs, B: Behavior>(
             exponent,
             significand,
         } => {
-            let fixed = if source.radix == 10 {
-                from_decimal(&significand, exponent)
-            } else {
-                from_binary(significand, exponent)
+            let fixed = match source {
+                Source::Decimal { .. } => from_decimal(&significand, exponent),
+                Source::Binary { .. } => from_binary(significand, exponent),
             };
             match fixed {
                 Some(fixed) => round_fixed(&(negative, fixed), &env),

@@ -241,9 +241,7 @@ where
     const EMAX: i32 = DecimalLayout::<Enc, W>::EMAX;
     const EMIN: i32 = DecimalLayout::<Enc, W>::EMIN;
     const SIGNIFICAND_BITS: u32 = DecimalLayout::<Enc, W>::SIGNIFICAND_BITS;
-    // The trailing significand field holds the payload.
-    const SOURCE: Source = Source {
-        radix: 10,
+    const SOURCE: Source = Source::Decimal {
         payload_digits: DecimalLayout::<Enc, W>::PRECISION - 1,
         payload_bits: DecimalLayout::<Enc, W>::TRAILING,
     };

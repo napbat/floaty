@@ -110,7 +110,7 @@ where
     const HOST: Host = Host::of_binary(E, Self::WIDTH, Enc::KIND);
 
     /// The number of NaN payload bits, below the quiet bit.
-    const PAYLOAD_DIGITS: u32 = match Enc::KIND {
+    const PAYLOAD_BITS: u32 = match Enc::KIND {
         EncodingKind::Ieee => Self::FRACTION_BITS - 1,
         EncodingKind::X87 => 62,
         EncodingKind::NoInf | EncodingKind::Fnuz | EncodingKind::Finite => 0,
@@ -514,11 +514,8 @@ where
     const SIGNIFICAND_BITS: u32 = Layout::<E, Enc, W>::PRECISION;
     const EMAX: i32 = Layout::<E, Enc, W>::EMAX;
     const EMIN: i32 = Layout::<E, Enc, W>::EMIN;
-    // A binary payload digit is a bit below the quiet bit.
-    const SOURCE: Source = Source {
-        radix: 2,
-        payload_digits: Layout::<E, Enc, W>::PAYLOAD_DIGITS,
-        payload_bits: Layout::<E, Enc, W>::PAYLOAD_DIGITS,
+    const SOURCE: Source = Source::Binary {
+        payload_bits: Layout::<E, Enc, W>::PAYLOAD_BITS,
     };
     const HOST: Host = Layout::<E, Enc, W>::HOST;
 
