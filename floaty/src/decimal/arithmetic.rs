@@ -147,6 +147,11 @@ where
 {
     /// Decodes an operand, reports a subnormal operand, and applies DAZ. A
     /// zero from DAZ keeps the exponent of the subnormal value.
+    // `Float::convert_with` and every decimal operation read their operands
+    // here. With `#[inline]` only on the forwarder of `Standard::operand`, a
+    // decimal32 to decimal64 `convert` took 24.3 ns instead of 22.8 ns.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(super) fn operand<L: Limbs>(bits: L, env: &Env, flags: &mut Flags) -> Unpacked<L> {
         let value = Self::decode(bits);
         let Unpacked::Finite {

@@ -27,7 +27,7 @@ type Wide<L> = <L as Widen>::Double;
 
 use self::digits::{power_divisor, power_of_ten_u128};
 use self::round::DecimalTarget;
-use crate::env::{Behavior, Flags, TotalOrder};
+use crate::env::{Behavior, Env, Flags, TotalOrder};
 use crate::exact::Unrounded;
 use crate::float::Class;
 use crate::format::internal::{Host, LimbConversion, MinMax, Quotient, Source, Step};
@@ -419,6 +419,20 @@ where
 
     fn classify(bits: Self::Bits) -> Class {
         DecimalLayout::<Enc, W>::classify(bits.to_limbs())
+    }
+
+    // `Float::convert_with` reads its operand here. Out of line, the decoded
+    // operand went through memory and blocked store forwarding: a decimal32
+    // to decimal64 `convert` took 29.7 ns instead of 22.8 ns.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn operand(
+        bits: Self::Bits,
+        env: &Env,
+    ) -> (Unpacked<<Self::Bits as LimbConversion>::Limbs>, Flags) {
+        let mut flags = Flags::NONE;
+        let value = DecimalLayout::<Enc, W>::operand(bits.to_limbs(), env, &mut flags);
+        (value, flags)
     }
 
     fn is_canonical(bits: Self::Bits) -> bool {

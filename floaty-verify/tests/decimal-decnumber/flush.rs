@@ -14,20 +14,25 @@
 //!   operand, so FTZ does not change them.
 //! - An operation that reads a behavior reports `DENORMAL_INPUT` for a
 //!   subnormal operand, with DAZ or without it.
+//! - A conversion between the DPD widths under DAZ converts a subnormal
+//!   operand as that zero. The expected result is decNumber's `ToWider` or
+//!   `FromWider` of the zero.
 //!
 //! decimal32 runs without the copies, as for its random cases in
 //! `random.rs`.
 
 use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
 use floaty::{Env, Flags, Rounding};
-use floaty_verify::decnumber::{self, Arithmetic, Binary, Double, Quad, Single, Status, Unary};
+use floaty_verify::decnumber::{
+    self, Arithmetic, Binary, Double, Outcome, Quad, Single, Status, Unary, Widening,
+};
 use floaty_verify::dectest::Operation;
 
 use super::operands::{Generator, Shape};
 use super::random::{SIGNALING_PAIR, arithmetic, others};
 use super::{
-    Answer, SHARED_ROUNDINGS, Tally, describe, describe_operands, direction, excluded, flags_of,
-    ieee, keeps_encoding, run_floaty_in, run_oracle,
+    Answer, DpdFloat, SHARED_ROUNDINGS, Tally, describe, describe_operands, direction, excluded,
+    flags_of, ieee, keeps_encoding, run_floaty_in, run_oracle,
 };
 
 /// Returns whether an operation rounds its result, so that FTZ applies.
@@ -71,22 +76,27 @@ fn denormals_are_zero<F: Arithmetic>(operation: &Operation, operands: &[F::Bits]
             if !subnormal::<F>(bits) || (scale && index == 1) {
                 return bits;
             }
-            // decNumber writes a subnormal value as `[-]d.dddE-n`: the zero
-            // takes the sign and the exponent of the last digit.
-            let text = F::to_string(bits);
-            let (mantissa, exponent) = text
-                .split_once('E')
-                .expect("a subnormal string has an exponent");
-            let negative = mantissa.starts_with('-');
-            let fraction = mantissa
-                .split_once('.')
-                .map_or(0, |(_, digits)| digits.len());
-            let adjusted: i64 = exponent.parse().expect("the exponent is an integer");
-            let exponent = adjusted - i64::try_from(fraction).expect("a digit count fits an i64");
-            let zero = format!("{}0E{exponent}", if negative { "-" } else { "" });
-            F::from_string(&zero, decnumber::Rounding::HalfEven).value
+            daz_zero::<F>(bits)
         })
         .collect()
+}
+
+/// Returns the zero that DAZ reads for a subnormal encoding: the zero with
+/// its sign and the exponent of its last digit.
+fn daz_zero<F: Arithmetic>(bits: F::Bits) -> F::Bits {
+    // decNumber writes a subnormal value as `[-]d.dddE-n`.
+    let text = F::to_string(bits);
+    let (mantissa, exponent) = text
+        .split_once('E')
+        .expect("a subnormal string has an exponent");
+    let negative = mantissa.starts_with('-');
+    let fraction = mantissa
+        .split_once('.')
+        .map_or(0, |(_, digits)| digits.len());
+    let adjusted: i64 = exponent.parse().expect("the exponent is an integer");
+    let exponent = adjusted - i64::try_from(fraction).expect("a digit count fits an i64");
+    let zero = format!("{}0E{exponent}", if negative { "-" } else { "" });
+    F::from_string(&zero, decnumber::Rounding::HalfEven).value
 }
 
 /// Returns whether the exact result of an operation is tiny, from
@@ -306,4 +316,98 @@ fn decimal32_flush_to_zero_and_denormals_are_zero() {
     let mut skipped = skips(2896, 96, 1128, 2352);
     skipped.push((SIGNALING_PAIR, 24));
     tally.assert_counts(497_504, &skipped, &[(REPLACED, 37_424), (FLUSHED, 9_968)]);
+}
+
+/// The note of a conversion of a subnormal operand under DAZ.
+const CONVERTED: &str = "daz: a subnormal operand converts as a zero";
+
+/// Converts the subnormal operands among `count` random operands of format
+/// `S` to format `T` under DAZ, in every shared rounding mode. The expected
+/// result is `oracle`, decNumber's conversion, of the zero that DAZ reads.
+fn convert_subnormals<S: Arithmetic, T: Arithmetic, const FROM: usize, const TO: usize>(
+    tally: &mut Tally,
+    count: usize,
+    seed: u64,
+    oracle: impl Fn(S::Bits, decnumber::Rounding) -> Outcome<T::Bits>,
+) where
+    Width<FROM>: Storage<Bits = S::Bits>,
+    Decimal<Dpd>: Standard<FROM, Bits = S::Bits>,
+    Width<TO>: Storage<Bits = T::Bits>,
+    Decimal<Dpd>: Standard<TO, Bits = T::Bits>,
+{
+    let mut generator = Generator::<S>::new(seed, Shape::of::<S>());
+    let operands: Vec<S::Bits> = (0..count)
+        .map(|_| generator.operand().0)
+        .filter(|&bits| subnormal::<S>(bits))
+        .collect();
+    for x in operands {
+        let zero = daz_zero::<S>(x);
+        for rounding in SHARED_ROUNDINGS {
+            let env = Env::IEEE
+                .with_rounding(direction(rounding))
+                .with_denormals_are_zero(true);
+            let (result, flags) = DpdFloat::<FROM>::from_bits(x).convert_with::<DpdFloat<TO>>(env);
+            let denormal = if flags.contains(Flags::DENORMAL_INPUT) {
+                Flags::DENORMAL_INPUT
+            } else {
+                Flags::NONE
+            };
+            let flags = ieee(flags) | denormal;
+            let outcome = oracle(zero, rounding);
+            // decNumber's string of its result gives the canonical encoding.
+            let expected =
+                T::from_string(&T::to_string(outcome.value), decnumber::Rounding::HalfEven).value;
+            let expected_flags = Flags::DENORMAL_INPUT | flags_of(outcome.status);
+            tally.note(CONVERTED);
+            if result.to_bits() == expected && flags == expected_flags {
+                tally.passed += 1;
+                continue;
+            }
+            tally.fail(|| {
+                format!(
+                    "{} to {} {rounding:?} daz [{}]: floaty gives {} {flags:?}, expected {} \
+                     {expected_flags:?}",
+                    S::NAME,
+                    T::NAME,
+                    describe_operands::<S>(&[x]),
+                    describe::<T>(&Answer::Encoding(result.to_bits())),
+                    describe::<T>(&Answer::Encoding(expected)),
+                )
+            });
+        }
+    }
+}
+
+/// Returns the outcome of an exact widening.
+fn widen<B>(value: B) -> Outcome<B> {
+    Outcome {
+        value,
+        status: Status::NONE,
+    }
+}
+
+#[test]
+fn subnormal_operands_convert_as_zeros_under_denormals_are_zero() {
+    let mut tally = Tally::default();
+    convert_subnormals::<Single, Double, 32, 64>(&mut tally, 20_000, 0x0032_0DA2, |x, _| {
+        widen(Single::to_wider(x))
+    });
+    convert_subnormals::<Double, Quad, 64, 128>(&mut tally, 20_000, 0x0064_0DA2, |x, _| {
+        widen(Double::to_wider(x))
+    });
+    convert_subnormals::<Double, Single, 64, 32>(
+        &mut tally,
+        20_000,
+        0x0064_0DA3,
+        Single::from_wider,
+    );
+    convert_subnormals::<Quad, Double, 128, 64>(
+        &mut tally,
+        20_000,
+        0x0128_0DA3,
+        Double::from_wider,
+    );
+    tally.report("DAZ conversions");
+    // The generator is seeded, so the counts are exact.
+    tally.assert_counts(58_136, &[], &[(CONVERTED, 58_136)]);
 }

@@ -167,23 +167,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (T, Flags) {
         let behavior = behavior.apply::<T::Mode>();
-        let env = behavior.env();
-        let mut value = S::unpack(self.bits);
-        let mut input = Flags::NONE;
-        if S::classify(self.bits) == Class::Subnormal {
-            input = Flags::DENORMAL_INPUT;
-            if env.denormals_are_zero {
-                // A decimal zero keeps the quantum of the subnormal value.
-                let exponent = match value {
-                    Unpacked::Finite { exponent, .. } if S::RADIX == 10 => exponent,
-                    _ => 0,
-                };
-                value = Unpacked::Zero {
-                    negative: self.is_sign_negative(),
-                    exponent,
-                };
-            }
-        }
+        let (value, input) = S::operand(self.bits, &behavior.env());
         let source = Source {
             radix: S::RADIX,
             payload_digits: S::PAYLOAD_DIGITS,

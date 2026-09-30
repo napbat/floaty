@@ -553,7 +553,11 @@ where
             return (Self::encode(Unpacked::Infinity { negative }), Flags::NONE);
         }
         let value = if env.saturate || !Self::TARGET.has_nan {
-            exact::largest(negative, env.precision_within(Self::TARGET.precision), &Self::TARGET)
+            exact::largest(
+                negative,
+                env.precision_within(Self::TARGET.precision),
+                &Self::TARGET,
+            )
         } else {
             Unpacked::Nan {
                 negative,
@@ -611,6 +615,21 @@ where
 
     fn classify(bits: Self::Bits) -> Class {
         Layout::<E, Enc, W>::classify(bits.to_limbs())
+    }
+
+    // `Float::convert_with` reads its operand here. LLVM does not inline this
+    // forwarder for `#[inline]`: a binary32 to binary32 `convert` took 12.4
+    // ns instead of 7.4 ns, and an FP8 to binary32 `convert` 12.1 ns instead
+    // of 7.4 ns.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn operand(
+        bits: Self::Bits,
+        env: &Env,
+    ) -> (Unpacked<<Self::Bits as LimbConversion>::Limbs>, Flags) {
+        let mut flags = Flags::NONE;
+        let value = Layout::<E, Enc, W>::operand(bits.to_limbs(), env, &mut flags);
+        (value, flags)
     }
 
     fn is_canonical(bits: Self::Bits) -> bool {

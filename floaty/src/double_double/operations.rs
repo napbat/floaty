@@ -110,10 +110,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
             } => {
                 let integral = integral(negative, &significand, &env);
                 match fit::<I, _>(negative, &integral.magnitude) {
-                    Some(parts) => (
-                        ToInt::Value(I::from_parts(parts)),
-                        integral.flags(),
-                    ),
+                    Some(parts) => (ToInt::Value(I::from_parts(parts)), integral.flags()),
                     None => (ToInt::OutOfRange { negative }, Flags::INVALID),
                 }
             }

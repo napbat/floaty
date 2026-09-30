@@ -96,6 +96,11 @@ where
     Width<W>: Storage,
 {
     /// Decodes an operand, reports a subnormal operand, and applies DAZ.
+    // `Float::convert_with` and the special paths read their operands here.
+    // With only `#[inline]`, a binary32 to binary32 `convert` took 8.0 ns
+    // instead of 7.3 ns.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(super) fn operand<L: Limbs>(bits: L, env: &Env, flags: &mut Flags) -> Unpacked<L> {
         let value = Self::decode(bits);
         let subnormal =
@@ -147,7 +152,11 @@ where
         if Self::TARGET.has_infinity {
             Unpacked::Infinity { negative }
         } else if env.saturate || !Self::TARGET.has_nan {
-            exact::largest(negative, env.precision_within(Self::TARGET.precision), &Self::TARGET)
+            exact::largest(
+                negative,
+                env.precision_within(Self::TARGET.precision),
+                &Self::TARGET,
+            )
         } else {
             Unpacked::Nan {
                 negative,
@@ -234,7 +243,11 @@ where
             (Unpacked::Infinity { .. }, _) => Self::exact(x, flags),
             (_, Unpacked::Infinity { .. }) => Self::exact(y, flags),
             (Unpacked::Zero { negative: a, .. }, Unpacked::Zero { negative: b, .. }) => {
-                let negative = if a == b { a } else { env.zero_sum_is_negative() };
+                let negative = if a == b {
+                    a
+                } else {
+                    env.zero_sum_is_negative()
+                };
                 Self::exact(Unpacked::zero(negative), flags)
             }
             (

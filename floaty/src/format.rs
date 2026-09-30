@@ -7,7 +7,7 @@ use core::hash::Hash;
 use core::marker::PhantomData;
 
 use crate::binary::{EncodingKind, Unpacked};
-use crate::env::{Behavior, Flags, TotalOrder};
+use crate::env::{Behavior, Env, Flags, TotalOrder};
 use crate::exact::Unrounded;
 use crate::float::Class;
 use crate::integer::{Integer, ToInt};
@@ -64,6 +64,15 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     /// Returns the class of an encoding. The bits above `W` must be zero.
     #[doc(hidden)]
     fn classify(bits: Self::Bits) -> Class;
+
+    /// Decodes an operand as an operation that reads a behavior does: a
+    /// subnormal operand reports `DENORMAL_INPUT`, and DAZ reads it as a zero.
+    /// The bits above `W` must be zero.
+    #[doc(hidden)]
+    fn operand(
+        bits: Self::Bits,
+        env: &Env,
+    ) -> (Unpacked<<Self::Bits as LimbConversion>::Limbs>, Flags);
 
     /// Returns `true` when the encoding is the canonical encoding of its value.
     /// The bits above `W` must be zero.
