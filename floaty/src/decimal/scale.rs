@@ -1,7 +1,7 @@
 //! Scaling by a power of 10, the next value up or down, and the quantum
 //! operations of IEEE 754-2019 section 5.3.2, for the decimal formats.
 
-use super::digits::{digit_count, power_of_ten};
+use super::digits::digit_count;
 use super::round;
 use super::{DecimalLayout, Wide};
 use crate::env::{Env, Flags};
@@ -16,15 +16,6 @@ impl<Enc: DecimalEncoding, const W: usize> DecimalLayout<Enc, W>
 where
     Width<W>: Storage,
 {
-    /// Returns the smallest and the largest exponent of a coefficient.
-    fn exponent_range() -> (i64, i64) {
-        let precision = i64::from(Self::PRECISION);
-        (
-            i64::from(Self::EMIN) - precision + 1,
-            i64::from(Self::EMAX) - precision + 1,
-        )
-    }
-
     /// Returns `value * 10^scale`, rounded. The preferred exponent is the
     /// exponent of `value` plus `scale`.
     pub fn scale_b<L: Widen>(bits: L, scale: i32, env: &Env) -> (L, Flags) {
@@ -54,7 +45,8 @@ where
                 };
                 Self::finish(&scaled, exponent, *env, flags)
             }
-            Unpacked::Infinity { .. } | Unpacked::Unsupported => Self::exact(value, flags),
+            Unpacked::Infinity { .. } => Self::exact(value, flags),
+            Unpacked::Unsupported => unreachable!("a decimal format has no unsupported encoding"),
         }
     }
 
@@ -82,10 +74,6 @@ where
         let (lowest, highest) = Self::exponent_range();
         let narrow =
             |exponent: i64| i32::try_from(exponent).expect("an exponent of the format fits an i32");
-        let largest = || {
-            let significand = power_of_ten::<L>(Self::PRECISION).sub(L::ZERO.with_bit(0));
-            (significand, highest)
-        };
         let (negative, coefficient, exponent) = match value {
             Unpacked::Zero { .. } => {
                 return Some(Unpacked::Finite {
@@ -96,12 +84,7 @@ where
             }
             Unpacked::Infinity { negative: false } => return Some(value),
             Unpacked::Infinity { negative: true } => {
-                let (significand, exponent) = largest();
-                return Some(Unpacked::Finite {
-                    negative: true,
-                    exponent: narrow(exponent),
-                    significand,
-                });
+                return Some(round::largest(true, Self::PRECISION, &Self::TARGET));
             }
             Unpacked::Finite {
                 negative,
@@ -112,12 +95,12 @@ where
                 unreachable!("the caller handles every NaN")
             }
         };
-        // Pad the coefficient to every digit, down to the smallest exponent.
-        let (mut coefficient, mut exponent) = (coefficient, exponent);
-        while digit_count(&coefficient) < Self::PRECISION && exponent > lowest {
-            coefficient = limbs::multiply_small(coefficient, 10);
-            exponent -= 1;
-        }
+        let (coefficient, mut exponent) = round::least_exponent(
+            coefficient,
+            digit_count(&coefficient),
+            exponent,
+            &Self::TARGET,
+        );
         let one = L::ZERO.with_bit(0);
         if negative {
             let next = coefficient.sub(one);

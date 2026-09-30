@@ -15,7 +15,7 @@ use crate::env::{Env, Flags, TotalOrder};
 use crate::format::internal::MinMax;
 use crate::format::{DecimalEncoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
-use crate::nan::{self, default_nan};
+use crate::nan;
 use crate::unpacked::Unpacked;
 
 /// Orders the magnitudes of two numbers: zeros, finite values, or
@@ -188,9 +188,6 @@ where
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
-        if matches!(first, Unpacked::Unsupported) || matches!(second, Unpacked::Unsupported) {
-            return Self::exact(default_nan(env), flags | Flags::INVALID);
-        }
         if let Some((value, special)) = nan::min_max(&first, &second, operation, env) {
             return Self::exact(value, flags | special);
         }

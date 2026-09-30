@@ -29,7 +29,7 @@ impl DecimalTarget {
     /// Returns the smallest and the largest exponent of a coefficient of
     /// `precision` digits.
     #[inline]
-    fn exponents(&self, precision: u32) -> (i64, i64) {
+    pub fn exponents(&self, precision: u32) -> (i64, i64) {
         let digits = i64::from(precision);
         (
             i64::from(self.emin) - digits + 1,
@@ -77,18 +77,11 @@ pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
     let negative = value.negative;
     let precision = env.precision_within(target.precision);
     let (lowest, _) = target.exponents(precision);
-    let (full_lowest, full_highest) = target.exponents(target.precision);
+    let (full_lowest, _) = target.exponents(target.precision);
     let digits = digit_count(&value.significand);
     if digits == 0 {
         debug_assert!(!value.sticky, "a sticky bit needs a nonzero significand");
-        let exponent = i64::from(preferred).clamp(full_lowest, full_highest);
-        return (
-            Unpacked::Zero {
-                negative,
-                exponent: narrow(exponent),
-            },
-            Flags::NONE,
-        );
+        return (zero(negative, i64::from(preferred), target), Flags::NONE);
     }
     debug_assert!(
         !value.sticky || digits > precision,
@@ -289,9 +282,9 @@ fn append_zeros<L: Limbs>(kept: L, digits: u32, limit: u32, precision: u32) -> (
     (limbs::multiply_fit(kept, power_of_ten(count)), count)
 }
 
-/// Adds trailing zeros to an inexact coefficient, down to the least possible
+/// Adds trailing zeros to a nonzero coefficient, down to the least possible
 /// exponent. A precision limit leaves fewer digits than the format holds.
-fn least_exponent<L: Limbs>(
+pub fn least_exponent<L: Limbs>(
     mut kept: L,
     digits: u32,
     mut position: i64,
@@ -303,6 +296,16 @@ fn least_exponent<L: Limbs>(
     position -= i64::from(appended);
     debug_assert!(position <= highest, "the value is below the overflow bound");
     (kept, position)
+}
+
+/// Returns a zero at `exponent`, or at the nearest exponent of a coefficient
+/// of the format precision.
+pub fn zero<L>(negative: bool, exponent: i64, target: &DecimalTarget) -> Unpacked<L> {
+    let (lowest, highest) = target.exponents(target.precision);
+    Unpacked::Zero {
+        negative,
+        exponent: narrow(exponent.clamp(lowest, highest)),
+    }
 }
 
 /// Returns the result of an overflow: an infinity, or the largest finite value

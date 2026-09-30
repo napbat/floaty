@@ -194,12 +194,7 @@ where
     /// Returns a zero with the exponent nearest `exponent` in the range of the
     /// format.
     pub(super) fn zero<L>(negative: bool, exponent: i64) -> Unpacked<L> {
-        let lowest = i64::from(Self::EMIN) - i64::from(Self::PRECISION) + 1;
-        let highest = i64::from(Self::EMAX) - i64::from(Self::PRECISION) + 1;
-        Unpacked::Zero {
-            negative,
-            exponent: narrow(exponent.clamp(lowest, highest)),
-        }
+        round::zero(negative, exponent, &Self::TARGET)
     }
 
     /// Returns the term of a zero or a finite value, in the limbs `Out`.
@@ -345,7 +340,7 @@ where
             return Self::exact(value, flags | special);
         }
         let negative = Self::sign(&x) != Self::sign(&y);
-        let lowest = i64::from(Self::EMIN) - i64::from(Self::PRECISION) + 1;
+        let (lowest, _) = Self::exponent_range();
         match (x, y) {
             (Unpacked::Infinity { .. }, Unpacked::Infinity { .. })
             | (Unpacked::Zero { .. }, Unpacked::Zero { .. }) => {

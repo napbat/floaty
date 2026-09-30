@@ -117,7 +117,7 @@ where
         env: &Env,
     ) -> (Out, Flags) {
         let precision = i64::from(Self::PRECISION);
-        let lowest = i64::from(Self::EMIN) - precision + 1;
+        let (lowest, _) = Self::exponent_range();
         let top = i64::from(exponent) + i64::from(significand.bit_length()) - 1;
         let digits = radix::digits_estimate(top);
         let unit: Wide<Out> = power_of_ten(Self::PRECISION + 1);
