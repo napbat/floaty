@@ -95,7 +95,7 @@ where
             }
         } else {
             let field: [u64; 2] =
-                nan::align_payload(payload, source.payload_bits(), Self::TRAILING);
+                nan::align_payload(payload, source.payload_bits, Self::TRAILING);
             limbs::to_u128(&field)
         };
         if payload > Self::LARGEST_PAYLOAD {

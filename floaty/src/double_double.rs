@@ -32,11 +32,11 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::marker::PhantomData;
 
+use self::convert::BINARY;
 use self::steps::Steps;
 use crate::env::{Behavior, Env, Flags, Mode, Override, mode};
 use crate::float::{Decoded, F64, Float, FloatType};
-use crate::format::internal::Source;
-use crate::format::{Binary, Standard};
+use crate::format::Binary;
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 use crate::unpacked::Unpacked;
@@ -387,11 +387,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     /// NaN keeps the high-order bits of its payload.
     #[must_use]
     pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (T, Flags) {
-        let source = Source {
-            radix: 2,
-            payload_digits: <Binary<11> as Standard<64>>::PAYLOAD_DIGITS,
-        };
-        T::convert_from(self.exact(), source, behavior.apply::<T::Mode>())
+        T::convert_from(self.exact(), BINARY, behavior.apply::<T::Mode>())
     }
 
     /// Compares the exact values as the IEEE 754 quiet predicates do. `None`

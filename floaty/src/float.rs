@@ -168,11 +168,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (T, Flags) {
         let behavior = behavior.apply::<T::Mode>();
         let (value, input) = S::operand(self.bits, &behavior.env());
-        let source = Source {
-            radix: S::RADIX,
-            payload_digits: S::PAYLOAD_DIGITS,
-        };
-        let (result, flags) = T::convert_from(value, source, behavior);
+        let (result, flags) = T::convert_from(value, S::SOURCE, behavior);
         (result, flags | input)
     }
 

@@ -273,10 +273,7 @@ fn infinity(negative: bool) -> F64 {
 
 /// The source of a binary value, for an integer or an exact result. A
 /// finite value reads no payload.
-pub(super) const BINARY: Source = Source {
-    radix: 2,
-    payload_digits: <Binary<11> as Standard<64>>::PAYLOAD_DIGITS,
-};
+pub(super) const BINARY: Source = <Binary<11> as Standard<64>>::SOURCE;
 
 impl<Alg, M: Mode> Sealed for DoubleDouble<Alg, M> {}
 

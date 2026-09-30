@@ -44,10 +44,10 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     #[doc(hidden)]
     const SIGNIFICAND_BITS: u32;
 
-    /// The number of NaN payload digits of the radix: bits below the quiet
-    /// bit for a binary format, and decimal digits for a decimal format.
+    /// The format as the source of a conversion: its radix and the digits and
+    /// the bits of its NaN payload.
     #[doc(hidden)]
-    const PAYLOAD_DIGITS: u32;
+    const SOURCE: Source;
 
     /// The host format with the same encoding, for the host paths.
     #[doc(hidden)]
@@ -223,20 +223,8 @@ pub(crate) mod internal {
         pub radix: u32,
         /// The number of NaN payload digits of the source format.
         pub payload_digits: u32,
-    }
-
-    impl Source {
-        /// Returns the width in bits of the field that holds a NaN payload.
-        /// A decimal format keeps three payload digits in each 10-bit declet
-        /// of its trailing significand field.
-        #[must_use]
-        pub const fn payload_bits(self) -> u32 {
-            if self.radix == 10 {
-                self.payload_digits / 3 * 10
-            } else {
-                self.payload_digits
-            }
-        }
+        /// The width in bits of the field that holds a NaN payload.
+        pub payload_bits: u32,
     }
 
     /// The host format with the same encoding as a floaty format.

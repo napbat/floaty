@@ -538,7 +538,7 @@ where
             | NanPropagation::LargerSignificand => Self::encode(Unpacked::Nan {
                 negative,
                 signaling: false,
-                payload: nan::align_payload(payload, source.payload_bits(), Self::PAYLOAD_DIGITS),
+                payload: nan::align_payload(payload, source.payload_bits, Self::PAYLOAD_DIGITS),
             }),
         };
         (nan, flags)
@@ -599,7 +599,12 @@ where
     const SIGNIFICAND_BITS: u32 = Layout::<E, Enc, W>::PRECISION;
     const EMAX: i32 = Layout::<E, Enc, W>::EMAX;
     const EMIN: i32 = Layout::<E, Enc, W>::EMIN;
-    const PAYLOAD_DIGITS: u32 = Layout::<E, Enc, W>::PAYLOAD_DIGITS;
+    // A binary payload digit is a bit below the quiet bit.
+    const SOURCE: Source = Source {
+        radix: 2,
+        payload_digits: Layout::<E, Enc, W>::PAYLOAD_DIGITS,
+        payload_bits: Layout::<E, Enc, W>::PAYLOAD_DIGITS,
+    };
     const HOST: Host = Layout::<E, Enc, W>::HOST;
 
     #[inline]
