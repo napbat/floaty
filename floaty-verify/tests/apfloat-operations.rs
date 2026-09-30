@@ -398,12 +398,12 @@ fn integers(bits: u32, signed: bool, random: &mut SplitMix64) -> Vec<Integer> {
         }
     }
     for _ in 0..300 {
-        let width = u32::try_from(random.next_u64() % u64::from(bits))
+        let width = u32::try_from(random.below(u64::from(bits)))
             .expect("a width below the integer width fits a u32")
             + 1;
         let digits = [random.next_u64(), random.next_u64()];
         let mut value = Integer::from_digits(&digits, Order::Lsf).keep_bits(width);
-        if signed && random.next_u64() % 2 == 0 {
+        if signed && random.below(2) == 0 {
             value = -value;
         }
         values.push(value);

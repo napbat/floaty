@@ -89,8 +89,8 @@ macro_rules! ties_and_multiples_match {
         for _ in 0..4_000 {
             let odd = i64::try_from(random.next_u64() >> (64 - $bits)).expect("small") | 1;
             let quotient = i64::try_from(random.next_u64() >> 54).expect("small");
-            let scale = i32::try_from(random.next_u64() % 60).expect("small") - 30;
-            let sign = if random.next_u64() & 1 == 0 { 1 } else { -1 };
+            let scale = i32::try_from(random.below(60)).expect("small") - 30;
+            let sign = if random.coin_flip() { -1 } else { 1 };
             let divisor = <$alias>::from_int(odd).scale_b(scale);
             let tie = <$alias>::from_int(sign * (2 * quotient + 1) * odd).scale_b(scale - 1);
             let multiple = <$alias>::from_int(sign * quotient * odd).scale_b(scale);

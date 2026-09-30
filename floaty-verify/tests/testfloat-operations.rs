@@ -28,7 +28,7 @@ use floaty::format::Standard;
 use floaty::{Binary, Env, Flags, Float, Integer, Rounding, ToInt, X87};
 use floaty_verify::testfloat::{
     self, Exactness, Generator, Level, Options, PRECISION_CONTROL, PrecisionControl, ROUNDINGS,
-    fields, flag_bits, quiet_extended_nan,
+    Run, fields, flag_bits, quiet_extended_nan,
 };
 
 /// The storage of a format that TestFloat covers. It converts to and from the
@@ -84,36 +84,24 @@ impl Format {
     }
 }
 
-/// One run of a generator: the generator, the behavior, the exactness, and
-/// the options.
-struct Run {
-    generator: Generator,
-    env: Env,
-    exactness: Exactness,
-    options: Options,
-}
-
 /// Returns the runs of `generator` in every rounding direction with each
-/// exactness. `base` gives every field of the behavior but the direction.
+/// exactness, at the precision control `precision`.
 fn directions(
     generator: Generator,
-    base: Env,
     exactness: &[Exactness],
     precision: PrecisionControl,
 ) -> Vec<Run> {
     exactness
         .iter()
         .flat_map(|&exactness| {
-            ROUNDINGS.map(|(rounding, _)| Run {
-                generator,
-                env: base.with_rounding(rounding),
-                exactness,
-                options: Options {
+            ROUNDINGS.map(|(rounding, _)| {
+                let options = Options {
                     rounding: Some(rounding),
                     exactness: Some(exactness),
                     precision: Some(precision),
                     ..Options::default()
-                },
+                };
+                Run::new(generator, options)
             })
         })
         .collect()
@@ -126,20 +114,15 @@ fn directions(
 fn float_runs(format: Format, exactness: &[Exactness]) -> Vec<Run> {
     let mut runs = Vec::new();
     for &precision in format.precisions() {
-        let base = Env::IEEE.with_precision(precision.limit);
-        runs.extend(directions(Generator::ARM, base, exactness, precision));
+        runs.extend(directions(Generator::ARM, exactness, precision));
         for generator in format.nan_generators() {
-            runs.push(Run {
-                generator,
-                env: base.with_nan(generator.rule),
-                exactness: Exactness::Exact,
-                options: Options {
-                    rounding: Some(Rounding::TiesToEven),
-                    exactness: Some(Exactness::Exact),
-                    precision: Some(precision),
-                    ..Options::default()
-                },
-            });
+            let options = Options {
+                rounding: Some(Rounding::TiesToEven),
+                exactness: Some(Exactness::Exact),
+                precision: Some(precision),
+                ..Options::default()
+            };
+            runs.push(Run::new(generator, options));
         }
     }
     runs
@@ -231,12 +214,7 @@ const PREDICATES: [(&str, Form, Relation); 6] = [
 /// The operators must give the value of each predicate, because a signaling
 /// predicate has the value of its quiet form.
 fn check_comparisons<S: Standard<W, Bits: Field>, const W: usize>(format: Format) {
-    let run = Run {
-        generator: Generator::ARM,
-        env: Env::IEEE,
-        exactness: Exactness::Exact,
-        options: Options::default(),
-    };
+    let run = Run::new(Generator::ARM, Options::default());
     for (suffix, form, relation) in PREDICATES {
         let function = format!("{}_{suffix}", format.name);
         check(
@@ -384,18 +362,8 @@ where
 {
     let function = format!("{}_to_{}", format.name, integer_name::<I>());
     let exactness = [Exactness::Exact, Exactness::NotExact];
-    let arm = directions(
-        Generator::ARM,
-        Env::IEEE,
-        &exactness,
-        PrecisionControl::FULL,
-    );
-    let sse = directions(
-        Generator::SSE,
-        Env::IEEE,
-        &[Exactness::Exact],
-        PrecisionControl::FULL,
-    );
+    let arm = directions(Generator::ARM, &exactness, PrecisionControl::FULL);
+    let sse = directions(Generator::SSE, &[Exactness::Exact], PrecisionControl::FULL);
     let defaults = core::cell::Cell::new(0_usize);
     for (runs, encoding) in [
         (arm, IntegerEncoding::Saturating),
@@ -433,12 +401,7 @@ where
     I: Integer + TryFrom<i128, Error: Debug>,
 {
     let function = format!("{}_to_{}", integer_name::<I>(), format.name);
-    let runs = directions(
-        Generator::ARM,
-        Env::IEEE,
-        &[Exactness::Exact],
-        PrecisionControl::FULL,
-    );
+    let runs = directions(Generator::ARM, &[Exactness::Exact], PrecisionControl::FULL);
     let defaults = core::cell::Cell::new(0_usize);
     check(&function, Level::Two, &runs, |line, run| {
         let [a, result, flags] = fields::<3>(line);

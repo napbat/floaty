@@ -6,7 +6,7 @@
 use core::num::NonZeroU32;
 
 use floaty::{Class, Env, F32, F64, F80, ToInt};
-use floaty_verify::encodings::{Layout, boundary_encodings, to_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings, rounding_edges, to_u128};
 use floaty_verify::entry_points::{
     Arithmetic, Conversions, arithmetic, arithmetic_with, conversions, conversions_with, remainder,
     remainder_with,
@@ -92,7 +92,7 @@ fn pseudo_denormals_have_the_value_that_the_processor_computes() {
     let mut random = SplitMix64::new(0x0D0D);
     for _ in 0..10_000 {
         let fraction = random.next_u64() | (1 << 63);
-        let sign = u128::from(random.next_u64() & 1) << 79;
+        let sign = u128::from(random.coin_flip()) << 79;
         let pseudo = sign | u128::from(fraction);
         let (normal, _) = x86::times_one(pseudo, 0x037F);
         let ours = F80::from_bits(pseudo);
@@ -106,14 +106,6 @@ fn pseudo_denormals_have_the_value_that_the_processor_computes() {
 /// The status bits that the comparisons check: IE, DE, ZE, OE, UE, PE, and C1.
 const CHECKED: u16 = X87_STATUS_FLAGS;
 const DE: u16 = X87_DE;
-
-/// Returns the low-bit patterns of `dropped` discarded bits that decide a
-/// rounding: exact, just below halfway, halfway, just above halfway, and all
-/// ones.
-fn edge_patterns(dropped: u32) -> [u64; 5] {
-    let half = 1_u64 << (dropped - 1);
-    [0, half - 1, half, half + 1, (half << 1) - 1]
-}
 
 /// Returns boundary and random 80-bit encodings, with exponents biased toward
 /// the binary32 and binary64 ranges, and every edge pattern at the binary32
@@ -130,24 +122,20 @@ fn store_inputs() -> Vec<u128> {
         for exponent in edges {
             let dropped = (64 - precision + (emin - exponent).max(0)).min(63);
             let biased = u128::try_from(16383 + exponent).expect("a normal x87 exponent");
-            for pattern in edge_patterns(u32::try_from(dropped).expect("at most 63")) {
+            for pattern in rounding_edges(u32::try_from(dropped).expect("at most 63")) {
                 for _ in 0..8 {
                     let high = random.next_u64() & !((1 << dropped) - 1);
                     let significand = u128::from((1 << 63) | high | pattern);
-                    let sign = u128::from(random.next_u64() & 1) << 79;
+                    let sign = u128::from(random.coin_flip()) << 79;
                     inputs.push(sign | (biased << 64) | significand);
                 }
             }
         }
     }
     for _ in 0..100_000 {
-        let exponent = u128::from(16383 - 1100 + random.next_u64() % 2300);
-        let sign = u128::from(random.next_u64() & 1) << 79;
-        let integer = if random.next_u64() % 16 == 0 {
-            0
-        } else {
-            1 << 63
-        };
+        let exponent = u128::from(16383 - 1100 + random.below(2300));
+        let sign = u128::from(random.coin_flip()) << 79;
+        let integer = if random.below(16) == 0 { 0 } else { 1 << 63 };
         let significand = u128::from(random.next_u64() | integer);
         inputs.push(sign | (exponent << 64) | significand);
     }
@@ -229,17 +217,13 @@ fn operands(random: &mut SplitMix64, count: usize) -> Vec<u128> {
     let mut operands = SPECIALS.to_vec();
     for index in 0..count {
         let exponent = u128::from(match index % 3 {
-            0 => random.next_u64() % 0x7FFF,
-            1 => random.next_u64() % 80,
-            _ => 0x7FFF - 80 + random.next_u64() % 80,
+            0 => random.below(0x7FFF),
+            1 => random.below(80),
+            _ => 0x7FFF - 80 + random.below(80),
         });
-        let integer = if random.next_u64() % 32 == 0 {
-            0
-        } else {
-            1 << 63
-        };
+        let integer = if random.below(32) == 0 { 0 } else { 1 << 63 };
         let significand = u128::from(random.next_u64() | integer);
-        let sign = u128::from(random.next_u64() & 1) << 79;
+        let sign = u128::from(random.coin_flip()) << 79;
         operands.push(sign | (exponent << 64) | significand);
     }
     operands
@@ -467,7 +451,7 @@ fn remainders_read_the_control_word_before_the_x87_unit() {
         for &dividend in &dividends {
             // A divisor with a nearby exponent: the dividend shifted right by
             // up to 31 exponent steps, with a changed significand.
-            let shift = u128::from(random.next_u64() % 32) << 64;
+            let shift = u128::from(random.below(32)) << 64;
             let divisor = (dividend.wrapping_sub(shift) ^ u128::from(random.next_u64() >> 1))
                 & ((1 << 80) - 1);
             let (x, y) = (F80::from_bits(dividend), F80::from_bits(divisor));

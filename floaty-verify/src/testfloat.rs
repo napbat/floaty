@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 
 use floaty::env::{NanPropagation, NanRule, Tininess};
-use floaty::{Flags, Rounding};
+use floaty::{Env, Flags, Rounding};
 
 /// A `testfloat_gen` built against one SoftFloat NaN specialization, and the
 /// NaN rule that the specialization follows.
@@ -190,6 +190,42 @@ impl Options {
             )
             .chain([function])
             .collect()
+    }
+}
+
+/// One run of a generator: the generator, its options, and the behavior and
+/// the exactness that the options give.
+#[derive(Clone, Copy, Debug)]
+pub struct Run {
+    /// The generator.
+    pub generator: Generator,
+    /// The options of the generator.
+    pub options: Options,
+    /// The behavior of the run: [`Env::IEEE`] with the NaN rule of the
+    /// generator, and the rounding direction, the tininess rule, and the
+    /// precision limit of the options.
+    pub env: Env,
+    /// Whether a rounding to an integer raises inexact.
+    pub exactness: Exactness,
+}
+
+impl Run {
+    /// Makes a run of `generator` with `options`. An option at `None` takes
+    /// the default of `testfloat_gen`: round to nearest even, tininess after
+    /// rounding, the full precision, and `-notexact`.
+    #[must_use]
+    pub fn new(generator: Generator, options: Options) -> Self {
+        let env = Env::IEEE
+            .with_nan(generator.rule)
+            .with_rounding(options.rounding.unwrap_or(Rounding::TiesToEven))
+            .with_tininess(options.tininess.unwrap_or(Tininess::AfterRounding))
+            .with_precision(options.precision.and_then(|precision| precision.limit));
+        Self {
+            generator,
+            options,
+            env,
+            exactness: options.exactness.unwrap_or(Exactness::NotExact),
+        }
     }
 }
 

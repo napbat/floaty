@@ -12,7 +12,7 @@
 use core::ops::RangeInclusive;
 
 use floaty::{F80, Flags, Rounding};
-use floaty_verify::encodings::{Layout, boundary_encodings, to_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings, integer_edges, to_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, X87_C1, X87_STATUS_FLAGS, stored, x87_arithmetic_status, x87_env, x87_status,
@@ -89,59 +89,24 @@ fn random_operands(random: &mut SplitMix64, count: usize, near: RangeInclusive<i
     let near_span = biased(*near.end()) - near_start + 1;
     (0..count)
         .map(|index| {
-            let negative = random.next_u64() & 1 == 1;
+            let negative = random.coin_flip();
             let fraction = random.next_u64() >> 1;
             let (exponent, integer) = match index % 4 {
-                0 => (random.next_u64() % 0x8000, 1 << 63),
-                1 => (random.next_u64() % 80, 1 << 63),
-                2 => (near_start + random.next_u64() % near_span, 1 << 63),
-                _ => (random.next_u64() % 0x8000, random.next_u64() & (1 << 63)),
+                0 => (random.below(0x8000), 1 << 63),
+                1 => (random.below(80), 1 << 63),
+                2 => (near_start + random.below(near_span), 1 << 63),
+                _ => (random.below(0x8000), random.next_u64() & (1 << 63)),
             };
             encode(negative, exponent, integer | fraction)
         })
         .collect()
 }
 
-/// Returns the patterns of `dropped` low bits that decide a rounding: exact,
-/// just below halfway, halfway, just above halfway, and all ones.
-fn edge_patterns(dropped: u32) -> [u64; 5] {
-    if dropped == 0 {
-        return [0; 5];
-    }
-    let half = 1_u64 << (dropped - 1);
-    let mask = (half << 1).wrapping_sub(1);
-    [0, half - 1, half, half + 1, mask].map(|pattern| pattern & mask)
-}
-
-/// Returns encodings around the integers with the unbiased exponents
-/// `exponents`, for both signs.
-///
-/// The fraction bits below the binary point take each edge pattern, and the
-/// bits above the binary point are all zeros, all ones, or random. A value
-/// below one has every fraction bit below the binary point.
-fn integer_edges(random: &mut SplitMix64, exponents: RangeInclusive<i32>) -> Vec<u128> {
-    let mut encodings = Vec::new();
-    for exponent in exponents {
-        let dropped = u32::try_from((63 - exponent).clamp(0, 63))
-            .expect("a shift clamped to 0..=63 fits a u32");
-        let all_ones = (1_u64 << (63 - dropped)) - 1;
-        for high in [0, all_ones, random.next_u64(), random.next_u64()] {
-            for pattern in edge_patterns(dropped) {
-                for negative in [false, true] {
-                    let significand = (1 << 63) | ((high & all_ones) << dropped) | pattern;
-                    encodings.push(encode(negative, biased(exponent), significand));
-                }
-            }
-        }
-    }
-    encodings
-}
-
 /// Returns the specials, the edges around the integers up to 2^66, and
 /// random values.
 fn integral_operands(random: &mut SplitMix64) -> Vec<u128> {
     let mut operands = SPECIALS.to_vec();
-    operands.extend(integer_edges(random, -3..=66));
+    operands.extend(integer_edges::<u128>(Layout::X87_EXTENDED, random, -3..=66));
     operands.extend(random_operands(random, 20_000, -3..=66));
     operands
 }
@@ -292,7 +257,7 @@ fn integer_operands(random: &mut SplitMix64, bits: u32) -> Vec<i64> {
         }
     }
     for _ in 0..20_000 {
-        let value = random.next_u64() >> (random.next_u64() % 64);
+        let value = random.next_u64() >> random.below(64);
         operands.push(i64::from_le_bytes(value.to_le_bytes()) >> (64 - bits));
     }
     operands
@@ -350,34 +315,26 @@ fn remainder_pairs(random: &mut SplitMix64) -> Vec<(u128, u128)> {
     for &dividend in &operands {
         let field =
             u64::try_from((dividend >> 64) & 0x7FFF).expect("the x87 exponent field has 15 bits");
-        let difference = random.next_u64() % 140;
+        let difference = random.below(140);
         let divisor_field = (field + 8).saturating_sub(difference).min(0x7FFE);
         let significand = random.next_u64() | (1 << 63);
-        let negative = random.next_u64() & 1 == 1;
+        let negative = random.coin_flip();
         pairs.push((dividend, encode(negative, divisor_field, significand)));
     }
     for _ in 0..4_000 {
         let [dividend, divisor] = [0; 2].map(|_| {
             let significand = random.next_u64() | (random.next_u64() & (1 << 63));
-            encode(
-                random.next_u64() & 1 == 1,
-                random.next_u64() % 70,
-                significand,
-            )
+            encode(random.coin_flip(), random.below(70), significand)
         });
         pairs.push((dividend, divisor));
     }
     for _ in 0..300 {
         let dividend = encode(
             false,
-            0x4000 + random.next_u64() % 0x3FFF,
+            0x4000 + random.below(0x3FFF),
             random.next_u64() | (1 << 63),
         );
-        let divisor = encode(
-            true,
-            random.next_u64() % 0x100,
-            random.next_u64() | (1 << 63),
-        );
+        let divisor = encode(true, random.below(0x100), random.next_u64() | (1 << 63));
         pairs.push((dividend, divisor));
     }
     for _ in 0..2_000 {
@@ -387,7 +344,7 @@ fn remainder_pairs(random: &mut SplitMix64) -> Vec<(u128, u128)> {
         let multiple = (random.next_u64() >> 17) | (1 << 46);
         let odd = (random.next_u64() >> 49) | 1;
         let exponent =
-            i32::try_from(random.next_u64() % 400).expect("an offset below 400 fits an i32") - 200;
+            i32::try_from(random.below(400)).expect("an offset below 400 fits an i32") - 200;
         let divisor = F80::from_int(multiple).scale_b(exponent);
         let dividend = F80::from_int(multiple * odd).scale_b(exponent - 1);
         pairs.push((dividend.to_bits(), divisor.to_bits()));
@@ -467,17 +424,13 @@ fn scale_pairs(random: &mut SplitMix64) -> Vec<(u128, i32)> {
         let field =
             i32::try_from((value >> 64) & 0x7FFF).expect("the x87 exponent field has 15 bits");
         let exponent = field.max(1) - Layout::X87_EXTENDED.ieee_bias();
-        let offset = i32::try_from(random.next_u64() % 80).expect("an offset below 80 fits an i32");
-        let scale = match random.next_u64() % 4 {
+        let offset = i32::try_from(random.below(80)).expect("an offset below 80 fits an i32");
+        let scale = match random.below(4) {
             0 => -16_382 - 70 + offset - exponent,
             1 => 16_383 - 8 + offset / 8 - exponent,
-            2 => {
-                i32::try_from(random.next_u64() % 401).expect("an offset below 401 fits an i32")
-                    - 200
-            }
+            2 => i32::try_from(random.below(401)).expect("an offset below 401 fits an i32") - 200,
             _ => {
-                i32::try_from(random.next_u64() % 140_001)
-                    .expect("an offset below 140,001 fits an i32")
+                i32::try_from(random.below(140_001)).expect("an offset below 140,001 fits an i32")
                     - 70_000
             }
         };

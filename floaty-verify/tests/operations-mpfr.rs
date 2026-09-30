@@ -15,6 +15,7 @@
 
 use floaty::format::Standard;
 use floaty::{Binary, Float, Int, NoInf, UInt};
+use floaty_verify::encodings::Layout;
 use floaty_verify::mpfr::{Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
 use floaty_verify::operations::check::{self, Case};
@@ -22,10 +23,14 @@ use rug::Integer;
 
 /// Returns a case for every encoding of a format of at most 8 bits.
 fn cases<S: Standard<W, Bits = u8>, const W: usize>() -> Vec<Case<S, W>> {
+    // The formats store the IEEE fields: a sign, `W - p` exponent bits, and
+    // `p - 1` trailing significand bits.
+    let width = u32::try_from(W).expect("the format has at most 8 bits");
+    let layout = Layout::ieee(width, width - Float::<S, W>::PRECISION);
     (0..1_u16 << W)
         .map(|bits| {
             let bits = u8::try_from(bits).expect("the format has at most 8 bits");
-            Case::new(Integer::from(bits), Float::from_bits(bits))
+            Case::new(Integer::from(bits), layout, Float::from_bits(bits))
         })
         .collect()
 }

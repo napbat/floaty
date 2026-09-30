@@ -137,8 +137,7 @@ macro_rules! samples {
             .map(to_limbs::<$limbs>)
             .collect();
         let mask: Integer = (Integer::from(1) << layout.width) - 1u32;
-        let nan_field: Integer =
-            ((Integer::from(1) << layout.exponent_bits) - 1u32) << layout.fraction_bits();
+        let nan_field: Integer = Integer::from(layout.largest_field()) << layout.fraction_bits();
         samples.extend((0..$count).map(|index| {
             let digits: [u64; $limbs] = core::array::from_fn(|_| $random.next_u64());
             let mut value = Integer::from_digits(&digits, Order::Lsf) & &mask;

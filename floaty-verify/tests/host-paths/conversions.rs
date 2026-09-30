@@ -136,7 +136,7 @@ fn conversions_from_integers_give_the_default_mode_results() {
     // points and the overflow threshold of binary16.
     let mut integers: Vec<i128> = (0..20_000)
         .map(|_| {
-            let bits = random.next_u64() % 127;
+            let bits = random.below(127);
             i128::from_le_bytes(random.next_u128().to_le_bytes()) >> bits
         })
         .collect();

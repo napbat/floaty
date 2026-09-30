@@ -8,6 +8,7 @@ use rug::Integer;
 use rug::integer::Order;
 
 use super::{Outcome, Sample, default_nan, number, propagate};
+use crate::encodings::IntegerBit;
 use crate::mpfr::{Format, Operand, Read};
 
 /// Returns the expected order and flags of `compare_quiet_with`.
@@ -81,10 +82,14 @@ pub fn total_order<const N: usize>(
     let datum = |sample: &Sample<N>| !matches!(sample.operand.decoded, Decoded::Unsupported);
     match order {
         TotalOrder::Encoding if !first.canonical || !second.canonical => {
-            return by_bits(&first.bits, &second.bits, first.width);
+            return by_bits(&first.bits, &second.bits, first.layout.width);
         }
         TotalOrder::Datum if !datum(first) || !datum(second) => {
-            return by_bits(&canonical_bits(first), &canonical_bits(second), first.width);
+            return by_bits(
+                &canonical_bits(first),
+                &canonical_bits(second),
+                first.layout.width,
+            );
         }
         _ => {}
     }
@@ -128,19 +133,20 @@ pub fn total_order<const N: usize>(
 
 /// Returns the canonical encoding of a datum, or the encoding of an
 /// unsupported operand. The only binary encoding of a datum that is not
-/// canonical is an x87 pseudo-denormal: exponent field 0 with the integer bit
-/// set. The normal encoding of its value has exponent field 1, so it sets bit
-/// 64.
+/// canonical is a pseudo-denormal of a format with a stored integer bit, x87
+/// extended: exponent field 0 with the integer bit set. The normal encoding
+/// of its value has exponent field 1, so it sets the lowest bit of the field.
 fn canonical_bits<const N: usize>(sample: &Sample<N>) -> Integer {
     if sample.canonical || matches!(sample.operand.decoded, Decoded::Unsupported) {
         return sample.bits.clone();
     }
     assert_eq!(
-        sample.width, 80,
-        "only an x87 encoding of a datum is not canonical"
+        sample.layout.integer_bit,
+        IntegerBit::Explicit,
+        "only an encoding with a stored integer bit is not canonical"
     );
     let mut twin = sample.bits.clone();
-    twin.set_bit(64, true);
+    twin.set_bit(sample.layout.fraction_bits(), true);
     twin
 }
 

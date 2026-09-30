@@ -50,7 +50,7 @@ use floaty_verify::intel_decimal::{
     Integer as IntelInteger, Outcome, Predicate, Rounding as IntelRounding, Signals, Value,
     encoding, to_integer,
 };
-use floaty_verify::readtest::{self, Field, Line};
+use floaty_verify::readtest::{self, Line};
 
 /// The storage of a format of width `W`.
 type Bits<const W: usize> = <Width<W> as Storage>::Bits;
@@ -117,24 +117,15 @@ impl Tally {
     }
 }
 
-fn field(line: &Line, index: usize) -> Result<&Field, String> {
-    line.operands
-        .get(index)
-        .ok_or_else(|| format!("operand {index} is missing"))
-}
-
-/// Returns a decimal operand. `readtest.c` converts a decimal string
-/// operand rounding to nearest.
+/// Returns a decimal operand, by [`Line::decimal_operand`].
 fn operand<F: Format>(line: &Line, index: usize) -> Result<F::Bits, String> {
-    field(line, index)?
-        .decimal::<F>(IntelRounding::TiesToEven)
+    line.decimal_operand::<F>(index)
         .map_err(|error| error.to_string())
 }
 
-/// Returns an integer operand of type `integer`.
+/// Returns an integer operand of type `integer`, by [`Line::integer_operand`].
 fn integer_operand(line: &Line, index: usize, integer: IntelInteger) -> Result<i128, String> {
-    field(line, index)?
-        .integer(integer)
+    line.integer_operand(index, integer)
         .map_err(|error| error.to_string())
 }
 
@@ -404,37 +395,18 @@ where
 }
 
 /// Returns the integer type, direction, and inexact rule of a name such as
-/// `to_uint16_xfloor`, or of `lrint`, `llrint`, `lround`, and `llround` in
-/// the direction of the line.
+/// `to_uint16_xfloor`, by [`readtest::to_integer_name`], or of `lrint`,
+/// `llrint`, `lround`, and `llround` in the direction of the line.
 fn to_integer_name(name: &str, line: &Line) -> Option<(IntelInteger, IntelRounding, Inexact)> {
     match name {
-        "lrint" | "llrint" => return Some((IntelInteger::Int64, line.rounding, Inexact::Signaled)),
-        "lround" | "llround" => {
-            return Some((
-                IntelInteger::Int64,
-                IntelRounding::TiesToAway,
-                Inexact::Ignored,
-            ));
-        }
-        _ => {}
+        "lrint" | "llrint" => Some((IntelInteger::Int64, line.rounding, Inexact::Signaled)),
+        "lround" | "llround" => Some((
+            IntelInteger::Int64,
+            IntelRounding::TiesToAway,
+            Inexact::Ignored,
+        )),
+        _ => readtest::to_integer_name(name),
     }
-    let (integer, suffix) = name.strip_prefix("to_")?.split_once('_')?;
-    let integer = IntelInteger::ALL
-        .into_iter()
-        .find(|candidate| candidate.name() == integer)?;
-    let (inexact, direction) = match suffix.strip_prefix('x') {
-        Some(direction) => (Inexact::Signaled, direction),
-        None => (Inexact::Ignored, suffix),
-    };
-    let rounding = match direction {
-        "rnint" => IntelRounding::TiesToEven,
-        "rninta" => IntelRounding::TiesToAway,
-        "int" => IntelRounding::TowardZero,
-        "floor" => IntelRounding::TowardNegative,
-        "ceil" => IntelRounding::TowardPositive,
-        _ => return None,
-    };
-    Some((integer, rounding, inexact))
 }
 
 /// Runs a line of a function of format `F`, named without its prefix.

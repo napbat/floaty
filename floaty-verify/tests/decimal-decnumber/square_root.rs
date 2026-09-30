@@ -31,7 +31,7 @@ pub(super) fn operand<F: Arithmetic>(generator: &mut Generator<F>) -> F::Bits {
         exponent: generator.exponent(digit_count(coefficient)),
     });
     let rounding = decnumber::Rounding::HalfEven;
-    match generator.below(4) {
+    match generator.random.below(4) {
         0 => F::unary(Unary::NextPlus, square, rounding).value,
         1 => F::unary(Unary::NextMinus, square, rounding).value,
         _ => square,

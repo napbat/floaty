@@ -278,6 +278,21 @@ fn denormal_yields(flags: Flags, nan_operand: bool) -> bool {
     nan_operand || flags.contains(Flags::INVALID) || flags.contains(Flags::DIVIDE_BY_ZERO)
 }
 
+/// Returns the IE, ZE, OE, UE, and PE bits of floaty flags. MXCSR and the x87
+/// status word hold them in the same bits: 0, 2, 3, 4, and 5.
+fn exception_bits(flags: Flags) -> u16 {
+    [
+        (Flags::INVALID, 0),
+        (Flags::DIVIDE_BY_ZERO, 2),
+        (Flags::OVERFLOW, 3),
+        (Flags::UNDERFLOW, 4),
+        (Flags::INEXACT, 5),
+    ]
+    .into_iter()
+    .filter(|&(flag, _)| flags.contains(flag))
+    .fold(0, |bits, (_, bit)| bits | (1 << bit))
+}
+
 /// Returns the MXCSR flags that floaty flags report.
 ///
 /// MXCSR sets DE only when DAZ is clear, and only when no higher-priority
@@ -286,18 +301,7 @@ fn denormal_yields(flags: Flags, nan_operand: bool) -> bool {
 /// `nan_operand` says that an operand is a NaN.
 #[must_use]
 pub fn mxcsr_flags(flags: Flags, daz: bool, nan_operand: bool) -> u32 {
-    let mut bits = 0;
-    for (flag, bit) in [
-        (Flags::INVALID, 0),
-        (Flags::DIVIDE_BY_ZERO, 2),
-        (Flags::OVERFLOW, 3),
-        (Flags::UNDERFLOW, 4),
-        (Flags::INEXACT, 5),
-    ] {
-        if flags.contains(flag) {
-            bits |= 1 << bit;
-        }
-    }
+    let mut bits = u32::from(exception_bits(flags));
     if flags.contains(Flags::DENORMAL_INPUT) && !daz && !denormal_yields(flags, nan_operand) {
         bits |= MXCSR_DE;
     }
@@ -374,19 +378,12 @@ pub fn x87_arithmetic_status(flags: Flags, nan_operand: bool) -> u16 {
 /// PE, and C1 for a rounding that grew the magnitude.
 #[must_use]
 pub fn x87_status(flags: Flags) -> u16 {
-    let mut bits = 0;
-    for (flag, bit) in [
-        (Flags::INVALID, 0),
-        (Flags::DENORMAL_INPUT, 1),
-        (Flags::DIVIDE_BY_ZERO, 2),
-        (Flags::OVERFLOW, 3),
-        (Flags::UNDERFLOW, 4),
-        (Flags::INEXACT, 5),
-        (Flags::ROUNDED_UP, 9),
-    ] {
-        if flags.contains(flag) {
-            bits |= 1 << bit;
-        }
+    let mut bits = exception_bits(flags);
+    if flags.contains(Flags::DENORMAL_INPUT) {
+        bits |= X87_DE;
+    }
+    if flags.contains(Flags::ROUNDED_UP) {
+        bits |= X87_C1;
     }
     bits
 }

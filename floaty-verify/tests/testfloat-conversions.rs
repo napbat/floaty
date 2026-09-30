@@ -16,7 +16,7 @@
 
 use floaty::{Env, F16, F32, F64, F80, F128, Flags};
 use floaty_verify::testfloat::{
-    self, Generator, Level, Options, ROUNDINGS, TININESS, fields, flag_bits,
+    self, Generator, Level, Options, ROUNDINGS, Run, TININESS, fields, flag_bits,
 };
 
 /// Converts one encoding and returns the result bits and the flags.
@@ -51,15 +51,12 @@ macro_rules! conversion_test {
                 let mut count = 0_usize;
                 for (rounding, _) in ROUNDINGS {
                     for (tininess, _) in TININESS {
-                        let env = Env::IEEE
-                            .with_rounding(rounding)
-                            .with_tininess(tininess)
-                            .with_nan(generator.rule);
                         let options = Options {
                             rounding: Some(rounding),
                             tininess: Some(tininess),
                             ..Options::default()
                         };
+                        let Run { env, .. } = Run::new(generator, options);
                         count += testfloat::run(generator, Level::Two, $function, &options, None, |line| {
                             let [operand, result, flags] = fields::<3>(line);
                             let (ours, ours_flags) = convert!($source => $destination, operand, env);

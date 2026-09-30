@@ -17,16 +17,17 @@
 //! with `fetestexcept`. QEMU computes the flags of the FPSCR with the rules
 //! of its PowerPC target. PowerPC has no denormal flag.
 //!
-//! [`Pair`], [`Rounding`], [`Flags`], and [`Outcome`] are also the types of
-//! [`crate::qd`], so one test can compare both references.
+//! [`Pair`], [`Rounding`], [`Flags`], and [`Outcome`] are the types of
+//! [`crate::double_double::reference`], which [`crate::qd`] also uses, so one test can
+//! compare both references.
 
-use core::fmt;
-use core::ops::BitOr;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::process::{Command, Stdio};
 use std::thread;
 
 use floaty::env::{FusedNanOrder, InvalidProduct, NanPropagation, NanRule, Tininess};
+
+pub use crate::double_double::reference::{Flags, Outcome, Pair, Rounding};
 
 /// The batch program, a static powerpc64le executable.
 pub const PROGRAM: &str = env!("FLOATY_IBM_LDOUBLE");
@@ -37,29 +38,6 @@ pub const QEMU: &str = env!("FLOATY_QEMU");
 /// The pinned QEMU release. The build script checks it when it builds
 /// [`PROGRAM`].
 const QEMU_VERSION: &str = env!("FLOATY_QEMU_VERSION");
-
-/// A double-double value as the binary64 encodings of its two halves.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Pair {
-    /// The encoding of the high half.
-    pub hi: u64,
-    /// The encoding of the low half.
-    pub lo: u64,
-}
-
-impl Pair {
-    /// Returns the pair of two binary64 encodings.
-    #[must_use]
-    pub const fn new(hi: u64, lo: u64) -> Self {
-        Self { hi, lo }
-    }
-}
-
-impl fmt::Debug for Pair {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Pair({:#018x}, {:#018x})", self.hi, self.lo)
-    }
-}
 
 /// An arithmetic operation of libgcc.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -156,36 +134,13 @@ impl Instruction {
     }
 }
 
-/// A rounding direction of the C `fesetround` function.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Rounding {
-    /// `FE_TONEAREST`: to nearest, with a tie to even.
-    TiesToEven,
-    /// `FE_TOWARDZERO`.
-    TowardZero,
-    /// `FE_UPWARD`: toward positive infinity.
-    TowardPositive,
-    /// `FE_DOWNWARD`: toward negative infinity.
-    TowardNegative,
-}
-
-impl Rounding {
-    /// Every rounding direction.
-    pub const ALL: [Self; 4] = [
-        Self::TiesToEven,
-        Self::TowardZero,
-        Self::TowardPositive,
-        Self::TowardNegative,
-    ];
-
-    /// Returns the name of the direction in the input of [`PROGRAM`].
-    const fn word(self) -> &'static str {
-        match self {
-            Self::TiesToEven => "nearest",
-            Self::TowardZero => "zero",
-            Self::TowardPositive => "up",
-            Self::TowardNegative => "down",
-        }
+/// Returns the name of a rounding direction in the input of [`PROGRAM`].
+const fn rounding_word(rounding: Rounding) -> &'static str {
+    match rounding {
+        Rounding::TiesToEven => "nearest",
+        Rounding::TowardZero => "zero",
+        Rounding::TowardPositive => "up",
+        Rounding::TowardNegative => "down",
     }
 }
 
@@ -206,113 +161,6 @@ pub fn behavior(rounding: Rounding) -> floaty::Env {
                 .with_fused_order(FusedNanOrder::AddendSecond)
                 .with_invalid_product(InvalidProduct::SignalsAndYieldsToNan),
         )
-}
-
-impl From<Rounding> for floaty::Rounding {
-    fn from(rounding: Rounding) -> Self {
-        match rounding {
-            Rounding::TiesToEven => Self::TiesToEven,
-            Rounding::TowardZero => Self::TowardZero,
-            Rounding::TowardPositive => Self::TowardPositive,
-            Rounding::TowardNegative => Self::TowardNegative,
-        }
-    }
-}
-
-/// A set of the five IEEE exception flags.
-///
-/// The bits are the flag bits of both shims: `shim/ibm_ldouble.c` and
-/// `shim/qd_shim.cpp`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Flags(u8);
-
-impl Flags {
-    /// No flag.
-    pub const NONE: Self = Self(0);
-    /// `FE_INVALID`.
-    pub const INVALID: Self = Self(0x01);
-    /// `FE_DIVBYZERO`.
-    pub const DIVIDE_BY_ZERO: Self = Self(0x02);
-    /// `FE_OVERFLOW`.
-    pub const OVERFLOW: Self = Self(0x04);
-    /// `FE_UNDERFLOW`.
-    pub const UNDERFLOW: Self = Self(0x08);
-    /// `FE_INEXACT`.
-    pub const INEXACT: Self = Self(0x10);
-
-    /// Every flag, and its name.
-    const NAMES: [(Self, &'static str); 5] = [
-        (Self::INVALID, "INVALID"),
-        (Self::DIVIDE_BY_ZERO, "DIVIDE_BY_ZERO"),
-        (Self::OVERFLOW, "OVERFLOW"),
-        (Self::UNDERFLOW, "UNDERFLOW"),
-        (Self::INEXACT, "INEXACT"),
-    ];
-
-    /// The bits of every flag.
-    const ALL_BITS: u8 = 0x1F;
-
-    /// Returns the flags with the shim bits, or `None` when a bit is not a
-    /// flag.
-    #[must_use]
-    pub const fn from_bits(bits: u8) -> Option<Self> {
-        if bits & !Self::ALL_BITS == 0 {
-            Some(Self(bits))
-        } else {
-            None
-        }
-    }
-
-    /// Returns the shim bits.
-    #[must_use]
-    pub const fn bits(self) -> u8 {
-        self.0
-    }
-
-    /// Returns whether every flag of `other` is set.
-    #[must_use]
-    pub const fn contains(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
-
-    /// Returns the five IEEE flags of floaty flags. The references have no
-    /// other flag.
-    #[must_use]
-    pub fn from_floaty(flags: floaty::Flags) -> Self {
-        [
-            (floaty::Flags::INVALID, Self::INVALID),
-            (floaty::Flags::DIVIDE_BY_ZERO, Self::DIVIDE_BY_ZERO),
-            (floaty::Flags::OVERFLOW, Self::OVERFLOW),
-            (floaty::Flags::UNDERFLOW, Self::UNDERFLOW),
-            (floaty::Flags::INEXACT, Self::INEXACT),
-        ]
-        .into_iter()
-        .filter(|&(ours, _)| flags.contains(ours))
-        .fold(Self::NONE, |set, (_, theirs)| set | theirs)
-    }
-}
-
-impl BitOr for Flags {
-    type Output = Self;
-
-    fn bitor(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-}
-
-impl fmt::Debug for Flags {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let names: Vec<&str> = Self::NAMES
-            .into_iter()
-            .filter(|&(flag, _)| self.contains(flag))
-            .map(|(_, name)| name)
-            .collect();
-        if names.is_empty() {
-            formatter.write_str("Flags(NONE)")
-        } else {
-            write!(formatter, "Flags({})", names.join(" | "))
-        }
-    }
 }
 
 /// One operation on two operands in one rounding direction.
@@ -338,15 +186,6 @@ pub struct FunctionCase {
     pub rounding: Rounding,
     /// The operands.
     pub operands: [Pair; 3],
-}
-
-/// The result of an operation and the flags that it raised.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Outcome {
-    /// The result.
-    pub result: Pair,
-    /// The flags that the operation raised.
-    pub flags: Flags,
 }
 
 /// One fused multiply-add instruction on three binary64 operands in one
@@ -387,7 +226,7 @@ pub fn run(cases: &[Case]) -> Vec<Outcome> {
         format!(
             "{} {} {:016x} {:016x} {:016x} {:016x}",
             case.operation.word(),
-            case.rounding.word(),
+            rounding_word(case.rounding),
             case.a.hi,
             case.a.lo,
             case.b.hi,
@@ -425,7 +264,7 @@ pub fn run_functions(cases: &[FunctionCase]) -> Vec<Outcome> {
         format!(
             "{} {} {}",
             case.function.word(),
-            case.rounding.word(),
+            rounding_word(case.rounding),
             operands.join(" ")
         )
     })
@@ -456,7 +295,7 @@ pub fn run_instructions(cases: &[InstructionCase]) -> Vec<InstructionOutcome> {
         format!(
             "{} {} {:016x} {:016x} {:016x}",
             case.instruction.word(),
-            case.rounding.word(),
+            rounding_word(case.rounding),
             case.a,
             case.c,
             case.b,

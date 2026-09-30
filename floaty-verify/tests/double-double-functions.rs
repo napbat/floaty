@@ -13,41 +13,37 @@
 
 use floaty::{DoubleDouble, Env, F64, Flags, Gcc, Qd};
 use floaty_verify::double_double::pair;
+use floaty_verify::encodings::Layout;
 use floaty_verify::ibm_ldouble::{
     self, Flags as ReferenceFlags, Function, FunctionCase, Outcome, Pair, Rounding,
 };
 use floaty_verify::qd;
 use floaty_verify::random::SplitMix64;
 
-/// Returns a binary64 encoding with this sign, exponent field, and fraction.
-fn encode(negative: bool, field: u64, fraction: u64) -> u64 {
-    (u64::from(negative) << 63) | (field << 52) | (fraction & ((1 << 52) - 1))
-}
+/// The layout of the halves.
+const BINARY64: Layout = Layout::BINARY64;
 
 /// Returns a random pair: a canonical pair of any magnitude, a pair near
 /// the edges of the range, or a pair of the generator of the exact-value
 /// tests, which holds special and random halves.
 fn operand(random: &mut SplitMix64) -> Pair {
-    let negative = random.next_u64() & 1 == 1;
-    match random.next_u64() % 4 {
+    let negative = random.coin_flip();
+    match random.below(4) {
         0 | 1 => {
-            let field = match random.next_u64() % 4 {
-                0 => random.next_u64() % 120,
-                1 => 2046 - random.next_u64() % 60,
-                _ => 1 + random.next_u64() % 2046,
+            let field = match random.below(4) {
+                0 => random.below(120),
+                1 => 2046 - random.below(60),
+                _ => 1 + random.below(2046),
             };
-            let hi = encode(negative, field, random.next_u64());
-            if field < 56 || random.next_u64() % 6 == 0 {
+            let hi = BINARY64.encode_u64(negative, field, random.next_u64());
+            if field < 56 || random.below(6) == 0 {
                 return Pair::new(hi, 0);
             }
-            let low_field = field - 54 - random.next_u64() % (field - 54).min(70);
-            let lo = encode(random.next_u64() & 1 == 1, low_field, random.next_u64());
+            let low_field = field - 54 - random.below((field - 54).min(70));
+            let lo = BINARY64.encode_u64(random.coin_flip(), low_field, random.next_u64());
             Pair::new(hi, lo)
         }
-        _ => {
-            let (hi, lo) = pair(random);
-            Pair::new(hi, lo)
-        }
+        _ => pair(random),
     }
 }
 
@@ -72,16 +68,16 @@ fn divisor(random: &mut SplitMix64, dividend: Pair) -> Pair {
         let result = x.scale_b(scale);
         Pair::new(result.hi().to_bits(), result.lo().to_bits())
     };
-    match random.next_u64() % 8 {
-        0 => scaled(-i32::try_from(random.next_u64() % 120).expect("below 120")),
-        1 => scaled(-i32::try_from(random.next_u64() % 2100).expect("below 2100")),
+    match random.below(8) {
+        0 => scaled(-i32::try_from(random.below(120)).expect("below 120")),
+        1 => scaled(-i32::try_from(random.below(2100)).expect("below 2100")),
         2 => Pair::new(dividend.hi, 0),
         3 => Pair::new(dividend.hi ^ 1 << 63, dividend.lo),
         4 => {
             // A dividend that is an integer times the divisor, near a tie.
-            let quotient = F64::from_bits(encode(
+            let quotient = F64::from_bits(BINARY64.encode_u64(
                 false,
-                1023 + random.next_u64() % 60,
+                1023 + random.below(60),
                 random.next_u64(),
             ));
             let quotient = DoubleDouble::<Gcc>::from_f64(quotient.round_to_integral());
@@ -185,12 +181,12 @@ fn sqrt_next_up_and_next_down_match_glibc() {
 /// half, so that `sqrtl` scales the low half to the subnormal range of
 /// binary64, or below it.
 fn far_low(random: &mut SplitMix64) -> Pair {
-    let field = 1100 + random.next_u64() % 940;
-    let low_field = field - 1016 - random.next_u64() % 70;
-    let sign = |random: &mut SplitMix64| random.next_u64() & 1 == 1;
+    let field = 1100 + random.below(940);
+    let low_field = field - 1016 - random.below(70);
+    let sign = |random: &mut SplitMix64| random.coin_flip();
     Pair::new(
-        encode(false, field, random.next_u64()),
-        encode(sign(random), low_field, random.next_u64()),
+        BINARY64.encode_u64(false, field, random.next_u64()),
+        BINARY64.encode_u64(sign(random), low_field, random.next_u64()),
     )
 }
 
@@ -233,17 +229,13 @@ fn fmod_and_remainder_match_glibc() {
 fn ties(random: &mut SplitMix64) -> Vec<(Pair, Pair)> {
     let mut pairs = Vec::new();
     for _ in 0..500 {
-        let subnormal = random.next_u64() % 4 == 0;
-        let field = if subnormal {
-            0
-        } else {
-            1 + random.next_u64() % 2000
-        };
+        let subnormal = random.below(4) == 0;
+        let field = if subnormal { 0 } else { 1 + random.below(2000) };
         // A divisor with at most 30 significant bits, and an even one when
         // subnormal, so that the dividend is exact.
         let fraction = (random.next_u64() >> 34) << 22;
-        let divisor = F64::from_bits(encode(random.next_u64() & 1 == 1, field, fraction));
-        let multiple = F64::from_int(4 * (random.next_u64() % 256) + 3);
+        let divisor = F64::from_bits(BINARY64.encode_u64(random.coin_flip(), field, fraction));
+        let multiple = F64::from_int(4 * random.below(256) + 3);
         let (dividend, flags) = divisor
             .mul_with(multiple, floaty::Env::IEEE)
             .0
@@ -254,11 +246,7 @@ fn ties(random: &mut SplitMix64) -> Vec<(Pair, Pair)> {
                 Pair::new(divisor.to_bits(), 0),
             ));
         }
-        let tiny = encode(
-            random.next_u64() & 1 == 1,
-            random.next_u64() % 3,
-            random.next_u64(),
-        );
+        let tiny = BINARY64.encode_u64(random.coin_flip(), random.below(3), random.next_u64());
         pairs.push((Pair::new(1 << 63, tiny), Pair::new(divisor.to_bits(), 0)));
     }
     pairs
@@ -267,12 +255,12 @@ fn ties(random: &mut SplitMix64) -> Vec<(Pair, Pair)> {
 /// Returns an addend for `x * y`: random, zero, the negated product, which
 /// cancels all but its error, or a value far from the product.
 fn addend(random: &mut SplitMix64, x: Pair, y: Pair) -> Pair {
-    match random.next_u64() % 5 {
-        0 => Pair::new(u64::from(random.next_u64() & 1 == 1) << 63, 0),
+    match random.below(5) {
+        0 => Pair::new(u64::from(random.coin_flip()) << 63, 0),
         1 | 2 => {
             let product = value(x) * value(y);
-            let scale = i32::try_from(random.next_u64() % 8).expect("below 8") - 4;
-            let negated = (-product).scale_b(if random.next_u64() & 1 == 0 { 0 } else { scale });
+            let scale = i32::try_from(random.below(8)).expect("below 8") - 4;
+            let negated = (-product).scale_b(if random.coin_flip() { scale } else { 0 });
             Pair::new(negated.hi().to_bits(), negated.lo().to_bits())
         }
         _ => operand(random),
@@ -285,7 +273,7 @@ fn mul_add_matches_glibc() {
     let mut cases = Vec::new();
     for _ in 0..20_000 {
         let x = operand(&mut random);
-        let y = if random.next_u64() % 4 == 0 {
+        let y = if random.below(4) == 0 {
             divisor(&mut random, x)
         } else {
             operand(&mut random)
@@ -305,13 +293,13 @@ fn mul_add_matches_glibc() {
 /// Returns a malformed pair: a finite high half with an infinite low half,
 /// or a NaN low half with a payload of its own.
 fn malformed(random: &mut SplitMix64) -> Pair {
-    let hi = encode(
-        random.next_u64() & 1 == 1,
-        1 + random.next_u64() % 2046,
+    let hi = BINARY64.encode_u64(
+        random.coin_flip(),
+        1 + random.below(2046),
         random.next_u64(),
     );
-    let sign = (random.next_u64() & 1) << 63;
-    let lo = if random.next_u64() % 3 == 0 {
+    let sign = u64::from(random.coin_flip()) << 63;
+    let lo = if random.below(3) == 0 {
         0x7FF0_0000_0000_0000
     } else {
         0x7FF8_0000_0000_0000 | (random.next_u64() & 0xFFFF)
@@ -327,10 +315,10 @@ fn mul_add_of_malformed_operands_matches_glibc() {
     let mut cases = Vec::new();
     for _ in 0..10_000 {
         let [x, y, z] = [0; 3].map(|_| {
-            if random.next_u64() & 1 == 0 {
-                malformed(&mut random)
-            } else {
+            if random.coin_flip() {
                 operand(&mut random)
+            } else {
+                malformed(&mut random)
             }
         });
         for rounding in [Rounding::TiesToEven, Rounding::TowardNegative] {
@@ -344,9 +332,9 @@ fn mul_add_of_malformed_operands_matches_glibc() {
     // Small values sort below the NaNs, whose exponent is 0, so two NaNs of
     // other payloads reach the top of the sort and meet in one sum.
     let small = |random: &mut SplitMix64| {
-        let hi = encode(
-            random.next_u64() & 1 == 1,
-            900 + random.next_u64() % 120,
+        let hi = BINARY64.encode_u64(
+            random.coin_flip(),
+            900 + random.below(120),
             random.next_u64(),
         );
         Pair::new(hi, 0x7FF8_0000_0000_0000 | (random.next_u64() & 0xFFFF))

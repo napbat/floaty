@@ -210,7 +210,7 @@ fn random_case(random: &mut SplitMix64) -> Case {
 /// Returns a random element of `items`.
 fn pick<T: Copy>(random: &mut SplitMix64, items: &[T]) -> T {
     let count = u64::try_from(items.len()).expect("a slice length fits in 64 bits");
-    let index = usize::try_from(random.next_u64() % count).expect("an index fits in usize");
+    let index = usize::try_from(random.below(count)).expect("an index fits in usize");
     items[index]
 }
 

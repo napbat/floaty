@@ -16,6 +16,7 @@ use core::cmp::Ordering;
 use floaty::{
     BF16, D64Bid, D128Dpd, Decoded, DoubleDouble, Env, F16, F32, F64, F80, F128, Flags, Gcc,
 };
+use floaty_verify::double_double::reference::Pair;
 use floaty_verify::double_double::{Exact, behaviors, exact, pair};
 use floaty_verify::mpfr::decimal::{self, DecimalFormat, DecimalValue};
 use floaty_verify::mpfr::{self, Format, Operand, Specials, Value};
@@ -138,8 +139,8 @@ fn value(hi: u64, lo: u64) -> DoubleDouble<Gcc> {
 fn the_exact_value_decodes_and_converts() {
     let mut random = SplitMix64::new(0xDD_E4AC);
     for _ in 0..20_000 {
-        let (hi, lo) = pair(&mut random);
-        let (dd, exact_value) = (value(hi, lo), exact(hi, lo));
+        let Pair { hi, lo } = pair(&mut random);
+        let (dd, exact_value) = (value(hi, lo), exact(Pair::new(hi, lo)));
         assert_eq!(
             dd.decode(),
             expected_decode(&exact_value),
@@ -156,16 +157,13 @@ fn the_exact_value_decodes_and_converts() {
 fn the_exact_values_compare() {
     let mut random = SplitMix64::new(0xDD_C0DE);
     for _ in 0..50_000 {
-        let (a, b) = (pair(&mut random), pair(&mut random));
+        let [a, b] = [pair(&mut random), pair(&mut random)].map(|Pair { hi, lo }| (hi, lo));
         // Half the second operands share the first high half, so that the low
         // halves decide.
-        let b = if random.next_u64() & 1 == 0 {
-            (a.0, b.1)
-        } else {
-            b
-        };
+        let b = if random.coin_flip() { b } else { (a.0, b.1) };
         let (x, y) = (value(a.0, a.1), value(b.0, b.1));
-        let (order, signaling) = expected_order(&exact(a.0, a.1), &exact(b.0, b.1));
+        let (order, signaling) =
+            expected_order(&exact(Pair::new(a.0, a.1)), &exact(Pair::new(b.0, b.1)));
         let quiet = if signaling {
             Flags::INVALID
         } else {
@@ -187,9 +185,9 @@ fn abs_clears_the_sign_of_the_exact_value() {
     let mut random = SplitMix64::new(0xDD_AB5);
     let sign = 1_u64 << 63;
     for _ in 0..50_000 {
-        let (hi, lo) = pair(&mut random);
+        let Pair { hi, lo } = pair(&mut random);
         let result = value(hi, lo).abs();
-        let expected = if exact(hi, lo).negative() {
+        let expected = if exact(Pair::new(hi, lo)).negative() {
             (hi ^ sign, lo ^ sign)
         } else {
             (hi, lo)

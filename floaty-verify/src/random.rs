@@ -26,4 +26,28 @@ impl SplitMix64 {
     pub fn next_u128(&mut self) -> u128 {
         (u128::from(self.next_u64()) << 64) | u128::from(self.next_u64())
     }
+
+    /// Returns a random value below `bound`, from the next 64 random bits.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `bound` is zero.
+    pub fn below(&mut self, bound: u64) -> u64 {
+        self.next_u64() % bound
+    }
+
+    /// Returns a random value below `bound`, from the next 128 random bits.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `bound` is zero.
+    pub fn below_u128(&mut self, bound: u128) -> u128 {
+        self.next_u128() % bound
+    }
+
+    /// Returns `true` or `false` with even odds, from the lowest of the next
+    /// 64 random bits.
+    pub fn coin_flip(&mut self) -> bool {
+        self.next_u64() & 1 == 1
+    }
 }

@@ -135,9 +135,9 @@ fn operands<S: Standard<W>, const W: usize>(random: &mut SplitMix64) -> Vec<Floa
     (0..COUNT)
         .map(|_| {
             let exact = Exact {
-                negative: random.next_u64() % 2 == 0,
+                negative: random.below(2) == 0,
                 exponent: base
-                    + i32::try_from(random.next_u64() % 8).expect("a shift below 8 fits an i32"),
+                    + i32::try_from(random.below(8)).expect("a shift below 8 fits an i32"),
                 significand: [random.next_u64() | 1 << 63],
                 sticky: false,
             };
@@ -240,10 +240,10 @@ fn zero<S: Standard<W>, const W: usize>() -> Float<S, W> {
 fn integers(random: &mut SplitMix64) -> Vec<i64> {
     (0..COUNT)
         .map(|_| {
-            let bits = random.next_u64() % 64;
+            let bits = random.below(64);
             let magnitude = i64::try_from((random.next_u64() >> 1) >> bits)
                 .expect("a value below 2^63 fits an i64");
-            if random.next_u64() % 2 == 0 {
+            if random.below(2) == 0 {
                 magnitude
             } else {
                 -magnitude
@@ -499,10 +499,9 @@ macro_rules! apfloat_row {
             let mut values = Vec::with_capacity(COUNT);
             for _ in 0..COUNT {
                 let exact = Exact {
-                    negative: random.next_u64() % 2 == 0,
+                    negative: random.below(2) == 0,
                     exponent: -63
-                        + i32::try_from(random.next_u64() % 8)
-                            .expect("a shift below 8 fits an i32"),
+                        + i32::try_from(random.below(8)).expect("a shift below 8 fits an i32"),
                     significand: [random.next_u64() | 1 << 63],
                     sticky: false,
                 };

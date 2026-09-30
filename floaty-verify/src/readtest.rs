@@ -37,7 +37,7 @@
 use std::fmt;
 use std::fs;
 
-use crate::intel_decimal::{Flags, Format, Integer, Rounding};
+use crate::intel_decimal::{Flags, Format, Inexact, Integer, Rounding};
 
 /// The path of the extracted `readtest.in`.
 pub const PATH: &str = env!("FLOATY_INTEL_READTEST");
@@ -291,6 +291,91 @@ pub struct Line {
     /// The size of `long int` that the expected result needs, from
     /// `longintsize=`.
     pub long_int_size: Option<u32>,
+}
+
+/// An operand that a test line lacks, or that does not have the form that
+/// its function needs.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum OperandError {
+    /// The line has no operand at this index.
+    Missing(usize),
+    /// The operand does not have the form.
+    Field(FieldError),
+}
+
+impl fmt::Display for OperandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing(index) => write!(formatter, "operand {index} is missing"),
+            Self::Field(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for OperandError {}
+
+impl From<FieldError> for OperandError {
+    fn from(error: FieldError) -> Self {
+        Self::Field(error)
+    }
+}
+
+impl Line {
+    /// Returns the operand at `index`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperandError::Missing`] when the line has no such operand.
+    pub fn operand(&self, index: usize) -> Result<&Field, OperandError> {
+        self.operands.get(index).ok_or(OperandError::Missing(index))
+    }
+
+    /// Returns the operand at `index` as an encoding of format `F`, by
+    /// [`Field::decimal`]. `readtest.c` converts a decimal string operand
+    /// rounding to nearest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`OperandError`] when the operand is missing or is not an
+    /// encoding of the format.
+    pub fn decimal_operand<F: Format>(&self, index: usize) -> Result<F::Bits, OperandError> {
+        Ok(self.operand(index)?.decimal::<F>(Rounding::TiesToEven)?)
+    }
+
+    /// Returns the operand at `index` as an integer of type `integer`, by
+    /// [`Field::integer`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`OperandError`] when the operand is missing or is not an
+    /// integer of the type.
+    pub fn integer_operand(&self, index: usize, integer: Integer) -> Result<i128, OperandError> {
+        Ok(self.operand(index)?.integer(integer)?)
+    }
+}
+
+/// Returns the integer type, the rounding direction, and the inexact rule of
+/// the name of a conversion to an integer, such as `to_uint16_xfloor`, without
+/// its format prefix. Returns `None` for another name.
+#[must_use]
+pub fn to_integer_name(name: &str) -> Option<(Integer, Rounding, Inexact)> {
+    let (integer, suffix) = name.strip_prefix("to_")?.split_once('_')?;
+    let integer = Integer::ALL
+        .into_iter()
+        .find(|candidate| candidate.name() == integer)?;
+    let (inexact, direction) = match suffix.strip_prefix('x') {
+        Some(direction) => (Inexact::Signaled, direction),
+        None => (Inexact::Ignored, suffix),
+    };
+    let rounding = match direction {
+        "rnint" => Rounding::TiesToEven,
+        "rninta" => Rounding::TiesToAway,
+        "int" => Rounding::TowardZero,
+        "floor" => Rounding::TowardNegative,
+        "ceil" => Rounding::TowardPositive,
+        _ => return None,
+    };
+    Some((integer, rounding, inexact))
 }
 
 /// A line of `readtest.in` that is not a test or a comment.

@@ -8,6 +8,11 @@
 //! its canonical pair. No reference library rounds to a pair this way, so
 //! [`round_pair`] evaluates the documented rule: each step is an exact
 //! rational operation or a binary64 rounding of [`mpfr::round`].
+//!
+//! The submodule [`reference`](mod@reference) holds the types that the
+//! double-double references share.
+
+pub mod reference;
 
 use core::num::NonZeroU32;
 
@@ -19,6 +24,7 @@ use rug::{Float as BigFloat, Integer, Rational};
 
 use crate::mpfr::{self, Format, Input, Specials, Value};
 use crate::random::SplitMix64;
+use reference::Pair;
 
 /// The precision of the exact sum of two halves: every finite pair spans at
 /// most 2,099 bits.
@@ -75,12 +81,11 @@ pub fn is_infinite(bits: u64) -> bool {
     bits & 0x7FFF_FFFF_FFFF_FFFF == 0x7FF0_0000_0000_0000
 }
 
-/// Returns the exact value of the pair `(hi, lo)` by floaty's rule: a NaN or
-/// an infinite high half gives that value; with a finite high half, a NaN or
-/// an infinite low half gives that value; and a zero sum takes the sign of
-/// the high half.
+/// Returns the exact value of a pair by floaty's rule: a NaN or an infinite
+/// high half gives that value; with a finite high half, a NaN or an infinite
+/// low half gives that value; and a zero sum takes the sign of the high half.
 #[must_use]
-pub fn exact(hi: u64, lo: u64) -> Exact {
+pub fn exact(Pair { hi, lo }: Pair) -> Exact {
     let special = |bits: u64| {
         if is_nan(bits) {
             Some(Exact::Nan(bits))
@@ -112,7 +117,7 @@ pub fn exact(hi: u64, lo: u64) -> Exact {
 /// # Panics
 ///
 /// Never: an index below 8 fits a `usize`.
-pub fn pair(random: &mut SplitMix64) -> (u64, u64) {
+pub fn pair(random: &mut SplitMix64) -> Pair {
     const EDGES: [u64; 8] = [
         0,
         1,
@@ -124,7 +129,7 @@ pub fn pair(random: &mut SplitMix64) -> (u64, u64) {
         0x7FF0_0000_0000_0003,
     ];
     let edge = |random: &mut SplitMix64| {
-        let index = usize::try_from(random.next_u64() % 8).expect("an index fits a usize");
+        let index = usize::try_from(random.below(8)).expect("an index fits a usize");
         EDGES[index] | (random.next_u64() & (1 << 63))
     };
     let finite = |random: &mut SplitMix64| {
@@ -135,14 +140,15 @@ pub fn pair(random: &mut SplitMix64) -> (u64, u64) {
             bits
         }
     };
-    match random.next_u64() % 6 {
+    // The halves draw in order: the high half, then the low half.
+    let (hi, lo) = match random.below(6) {
         0 | 1 => {
             let hi = finite(random);
             let field = (hi >> 52) & 0x7FF;
             if field < 60 {
-                return (hi, 0);
+                return Pair::new(hi, 0);
             }
-            let low_field = field - 54 - random.next_u64() % 6;
+            let low_field = field - 54 - random.below(6);
             (
                 hi,
                 (random.next_u64() & 0x800F_FFFF_FFFF_FFFF) | (low_field << 52),
@@ -152,7 +158,8 @@ pub fn pair(random: &mut SplitMix64) -> (u64, u64) {
         3 => (edge(random), edge(random)),
         4 => (finite(random), edge(random)),
         _ => (random.next_u64(), random.next_u64()),
-    }
+    };
+    Pair::new(hi, lo)
 }
 
 /// Behaviors that use each rounding direction, flush-to-zero with each

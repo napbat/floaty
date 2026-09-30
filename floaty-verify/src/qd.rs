@@ -22,13 +22,14 @@
 //! message to standard error. The shim discards the message.
 //!
 //! The value, rounding, and flag types are the types of
-//! [`crate::ibm_ldouble`], so one test can compare both references.
+//! [`crate::double_double::reference`], which [`crate::ibm_ldouble`] also uses, so one
+//! test can compare both references.
 
 use core::ffi::{c_int, c_uint};
 
 use floaty::{Env, F64};
 
-pub use crate::ibm_ldouble::{Flags, Outcome, Pair, Rounding};
+pub use crate::double_double::reference::{Flags, Outcome, Pair, Rounding};
 
 /// Returns `fma(x, y, z)` of the C library that QD calls, on binary64
 /// encodings, rounded to nearest. glibc selects its `fma` at run time, so the

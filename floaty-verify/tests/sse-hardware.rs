@@ -10,7 +10,7 @@
 #![cfg(target_arch = "x86_64")]
 
 use floaty::{BF16, Env, F16, F32, F64, mode};
-use floaty_verify::encodings::{Layout, boundary_encodings_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings_u128, rounding_edges};
 use floaty_verify::entry_points::{
     assert_arithmetic_under, assert_comparisons_under, assert_conversions_under,
     assert_remainder_under,
@@ -19,14 +19,6 @@ use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, MXCSR_COMPARISON_CONTROLS, MXCSR_MASKED, MXCSR_OPERATOR_CONTROLS, mxcsr_flags,
 };
-
-/// Returns the low-bit patterns of `dropped` discarded bits that decide a
-/// rounding: exact, just below halfway, halfway, just above halfway, and all
-/// ones.
-fn edge_patterns(dropped: u32) -> [u64; 5] {
-    let half = 1_u64 << (dropped - 1);
-    [0, half - 1, half, half + 1, (half << 1) - 1]
-}
 
 /// Returns binary64 encodings near every binary32 boundary, and random ones.
 fn binary64_to_binary32_inputs() -> Vec<u64> {
@@ -45,7 +37,7 @@ fn binary64_to_binary32_inputs() -> Vec<u64> {
         // A binary32 result keeps 24 bits, and fewer below 2^-126.
         let dropped = (29 + (-126 - exponent).max(0)).min(52);
         let biased = u64::try_from(1023 + exponent).expect("a normal binary64 exponent");
-        for pattern in edge_patterns(u32::try_from(dropped).expect("at most 52")) {
+        for pattern in rounding_edges(u32::try_from(dropped).expect("at most 52")) {
             for _ in 0..8 {
                 let high = (random.next_u64() >> 12) & !((1 << dropped) - 1);
                 let sign = random.next_u64() << 63;
@@ -55,7 +47,7 @@ fn binary64_to_binary32_inputs() -> Vec<u64> {
     }
     // Biased exponents from below the binary32 subnormals to above its range.
     for _ in 0..200_000 {
-        let exponent = 1023 - 160 + random.next_u64() % 300;
+        let exponent = 1023 - 160 + random.below(300);
         let fraction = random.next_u64() >> 12;
         let sign = random.next_u64() << 63;
         inputs.push(sign | (exponent << 52) | fraction);
@@ -145,11 +137,11 @@ fn single_operands(random: &mut SplitMix64, count: usize) -> Vec<u32> {
     for index in 0..count {
         let fraction = u32::try_from(random.next_u64() >> 41).expect("23 bits");
         let exponent = match index % 3 {
-            0 => u32::try_from(random.next_u64() % 256).expect("8 bits"),
-            1 => u32::try_from(random.next_u64() % 40).expect("below 40"),
-            _ => 215 + u32::try_from(random.next_u64() % 40).expect("below 40"),
+            0 => u32::try_from(random.below(256)).expect("8 bits"),
+            1 => u32::try_from(random.below(40)).expect("below 40"),
+            _ => 215 + u32::try_from(random.below(40)).expect("below 40"),
         };
-        let sign = u32::try_from(random.next_u64() & 1).expect("one bit") << 31;
+        let sign = u32::from(random.coin_flip()) << 31;
         operands.push(sign | (exponent.min(255) << 23) | fraction);
     }
     operands
@@ -172,11 +164,11 @@ fn double_operands(random: &mut SplitMix64, count: usize) -> Vec<u64> {
     for index in 0..count {
         let fraction = random.next_u64() >> 12;
         let exponent = match index % 3 {
-            0 => random.next_u64() % 2048,
-            1 => random.next_u64() % 80,
-            _ => 1970 + random.next_u64() % 78,
+            0 => random.below(2048),
+            1 => random.below(80),
+            _ => 1970 + random.below(78),
         };
-        let sign = (random.next_u64() & 1) << 63;
+        let sign = u64::from(random.coin_flip()) << 63;
         operands.push(sign | (exponent << 52) | fraction);
     }
     operands

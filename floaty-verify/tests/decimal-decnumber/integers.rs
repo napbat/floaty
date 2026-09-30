@@ -115,7 +115,7 @@ fn integer(random: &mut SplitMix64, precision: u32) -> i128 {
     let wide = |random: &mut SplitMix64| {
         u128::from(random.next_u64()) << 64 | u128::from(random.next_u64())
     };
-    let magnitude = match random.next_u64() % 4 {
+    let magnitude = match random.below(4) {
         0 => u128::from(random.next_u64()),
         1 => wide(random) >> 1,
         2 => {
@@ -123,13 +123,13 @@ fn integer(random: &mut SplitMix64, precision: u32) -> i128 {
             // ten: a tie of every nearest mode.
             let lowest = 10_u128.pow(precision - 1);
             let coefficient = lowest + wide(random) % (9 * lowest);
-            let scale = u32::try_from(random.next_u64() % 3).expect("the scale is below 3");
+            let scale = u32::try_from(random.below(3)).expect("the scale is below 3");
             (coefficient * 10 + 5) * 10_u128.pow(scale)
         }
         _ => wide(random) % 10_u128.pow(precision),
     };
     let magnitude = i128::try_from(magnitude).expect("every magnitude is below 2^127");
-    if random.next_u64() & 1 == 1 {
+    if random.coin_flip() {
         -magnitude
     } else {
         magnitude

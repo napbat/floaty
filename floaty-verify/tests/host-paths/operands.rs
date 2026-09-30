@@ -68,7 +68,7 @@ pub(super) fn double_double_pairs(random: &mut SplitMix64) -> Vec<(F64, F64)> {
     halves.extend((0..20_000).map(|_| {
         let hi = F64::from_bits(random.next_u64());
         // A low half near 2^-60 of the high half, or random bits.
-        let lo = if random.next_u64() % 4 == 0 {
+        let lo = if random.below(4) == 0 {
             F64::from_bits(random.next_u64())
         } else {
             hi.scale_b(-60)
@@ -133,7 +133,7 @@ pub(super) fn extended_operands(random: &mut SplitMix64) -> Vec<F80> {
     // 1.0 and near the bounds of 64-bit integers.
     for shift in [10, 39] {
         for _ in 0..5_000 {
-            let exponent = u128::from(0x3FFF - 70 + random.next_u64() % 140);
+            let exponent = u128::from(0x3FFF - 70 + random.below(140));
             let high = (random.next_u64() | 1 << 63) & !((1 << (shift + 1)) - 1);
             let half = u128::from(high | 1 << shift);
             bits.extend([half - 1, half, half + 1].map(|significand| exponent << 64 | significand));
@@ -195,7 +195,7 @@ pub(super) fn close_pairs(
     (0..4_000)
         .map(|_| {
             let exponent = 1 + u128::from(random.next_u64()) % largest;
-            let gap = u128::from(random.next_u64() % (spread + 1));
+            let gap = u128::from(random.below(spread + 1));
             let divisor = exponent.saturating_sub(gap).max(1);
             (encoding(random, exponent), encoding(random, divisor))
         })

@@ -191,13 +191,9 @@ fn cancelling_addend<S: floaty::format::Standard<W>, const W: usize>(
 /// zeros, the smallest subnormals, both infinities, and quiet and signaling
 /// NaNs of both signs.
 fn special_encodings(layout: Layout) -> Vec<Integer> {
-    let Layout {
-        width,
-        exponent_bits,
-        ..
-    } = layout;
+    let width = layout.width;
     let fraction_bits = layout.fraction_bits();
-    let field: Integer = ((Integer::from(1) << exponent_bits) - 1u32) << fraction_bits;
+    let field: Integer = Integer::from(layout.largest_field()) << fraction_bits;
     let quiet = Integer::from(1) << (fraction_bits - 1);
     let magnitudes = [
         Integer::ZERO,
@@ -219,8 +215,7 @@ fn special_encodings(layout: Layout) -> Vec<Integer> {
 fn encodings(layout: Layout, count: usize, random: &mut SplitMix64) -> Vec<Integer> {
     let width = layout.width;
     let mask: Integer = (Integer::from(1) << width) - 1u32;
-    let nan_field: Integer =
-        ((Integer::from(1) << layout.exponent_bits) - 1u32) << layout.fraction_bits();
+    let nan_field: Integer = Integer::from(layout.largest_field()) << layout.fraction_bits();
     let mut values = boundary_encodings(layout);
     let limbs = width.div_ceil(64);
     for index in 0..count {

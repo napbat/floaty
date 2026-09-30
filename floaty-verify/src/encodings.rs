@@ -1,11 +1,16 @@
 //! The field layouts of the binary formats, and test encodings at the field
-//! boundaries of a layout.
+//! boundaries of a layout and at the rounding edges.
 //!
-//! [`Layout`] and [`boundary_encodings_u128`] build on every target. The
-//! functions on MPFR's integers build only for x86-64, with MPFR.
+//! [`Layout`], [`boundary_encodings_u128`], [`rounding_edges`], and
+//! [`integer_edges`] build on every target. The functions on MPFR's integers
+//! build only for x86-64, with MPFR.
+
+use core::ops::RangeInclusive;
 
 #[cfg(target_arch = "x86_64")]
 use rug::Integer;
+
+use crate::random::SplitMix64;
 
 /// Whether a format stores its integer bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +104,13 @@ impl Layout {
         }
     }
 
+    /// Returns the largest exponent field, all ones: the field of the
+    /// infinities and the NaNs of an IEEE format.
+    #[must_use]
+    pub const fn largest_field(self) -> u32 {
+        (1 << self.exponent_bits) - 1
+    }
+
     /// Returns the exponent bias by the rule of IEEE 754, `2^(e - 1) - 1` for
     /// `e` exponent bits. The x87 format has the same bias. A format with
     /// another bias, such as a Fnuz format, does not use this method.
@@ -121,6 +133,78 @@ impl Layout {
         let fraction = fraction & ((1 << fraction_bits) - 1);
         (u128::from(negative) << (self.width - 1)) | (u128::from(field) << fraction_bits) | fraction
     }
+
+    /// Returns the encoding of [`Layout::encode`] in a format of at most 64
+    /// bits, as a `u64`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the encoding does not fit a `u64`.
+    #[must_use]
+    pub fn encode_u64(self, negative: bool, field: u64, fraction: u64) -> u64 {
+        u64::try_from(self.encode(negative, field, u128::from(fraction)))
+            .expect("the format has at most 64 bits")
+    }
+}
+
+/// Returns the patterns of `dropped` low bits that decide a rounding: exact,
+/// just below halfway, halfway, just above halfway, and all ones. With no
+/// dropped bit, every pattern is zero.
+#[must_use]
+pub fn rounding_edges(dropped: u32) -> [u64; 5] {
+    if dropped == 0 {
+        return [0; 5];
+    }
+    let half = 1_u64 << (dropped - 1);
+    let mask = (half << 1).wrapping_sub(1);
+    [0, half - 1, half, half + 1, mask].map(|pattern| pattern & mask)
+}
+
+/// Returns encodings around the integers with the unbiased exponents
+/// `exponents`, for both signs, in a format of at most 64 significand bits.
+///
+/// The significand bits below the binary point take each pattern of
+/// [`rounding_edges`], and the bits above the binary point are all zeros,
+/// all ones, or random. A value below one has every significand bit below
+/// the binary point. A stored integer bit is set.
+///
+/// # Panics
+///
+/// Panics for a format with more than 64 significand bits, for an exponent
+/// outside the normal range, and when an encoding does not fit `T`.
+pub fn integer_edges<T: TryFrom<u128>>(
+    layout: Layout,
+    random: &mut SplitMix64,
+    exponents: RangeInclusive<i32>,
+) -> Vec<T> {
+    let trailing = layout.precision() - 1;
+    assert!(trailing < 64, "the format has at most 64 significand bits");
+    let integer = match layout.integer_bit {
+        IntegerBit::Implicit => 0,
+        IntegerBit::Explicit => 1 << trailing,
+    };
+    let trailing_bits = i32::try_from(trailing).expect("at most 63 bits");
+    let mut encodings = Vec::new();
+    for exponent in exponents {
+        let dropped = u32::try_from((trailing_bits - exponent).clamp(0, trailing_bits))
+            .expect("between 0 and the trailing width");
+        let all_ones = (1 << (trailing - dropped)) - 1;
+        let field = u64::try_from(exponent + layout.ieee_bias()).expect("a normal exponent");
+        for high in [0, all_ones, random.next_u64(), random.next_u64()] {
+            for pattern in rounding_edges(dropped) {
+                for negative in [false, true] {
+                    let significand = integer | ((high & all_ones) << dropped) | pattern;
+                    let bits = layout.encode(negative, field, u128::from(significand));
+                    encodings.push(
+                        T::try_from(bits)
+                            .ok()
+                            .expect("the encoding fits the storage"),
+                    );
+                }
+            }
+        }
+    }
+    encodings
 }
 
 /// Returns the encodings of `boundary_encodings` for a format of at most 128
@@ -133,13 +217,11 @@ impl Layout {
 #[must_use]
 pub fn boundary_encodings_u128(layout: Layout) -> Vec<u128> {
     let Layout {
-        width,
-        exponent_bits,
-        integer_bit,
+        width, integer_bit, ..
     } = layout;
     assert!(width <= 128, "the format has at most 128 bits");
     let fraction_bits = layout.fraction_bits();
-    let field_max = (1_u128 << exponent_bits) - 1;
+    let field_max = u128::from(layout.largest_field());
     let fraction_all = (1_u128 << fraction_bits) - 1;
     let top = 1_u128 << (fraction_bits - 1);
     let next = 1_u128 << (fraction_bits - 2);
@@ -176,12 +258,10 @@ pub fn boundary_encodings_u128(layout: Layout) -> Vec<u128> {
 #[must_use]
 pub fn boundary_encodings(layout: Layout) -> Vec<Integer> {
     let Layout {
-        width,
-        exponent_bits,
-        integer_bit,
+        width, integer_bit, ..
     } = layout;
     let fraction_bits = layout.fraction_bits();
-    let field_max = (Integer::from(1) << exponent_bits) - 1u32;
+    let field_max = Integer::from(layout.largest_field());
     let fraction_all = (Integer::from(1) << fraction_bits) - 1u32;
     let top = Integer::from(1) << (fraction_bits - 1);
     let next = Integer::from(1) << (fraction_bits - 2);

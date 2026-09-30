@@ -219,9 +219,8 @@ macro_rules! decimal_values {
         for _ in 0..$random {
             let coefficient = Integer::from(random.next_u128()) % &largest;
             let span = u64::try_from(highest - lowest + 1).expect("the range is positive");
-            let exponent =
-                lowest + i64::try_from(random.next_u64() % span).expect("the offset fits");
-            values.push(make(random.next_u64() & 1 == 1, &coefficient, exponent));
+            let exponent = lowest + i64::try_from(random.below(span)).expect("the offset fits");
+            values.push(make(random.coin_flip(), &coefficient, exponent));
         }
         values.extend($specials.map(<$alias>::from_bits));
         values
@@ -335,11 +334,11 @@ fn in_decimal_range<const N: usize>(
     let bias = i64::from(layout.ieee_bias());
     (0..count)
         .map(|_| {
-            let offset = random.next_u64() % span.unsigned_abs();
+            let offset = random.below(span.unsigned_abs());
             let exponent = low + i64::try_from(offset).expect("the offset fits an i64");
             let limbs: [u64; N] = core::array::from_fn(|_| random.next_u64());
             let fraction = Integer::from_digits(&limbs, Order::Lsf).keep_bits(fraction_bits);
-            let sign = Integer::from(random.next_u64() & 1) << (layout.width - 1);
+            let sign = Integer::from(random.coin_flip()) << (layout.width - 1);
             let field = Integer::from(bias + exponent) << fraction_bits;
             to_limbs::<N>(&(sign | field | fraction))
         })

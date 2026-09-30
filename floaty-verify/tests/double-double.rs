@@ -22,22 +22,21 @@ use std::collections::BTreeMap;
 
 use floaty::env::Tininess;
 use floaty::{DoubleDouble, Env, F64, Flags, Gcc, Qd};
+use floaty_verify::encodings::Layout;
 use floaty_verify::ibm_ldouble::{
     self, Case, Flags as ReferenceFlags, Operation, Outcome, Pair, Rounding,
 };
 use floaty_verify::qd;
 use floaty_verify::random::SplitMix64;
 
+/// The layout of the halves.
+const BINARY64: Layout = Layout::BINARY64;
+
 /// The number of random operand pairs of each test.
 const PAIRS: usize = 24_000;
 
 /// The mask of the exponent field of a binary64 encoding.
 const EXPONENT_MASK: u64 = 0x7FF0_0000_0000_0000;
-
-/// Returns a binary64 encoding with this sign, exponent field, and fraction.
-fn encode(negative: bool, field: u64, fraction: u64) -> u64 {
-    (u64::from(negative) << 63) | (field << 52) | (fraction & ((1 << 52) - 1))
-}
 
 /// Seeded random operands, biased toward the edges of double-double
 /// arithmetic.
@@ -46,23 +45,15 @@ struct Operands {
 }
 
 impl Operands {
-    fn below(&mut self, bound: u64) -> u64 {
-        self.random.next_u64() % bound
-    }
-
-    fn sign(&mut self) -> bool {
-        self.random.next_u64() & 1 == 1
-    }
-
     /// Returns an exponent field, often at the ends of the range, at the
     /// scaling threshold of `__gcc_qdiv`, or near 1.
     fn field(&mut self) -> u64 {
-        match self.below(8) {
-            0 => self.below(60),
-            1 => 2046 - self.below(60),
-            2 => 54 + self.below(3),
-            3 => 1023 - 30 + self.below(60),
-            _ => 1 + self.below(2046),
+        match self.random.below(8) {
+            0 => self.random.below(60),
+            1 => 2046 - self.random.below(60),
+            2 => 54 + self.random.below(3),
+            3 => 1023 - 30 + self.random.below(60),
+            _ => 1 + self.random.below(2046),
         }
     }
 
@@ -70,12 +61,12 @@ impl Operands {
     /// half a unit in the last place of the high half.
     fn well_formed(&mut self) -> Pair {
         let field = self.field();
-        let hi = encode(self.sign(), field, self.random.next_u64());
-        if field < 55 || self.below(8) == 0 {
-            return Pair::new(hi, encode(self.sign(), 0, 0));
+        let hi = BINARY64.encode_u64(self.random.coin_flip(), field, self.random.next_u64());
+        if field < 55 || self.random.below(8) == 0 {
+            return Pair::new(hi, BINARY64.encode_u64(self.random.coin_flip(), 0, 0));
         }
-        let low_field = field - 54 - self.below((field - 54).min(70));
-        let lo = encode(self.sign(), low_field, self.random.next_u64());
+        let low_field = field - 54 - self.random.below((field - 54).min(70));
+        let lo = BINARY64.encode_u64(self.random.coin_flip(), low_field, self.random.next_u64());
         Pair::new(hi, lo)
     }
 
@@ -93,15 +84,18 @@ impl Operands {
             0x7FF8_0000_0000_0001,
             0x7FF0_0000_0000_0002,
         ];
-        let edge = EDGES[usize::try_from(self.below(10)).expect("an index fits a usize")];
-        edge | (u64::from(self.sign()) << 63)
+        let edge = EDGES[usize::try_from(self.random.below(10)).expect("an index fits a usize")];
+        edge | (u64::from(self.random.coin_flip()) << 63)
     }
 
     /// Returns an operand.
     fn operand(&mut self) -> Pair {
-        match self.below(12) {
+        match self.random.below(12) {
             0..=6 => self.well_formed(),
-            7 | 8 => Pair::new(self.edge(), encode(self.sign(), 0, 0)),
+            7 | 8 => Pair::new(
+                self.edge(),
+                BINARY64.encode_u64(self.random.coin_flip(), 0, 0),
+            ),
             9 => Pair::new(self.edge(), self.edge()),
             10 => Pair::new(self.random.next_u64(), self.random.next_u64()),
             _ => {
@@ -114,7 +108,7 @@ impl Operands {
     /// Returns a second operand: often one near the first, for cancellation
     /// and exact quotients.
     fn second(&mut self, first: Pair) -> Pair {
-        match self.below(9) {
+        match self.random.below(9) {
             0 => Pair::new(first.hi ^ (1 << 63), first.lo ^ (1 << 63)),
             1 => Pair::new(first.hi ^ (1 << 63), self.well_formed().lo),
             2 => first,
@@ -135,11 +129,14 @@ impl Operands {
         if !(a.is_normal() || a.is_subnormal()) {
             return self.operand();
         }
-        let steps = f64::from(u8::try_from(self.below(4)).expect("a step fits a u8"));
+        let steps = f64::from(u8::try_from(self.random.below(4)).expect("a step fits a u8"));
         let target = f64::MIN_POSITIVE * (1.0 - steps * f64::EPSILON / 2.0);
         let b = if product { target / a } else { a / target };
-        let sign = u64::from(self.sign()) << 63;
-        Pair::new(b.abs().to_bits() | sign, encode(self.sign(), 0, 0))
+        let sign = u64::from(self.random.coin_flip()) << 63;
+        Pair::new(
+            b.abs().to_bits() | sign,
+            BINARY64.encode_u64(self.random.coin_flip(), 0, 0),
+        )
     }
 }
 

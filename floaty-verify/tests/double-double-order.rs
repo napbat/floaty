@@ -14,6 +14,7 @@
 use core::cmp::Ordering;
 
 use floaty::{Class, DoubleDouble, Env, F64, Flags, Gcc, Qd};
+use floaty_verify::double_double::reference::Pair;
 use floaty_verify::double_double::{Exact, behaviors, exact, is_infinite, is_nan, pair};
 use floaty_verify::random::SplitMix64;
 use rug::{Float as BigFloat, Integer, Rational};
@@ -52,9 +53,12 @@ fn pairs_classify_by_their_exact_values() {
         (0x035F_FFFF_FFFF_FFFF, 0x0000_0000_0000_0001),
         (0x3FF0_0000_0000_0000, 0xBFF0_0000_0000_0000),
     ];
-    let pairs = (0..50_000).map(|_| pair(&mut random)).chain(edges);
+    let pairs = (0..50_000)
+        .map(|_| pair(&mut random))
+        .map(|Pair { hi, lo }| (hi, lo))
+        .chain(edges);
     for (hi, lo) in pairs {
-        let (ours, exact_value) = (value(hi, lo), exact(hi, lo));
+        let (ours, exact_value) = (value(hi, lo), exact(Pair::new(hi, lo)));
         let class = expected_class(&exact_value);
         let context = format!("{hi:#x} {lo:#x}");
         assert_eq!(ours.classify(), class, "{context}");
@@ -126,7 +130,10 @@ fn power_of_two(exponent: i32) -> Rational {
 #[test]
 fn canonical_pairs_follow_the_rule_of_glibc() {
     let mut random = SplitMix64::new(0xDD_CA70);
-    let mut pairs: Vec<(u64, u64)> = (0..100_000).map(|_| pair(&mut random)).collect();
+    let mut pairs: Vec<(u64, u64)> = (0..100_000)
+        .map(|_| pair(&mut random))
+        .map(|Pair { hi, lo }| (hi, lo))
+        .collect();
     // Low halves at half an ulp of an even and of an odd high half, and just
     // below and above it, with subnormal and normal low halves.
     for hi in [
@@ -181,7 +188,7 @@ fn rank(value: &Exact) -> (u8, Rational) {
 /// of their exact values, then the binary64 total order of the high halves
 /// and of the low halves.
 fn expected_order(a: (u64, u64), b: (u64, u64)) -> Ordering {
-    let (first, second) = (exact(a.0, a.1), exact(b.0, b.1));
+    let (first, second) = (exact(Pair::new(a.0, a.1)), exact(Pair::new(b.0, b.1)));
     let by_value = match (first.negative(), second.negative()) {
         (true, false) => Ordering::Less,
         (false, true) => Ordering::Greater,
@@ -199,9 +206,10 @@ fn expected_order(a: (u64, u64), b: (u64, u64)) -> Ordering {
 /// Returns a pair and a second pair: random, or with the high half of the
 /// first, or with the value of the first in another pair.
 fn two_pairs(random: &mut SplitMix64) -> ((u64, u64), (u64, u64)) {
-    let a = pair(random);
-    let b = match random.next_u64() % 4 {
-        0 => (a.0, pair(random).1),
+    let halves = |Pair { hi, lo }: Pair| (hi, lo);
+    let a = halves(pair(random));
+    let b = match random.below(4) {
+        0 => (a.0, pair(random).lo),
         // (hi, lo) and (hi + lo rounded, rest) often hold one value.
         1 => {
             let sum = F64::from_bits(a.0) + F64::from_bits(a.1);
@@ -209,7 +217,7 @@ fn two_pairs(random: &mut SplitMix64) -> ((u64, u64), (u64, u64)) {
             (sum.to_bits(), rest.to_bits())
         }
         2 => (a.0 ^ 1 << 63, a.1 ^ 1 << 63),
-        _ => pair(random),
+        _ => halves(pair(random)),
     };
     (a, b)
 }
@@ -249,7 +257,7 @@ macro_rules! check_min_max {
     ($a:expr, $b:expr, $env:expr, $with:ident, $minimum:expr) => {{
         let (a, b, env): ((u64, u64), (u64, u64), Env) = ($a, $b, $env);
         let (ours, flags) = value(a.0, a.1).$with(value(b.0, b.1), env);
-        let (first, second) = (exact(a.0, a.1), exact(b.0, b.1));
+        let (first, second) = (exact(Pair::new(a.0, a.1)), exact(Pair::new(b.0, b.1)));
         let is_nan = |value: &Exact| matches!(value, Exact::Nan(_));
         let expected = if is_nan(&first) || is_nan(&second) {
             let (half, flags) = nan_half(a).$with(nan_half(b), env);

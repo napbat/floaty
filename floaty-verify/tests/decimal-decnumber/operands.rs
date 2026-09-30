@@ -96,7 +96,8 @@ impl Shape {
 /// both signs, infinities, NaNs with payloads, and random encodings, which
 /// include non-canonical ones.
 pub(super) struct Generator<F: Format> {
-    random: SplitMix64,
+    /// The random numbers of the generator.
+    pub(super) random: SplitMix64,
     shape: Shape,
     format: PhantomData<F>,
 }
@@ -117,21 +118,16 @@ impl<F: Format> Generator<F> {
         (F::EMIN - precision + 1, F::EMAX - precision + 1)
     }
 
-    /// Returns a random value below `bound`.
-    pub(super) fn below(&mut self, bound: u64) -> u64 {
-        self.random.next_u64() % bound
-    }
-
     /// Returns `true` with a chance of `percent` in 100.
     pub(super) fn chance(&mut self, percent: u64) -> bool {
-        self.below(100) < percent
+        self.random.below(100) < percent
     }
 
     /// Returns a random value from `low` to `high`, both included.
     pub(super) fn between(&mut self, low: i32, high: i32) -> i32 {
         let span = u64::try_from(i64::from(high) - i64::from(low) + 1)
             .expect("the caller passes low <= high");
-        let offset = i64::try_from(self.below(span)).expect("an offset fits an i64");
+        let offset = i64::try_from(self.random.below(span)).expect("an offset fits an i64");
         i32::try_from(i64::from(low) + offset).expect("the value is between two i32 values")
     }
 
@@ -143,7 +139,7 @@ impl<F: Format> Generator<F> {
     /// Returns a random coefficient of exactly `length` digits.
     pub(super) fn full(&mut self, length: u32) -> u128 {
         let low = power_of_ten(length - 1);
-        low + self.random.next_u128() % (power_of_ten(length) - low)
+        low + self.random.below_u128(power_of_ten(length) - low)
     }
 
     /// Returns a coefficient of at most the shape's digits, biased toward
@@ -151,7 +147,7 @@ impl<F: Format> Generator<F> {
     fn coefficient(&mut self) -> u128 {
         let digits = self.shape.digits;
         let length = self.length();
-        match self.below(12) {
+        match self.random.below(12) {
             0 => 1,
             1 => 5,
             2 => power_of_ten(digits - 1),
@@ -173,7 +169,7 @@ impl<F: Format> Generator<F> {
         let shape = self.shape;
         let precision = signed(shape.precision);
         let tiny = shape.emin - precision + 1;
-        let adjusted = match self.below(12) {
+        let adjusted = match self.random.below(12) {
             0 => shape.emax,
             1 => shape.emax - self.between(1, 3),
             2 => shape.emin,
@@ -219,13 +215,13 @@ impl<F: Format> Generator<F> {
     /// the largest payload, or a random one.
     pub(super) fn special(&mut self) -> F::Bits {
         let sign = if self.chance(50) { "-" } else { "" };
-        let kind = match self.below(3) {
+        let kind = match self.random.below(3) {
             0 => return Self::from_text(&format!("{sign}Infinity")),
             1 => "sNaN",
             _ => "NaN",
         };
         let payload_digits = F::PRECISION - 1;
-        let payload = match self.below(4) {
+        let payload = match self.random.below(4) {
             0 => String::new(),
             1 => (power_of_ten(payload_digits) - 1).to_string(),
             _ => (self.random.next_u128()
@@ -252,7 +248,7 @@ impl<F: Format> Generator<F> {
 
     /// Returns an operand, and its value when it is a nonzero number.
     pub(super) fn operand(&mut self) -> (F::Bits, Option<Number>) {
-        match self.below(20) {
+        match self.random.below(20) {
             0..=12 => {
                 let number = self.number();
                 (Self::encode(number), Some(number))
@@ -275,7 +271,7 @@ impl<F: Format> Generator<F> {
         let spare = F::PRECISION - digit_count(x.coefficient);
         let precision = signed(F::PRECISION);
         let (lowest, highest) = Self::exponents();
-        let related = match self.below(12) {
+        let related = match self.random.below(12) {
             0 | 1 => Number {
                 negative: !x.negative,
                 ..x
@@ -369,7 +365,7 @@ impl<F: Arithmetic> Generator<F> {
     fn exact_division(&mut self) -> Vec<F::Bits> {
         const FACTORS: [u128; 11] = [1, 2, 3, 4, 5, 7, 8, 16, 25, 125, 1000];
         let (divisor, _) = self.operand();
-        let index = self.below(11);
+        let index = self.random.below(11);
         let factor = Self::encode(Number {
             negative: self.chance(50),
             coefficient: FACTORS[usize::try_from(index).expect("an index fits a usize")],
@@ -391,7 +387,7 @@ impl<F: Arithmetic> Generator<F> {
             coefficient,
             exponent: self.exponent(F::PRECISION),
         });
-        let index = self.below(8);
+        let index = self.random.below(8);
         let divisor = Self::encode(Number {
             negative: self.chance(50),
             coefficient: DIVISORS[usize::try_from(index).expect("an index fits a usize")],
@@ -434,7 +430,7 @@ impl<F: Arithmetic> Generator<F> {
     /// anywhere in decNumber's range, or at its limit of `2 * (emax + p)`.
     fn scale(&mut self) -> F::Bits {
         let limit = 2 * (F::EMAX + signed(F::PRECISION));
-        let magnitude = match self.below(10) {
+        let magnitude = match self.random.below(10) {
             0..=3 => self.between(0, 20),
             4 | 5 => self.between(0, limit),
             6 | 7 => limit + self.between(-2, 1),
@@ -474,7 +470,7 @@ impl<F: Arithmetic> Generator<F> {
         let rounding = decnumber::Rounding::HalfEven;
         let product = F::binary(Binary::Multiply, x, y, rounding).value;
         let negated = F::unary(Unary::CopyNegate, product, rounding).value;
-        match self.below(10) {
+        match self.random.below(10) {
             0..=2 => negated,
             3 => F::unary(Unary::NextPlus, negated, rounding).value,
             4 => F::unary(Unary::NextMinus, negated, rounding).value,

@@ -46,7 +46,7 @@ fn ieee_definition(encoding: &Integer, width: u32, exponent_bits: u32) -> Expect
     let trailing = precision - 1;
     let bias = (1_i32 << (exponent_bits - 1)) - 1;
     let negative = encoding.get_bit(width - 1);
-    let field_mask = (Integer::from(1) << exponent_bits) - 1u32;
+    let field_mask = Integer::from(Layout::ieee(width, exponent_bits).largest_field());
     let field = (encoding.clone() >> trailing) & field_mask.clone();
     let fraction = encoding.clone() & ((Integer::from(1) << trailing) - 1u32);
     if field == field_mask {

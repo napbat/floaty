@@ -209,7 +209,7 @@ fn dectest_decquad() {
 /// The Intel library against its `readtest.in`.
 mod intel {
     use floaty_verify::intel_decimal::{
-        self, Bid32, Bid64, Bid128, Flags, Format, Inexact, Integer, Outcome, Predicate, Rounding,
+        self, Bid32, Bid64, Bid128, Flags, Format, Integer, Outcome, Predicate, Rounding,
     };
     use floaty_verify::readtest::{self, Field, Line};
 
@@ -259,17 +259,14 @@ mod intel {
     /// The comparison of a line, or why its fields cannot be read.
     type Checked = Result<Verdict, String>;
 
+    /// Returns an operand, by [`Line::operand`].
     fn field(line: &Line, index: usize) -> Result<&Field, String> {
-        line.operands
-            .get(index)
-            .ok_or_else(|| format!("operand {index} is missing"))
+        line.operand(index).map_err(|error| error.to_string())
     }
 
-    /// Returns a decimal operand. `readtest.c` converts a decimal string
-    /// operand rounding to nearest.
+    /// Returns a decimal operand, by [`Line::decimal_operand`].
     fn operand<F: Format>(line: &Line, index: usize) -> Result<F::Bits, String> {
-        field(line, index)?
-            .decimal::<F>(Rounding::TiesToEven)
+        line.decimal_operand::<F>(index)
             .map_err(|error| error.to_string())
     }
 
@@ -391,33 +388,11 @@ mod intel {
         integer: Integer,
         function: fn(I, Rounding) -> Outcome<F::Bits>,
     ) -> Checked {
-        let value = field(line, 0)?
-            .integer(integer)
+        let value = line
+            .integer_operand(0, integer)
             .map_err(|error| error.to_string())?;
         let value = I::try_from(value).map_err(|_| String::from("the integer does not fit"))?;
         verdict::<F>(line, bits(function(value, line.rounding)), Kind::Decimal)
-    }
-
-    /// Returns the integer type, direction, and inexact rule of a name such
-    /// as `to_uint16_xfloor`.
-    fn to_integer_name(name: &str) -> Option<(Integer, Rounding, Inexact)> {
-        let (integer, suffix) = name.strip_prefix("to_")?.split_once('_')?;
-        let integer = Integer::ALL
-            .into_iter()
-            .find(|candidate| candidate.name() == integer)?;
-        let (inexact, direction) = match suffix.strip_prefix('x') {
-            Some(direction) => (Inexact::Signaled, direction),
-            None => (Inexact::Ignored, suffix),
-        };
-        let rounding = match direction {
-            "rnint" => Rounding::TiesToEven,
-            "rninta" => Rounding::TiesToAway,
-            "int" => Rounding::TowardZero,
-            "floor" => Rounding::TowardNegative,
-            "ceil" => Rounding::TowardPositive,
-            _ => return None,
-        };
-        Some((integer, rounding, inexact))
     }
 
     /// Runs a line of a function of format `F`, named without its prefix.
@@ -482,8 +457,8 @@ mod intel {
                     verdict::<F>(line, bits(outcome), Kind::Decimal)
                 })(),
                 "scalbn" => (|| {
-                    let n = field(line, 1)?
-                        .integer(Integer::Int32)
+                    let n = line
+                        .integer_operand(1, Integer::Int32)
                         .map_err(|error| error.to_string())?;
                     let n =
                         i32::try_from(n).map_err(|_| String::from("the exponent does not fit"))?;
@@ -541,7 +516,7 @@ mod intel {
                 verdict::<F>(line, integer(outcome), int32)
             })());
         }
-        let (integer_type, direction, inexact) = to_integer_name(name)?;
+        let (integer_type, direction, inexact) = readtest::to_integer_name(name)?;
         Some(x().and_then(|x| {
             let outcome = F::to_integer(x, integer_type, direction, inexact);
             verdict::<F>(line, integer(outcome), Kind::Integer(integer_type))

@@ -15,7 +15,7 @@
 use floaty::env::{NanPropagation, NanRule, Tininess};
 use floaty::{Env, F16, F32, F64, F80, F128, Rounding, mode};
 use floaty_verify::testfloat::{
-    self, Generator, Level, Options, PRECISION_CONTROL, PrecisionControl, ROUNDINGS, TININESS,
+    self, Generator, Level, Options, PRECISION_CONTROL, PrecisionControl, ROUNDINGS, Run, TININESS,
     fields, flag_bits, quiet_extended_nan,
 };
 
@@ -23,13 +23,6 @@ use floaty_verify::testfloat::{
 /// TestFloat level 1 has 6,133,248 cases for each run; the ignored test runs
 /// them all.
 const MUL_ADD_LIMIT: usize = 1_000_000;
-
-/// One run of the generator: the generator, the behavior, and its options.
-struct Run {
-    generator: Generator,
-    env: Env,
-    options: Options,
-}
 
 /// Returns the runs for a function. `precision_control` adds the x87
 /// precision limits of 32 and 64 bits and marks the x87 format. With
@@ -46,7 +39,6 @@ fn runs(precision_control: bool, every_direction: bool) -> Vec<Run> {
     };
     let mut runs = Vec::new();
     for &precision in precisions {
-        let base = Env::IEEE.with_precision(precision.limit);
         let default = Options {
             rounding: Some(Rounding::TiesToEven),
             tininess: Some(Tininess::AfterRounding),
@@ -56,35 +48,22 @@ fn runs(precision_control: bool, every_direction: bool) -> Vec<Run> {
         if every_direction {
             for (rounding, _) in ROUNDINGS {
                 for (tininess, _) in TININESS {
-                    runs.push(Run {
-                        generator: Generator::ARM,
-                        env: base.with_rounding(rounding).with_tininess(tininess),
-                        options: Options {
-                            rounding: Some(rounding),
-                            tininess: Some(tininess),
-                            ..default
-                        },
-                    });
+                    let options = Options {
+                        rounding: Some(rounding),
+                        tininess: Some(tininess),
+                        ..default
+                    };
+                    runs.push(Run::new(Generator::ARM, options));
                 }
             }
         } else {
-            runs.push(Run {
-                generator: Generator::ARM,
-                env: base,
-                options: default,
-            });
+            runs.push(Run::new(Generator::ARM, default));
         }
         let others = Generator::OTHER_NAN_RULES
             .into_iter()
             .filter(|generator| !precision_control || generator.covers_extended);
         for generator in others {
-            runs.push(Run {
-                generator,
-                env: base
-                    .with_nan(generator.rule)
-                    .with_tininess(Tininess::AfterRounding),
-                options: default,
-            });
+            runs.push(Run::new(generator, default));
         }
     }
     runs

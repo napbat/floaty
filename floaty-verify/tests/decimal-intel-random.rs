@@ -153,14 +153,9 @@ impl Report {
     }
 }
 
-/// Returns a random value below `bound`.
-fn below(rng: &mut SplitMix64, bound: u64) -> u64 {
-    rng.next_u64() % bound
-}
-
 /// Returns a random rounding direction of the library.
 fn rounding(rng: &mut SplitMix64) -> IntelRounding {
-    let index = usize::try_from(below(rng, 5)).expect("an index below 5 fits a usize");
+    let index = usize::try_from(rng.below(5)).expect("an index below 5 fits a usize");
     IntelRounding::ALL[index]
 }
 
@@ -202,7 +197,7 @@ fn is_nan<F: Format>(bits: F::Bits) -> bool {
 /// value near `x`, or a random value.
 fn addend<F: Format>(rng: &mut SplitMix64, x: u128, y: u128) -> u128 {
     let layout = F::LAYOUT;
-    match below(rng, 3) {
+    match rng.below(3) {
         0 => {
             let product = F::mul(encoding::<F>(x), encoding::<F>(y), rounding(rng)).value;
             F::negate(product).into()
@@ -358,12 +353,12 @@ fn scale(rng: &mut SplitMix64, layout: Layout) -> i32 {
         .expect("the range fits an i32");
     let within = |rng: &mut SplitMix64, bound: i32| {
         let width = u64::from(bound.unsigned_abs()) * 2 + 1;
-        i32::try_from(below(rng, width)).expect("the offset fits an i32") - bound
+        i32::try_from(rng.below(width)).expect("the offset fits an i32") - bound
     };
-    match below(rng, 6) {
+    match rng.below(6) {
         0 => within(rng, 20),
         1 => [i32::MIN, i32::MAX, 1 << 30, -(1 << 30), range, -range]
-            [usize::try_from(below(rng, 6)).expect("an index fits a usize")],
+            [usize::try_from(rng.below(6)).expect("an index fits a usize")],
         _ => within(rng, range),
     }
 }
@@ -522,7 +517,7 @@ where
         flags: IntelFlags::NONE,
     };
     for _ in 0..cases {
-        let (x, y) = if below(rng, 4) == 0 {
+        let (x, y) = if rng.below(4) == 0 {
             layout.equal_pair(rng)
         } else {
             let x = layout.random(rng);
@@ -705,8 +700,8 @@ where
 {
     let rounding = rounding(rng);
     let env = intel_decimal::env(rounding);
-    let power = 10_u64.pow(u32::try_from(below(rng, 20)).expect("an exponent fits a u32"));
-    let raw = match below(rng, 5) {
+    let power = 10_u64.pow(u32::try_from(rng.below(20)).expect("an exponent fits a u32"));
+    let raw = match rng.below(5) {
         0 => power,
         1 => power - 1,
         2 => power + 1,
@@ -718,10 +713,10 @@ where
             1 << 63,
             u64::from(u32::MAX),
             1 << 31,
-        ][usize::try_from(below(rng, 7)).expect("an index fits a usize")],
-        _ => rng.next_u64() >> below(rng, 64),
+        ][usize::try_from(rng.below(7)).expect("an index fits a usize")],
+        _ => rng.next_u64() >> rng.below(64),
     };
-    let negative = below(rng, 2) == 0;
+    let negative = rng.below(2) == 0;
     let operands = || format!("{raw:#x} negative {negative} {rounding:?}");
     let signed = i64::try_from(raw).unwrap_or(i64::MAX);
     let signed = if negative {

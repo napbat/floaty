@@ -15,6 +15,7 @@ use floaty::{
     Class, D64Bid, D128Bid, D128Dpd, Decoded, DoubleDouble, Env, F32, F64, F80, F128, F256, Flags,
     Gcc, Int, Qd, Rounding, ToInt, UInt,
 };
+use floaty_verify::double_double::reference::Pair;
 use floaty_verify::double_double::{
     BINARY64, Exact, Rounded, behaviors, exact, pair, rational, round_pair,
 };
@@ -34,8 +35,8 @@ const TOPS: [i32; 38] = [
 
 /// Returns a random top exponent: one of [`TOPS`], moved by up to 3.
 fn top(random: &mut SplitMix64) -> i32 {
-    let index = usize::try_from(random.next_u64() % 38).expect("an index fits a usize");
-    let offset = i32::try_from(random.next_u64() % 7).expect("below 7") - 3;
+    let index = usize::try_from(random.below(38)).expect("an index fits a usize");
+    let offset = i32::try_from(random.below(7)).expect("below 7") - 3;
     TOPS[index] + offset
 }
 
@@ -121,7 +122,7 @@ macro_rules! check_source {
 /// a significand with its top bit set and a random top exponent, or random
 /// bits.
 fn binary_exact(random: &mut SplitMix64, precision: u32) -> (bool, i32, Integer) {
-    let negative = random.next_u64() & 1 == 1;
+    let negative = random.coin_flip();
     let mut significand = Integer::from(1) << (precision - 1);
     for word in 0..precision.div_ceil(64) {
         significand |= Integer::from(random.next_u64()) << (word * 64);
@@ -129,8 +130,8 @@ fn binary_exact(random: &mut SplitMix64, precision: u32) -> (bool, i32, Integer)
     significand.keep_bits_mut(precision);
     significand.set_bit(precision - 1, true);
     // A third of the values end in a run of zeros, so the low half ties.
-    if random.next_u64() % 3 == 0 {
-        let zeros = u32::try_from(random.next_u64() % u64::from(precision)).expect("fits");
+    if random.below(3) == 0 {
+        let zeros = u32::try_from(random.below(u64::from(precision))).expect("fits");
         significand >>= zeros;
         significand <<= zeros;
     }
@@ -237,7 +238,7 @@ macro_rules! decimal_format {
             let scaled = i64::from(top(random)) * 30_103 / 100_000;
             let exponent = i32::try_from(scaled).expect("fits") - digits + 1;
             let exact = floaty::Exact::<2> {
-                negative: random.next_u64() & 1 == 1,
+                negative: random.coin_flip(),
                 exponent,
                 significand: limbs(&coefficient),
                 sticky: false,
@@ -300,11 +301,11 @@ fn decimal_values_round_to_pairs() {
 fn pairs_convert_between_the_algorithms() {
     let mut random = SplitMix64::new(0xDD_A160);
     for _ in 0..30_000 {
-        let (hi, lo) = pair(&mut random);
+        let Pair { hi, lo } = pair(&mut random);
         let value = DoubleDouble::<Gcc>::from_parts(F64::from_bits(hi), F64::from_bits(lo));
         for env in behaviors() {
             let (ours, flags) = value.convert_with::<DoubleDouble<Qd>>(env);
-            let want = match exact(hi, lo) {
+            let want = match exact(Pair::new(hi, lo)) {
                 Exact::Number(number) => round_pair(
                     &number.to_rational().expect("the value is finite"),
                     number.is_sign_negative(),
@@ -365,7 +366,7 @@ fn integers_round_to_pairs() {
         check_integer!(value);
     }
     for _ in 0..2_000 {
-        let shift = u32::try_from(random.next_u64() % 128).expect("below 128");
+        let shift = u32::try_from(random.below(128)).expect("below 128");
         check_integer!(random.next_u128() >> shift);
         let signed = i128::from_ne_bytes(random.next_u128().to_ne_bytes());
         check_integer!(signed >> shift);
@@ -373,7 +374,7 @@ fn integers_round_to_pairs() {
     // Integers of 512 bits, whose values need both halves and round.
     for _ in 0..500 {
         let words: [u64; 8] = core::array::from_fn(|_| random.next_u64());
-        let shift = u32::try_from(random.next_u64() % 512).expect("below 512");
+        let shift = u32::try_from(random.below(512)).expect("below 512");
         let magnitude = Integer::from_digits(&words, rug::integer::Order::Lsf) >> shift;
         let value = UInt::<512>::from_bits(limbs(&magnitude));
         let signed = Int::<512>::from_bits(limbs(&magnitude));
@@ -397,7 +398,7 @@ fn integers_round_to_pairs() {
 /// Returns the exact value of a pair as a rational, or `None` for a special
 /// value.
 fn pair_value(hi: u64, lo: u64) -> Option<(Rational, bool)> {
-    match exact(hi, lo) {
+    match exact(Pair::new(hi, lo)) {
         Exact::Number(number) => Some((
             number.to_rational().expect("the value is finite"),
             number.is_sign_negative(),
@@ -432,12 +433,12 @@ fn scale_b_rounds_the_scaled_value() {
         i32::MAX,
     ];
     for _ in 0..20_000 {
-        let (hi, lo) = pair(&mut random);
+        let Pair { hi, lo } = pair(&mut random);
         let value = DoubleDouble::<Gcc>::from_parts(F64::from_bits(hi), F64::from_bits(lo));
-        let scale = if random.next_u64() % 4 == 0 {
-            fixed[usize::try_from(random.next_u64() % 14).expect("below 14")]
+        let scale = if random.below(4) == 0 {
+            fixed[usize::try_from(random.below(14)).expect("below 14")]
         } else {
-            i32::try_from(random.next_u64() % 4401).expect("fits") - 2200
+            i32::try_from(random.below(4401)).expect("fits") - 2200
         };
         for env in behaviors() {
             let (ours, flags) = value.scale_b_with(scale, env);
@@ -452,7 +453,7 @@ fn scale_b_rounds_the_scaled_value() {
                     };
                     round_pair(&scaled, negative, &env)
                 }
-                None => expected(&special_decoded(&exact(hi, lo)), 2, &env),
+                None => expected(&special_decoded(&exact(Pair::new(hi, lo))), 2, &env),
             };
             let context = format!("{hi:#x} {lo:#x} {scale} {env:?}");
             assert_eq!(rounded((ours, flags)), want, "{context}");
@@ -507,18 +508,19 @@ fn round_integer(value: &Rational, rounding: Rounding) -> Integer {
 /// Returns a random pair near an integer: a high half of up to 110 bits and
 /// a low half with a fraction, or a random pair.
 fn near_integer(random: &mut SplitMix64) -> (u64, u64) {
-    if random.next_u64() % 3 == 0 {
-        return pair(random);
+    if random.below(3) == 0 {
+        let Pair { hi, lo } = pair(random);
+        return (hi, lo);
     }
-    let magnitude = i32::try_from(random.next_u64() % 110).expect("below 110");
+    let magnitude = i32::try_from(random.below(110)).expect("below 110");
     let hi = F64::from_bits(random.next_u64() >> 12 | 0x3FF0_0000_0000_0000).scale_b(magnitude);
     let fractions = [
         0x3FE0_0000_0000_0000_u64,
         0x3FD0_0000_0000_0000,
         0x3FE8_0000_0000_0000,
     ];
-    let lo = match random.next_u64() % 4 {
-        0 => fractions[usize::try_from(random.next_u64() % 3).expect("below 3")],
+    let lo = match random.below(4) {
+        0 => fractions[usize::try_from(random.below(3)).expect("below 3")],
         1 => 0,
         _ => random.next_u64() >> 12 | 0x3FC0_0000_0000_0000,
     } | (random.next_u64() & (1 << 63));
@@ -557,7 +559,7 @@ fn round_to_integral_gives_the_canonical_pair_of_the_integer() {
                     want.flags |= integral_flags(&number, &integer);
                     want
                 }
-                None => expected(&special_decoded(&exact(hi, lo)), 2, &env),
+                None => expected(&special_decoded(&exact(Pair::new(hi, lo))), 2, &env),
             };
             let context = format!("{hi:#x} {lo:#x} {env:?}");
             assert_eq!(rounded((ours, flags)), want, "{context}");
@@ -573,7 +575,7 @@ fn round_to_integral_gives_the_canonical_pair_of_the_integer() {
 macro_rules! check_to_int {
     ($value:expr, $hi:expr, $lo:expr, $env:expr, $integer:ty) => {{
         let (ours, flags) = $value.to_int_with::<$integer>($env);
-        let want = match exact($hi, $lo) {
+        let want = match exact(Pair::new($hi, $lo)) {
             Exact::Nan(_) => (ToInt::Nan, Flags::INVALID),
             Exact::Infinity { negative } => (ToInt::OutOfRange { negative }, Flags::INVALID),
             Exact::Zero { .. } => (ToInt::Value(0), Flags::NONE),

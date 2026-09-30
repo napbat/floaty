@@ -32,12 +32,6 @@ use rug::integer::Order;
 /// A 72-bit layout whose exponent field crosses a limb boundary.
 type Wide72 = Float<Binary<15>, 72>;
 
-/// Returns the largest exponent field of a layout: the field of the
-/// infinities and NaNs.
-fn field_max(layout: Layout) -> u64 {
-    (1 << layout.exponent_bits) - 1
-}
-
 /// Returns the exponent bias of a layout.
 fn bias(layout: Layout) -> u64 {
     u64::try_from(layout.ieee_bias()).expect("an exponent bias is positive")
@@ -126,7 +120,7 @@ fn samples(layout: Layout, count: usize, random: &mut SplitMix64) -> Vec<Integer
     tops.extend([
         22, 23, 24, 98, 99, 100, 126, 127, 128, 198, 199, 200, 510, 511, 512,
     ]);
-    let (bias, field_max) = (bias(layout), field_max(layout));
+    let (bias, field_max) = (bias(layout), u64::from(layout.largest_field()));
     let fields = tops
         .into_iter()
         .filter_map(|top| bias.checked_add_signed(top))
@@ -144,15 +138,15 @@ fn remainder_pairs(
     random: &mut SplitMix64,
 ) -> Vec<(Integer, Integer)> {
     let span = i64::from(layout.precision()) + 4;
-    let field_max = i64::try_from(field_max(layout)).expect("a field fits an i64");
+    let field_max = i64::from(layout.largest_field());
     let modulus = u64::try_from(field_max).expect("a field is positive");
     (0..count)
         .map(|index| {
-            let field = i64::try_from(random.next_u64() % modulus)
+            let field = i64::try_from(random.below(modulus))
                 .expect("a value below the field range fits an i64");
             let difference = if index % 4 == 0 {
                 field
-                    - i64::try_from(random.next_u64() % modulus)
+                    - i64::try_from(random.below(modulus))
                         .expect("a value below the field range fits an i64")
             } else {
                 i64::try_from(
@@ -171,7 +165,7 @@ fn remainder_pairs(
                 } else {
                     random_bits(random, layout.fraction_bits())
                 };
-                let negative = random.next_u64() % 2 == 0;
+                let negative = random.below(2) == 0;
                 let field = u64::try_from(field).expect("a field is not negative");
                 assemble(layout, negative, field, &fraction)
             };
@@ -232,7 +226,7 @@ fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
     let layout = plan.layout;
     let format = Format::of::<Float<S, W>>(Specials::Ieee);
     let mut random = SplitMix64::new(plan.seed);
-    let case = |bits: &Integer| Case::new(bits.clone(), (plan.make)(bits));
+    let case = |bits: &Integer| Case::new(bits.clone(), layout, (plan.make)(bits));
     let boundaries: Vec<Case<S, W>> = boundary_encodings(layout).iter().map(case).collect();
     let samples: Vec<Case<S, W>> = samples(layout, plan.count, &mut random)
         .iter()
@@ -454,11 +448,11 @@ fn integers<I: IntegerValue>(count: usize, random: &mut SplitMix64) -> Vec<I> {
         }
     }
     for _ in 0..count {
-        let width = u32::try_from(random.next_u64() % u64::from(bits))
+        let width = u32::try_from(random.below(u64::from(bits)))
             .expect("a width below the integer width fits a u32")
             + 1;
         let mut value = random_bits(random, width);
-        if I::signed() && random.next_u64() % 2 == 0 {
+        if I::signed() && random.below(2) == 0 {
             value = -value;
         }
         values.push(value);

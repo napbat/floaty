@@ -11,77 +11,23 @@
 use core::ops::{Range, RangeInclusive};
 
 use floaty::{F32, F64, Flags, Rounding};
-use floaty_verify::encodings::Layout;
+use floaty_verify::encodings::{Layout, integer_edges, rounding_edges};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, MXCSR_ROUNDINGS, ROUND_USE_MXCSR, mxcsr_flags, mxcsr_round_flags, stored,
 };
 
-/// Returns the largest biased exponent of binary32 or binary64: the field of
-/// the infinities and NaNs.
-fn field_max(layout: Layout) -> u64 {
-    (1 << layout.exponent_bits) - 1
-}
-
-/// Returns a binary32 or binary64 encoding from its sign, biased exponent,
-/// and fraction.
-fn encode(layout: Layout, negative: bool, biased: u64, fraction: u64) -> u64 {
-    u64::try_from(layout.encode(negative, biased, u128::from(fraction)))
-        .expect("a binary32 or binary64 encoding fits a u64")
-}
-
 /// Returns a random encoding with a biased exponent in `biased` and a random
 /// sign.
 fn random_encoding(layout: Layout, random: &mut SplitMix64, biased: Range<u64>) -> u64 {
-    let exponent = biased.start + random.next_u64() % (biased.end - biased.start);
-    let negative = random.next_u64() & 1 == 1;
-    encode(layout, negative, exponent, random.next_u64())
+    let exponent = biased.start + random.below(biased.end - biased.start);
+    let negative = random.coin_flip();
+    layout.encode_u64(negative, exponent, random.next_u64())
 }
 
 /// Returns the biased exponent of the unbiased exponent `exponent`.
 fn biased(layout: Layout, exponent: i32) -> u64 {
     u64::try_from(exponent + layout.ieee_bias()).expect("a normal exponent")
-}
-
-/// Returns encodings around the integers with the unbiased exponents
-/// `exponents`, for both signs.
-///
-/// The fraction bits below the binary point take each edge pattern, and the
-/// bits above the binary point are all zeros, all ones, or random. A value
-/// below one has every fraction bit below the binary point.
-fn integer_edges(
-    layout: Layout,
-    random: &mut SplitMix64,
-    exponents: RangeInclusive<i32>,
-) -> Vec<u64> {
-    let mut encodings = Vec::new();
-    for exponent in exponents {
-        let fraction_bits = i32::try_from(layout.fraction_bits()).expect("at most 52");
-        let dropped = u32::try_from((fraction_bits - exponent).clamp(0, fraction_bits))
-            .expect("between 0 and the fraction width");
-        let kept = layout.fraction_bits() - dropped;
-        let all_ones = (1 << kept) - 1;
-        for high in [0, all_ones, random.next_u64(), random.next_u64()] {
-            for pattern in edge_patterns(dropped) {
-                for negative in [false, true] {
-                    let fraction = ((high & all_ones) << dropped) | pattern;
-                    encodings.push(encode(layout, negative, biased(layout, exponent), fraction));
-                }
-            }
-        }
-    }
-    encodings
-}
-
-/// Returns the patterns of `dropped` low bits that decide a rounding: exact,
-/// just below halfway, halfway, just above halfway, and all ones.
-fn edge_patterns(dropped: u32) -> [u64; 5] {
-    if dropped == 0 {
-        return [0; 5];
-    }
-    let half = 1_u64 << (dropped - 1);
-    let mask = (half << 1).wrapping_sub(1);
-    [0, half - 1, half, half + 1, mask].map(|pattern| pattern & mask)
 }
 
 /// The binary32 special operands: zeros, infinities, quiet and signaling
@@ -149,7 +95,7 @@ fn random_operands(
     let near = biased(layout, *near.start())..biased(layout, *near.end()) + 1;
     (0..count)
         .map(|index| match index % 3 {
-            0 => random_encoding(layout, random, 0..field_max(layout) + 1),
+            0 => random_encoding(layout, random, 0..u64::from(layout.largest_field()) + 1),
             1 => random_encoding(layout, random, 0..3),
             _ => random_encoding(layout, random, near.clone()),
         })
@@ -255,7 +201,7 @@ fn conversion_flags(flags: Flags, daz: bool) -> u32 {
 /// around the integers up to 2^66, and random values.
 fn to_int_operands(layout: Layout, random: &mut SplitMix64, specials: &[u64]) -> Vec<u64> {
     let mut operands = specials.to_vec();
-    operands.extend(integer_edges(layout, random, -3..=66));
+    operands.extend(integer_edges::<u64>(layout, random, -3..=66));
     operands.extend(random_operands(layout, random, 30_000, -3..=66));
     operands
 }
@@ -322,7 +268,7 @@ fn integer_operands(random: &mut SplitMix64, bits: u32, precision: u32) -> Vec<i
     let mut operands = vec![0, 1, -1, largest, -largest, -largest - 1];
     for length in 1..bits {
         let dropped = length.saturating_sub(precision);
-        for pattern in edge_patterns(dropped) {
+        for pattern in rounding_edges(dropped) {
             for _ in 0..4 {
                 let high = (random.next_u64() >> (64 - length)) >> dropped << dropped;
                 let magnitude = (1 << (length - 1)) | high | pattern;
@@ -332,7 +278,7 @@ fn integer_operands(random: &mut SplitMix64, bits: u32, precision: u32) -> Vec<i
         }
     }
     for _ in 0..20_000 {
-        let value = random.next_u64() >> (random.next_u64() % 64);
+        let value = random.next_u64() >> random.below(64);
         let value = i64::from_le_bytes(value.to_le_bytes()) >> (64 - bits);
         operands.push(value);
     }
@@ -437,7 +383,7 @@ fn roundss_and_roundsd_match_rounding_to_an_integral_value() {
     );
     let mut random = SplitMix64::new(0x0400_5D00);
     let mut single = SINGLE_SPECIALS.map(u64::from).to_vec();
-    single.extend(integer_edges(Layout::BINARY32, &mut random, -3..=25));
+    single.extend(integer_edges::<u64>(Layout::BINARY32, &mut random, -3..=25));
     single.extend(random_operands(
         Layout::BINARY32,
         &mut random,
@@ -447,7 +393,7 @@ fn roundss_and_roundsd_match_rounding_to_an_integral_value() {
     let single = singles(single);
     round!(single, F32, roundss);
     let mut double = DOUBLE_SPECIALS.to_vec();
-    double.extend(integer_edges(Layout::BINARY64, &mut random, -3..=54));
+    double.extend(integer_edges::<u64>(Layout::BINARY64, &mut random, -3..=54));
     double.extend(random_operands(
         Layout::BINARY64,
         &mut random,

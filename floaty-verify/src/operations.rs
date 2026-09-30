@@ -21,6 +21,7 @@ use rug::float::Round;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
+use crate::encodings::Layout;
 use crate::mpfr::{
     self, Format, Input, Nan, Operand, Read, Specials, Value, exact, select_nan, signed_zero,
 };
@@ -152,8 +153,8 @@ pub fn outcome<S: Standard<W>, const W: usize, M: Mode>(value: Float<S, W, M>) -
 pub struct Sample<const N: usize> {
     /// The encoding.
     pub bits: Integer,
-    /// The width of the encoding in bits.
-    pub width: u32,
+    /// The field layout of the encoding.
+    pub layout: Layout,
     /// `true` when the encoding is canonical.
     pub canonical: bool,
     /// The decoded operand.
@@ -161,19 +162,26 @@ pub struct Sample<const N: usize> {
 }
 
 impl Sample<8> {
-    /// Makes a sample from an encoding and the floaty value of that encoding.
+    /// Makes a sample from an encoding, its field layout, and the floaty value
+    /// of that encoding.
     ///
     /// # Panics
     ///
-    /// Panics when the width does not fit a `u32`.
+    /// Panics when the width of the layout is not the width of the format.
     #[must_use]
     pub fn new<S: Standard<W>, const W: usize, M: Mode>(
         bits: Integer,
+        layout: Layout,
         value: Float<S, W, M>,
     ) -> Self {
+        assert_eq!(
+            usize::try_from(layout.width).ok(),
+            Some(W),
+            "the layout has the width of the format"
+        );
         Self {
             bits,
-            width: u32::try_from(W).expect("a width fits a u32"),
+            layout,
             canonical: value.is_canonical(),
             operand: Operand::of(value),
         }
@@ -475,7 +483,7 @@ pub fn next<const N: usize>(
 /// encoding each, so they do not change.
 #[must_use]
 pub fn with_sign(sample: &Sample<8>, specials: Specials, negative: bool) -> Integer {
-    let sign = sample.width - 1;
+    let sign = sample.layout.width - 1;
     let mut bits = sample.bits.clone();
     let magnitude_zero = bits.clone().keep_bits(sign).is_zero();
     if specials == Specials::Fnuz && magnitude_zero {

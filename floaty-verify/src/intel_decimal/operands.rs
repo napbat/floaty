@@ -14,8 +14,8 @@ impl Layout {
     /// subnormal values, non-canonical coefficients, infinities, and quiet
     /// and signaling NaNs with canonical and non-canonical payloads.
     pub fn random(self, rng: &mut SplitMix64) -> u128 {
-        let negative = rng.next_u64() & 1 == 1;
-        match below(rng, 20) {
+        let negative = rng.coin_flip();
+        match rng.below_u128(20) {
             0 | 1 => self.number(negative, self.random_field(rng), 0),
             2 => self.random_special(rng, negative),
             3 => self.random_nan(rng, negative),
@@ -35,10 +35,10 @@ impl Layout {
         let precision = self.precision();
         let digits = |rng: &mut SplitMix64, count: u32| {
             let low = Self::power_of_ten(count - 1);
-            low + below(rng, Self::power_of_ten(count) - low)
+            low + rng.below_u128(Self::power_of_ten(count) - low)
         };
-        match below(rng, 9) {
-            0 => 1 + below(rng, 9),
+        match rng.below_u128(9) {
+            0 => 1 + rng.below_u128(9),
             1 => Self::power_of_ten(precision) - 1,
             2 => Self::power_of_ten(below_u32(rng, precision)),
             3 => 5 * Self::power_of_ten(below_u32(rng, precision - 1)),
@@ -50,7 +50,7 @@ impl Layout {
                 let head = digits(rng, precision - tail);
                 let unit = Self::power_of_ten(tail);
                 let half = unit / 2;
-                let tail = match below(rng, 3) {
+                let tail = match rng.below_u128(3) {
                     0 => half,
                     1 => half - 1,
                     _ => half + 1,
@@ -68,7 +68,7 @@ impl Layout {
     /// to exponent 0.
     pub fn random_field(self, rng: &mut SplitMix64) -> u32 {
         let (largest, near) = (self.largest_field(), self.precision() + 3);
-        match below(rng, 5) {
+        match rng.below_u128(5) {
             0 => below_u32(rng, near),
             1 => largest - below_u32(rng, near),
             2 => self.bias() + below_u32(rng, 2 * near) - near,
@@ -78,7 +78,7 @@ impl Layout {
 
     /// Returns an infinity, with non-canonical trailing bits at times.
     fn random_special(self, rng: &mut SplitMix64, negative: bool) -> u128 {
-        let garbage = if below(rng, 2) == 0 {
+        let garbage = if rng.below_u128(2) == 0 {
             0
         } else {
             rng.next_u128() & ((1 << (self.width - 6)) - 1)
@@ -90,19 +90,19 @@ impl Layout {
     /// random, or non-canonical payload, and at times extra bits.
     fn random_nan(self, rng: &mut SplitMix64, negative: bool) -> u128 {
         let largest = Self::power_of_ten(self.precision() - 1) - 1;
-        let payload = match below(rng, 6) {
+        let payload = match rng.below_u128(6) {
             0 => 0,
-            1 => 1 + below(rng, 999),
+            1 => 1 + rng.below_u128(999),
             2 => largest,
-            3 => largest + 1 + below(rng, (1 << self.trailing()) - largest - 1),
-            _ => below(rng, largest + 1),
+            3 => largest + 1 + rng.below_u128((1 << self.trailing()) - largest - 1),
+            _ => rng.below_u128(largest + 1),
         };
-        let extra = if below(rng, 4) == 0 {
+        let extra = if rng.below_u128(4) == 0 {
             rng.next_u128()
         } else {
             0
         };
-        self.nan(negative, below(rng, 2) == 0, payload, extra)
+        self.nan(negative, rng.below_u128(2) == 0, payload, extra)
     }
 
     /// Returns a number with a coefficient above `10^p - 1`, which reads as
@@ -110,7 +110,7 @@ impl Layout {
     fn random_non_canonical(self, rng: &mut SplitMix64, negative: bool) -> u128 {
         let smallest = Self::power_of_ten(self.precision());
         let largest = (1 << (self.trailing() + 3)) + (1 << (self.trailing() + 1)) - 1;
-        let coefficient = smallest + below(rng, largest - smallest + 1);
+        let coefficient = smallest + rng.below_u128(largest - smallest + 1);
         self.number(negative, self.random_field(rng), coefficient)
     }
 
@@ -118,14 +118,14 @@ impl Layout {
     /// member of its cohort, half a unit in its last place, its negation,
     /// itself, or a new random operand.
     pub fn related(self, rng: &mut SplitMix64, x: u128) -> u128 {
-        let negative = rng.next_u64() & 1 == 1;
+        let negative = rng.coin_flip();
         let Some((field, coefficient)) = self.fields(x) else {
             return self.random(rng);
         };
         let precision = self.precision();
         let span = precision + 3;
         let largest_field = self.largest_field();
-        match below(rng, 10) {
+        match rng.below_u128(10) {
             0 => x,
             1 => x ^ (1 << (self.width - 1)),
             2 => self.number(negative, field, self.random_coefficient(rng)),
@@ -162,7 +162,7 @@ impl Layout {
     /// the radicand halved and rounded down. For the second form and for a
     /// root with trailing zeros, that member has trailing zeros.
     pub fn square(self, rng: &mut SplitMix64) -> u128 {
-        if below(rng, 2) == 0 {
+        if rng.below_u128(2) == 0 {
             return self.random(rng);
         }
         let field = self.random_field(rng);
@@ -174,13 +174,13 @@ impl Layout {
             1
         };
         let largest = ((Self::power_of_ten(self.precision()) - 1) / scale).isqrt();
-        let root = if below(rng, 4) == 0 {
+        let root = if rng.below_u128(4) == 0 {
             // One digit and trailing zeros. `largest` has at least three
             // digits, so the root stays below it.
             let zeros = below_u32(rng, largest.ilog10());
-            (1 + below(rng, 9)) * Self::power_of_ten(zeros)
+            (1 + rng.below_u128(9)) * Self::power_of_ten(zeros)
         } else {
-            1 + below(rng, largest)
+            1 + rng.below_u128(largest)
         };
         self.number(false, field, root * root * scale)
     }
@@ -194,7 +194,7 @@ impl Layout {
     /// both sides of each bound: decimal32 gets `2147483E+3` and `2147484E+3`
     /// for the bound `2^31 - 1` of `int32`.
     pub fn near_integer(self, rng: &mut SplitMix64, integer: Integer) -> u128 {
-        if below(rng, 4) == 0 {
+        if rng.below_u128(4) == 0 {
             return self.random(rng);
         }
         let top = 1_i128 << (integer.bits() - 1);
@@ -203,14 +203,14 @@ impl Layout {
         } else {
             (0, 2 * top - 1)
         };
-        let whole = match below(rng, 6) {
+        let whole = match rng.below_u128(6) {
             0 => low,
             1 => high,
             2 => low - 1,
             3 => high + 1,
             _ => {
                 let magnitude = i128::from(rng.next_u64() >> below_u32(rng, 64));
-                if below(rng, 2) == 0 {
+                if rng.below_u128(2) == 0 {
                     magnitude
                 } else {
                     -magnitude
@@ -220,7 +220,7 @@ impl Layout {
         let fraction_digits = below_u32(rng, 4);
         let unit = Self::power_of_ten(fraction_digits);
         let half = unit / 2;
-        let fraction = match below(rng, 4) {
+        let fraction = match rng.below_u128(4) {
             0 => 0,
             1 => half,
             2 => half.saturating_sub(1),
@@ -229,7 +229,7 @@ impl Layout {
         let magnitude = whole.unsigned_abs() * unit + fraction;
         let digits = magnitude.checked_ilog10().map_or(1, |log| log + 1);
         let mut dropped = digits.saturating_sub(self.precision());
-        let round_up = dropped > 0 && below(rng, 2) == 0;
+        let round_up = dropped > 0 && rng.below_u128(2) == 0;
         let mut kept = magnitude / Self::power_of_ten(dropped) + u128::from(round_up);
         if kept > Self::power_of_ten(self.precision()) - 1 {
             kept /= 10;
@@ -243,9 +243,9 @@ impl Layout {
     /// which reads as zero, two members of one cohort with one sign, such as
     /// 1.0 and 1.00, or two encodings of one infinity.
     pub fn equal_pair(self, rng: &mut SplitMix64) -> (u128, u128) {
-        let sign = |rng: &mut SplitMix64| rng.next_u64() & 1 == 1;
+        let sign = |rng: &mut SplitMix64| rng.coin_flip();
         let zero = |rng: &mut SplitMix64| self.number(sign(rng), self.random_field(rng), 0);
-        let (first, second) = match below(rng, 4) {
+        let (first, second) = match rng.below_u128(4) {
             0 => (zero(rng), zero(rng)),
             1 => {
                 let negative = sign(rng);
@@ -256,7 +256,7 @@ impl Layout {
                 let precision = self.precision();
                 let digits = 1 + below_u32(rng, precision);
                 let low = Self::power_of_ten(digits - 1);
-                let coefficient = low + below(rng, Self::power_of_ten(digits) - low);
+                let coefficient = low + rng.below_u128(Self::power_of_ten(digits) - low);
                 let room = precision - digits;
                 let field = self.random_field(rng).max(room);
                 let member = |rng: &mut SplitMix64| {
@@ -271,7 +271,7 @@ impl Layout {
                 (self.infinity(negative), self.random_special(rng, negative))
             }
         };
-        if below(rng, 2) == 0 {
+        if rng.below_u128(2) == 0 {
             (first, second)
         } else {
             (second, first)
@@ -279,12 +279,8 @@ impl Layout {
     }
 }
 
-/// Returns a random value below `bound`, which must not be zero.
-fn below(rng: &mut SplitMix64, bound: u128) -> u128 {
-    rng.next_u128() % bound
-}
-
-/// Returns a random value below `bound`, which must not be zero.
+/// Returns a random value below `bound`, which must not be zero, from 128
+/// random bits.
 fn below_u32(rng: &mut SplitMix64, bound: u32) -> u32 {
-    u32::try_from(below(rng, u128::from(bound))).expect("the value is below a u32 bound")
+    u32::try_from(rng.below_u128(u128::from(bound))).expect("the value is below a u32 bound")
 }

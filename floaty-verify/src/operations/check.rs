@@ -8,6 +8,8 @@ use floaty::format::Standard;
 use floaty::{Env, Flags, Float, TotalOrder};
 use rug::Integer;
 
+use crate::encodings::Layout;
+
 use super::compare::{self, MinMax};
 use super::integral::{self, IntegerValue, to_int_value};
 use super::{
@@ -24,18 +26,19 @@ pub struct Case<S: Standard<W>, const W: usize> {
 }
 
 impl<S: Standard<W>, const W: usize> Case<S, W> {
-    /// Makes a case from an encoding and the floaty value of that encoding.
+    /// Makes a case from an encoding, its field layout, and the floaty value
+    /// of that encoding.
     #[must_use]
-    pub fn new(bits: Integer, value: Float<S, W>) -> Self {
+    pub fn new(bits: Integer, layout: Layout, value: Float<S, W>) -> Self {
         Self {
             value,
-            sample: Sample::new(bits, value),
+            sample: Sample::new(bits, layout, value),
         }
     }
 
     /// Returns `true` when the sign bit of the encoding is set.
     fn sign_bit(&self) -> bool {
-        self.sample.bits.get_bit(self.sample.width - 1)
+        self.sample.bits.get_bit(self.sample.layout.width - 1)
     }
 }
 

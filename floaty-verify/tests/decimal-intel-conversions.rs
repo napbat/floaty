@@ -47,12 +47,6 @@ fn explicit_integer(binary: BinaryLayout) -> bool {
     binary.integer_bit == IntegerBit::Explicit
 }
 
-/// Returns the largest exponent field of a binary format, which infinities
-/// and NaNs use.
-fn largest_field(binary: BinaryLayout) -> u32 {
-    (1 << binary.exponent_bits) - 1
-}
-
 /// Returns the exponent bias of a binary format.
 fn bias(binary: BinaryLayout) -> i64 {
     i64::from(binary.ieee_bias())
@@ -85,7 +79,7 @@ fn normal_encoding(
         return None;
     }
     let field = exponent + i64::from(top) + bias(binary);
-    if field < 1 || field >= i64::from(largest_field(binary)) {
+    if field < 1 || field >= i64::from(binary.largest_field()) {
         return None;
     }
     let significand = magnitude << (precision - 1 - top);
@@ -107,9 +101,9 @@ fn normal_encoding(
 /// payloads. An x87 encoding has a wrong integer bit at times: a
 /// pseudo-denormal, an unnormal, a pseudo-infinity, or a pseudo-NaN.
 fn random_binary(binary: BinaryLayout, rng: &mut SplitMix64) -> u128 {
-    let negative = rng.next_u64() & 1 == 1;
-    let largest = largest_field(binary);
-    let field = match below(rng, 8) {
+    let negative = rng.coin_flip();
+    let largest = binary.largest_field();
+    let field = match rng.below(8) {
         0 => 0,
         1 => largest,
         2 => 1 + below_u32(rng, 3),
@@ -126,19 +120,19 @@ fn random_binary(binary: BinaryLayout, rng: &mut SplitMix64) -> u128 {
         binary.fraction_bits()
     };
     let mask = (1 << bits) - 1;
-    let fraction = match below(rng, 8) {
+    let fraction = match rng.below(8) {
         0 => 0,
         1 => mask,
         2 => 1,
-        3 => 1 << below(rng, u64::from(bits)),
+        3 => 1 << rng.below(u64::from(bits)),
         4 => 1 << (bits - 1),
-        5 => (rng.next_u128() & mask) >> below(rng, u64::from(bits)) << below(rng, 8),
+        5 => (rng.next_u128() & mask) >> rng.below(u64::from(bits)) << rng.below(8),
         _ => rng.next_u128(),
     } & mask;
     if !explicit_integer(binary) {
         return encode(binary, negative, field, fraction);
     }
-    let integer = (field != 0) != (below(rng, 8) == 0);
+    let integer = (field != 0) != (rng.below(8) == 0);
     encode(
         binary,
         negative,
@@ -154,7 +148,7 @@ fn short(binary: BinaryLayout, rng: &mut SplitMix64) -> u128 {
     let bits = 1 + below_u32(rng, binary.precision().min(60));
     let magnitude = (rng.next_u128() & ((1 << bits) - 1)) | (1 << (bits - 1));
     let exponent = i64::from(below_u32(rng, 161)) - 80;
-    normal_encoding(binary, rng.next_u64() & 1 == 1, magnitude, exponent)
+    normal_encoding(binary, rng.coin_flip(), magnitude, exponent)
         .unwrap_or_else(|| random_binary(binary, rng))
 }
 
@@ -162,30 +156,19 @@ fn short(binary: BinaryLayout, rng: &mut SplitMix64) -> u128 {
 /// `layout`: `p + 1` digits that end in 5, or a neighbor of such an integer.
 fn decimal_tie(binary: BinaryLayout, rng: &mut SplitMix64, layout: Layout) -> u128 {
     let unit = Layout::power_of_ten(layout.precision());
-    let head = unit + below_u128(rng, 9 * unit);
+    let head = unit + rng.below_u128(9 * unit);
     let tie = head / 10 * 10 + 5;
-    let magnitude = match below(rng, 3) {
+    let magnitude = match rng.below(3) {
         0 => tie - 1,
         1 => tie + 1,
         _ => tie,
     };
-    normal_encoding(binary, rng.next_u64() & 1 == 1, magnitude, 0)
-        .unwrap_or_else(|| short(binary, rng))
+    normal_encoding(binary, rng.coin_flip(), magnitude, 0).unwrap_or_else(|| short(binary, rng))
 }
 
-/// Returns a random value below `bound`.
-fn below(rng: &mut SplitMix64, bound: u64) -> u64 {
-    rng.next_u64() % bound
-}
-
-/// Returns a random value below `bound`.
+/// Returns a random value below `bound`, from 64 random bits.
 fn below_u32(rng: &mut SplitMix64, bound: u32) -> u32 {
-    u32::try_from(below(rng, u64::from(bound))).expect("the value is below a u32 bound")
-}
-
-/// Returns a random value below `bound`.
-fn below_u128(rng: &mut SplitMix64, bound: u128) -> u128 {
-    rng.next_u128() % bound
+    u32::try_from(rng.below(u64::from(bound))).expect("the value is below a u32 bound")
 }
 
 /// A decimal value of `layout` inside or just outside the range of
@@ -197,13 +180,13 @@ fn near_binary(rng: &mut SplitMix64, layout: Layout, binary: BinaryLayout) -> u1
     let normal = 1 - bias(binary);
     let largest = bias(binary) + 1;
     let near = |rng: &mut SplitMix64, at: i64| at + i64::from(below_u32(rng, 9)) - 4;
-    let exponent = match below(rng, 4) {
+    let exponent = match rng.below(4) {
         0 => near(rng, smallest),
         1 => near(rng, normal),
         2 => near(rng, largest),
         _ => {
             smallest
-                + i64::try_from(below(rng, (largest - smallest).unsigned_abs() + 1))
+                + i64::try_from(rng.below((largest - smallest).unsigned_abs() + 1))
                     .expect("an exponent fits an i64")
         }
     };
@@ -215,8 +198,8 @@ fn near_binary(rng: &mut SplitMix64, layout: Layout, binary: BinaryLayout) -> u1
     let field = u32::try_from(field.clamp(0, i64::from(layout.largest_field())))
         .expect("a clamped field fits a u32");
     let low = Layout::power_of_ten(digits - 1);
-    let coefficient = low + below_u128(rng, Layout::power_of_ten(digits) - low);
-    layout.number(rng.next_u64() & 1 == 1, field, coefficient)
+    let coefficient = low + rng.below_u128(Layout::power_of_ten(digits) - low);
+    layout.number(rng.coin_flip(), field, coefficient)
 }
 
 /// A decimal value of `layout` that is exactly halfway between two values of
@@ -226,7 +209,7 @@ fn near_binary(rng: &mut SplitMix64, layout: Layout, binary: BinaryLayout) -> u1
 /// a negative power of 2, and positive for an odd integer that holds a power
 /// of 5; see [`scaled_tie`].
 fn binary_tie(rng: &mut SplitMix64, layout: Layout, binary: BinaryLayout) -> u128 {
-    let bits = if below(rng, 2) == 0 {
+    let bits = if rng.below(2) == 0 {
         binary.precision() + 1
     } else {
         1 + below_u32(rng, binary.precision() + 1)
@@ -236,7 +219,7 @@ fn binary_tie(rng: &mut SplitMix64, layout: Layout, binary: BinaryLayout) -> u12
     }
     let odd = (rng.next_u128() & ((1 << bits) - 1)) | (1 << (bits - 1)) | 1;
     let power = below_u32(rng, 41);
-    let (coefficient, exponent) = match below(rng, 3) {
+    let (coefficient, exponent) = match rng.below(3) {
         0 => (odd.checked_mul(1 << power), 0),
         1 => {
             let five = 5_u128.checked_pow(power);
@@ -254,13 +237,13 @@ fn binary_tie(rng: &mut SplitMix64, layout: Layout, binary: BinaryLayout) -> u12
     let Some(coefficient) = coefficient.filter(|&coefficient| coefficient < largest) else {
         return near_binary(rng, layout, binary);
     };
-    let coefficient = match below(rng, 4) {
+    let coefficient = match rng.below(4) {
         0 => coefficient + 1,
         1 => coefficient - 1,
         _ => coefficient,
     };
     let field = u32::try_from(exponent + i64::from(layout.bias())).expect("the field fits");
-    layout.number(rng.next_u64() & 1 == 1, field, coefficient)
+    layout.number(rng.coin_flip(), field, coefficient)
 }
 
 /// Returns the coefficient and the exponent of a decimal value that is an
@@ -285,13 +268,13 @@ fn scaled_tie(rng: &mut SplitMix64, layout: Layout, bits: u32) -> Option<(u128, 
     let q = first + below_u32(rng, last - first + 1);
     let five = 5_u128.pow(q);
     let (smallest, largest) = (low.div_ceil(five), high / five);
-    let m = (smallest + below_u128(rng, largest - smallest + 1)) | 1;
+    let m = (smallest + rng.below_u128(largest - smallest + 1)) | 1;
     let m = if m > largest { m - 2 } else { m };
     if m < smallest {
         return None;
     }
     let room = (limit / m).ilog2();
-    let s = if below(rng, 2) == 0 {
+    let s = if rng.below(2) == 0 {
         room
     } else {
         below_u32(rng, room + 1)
@@ -784,12 +767,12 @@ fn readtest_conversions() {
 /// both formats.
 fn operand(rng: &mut SplitMix64, conversion: &Conversion) -> u128 {
     match (conversion.source, conversion.target) {
-        (Side::Binary(binary), Side::Bid(layout)) => match below(rng, 5) {
+        (Side::Binary(binary), Side::Bid(layout)) => match rng.below(5) {
             0 => short(binary, rng),
             1 => decimal_tie(binary, rng, layout),
             _ => random_binary(binary, rng),
         },
-        (Side::Bid(layout), Side::Binary(binary)) => match below(rng, 4) {
+        (Side::Bid(layout), Side::Binary(binary)) => match rng.below(4) {
             0 => layout.random(rng),
             1 => binary_tie(rng, layout, binary),
             _ => near_binary(rng, layout, binary),
@@ -797,7 +780,7 @@ fn operand(rng: &mut SplitMix64, conversion: &Conversion) -> u128 {
         (Side::Bid(layout), _) => layout.random(rng),
         (Side::Dpd(layout), _) => {
             let bid = layout.random(rng);
-            match (below(rng, 2), layout.width) {
+            match (rng.below(2), layout.width) {
                 (0, _) => rng.next_u128() & (u128::MAX >> (128 - layout.width)),
                 (_, 32) => Bid32::to_dpd(narrow(bid)).into(),
                 (_, 64) => Bid64::to_dpd(narrow(bid)).into(),
@@ -821,7 +804,7 @@ fn random_conversions(
     for conversion in conversions().iter().filter(|conversion| select(conversion)) {
         for _ in 0..cases {
             let x = operand(&mut rng, conversion);
-            let index = usize::try_from(below(&mut rng, 5)).expect("an index fits a usize");
+            let index = usize::try_from(rng.below(5)).expect("an index fits a usize");
             let rounding = IntelRounding::ALL[index];
             let library = (conversion.library)(x, rounding);
             report.check(conversion, x, rounding, library, &String::new);

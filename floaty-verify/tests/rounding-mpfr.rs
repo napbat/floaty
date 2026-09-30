@@ -51,12 +51,12 @@ fn behaviors(precisions: &[u32]) -> Vec<Env> {
 fn significand(random: &mut SplitMix64, width: u32) -> Integer {
     let limbs: Vec<u64> = (0..width.div_ceil(64)).map(|_| random.next_u64()).collect();
     let low = Integer::from_digits(&limbs, Order::Lsf) & ((Integer::from(1) << (width - 1)) - 1u32);
-    let pattern = match random.next_u64() % 4 {
+    let pattern = match random.below(4) {
         0 => (Integer::from(1) << (width - 1)) - 1u32,
         1 => Integer::ZERO,
         2 if width >= 3 => {
             let position =
-                u32::try_from(random.next_u64() % u64::from(width - 2)).expect("below the width");
+                u32::try_from(random.below(u64::from(width - 2))).expect("below the width");
             Integer::from(1) << position
         }
         _ => low,
@@ -96,15 +96,15 @@ fn inputs(format: &Format, env: &Env, random: &mut SplitMix64) -> Vec<Input> {
     (0..INPUTS)
         .map(|index| {
             let width = if index % 3 == 0 {
-                u32::try_from(random.next_u64() % 500).expect("below 500") + 1
+                u32::try_from(random.below(500)).expect("below 500") + 1
             } else {
                 widths[index % widths.len()]
             };
-            let top = tops[usize::try_from(random.next_u64() % 12).expect("below 12")];
+            let top = tops[usize::try_from(random.below(12)).expect("below 12")];
             let exponent = top - i32::try_from(width).expect("a width fits an i32") + 1;
-            let sticky = width >= precision + 2 && random.next_u64() % 2 == 0;
+            let sticky = width >= precision + 2 && random.below(2) == 0;
             Input {
-                negative: random.next_u64() % 2 == 0,
+                negative: random.below(2) == 0,
                 exponent,
                 significand: significand(random, width),
                 sticky,
