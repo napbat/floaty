@@ -51,6 +51,11 @@ fn two_diff<B: Behavior>(steps: &mut Steps<B>, a: F64, b: F64) -> Pair {
 
 /// The tail of IEEE-style addition and subtraction from `s2 += t1`: the sum
 /// `s1 + s2` with the errors `t1` and `t2`, renormalized twice.
+// Out of line, the flags of the steps go through memory. With `#[inline]`
+// only, the `+` operator of `DoubleDouble<Qd>` took 17.0 ns instead of 16.1
+// ns.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 fn renormalize<B: Behavior>(steps: &mut Steps<B>, (s1, s2): Pair, (t1, t2): Pair) -> Pair {
     let s2 = steps.add(s2, t1);
     let s = steps.add(s1, s2);

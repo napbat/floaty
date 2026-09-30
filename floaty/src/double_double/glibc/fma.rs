@@ -331,7 +331,7 @@ pub fn mul_add<B: Behavior>(steps: &mut Steps<B>, x: Pair, y: Pair, z: Pair) -> 
 /// block. So [`order`] and [`sort`] follow the source and `qsort` exactly,
 /// and each sum of two values that can both be NaNs has the operand order of
 /// its site.
-fn fused(steps: &mut Steps<Env>, x: Pair, y: Pair, z: Pair) -> Fused {
+fn fused<B: Behavior>(steps: &mut Steps<B>, x: Pair, y: Pair, z: Pair) -> Fused {
     let mut values = [Scaled::zero(); 10];
     values[0] = store(steps, z.0);
     values[1] = store(steps, z.1);

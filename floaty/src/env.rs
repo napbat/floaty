@@ -586,6 +586,10 @@ impl Debug for Flags {
 /// copy of an operation, without the branches that the constants decide. The
 /// trait is sealed.
 pub trait Behavior: Sealed + Copy {
+    /// The behavior that [`rounded`](Self::rounded) gives.
+    #[doc(hidden)]
+    type Rounded: Behavior;
+
     /// Returns the fields of the behavior.
     #[doc(hidden)]
     fn env(self) -> Env;
@@ -594,10 +598,24 @@ pub trait Behavior: Sealed + Copy {
     #[doc(hidden)]
     #[must_use]
     fn without_saturation(self) -> Self;
+
+    /// Returns the behavior with the rounding direction `rounding`.
+    #[doc(hidden)]
+    #[must_use]
+    fn rounded(self, rounding: Rounding) -> Self::Rounded;
+
+    /// Reports one binary64 step of a double-double operation: the
+    /// operation, the result, and the flags. Only an [`Observed`] behavior
+    /// acts on the report.
+    #[doc(hidden)]
+    #[inline]
+    fn observe(self, _operation: StepOperation, _result: StepResult, _flags: Flags) {}
 }
 
 impl Sealed for Env {}
 impl Behavior for Env {
+    type Rounded = Env;
+
     #[inline]
     fn env(self) -> Env {
         self
@@ -607,9 +625,16 @@ impl Behavior for Env {
     fn without_saturation(self) -> Self {
         self.with_saturate(false)
     }
+
+    #[inline]
+    fn rounded(self, rounding: Rounding) -> Env {
+        self.with_rounding(rounding)
+    }
 }
 
 impl<M: Mode> Behavior for M {
+    type Rounded = Env;
+
     #[inline]
     fn env(self) -> Env {
         M::ENV
@@ -620,6 +645,11 @@ impl<M: Mode> Behavior for M {
     fn without_saturation(self) -> Self {
         const { assert!(!M::ENV.saturate, "no mode saturates") };
         self
+    }
+
+    #[inline]
+    fn rounded(self, rounding: Rounding) -> Env {
+        M::ENV.with_rounding(rounding)
     }
 }
 
@@ -679,3 +709,7 @@ pub trait Mode: Sealed + Copy + Default + 'static {
 }
 
 pub mod mode;
+mod observe;
+
+#[doc(hidden)]
+pub use self::observe::{Observed, Step, StepOperation, StepResult};
