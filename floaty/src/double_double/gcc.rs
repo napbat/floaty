@@ -10,7 +10,8 @@
 //! `fcmpu` is a quiet comparison. `bge` branches unless the first operand is
 //! less, and `ble` unless it is greater, so both branch for an unordered
 //! comparison. A function that returns one `double` returns it with a
-//! positive zero low half, which `xxlxor` makes.
+//! positive zero low half, which `xxlxor` makes. `fmsub` models the PowerPC
+//! instruction for these functions and for `fmal` of glibc.
 
 use core::cmp::Ordering;
 

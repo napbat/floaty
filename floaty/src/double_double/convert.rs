@@ -1,18 +1,9 @@
-//! The rounding of an exact value to a pair: the conversions into a
-//! double-double, and the operations whose result is an exact value.
+//! The conversions into and out of a double-double, and the rounding of an
+//! exact value to a pair by the rule of the documentation of `DoubleDouble`.
 //!
-//! The rule has two steps. The high half is the value rounded to nearest
-//! even, and the low half is the rest rounded in the direction of the
-//! behavior. The sum of the two halves is the value of the result. That sum
-//! then splits again into its canonical pair: the high half is the sum
-//! rounded to nearest even, and the low half is the exact rest. So a value
-//! that a canonical pair holds gives that pair in every direction.
-//!
-//! The result is inexact when the low half rounds. The low half gives the
-//! other flags of the rounding: `TINY` when it is tiny, and `UNDERFLOW` when
-//! it is also inexact, as for a binary64 result. The result is `ROUNDED_UP` when its magnitude is above the
-//! magnitude of the value. An overflow gives an infinity, or the largest
-//! finite pair, as the direction and saturation select for binary64.
+//! The value first rounds to odd on the grid of [`Fixed`]. Then the high half
+//! rounds to nearest even, the low half rounds the rest, and the sum of the
+//! two halves splits again into its canonical pair.
 
 use core::cmp::Ordering;
 
@@ -54,7 +45,7 @@ type Signed = (bool, Fixed);
 /// A zero gives the zero of its sign with a `+0` low half. An infinity
 /// gives the infinity with a `+0` low half. A NaN converts to binary64, by
 /// the rules of a conversion, and takes a `+0` low half.
-pub(super) fn round_value<L: Limbs, B: Behavior>(
+fn round_value<L: Limbs, B: Behavior>(
     value: Unpacked<L>,
     source: Source,
     behavior: B,
@@ -279,21 +270,21 @@ fn infinity(negative: bool) -> F64 {
 
 /// The source of a binary value, for an integer or an exact result. A
 /// finite value reads no payload.
-pub(super) const BINARY: Source = <Binary<11> as Standard<64>>::SOURCE;
+const BINARY: Source = <Binary<11> as Standard<64>>::SOURCE;
 
 impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     /// Converts the exact value to another format with the default mode of
-    /// that format: once rounded to a [`Float`](crate::Float), or to a pair by the rule of
-    /// the type documentation.
+    /// that format: once rounded to a [`Float`](crate::Float), or to a pair
+    /// by the rule of the type documentation.
     #[must_use]
     pub fn convert<T: FloatType>(self) -> T {
         self.convert_with(T::Mode::default()).0
     }
 
     /// Converts the exact value to another format, with an override of the
-    /// destination behavior: once rounded to a [`Float`](crate::Float), or to a pair by the
-    /// rule of the type documentation. Returns the result and the flags. A
-    /// NaN keeps the high-order bits of its payload.
+    /// destination behavior: once rounded to a [`Float`](crate::Float), or to
+    /// a pair by the rule of the type documentation. Returns the result and
+    /// the flags. A NaN keeps the high-order bits of its payload.
     #[must_use]
     pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (T, Flags) {
         T::convert_from(self.exact(), BINARY, behavior.apply::<T::Mode>())
@@ -304,7 +295,7 @@ impl<Alg, M: Mode> Sealed for DoubleDouble<Alg, M> {}
 
 /// A double-double is a conversion destination, so
 /// [`Float::convert`](crate::Float::convert) and
-/// [`DoubleDouble::convert`] round to a pair. The rule of the module
+/// [`DoubleDouble::convert`] round to a pair. The rule of the type
 /// documentation of [`DoubleDouble`] applies.
 impl<Alg: Algorithm, M: Mode> FloatType for DoubleDouble<Alg, M> {
     type Mode = M;
@@ -351,10 +342,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     pub fn from_int_with<I: Integer>(value: I, behavior: impl Override) -> (Self, Flags) {
         let parts = value.to_parts();
         let value = if parts.magnitude.is_zero() {
-            Unpacked::Zero {
-                negative: false,
-                exponent: 0,
-            }
+            Unpacked::zero(false)
         } else {
             Unpacked::Finite {
                 negative: parts.negative,
@@ -362,7 +350,16 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
                 significand: parts.magnitude,
             }
         };
-        let ((hi, lo), flags) = round_value(value, BINARY, behavior.apply::<M>());
+        Self::from_exact(value, behavior.apply::<M>())
+    }
+
+    /// Rounds a binary exact value to a pair by the rule of the type
+    /// documentation. Returns the pair and the flags.
+    pub(super) fn from_exact<L: Limbs, B: Behavior>(
+        value: Unpacked<L>,
+        behavior: B,
+    ) -> (Self, Flags) {
+        let ((hi, lo), flags) = round_value(value, BINARY, behavior);
         (Self::new(hi, lo), flags)
     }
 }

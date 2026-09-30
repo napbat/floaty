@@ -79,14 +79,14 @@ fn absolute<B: Behavior>(steps: &mut Steps<B>, (hi, lo): Pair) -> Pair {
 pub fn is_canonical((hi, lo): Pair) -> bool {
     // `sysdeps/ieee754/ldbl-128ibm/s_iscanonicall.c` of glibc 2.43, on the
     // magnitudes of the halves.
-    let high = hi.to_bits() & !(1 << 63);
-    let low = lo.to_bits() & !(1 << 63);
+    let high = hi.to_bits() & !SIGN;
+    let low = lo.to_bits() & !SIGN;
     if low == 0 {
         return true;
     }
     let high_field = high >> 52;
     if high_field == 0x7FF {
-        return high != 0x7FF0_0000_0000_0000;
+        return high != INFINITY;
     }
     // glibc compares the exponent fields: the high field must exceed the
     // low field by more than 53, or by 53 when the low half is a power of

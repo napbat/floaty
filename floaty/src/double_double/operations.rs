@@ -9,9 +9,9 @@
 
 use core::cmp::Ordering;
 
-use super::convert::{BINARY, round_value};
-use super::{Algorithm, DoubleDouble, LOWEST, Magnitude};
-use crate::env::{Behavior, Env, Flags, Mode, Override};
+use super::value::Magnitude;
+use super::{Algorithm, DoubleDouble};
+use crate::env::{Behavior, Flags, Mode, Override, Rounding};
 use crate::exact::{self, Unrounded};
 use crate::float::F64;
 use crate::format::internal::MinMax;
@@ -27,14 +27,19 @@ type Whole = [u64; 17];
 
 /// Returns the integer that a finite exact value rounds to in the direction
 /// `rounding`.
-fn integral(negative: bool, magnitude: &Magnitude, env: &Env) -> Integral<Whole> {
+fn integral(
+    negative: bool,
+    exponent: i32,
+    magnitude: &Magnitude,
+    rounding: Rounding,
+) -> Integral<Whole> {
     let value = Unrounded {
         negative,
-        exponent: LOWEST,
+        exponent,
         significand: *magnitude,
         sticky: false,
     };
-    exact::round_to_integer(&value, env.rounding)
+    exact::round_to_integer(&value, rounding)
 }
 
 /// Defines a minimum or maximum operation: a method with the default mode and
@@ -98,13 +103,16 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         }
         let Unpacked::Finite {
             negative,
+            exponent,
             significand,
-            ..
         } = value
         else {
             unreachable!("ToInt::special takes every value that is not finite");
         };
-        ToInt::from_integral(negative, &integral(negative, &significand, &env))
+        ToInt::from_integral(
+            negative,
+            &integral(negative, exponent, &significand, env.rounding),
+        )
     }
 
     /// Rounds to an integral value, with the default mode.
@@ -133,15 +141,12 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         let (value, flags) = match self.exact() {
             Unpacked::Finite {
                 negative,
+                exponent,
                 significand,
-                ..
             } => {
-                let integral = integral(negative, &significand, &env);
+                let integral = integral(negative, exponent, &significand, env.rounding);
                 let value = if integral.magnitude.is_zero() {
-                    Unpacked::Zero {
-                        negative,
-                        exponent: 0,
-                    }
+                    Unpacked::zero(negative)
                 } else {
                     Unpacked::Finite {
                         negative,
@@ -153,8 +158,8 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
             }
             other => (other, Flags::NONE),
         };
-        let ((hi, lo), round_flags) = round_value(value, BINARY, exact_env);
-        (Self::new(hi, lo), flags | round_flags)
+        let (pair, round_flags) = Self::from_exact(value, exact_env);
+        (pair, flags | round_flags)
     }
 
     /// Returns `self * 2^scale`, rounded with the default mode.
@@ -185,8 +190,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
             },
             other => other,
         };
-        let ((hi, lo), flags) = round_value(value, BINARY, behavior.apply::<M>());
-        (Self::new(hi, lo), flags)
+        Self::from_exact(value, behavior.apply::<M>())
     }
 
     /// Returns the minimum or the maximum of one family.
@@ -218,13 +222,9 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     /// Returns the half that holds the NaN of a NaN pair, or a zero for a
     /// number.
     fn nan_half(self) -> F64 {
-        if self.hi.is_nan() {
-            self.hi
-        } else if self.hi.is_finite() && self.lo.is_nan() {
-            self.lo
-        } else {
-            F64::from_bits(0)
-        }
+        self.special_half()
+            .filter(|half| half.is_nan())
+            .unwrap_or(F64::from_bits(0))
     }
 
     min_max!(

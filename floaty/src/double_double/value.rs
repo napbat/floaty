@@ -3,11 +3,22 @@
 
 use core::cmp::Ordering;
 
-use super::{Algorithm, DoubleDouble, LOWEST, Magnitude, glibc};
+use super::{Algorithm, DoubleDouble, glibc};
 use crate::env::{Flags, Mode};
-use crate::float::{Class, Decoded};
+use crate::float::{Class, Decoded, F64};
 use crate::limbs::Limbs;
 use crate::unpacked::Unpacked;
+
+/// `|hi + lo| * 2^1074`. Every finite pair is a multiple of 2^-1074 below
+/// 2^1025, so 2,099 bits hold the exact value of every finite pair.
+pub(super) type Magnitude = [u64; 33];
+
+/// The weight of the lowest bit of a [`Magnitude`].
+const LOWEST: i32 = -1074;
+
+/// The encoding bits of the exponent field of binary64, all ones in a NaN
+/// and an infinity.
+const SPECIAL_FIELD: u64 = 0x7FF0_0000_0000_0000;
 
 /// The bit length of `2^-969 * 2^1074`, the magnitude of `LDBL_MIN`: a
 /// finite value with a shorter [`Magnitude`] is below `LDBL_MIN`.
@@ -104,16 +115,29 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         (Some(order_values(&first, &second)), false)
     }
 
-    /// Returns the exact value of the pair. A NaN or infinite high half makes
-    /// the value that half. With a finite high half, a NaN or infinite low half
-    /// makes the value that low half. Otherwise the value is the exact sum,
-    /// and a zero sum takes the sign of the high half.
+    /// Returns the exact value of the pair. The half of
+    /// [`special_half`](Self::special_half) makes the value that half.
+    /// Otherwise the value is the exact sum, and a zero sum takes the sign of
+    /// the high half. A nonzero finite value has the exponent `-1074`, and its
+    /// significand is its [`Magnitude`].
     pub(super) fn exact(self) -> Unpacked<Magnitude> {
-        let (hi, lo) = (self.hi.decode::<1>(), self.lo.decode::<1>());
-        match (hi, lo) {
-            (Decoded::Nan { .. } | Decoded::Infinity { .. }, _) => special(hi),
-            (_, Decoded::Nan { .. } | Decoded::Infinity { .. }) => special(lo),
-            _ => sum(hi, lo),
+        if let Some(half) = self.special_half() {
+            return special(half.decode::<1>());
+        }
+        sum(self.hi.decode::<1>(), self.lo.decode::<1>())
+    }
+
+    /// Returns the half that makes the value a NaN or an infinity: a NaN or
+    /// infinite high half, or, with a finite high half, a NaN or infinite low
+    /// half. A pair of finite halves gives `None`.
+    pub(super) fn special_half(self) -> Option<F64> {
+        let special = |half: F64| half.to_bits() & SPECIAL_FIELD == SPECIAL_FIELD;
+        if special(self.hi) {
+            Some(self.hi)
+        } else if special(self.lo) {
+            Some(self.lo)
+        } else {
+            None
         }
     }
 
@@ -277,19 +301,11 @@ fn sum(hi: Decoded<1>, lo: Decoded<1>) -> Unpacked<Magnitude> {
         match hi_magnitude.compare(&lo_magnitude) {
             Ordering::Greater => (hi_negative, hi_magnitude.sub(lo_magnitude)),
             Ordering::Less => (lo_negative, lo_magnitude.sub(hi_magnitude)),
-            Ordering::Equal => {
-                return Unpacked::Zero {
-                    negative: hi_negative,
-                    exponent: 0,
-                };
-            }
+            Ordering::Equal => return Unpacked::zero(hi_negative),
         }
     };
     if magnitude.is_zero() {
-        return Unpacked::Zero {
-            negative: hi_negative,
-            exponent: 0,
-        };
+        return Unpacked::zero(hi_negative);
     }
     Unpacked::Finite {
         negative,
