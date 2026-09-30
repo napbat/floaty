@@ -1,9 +1,9 @@
 //! Safe wrappers over the Intel Decimal Floating-Point Math Library.
 //!
-//! `build.rs` builds release 2.0 Update 2 of the library from its pinned
-//! archive. Each function takes its rounding direction and a pointer to its
-//! status flags as arguments, so no state is global. The library works on
-//! BID encodings. Every function here takes and returns raw encodings,
+//! The build script builds release 2.0 Update 2 of the library from its
+//! pinned archive. Each function takes its rounding direction and a pointer
+//! to its status flags as arguments, so no state is global. The library works
+//! on BID encodings. Every function here takes and returns raw encodings,
 //! `u32`, `u64`, and `u128`, and binary floating-point values as their bits:
 //! an x87 extended value in the low 80 bits of a `u128`.
 //!

@@ -1,6 +1,6 @@
 //! Safe wrappers over decNumber's fixed-size DPD formats.
 //!
-//! `build.rs` builds decNumber 3.68 from its pinned release archive.
+//! The build script builds decNumber 3.68 from its pinned release archive.
 //! `decSingle`, `decDouble`, and `decQuad` hold decimal32, decimal64, and
 //! decimal128 in the DPD encoding. Every function here takes and returns raw
 //! encodings: `u32`, `u64`, and `u128`.

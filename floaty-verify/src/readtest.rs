@@ -1,8 +1,8 @@
 //! Reads `readtest.in`, the tests of the Intel Decimal Floating-Point Math
 //! Library.
 //!
-//! `build.rs` extracts the file from the pinned archive to [`PATH`]. The
-//! library's `TESTS/readtest.c` reads it, and this module follows that
+//! The build script extracts the file from the pinned archive to [`PATH`].
+//! The library's `TESTS/readtest.c` reads it, and this module follows that
 //! program. A test line is
 //!
 //! ```text
@@ -400,7 +400,7 @@ pub fn parse(text: &str) -> Result<Vec<Line>, ParseError> {
 /// Panics when the file cannot be read or parsed. The pinned file parses.
 #[must_use]
 pub fn read() -> Vec<Line> {
-    let text = fs::read_to_string(PATH).expect("build.rs extracts readtest.in");
+    let text = fs::read_to_string(PATH).expect("the build script extracts readtest.in");
     parse(&text).unwrap_or_else(|error| panic!("{PATH}: {error}"))
 }
 

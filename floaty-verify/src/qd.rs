@@ -1,10 +1,11 @@
 //! Runs the double-double arithmetic of QD, `dd_real`, and its remainders
 //! `drem` and `fmod`, as an oracle.
 //!
-//! `build.rs` builds QD 2.3.24 from its pinned archive, with the IEEE-style
-//! addition, the accurate division, and the C `fma` for the error of a
-//! product, and with `-O2 -ffp-contract=off`. The shim `shim/qd_shim.cpp`
-//! compiles the inline operators of QD with the same options.
+//! The build script builds QD 2.3.24 from its pinned archive, with the
+//! IEEE-style addition, the accurate division, and the C `fma` for the error
+//! of a product, and with `-O2 -ffp-contract=off`. The shim
+//! `shim/qd_shim.cpp` compiles the inline operators of QD with the same
+//! options.
 //!
 //! Each function sets the rounding direction of the calling thread, clears
 //! the flags, computes with `dd_real`, and reads the flags with

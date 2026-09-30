@@ -138,7 +138,7 @@ cargo +1.85 clippy -p floaty --all-targets --target s390x-unknown-linux-gnu -- -
   instruction. On another host, run the gates with `-p floaty` instead of
   `--workspace`.
 - Keep the submodules under `floaty-verify/reference/`, the pinned archives
-  in `floaty-verify/build.rs`, the pinned compilers, the pinned PowerPC C
+  in `floaty-verify/build/`, the pinned compilers, the pinned PowerPC C
   library, and the pinned QEMU at their pinned releases. Make a change of
   release in its own commit, and state the reason in the commit message.
 - Run the long exhaustive sweeps with
@@ -225,6 +225,8 @@ in every workspace package.
 - Keep the package manifest at the package root and Rust code under `src/`.
 - Put integration tests in `tests/`, examples in `examples/`, and benchmarks
   in `benches/` at the package root. Do not put Rust source anywhere else.
+- Put the build script of `floaty-verify` and its modules in
+  `floaty-verify/build/`, with `main.rs` as the root.
 - Name every binary, example, benchmark, and integration-test target in
   `kebab-case`. Name module files and directories in `snake_case`.
 - Use the named-file module style: `parent.rs` beside a `parent/` directory.

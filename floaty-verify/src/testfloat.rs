@@ -1,9 +1,9 @@
 //! Runs the Berkeley TestFloat generator, `testfloat_gen`, and reads its test
 //! cases.
 //!
-//! `build.rs` builds one generator for each SoftFloat NaN specialization.
-//! Each line of the output holds the operands, the expected result, and the
-//! expected flags, all in hexadecimal.
+//! The build script builds one generator for each SoftFloat NaN
+//! specialization. Each line of the output holds the operands, the expected
+//! result, and the expected flags, all in hexadecimal.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};

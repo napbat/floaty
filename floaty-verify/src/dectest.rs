@@ -1,7 +1,7 @@
 //! Reads decTest files, the decimal arithmetic test vectors of Mike
 //! Cowlishaw.
 //!
-//! `build.rs` extracts the pinned decTest archive, version 2.62, into
+//! The build script extracts the pinned decTest archive, version 2.62, into
 //! [`DIRECTORY`]. The `dd` files test decimal64, `decDouble` in decNumber;
 //! the `dq` files test decimal128, `decQuad`; and the `ds` files test
 //! decimal32, `decSingle`. The document "General Decimal Arithmetic
@@ -605,7 +605,7 @@ fn parse_test(line: usize, tokens: &[Token], context: Context) -> Result<Test, P
 #[must_use]
 pub fn files(prefix: &str) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = fs::read_dir(DIRECTORY)
-        .expect("build.rs extracts the decTest files")
+        .expect("the build script extracts the decTest files")
         .map(|entry| entry.expect("the decTest directory can be read").path())
         .filter(|path| {
             path.extension()
@@ -629,7 +629,7 @@ pub fn files(prefix: &str) -> Vec<PathBuf> {
 #[must_use]
 pub fn read(name: &str) -> Vec<Test> {
     let path = PathBuf::from(DIRECTORY).join(name);
-    let text = fs::read_to_string(&path).expect("build.rs extracts the decTest files");
+    let text = fs::read_to_string(&path).expect("the build script extracts the decTest files");
     parse(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 

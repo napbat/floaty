@@ -2,14 +2,14 @@
 //! `long double` functions of glibc's libm, and the PowerPC fused
 //! multiply-add instructions, as an oracle.
 //!
-//! `build.rs` builds the batch program `shim/ibm_ldouble.c` with the pinned
-//! powerpc64le GCC 15.2.0, and links it statically with the libgcc of that
-//! compiler and the libm of its glibc 2.43. The program calls `__gcc_qadd`,
-//! `__gcc_qsub`, `__gcc_qmul`, and `__gcc_qdiv`, the libm functions of
-//! [`Function`], and executes `fmadd` and `fmsub`, under `qemu-ppc64le`.
-//! [`run`], [`run_functions`], and [`run_instructions`] send a batch of
-//! cases to one QEMU process. A process takes about 10 ms to start, and then
-//! runs about 500,000 cases a second.
+//! The build script builds the batch program `shim/ibm_ldouble.c` with the
+//! pinned powerpc64le GCC 15.2.0, and links it statically with the libgcc of
+//! that compiler and the libm of its glibc 2.43. The program calls
+//! `__gcc_qadd`, `__gcc_qsub`, `__gcc_qmul`, and `__gcc_qdiv`, the libm
+//! functions of [`Function`], and executes `fmadd` and `fmsub`, under
+//! `qemu-ppc64le`. [`run`], [`run_functions`], and [`run_instructions`] send
+//! a batch of cases to one QEMU process. A process takes about 10 ms to
+//! start, and then runs about 500,000 cases a second.
 //!
 //! The module works on raw bits: a [`Pair`] holds the binary64 encodings of
 //! the high and the low half. The program sets the rounding direction with
@@ -34,7 +34,8 @@ pub const PROGRAM: &str = env!("FLOATY_IBM_LDOUBLE");
 /// The emulator that runs [`PROGRAM`].
 pub const QEMU: &str = "qemu-ppc64le";
 
-/// The pinned QEMU release. `build.rs` checks it when it builds [`PROGRAM`].
+/// The pinned QEMU release. The build script checks it when it builds
+/// [`PROGRAM`].
 const QEMU_VERSION: &str = env!("FLOATY_QEMU_VERSION");
 
 /// A double-double value as the binary64 encodings of its two halves.
@@ -526,7 +527,7 @@ fn qemu() -> Command {
 }
 
 /// Stops the test when [`QEMU`] is not the pinned release. QEMU can change
-/// after `build.rs` checked it, for example in a system update.
+/// after the build script checked it, for example in a system update.
 fn check_qemu() {
     let output = qemu()
         .arg("--version")

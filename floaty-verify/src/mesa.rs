@@ -1,9 +1,9 @@
 //! Runs Mesa's conversions of the unsigned floats of R11G11B10 as an oracle.
 //!
-//! `build.rs` fetches `format_r11g11b10f.h` and `rounding.h` of Mesa 25.2.0,
-//! and the shim `shim/mesa_r11g11b10.c` exposes the inline functions of the
-//! header. The conversions follow `GL_EXT_packed_float`. Each function takes
-//! and returns encodings.
+//! The build script fetches `format_r11g11b10f.h` and `rounding.h` of Mesa
+//! 25.2.0, and the shim `shim/mesa_r11g11b10.c` exposes the inline functions
+//! of the header. The conversions follow `GL_EXT_packed_float`. Each function
+//! takes and returns encodings.
 
 unsafe extern "C" {
     fn floaty_mesa_f32_to_uf11(bits: u32) -> u32;
