@@ -196,6 +196,13 @@ mod tests {
             0x7E
         );
         assert_eq!(F8E4M3Fn::from_bits(0xFE).next_down().to_bits(), 0xFF);
+        // A format with an infinity steps to it, also when saturating.
+        let saturate = Env::IEEE.with_saturate(true);
+        let largest_single = F32::from_bits(0x7F7F_FFFF);
+        assert_eq!(
+            largest_single.next_up_with(saturate).0.to_bits(),
+            0x7F80_0000
+        );
         // The precision limit does not shrink the largest value.
         let limited = Env::IEEE
             .with_saturate(true)

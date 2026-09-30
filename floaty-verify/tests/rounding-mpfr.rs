@@ -21,15 +21,9 @@ use rug::integer::Order;
 /// Inputs for each behavior of each format.
 const INPUTS: usize = 1000;
 
-/// Returns every behavior to test: each direction, tininess rule, and
-/// flush-to-zero setting, with saturation for the formats without infinity,
-/// at each precision limit.
-fn behaviors(specials: Specials, precisions: &[u32]) -> Vec<Env> {
-    let saturations: &[bool] = if specials == Specials::Ieee {
-        &[false]
-    } else {
-        &[false, true]
-    };
+/// Returns every behavior to test: each direction, tininess rule,
+/// flush-to-zero setting, and saturation setting, at each precision limit.
+fn behaviors(precisions: &[u32]) -> Vec<Env> {
     let limits: Vec<Option<NonZeroU32>> = core::iter::once(None)
         .chain(precisions.iter().map(|&bits| NonZeroU32::new(bits)))
         .collect();
@@ -37,7 +31,7 @@ fn behaviors(specials: Specials, precisions: &[u32]) -> Vec<Env> {
     for &rounding in &mpfr::DIRECTIONS {
         for tininess in [Tininess::BeforeRounding, Tininess::AfterRounding] {
             for flush_to_zero in [false, true] {
-                for &saturate in saturations {
+                for saturate in [false, true] {
                     for &precision in &limits {
                         envs.push(
                             Env::IEEE
@@ -132,7 +126,7 @@ macro_rules! check_format {
             specials: $specials,
         };
         let mut random = SplitMix64::new($seed);
-        for env in behaviors($specials, $precisions) {
+        for env in behaviors($precisions) {
             for input in inputs(&format, &env, &mut random) {
                 let exact = Exact::<8> {
                     negative: input.negative,
@@ -195,7 +189,7 @@ fn every_small_input_to_the_fp8_formats() {
                 specials: $specials,
             };
             let p = i32::try_from(format.precision).expect("a precision fits an i32");
-            for env in behaviors($specials, &[1, 2, 3]) {
+            for env in behaviors(&[1, 2, 3]) {
                 let limit = format.precision_in(&env);
                 for significand in 0_u64..256 {
                     let width = 64 - significand.leading_zeros();

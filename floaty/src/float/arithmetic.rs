@@ -192,8 +192,9 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     ///
     /// The next value above a zero of either sign is the smallest positive
     /// subnormal value. In a format without an infinity, the value above the
-    /// largest finite value is the NaN. When the behavior saturates, it is
-    /// the largest finite value itself. The step does not round, so the
+    /// largest finite value is the NaN, or the largest finite value itself
+    /// when the behavior saturates. In a format with an infinity, it is the
+    /// infinity: the step overflows nothing. The step does not round, so the
     /// precision limit and flush-to-zero do not apply, and a subnormal result
     /// reports no [`Flags::TINY`]. Only a signaling NaN or an unsupported
     /// encoding signals invalid. A subnormal input reports

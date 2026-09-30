@@ -234,13 +234,13 @@ fn overflow(negative: bool, format: &Format, precision: u32, env: &Env) -> (Valu
         Rounding::TowardZero | Rounding::ToOdd => false,
         _ => panic!("the oracle knows every rounding direction"),
     };
-    if to_infinity {
+    // A saturating behavior gives the largest finite value, as the OCP FP8
+    // saturation mode does for an overflow.
+    if to_infinity && !env.saturate {
         if format.specials == Specials::Ieee {
             return (Value::Infinity { negative }, flags | Flags::ROUNDED_UP);
         }
-        if !env.saturate {
-            return (nan(negative, format), flags);
-        }
+        return (nan(negative, format), flags);
     }
     let mut value = largest(format, precision);
     if negative {

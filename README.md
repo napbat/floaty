@@ -99,11 +99,11 @@ let largest = Minifloat::from_bits(0x77).decode::<1>();
 assert_eq!(largest, Decoded::Finite { negative: false, exponent: 4, significand: [15] });
 ```
 
-The formats without an infinity overflow to the NaN, or to the largest
-finite value when the behavior saturates:
+The formats without an infinity overflow to the NaN. A saturating behavior
+gives the largest finite value instead, in every binary format:
 
 ```rust
-use floaty::{F8E4M3Fn, Flags};
+use floaty::{F8E4M3Fn, F8E5M2, Flags};
 
 let largest = F8E4M3Fn::from_bits(0x7E); // 448
 let (nan, flags) = largest.add_with(largest, F8E4M3Fn::ENV);
@@ -111,6 +111,11 @@ assert_eq!((nan.to_bits(), flags), (0x7F, Flags::OVERFLOW | Flags::INEXACT));
 
 let (saturated, _) = largest.add_with(largest, F8E4M3Fn::ENV.with_saturate(true));
 assert_eq!(saturated.to_bits(), 0x7E);
+
+// E5M2 has an infinity, which saturation replaces with 57344.
+let largest = F8E5M2::from_bits(0x7B);
+let (saturated, flags) = largest.add_with(largest, F8E5M2::ENV.with_saturate(true));
+assert_eq!((saturated.to_bits(), flags), (0x7B, Flags::OVERFLOW | Flags::INEXACT));
 ```
 
 ## Behavior
@@ -125,7 +130,7 @@ assert_eq!(saturated.to_bits(), 0x7E);
 | `tininess` | Tininess detection before or after rounding. |
 | `nan` | The NaN that an operation returns: the propagation rule, the sign of the default NaN, and the fused multiply-add rules. |
 | `precision` | A precision limit below the format precision, as x87 precision control gives it. |
-| `saturate` | An overflow gives the largest finite value in a format without an infinity. |
+| `saturate` | A finite result that overflows gives the largest finite value instead of an infinity or a NaN, as OCP FP8 saturation does. |
 | `total_order` | How `total_cmp` orders two encodings of one value. |
 
 `Env::IEEE` is the IEEE 754 default. `Env::X86_SSE` and `Env::X87` give the

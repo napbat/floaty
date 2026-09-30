@@ -717,6 +717,16 @@ mod tests {
         // A format without an infinity gives its NaN for a division by zero.
         let (nan, flags) = F8E4M3Fn::from_bits(0x38).div_with(F8E4M3Fn::from_bits(0), Env::IEEE);
         assert_eq!((nan.to_bits(), flags), (0x7F, Flags::DIVIDE_BY_ZERO));
+        // An exact infinity is no overflow, so saturation keeps it.
+        let saturate = Env::IEEE.with_saturate(true);
+        let (quotient, flags) = F32::from_bits(0x3F80_0000).div_with(F32::from_bits(0), saturate);
+        assert_eq!(
+            (quotient.to_bits(), flags),
+            (0x7F80_0000, Flags::DIVIDE_BY_ZERO)
+        );
+        let infinity = F32::from_bits(0x7F80_0000);
+        let (sum, flags) = infinity.add_with(F32::from_bits(0x3F80_0000), saturate);
+        assert_eq!((sum.to_bits(), flags), (0x7F80_0000, Flags::NONE));
     }
 
     #[test]

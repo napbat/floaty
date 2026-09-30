@@ -464,20 +464,19 @@ fn overflow<L: Limbs>(
         Rounding::TowardNegative => negative,
         Rounding::TowardZero | Rounding::ToOdd => false,
     };
-    if to_infinity {
+    // A saturating behavior gives the largest finite value in every direction.
+    if to_infinity && !env.saturate {
         if target.has_infinity {
             return (Unpacked::Infinity { negative }, flags | Flags::ROUNDED_UP);
         }
-        if !env.saturate {
-            return (
-                Unpacked::Nan {
-                    negative,
-                    signaling: false,
-                    payload: L::ZERO,
-                },
-                flags,
-            );
-        }
+        return (
+            Unpacked::Nan {
+                negative,
+                signaling: false,
+                payload: L::ZERO,
+            },
+            flags,
+        );
     }
     (largest(negative, precision, target), flags)
 }
@@ -669,6 +668,12 @@ mod tests {
         assert_eq!(
             F8E4M3Fnuz::round(exact(true, 8, [1]), saturate).0.to_bits(),
             0xFF
+        );
+        // Saturation also replaces the infinity of a format that has one.
+        let (largest, flags) = F32::round(huge, saturate);
+        assert_eq!(
+            (largest.to_bits(), flags),
+            (0x7F7F_FFFF, Flags::OVERFLOW | Flags::INEXACT)
         );
     }
 

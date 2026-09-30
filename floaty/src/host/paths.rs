@@ -34,9 +34,9 @@ use crate::limbs::Limbs;
 #[inline]
 const fn compatible(env: &Env, precision: u32) -> bool {
     // Every field is named, so a new field of `Env` needs a decision here.
-    // Tininess and saturation change only flags and formats without an
-    // infinity, the NaN rule applies only to a NaN result, and the total
-    // order applies to no arithmetic.
+    // Tininess changes only flags, the NaN rule applies only to a NaN result,
+    // and the total order applies to no arithmetic. Saturation changes the
+    // result of an overflow, which the host unit carries to an infinity.
     let Env {
         rounding,
         flush_to_zero,
@@ -44,7 +44,7 @@ const fn compatible(env: &Env, precision: u32) -> bool {
         tininess: _,
         nan: _,
         precision: limit,
-        saturate: _,
+        saturate,
         total_order: _,
     } = *env;
     let full_precision = match limit {
@@ -54,6 +54,7 @@ const fn compatible(env: &Env, precision: u32) -> bool {
     matches!(rounding, Rounding::TiesToEven)
         && !flush_to_zero
         && !denormals_are_zero
+        && !saturate
         && full_precision
 }
 
