@@ -206,15 +206,17 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     /// The behavior of the default mode.
     pub const ENV: Env = M::ENV;
 
-    /// Makes a value from its halves. The pair is kept as it is.
+    /// Makes a value from its halves. The pair is kept as it is. The halves
+    /// can have any mode, and the value has the mode `M`.
     #[must_use]
-    pub fn from_parts(hi: Float<Binary<11>, 64, M>, lo: Float<Binary<11>, 64, M>) -> Self {
+    pub fn from_parts<N: Mode>(hi: Float<Binary<11>, 64, N>, lo: Float<Binary<11>, 64, N>) -> Self {
         Self::new(hi.with_mode(), lo.with_mode())
     }
 
     /// Makes the value of a binary64 value: the value and a positive zero.
+    /// The binary64 value can have any mode, and the value has the mode `M`.
     #[must_use]
-    pub fn from_f64(value: Float<Binary<11>, 64, M>) -> Self {
+    pub fn from_f64<N: Mode>(value: Float<Binary<11>, 64, N>) -> Self {
         Self::new(value.with_mode(), F64::from_bits(0))
     }
 
@@ -515,7 +517,7 @@ assign!(RemAssign, rem_assign, %);
 #[cfg(test)]
 mod tests {
     use super::{DoubleDouble, Gcc, Qd};
-    use crate::env::{Env, Flags};
+    use crate::env::{Env, Flags, mode};
     use crate::float::{F32, F64};
 
     fn gcc(hi: u64, lo: u64) -> DoubleDouble<Gcc> {
@@ -532,6 +534,18 @@ mod tests {
 
     const ONE: u64 = 0x3FF0_0000_0000_0000;
     const THREE: u64 = 0x4008_0000_0000_0000;
+
+    #[test]
+    fn the_halves_can_have_any_mode() {
+        let (hi, lo) = (F64::from_bits(ONE), F64::from_bits(0x3C30_0000_0000_0000));
+        let pair = DoubleDouble::<Qd, mode::X87>::from_parts(hi, lo);
+        assert_eq!(
+            (pair.hi().to_bits(), pair.lo().to_bits()),
+            (ONE, lo.to_bits())
+        );
+        let single = DoubleDouble::<Gcc, mode::X86Sse>::from_f64(hi);
+        assert_eq!((single.hi().to_bits(), single.lo().to_bits()), (ONE, 0));
+    }
 
     #[test]
     fn a_small_addend_lands_in_the_low_half() {
