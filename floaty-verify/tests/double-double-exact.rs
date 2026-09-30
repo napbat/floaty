@@ -162,12 +162,7 @@ fn expected_order(first: &Exact, second: &Exact) -> (Option<Ordering>, bool) {
 /// Compares one conversion to a binary format.
 macro_rules! check_binary {
     ($value:expr, $exact:expr, $env:expr, $($target:ty),+) => {$(
-        let format = Format {
-            precision: <$target>::PRECISION,
-            emin: <$target>::EMIN,
-            emax: <$target>::EMAX,
-            specials: Specials::Ieee,
-        };
+        let format = Format::of::<$target>(Specials::Ieee);
         let (ours, flags) = $value.convert_with::<$target>($env);
         let ours = (Value::from_decoded(ours.decode::<8>()), flags);
         assert_eq!(ours, to_binary($exact, &format, &$env), "{:?} to {} {:?}", $value, stringify!($target), $env);
@@ -177,10 +172,7 @@ macro_rules! check_binary {
 /// Compares one conversion to a decimal format.
 macro_rules! check_decimal {
     ($value:expr, $exact:expr, $env:expr, $($target:ty),+) => {$(
-        let format = DecimalFormat {
-            precision: <$target>::PRECISION,
-            emax: <$target>::EMAX,
-        };
+        let format = DecimalFormat::of::<$target>();
         let (ours, flags) = $value.convert_with::<$target>($env);
         let ours = (DecimalValue::from_decoded(ours.decode::<2>()), flags);
         assert_eq!(ours, to_decimal_format($exact, format, &$env), "{:?} to {} {:?}", $value, stringify!($target), $env);

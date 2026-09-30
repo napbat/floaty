@@ -11,6 +11,8 @@ use rug::float::Round;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
+use super::Parameters;
+
 /// The parameters of a decimal format.
 #[derive(Clone, Copy, Debug)]
 pub struct DecimalFormat {
@@ -21,6 +23,15 @@ pub struct DecimalFormat {
 }
 
 impl DecimalFormat {
+    /// Returns the parameters of the decimal type `T`.
+    #[must_use]
+    pub fn of<T: Parameters>() -> Self {
+        Self {
+            precision: T::PRECISION,
+            emax: T::EMAX,
+        }
+    }
+
     /// Returns the width `t` of the trailing significand field, by IEEE
     /// 754-2019 Table 3.6: 20, 50, or 110 bits.
     ///

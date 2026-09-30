@@ -12,7 +12,7 @@
 use std::hint::black_box;
 
 use floaty::{BF16, Env, F16, F32, F64, mode};
-use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, MXCSR_DAZ, MXCSR_EXCEPTION_MASKS, MXCSR_FTZ, MXCSR_MASKED, MXCSR_TOWARD_NEGATIVE,
@@ -504,7 +504,7 @@ fn operators_read_mxcsr_before_the_host_unit() {
     let double = double_operands(&mut random, 4_000);
     let double_pairs = pairs(&double, 10, 1 << 63, 1);
     // binary16 takes the F16C path in a build with F16C.
-    let mut halves: Vec<u16> = boundary_encodings_u128(16, 5, IntegerBit::Implicit)
+    let mut halves: Vec<u16> = boundary_encodings_u128(Layout::BINARY16)
         .into_iter()
         .map(|bits| u16::try_from(bits).expect("a binary16 encoding has 16 bits"))
         .collect();
@@ -513,7 +513,7 @@ fn operators_read_mxcsr_before_the_host_unit() {
             .map(|_| u16::try_from(random.next_u64() >> 48).expect("the shift keeps 16 bits")),
     );
     // bfloat16 takes the paths that widen by a shift.
-    let mut bfloats: Vec<u16> = boundary_encodings_u128(16, 8, IntegerBit::Implicit)
+    let mut bfloats: Vec<u16> = boundary_encodings_u128(Layout::BFLOAT16)
         .into_iter()
         .map(|bits| u16::try_from(bits).expect("a bfloat16 encoding has 16 bits"))
         .collect();
@@ -604,19 +604,18 @@ fn comparisons_read_mxcsr_before_the_host_unit() {
     let single_pairs = pairs(&single, SINGLE_SPECIALS.len(), 1 << 31, 1);
     let double = double_operands(&mut random, 2_000);
     let double_pairs = pairs(&double, 10, 1 << 63, 1);
-    let sixteen = |exponent_bits: u32, random: &mut SplitMix64| -> Vec<(u16, u16)> {
-        let mut encodings: Vec<u16> =
-            boundary_encodings_u128(16, exponent_bits, IntegerBit::Implicit)
-                .into_iter()
-                .map(|bits| u16::try_from(bits).expect("a 16-bit encoding"))
-                .collect();
+    let sixteen = |layout: Layout, random: &mut SplitMix64| -> Vec<(u16, u16)> {
+        let mut encodings: Vec<u16> = boundary_encodings_u128(layout)
+            .into_iter()
+            .map(|bits| u16::try_from(bits).expect("a 16-bit encoding"))
+            .collect();
         let specials = encodings.len();
         encodings
             .extend((0..2_000).map(|_| u16::try_from(random.next_u64() >> 48).expect("16 bits")));
         pairs(&encodings, specials, 1 << 15, 1)
     };
-    let half_pairs = sixteen(5, &mut random);
-    let bfloat_pairs = sixteen(8, &mut random);
+    let half_pairs = sixteen(Layout::BINARY16, &mut random);
+    let bfloat_pairs = sixteen(Layout::BFLOAT16, &mut random);
     for control in controls {
         comparisons_under!(F16, control, &half_pairs);
         comparisons_under!(BF16, control, &bfloat_pairs);

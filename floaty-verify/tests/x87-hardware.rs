@@ -6,7 +6,7 @@
 use core::num::NonZeroU32;
 
 use floaty::{Class, Env, F32, F64, F80, ToInt};
-use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings, to_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, X87_DE, X87_MASKED, X87_PRECISIONS, X87_ROUNDINGS, X87_STATUS_FLAGS,
@@ -56,7 +56,7 @@ fn expected(class: Class) -> Fxam {
 fn every_boundary_and_random_encoding_matches_fxam() {
     let mask = (1_u128 << 80) - 1;
     let mut random = SplitMix64::new(0xF8A4);
-    let boundaries: Vec<u128> = boundary_encodings(80, 15, IntegerBit::Explicit)
+    let boundaries: Vec<u128> = boundary_encodings(Layout::X87_EXTENDED)
         .iter()
         .map(to_u128)
         .collect();
@@ -116,7 +116,7 @@ fn edge_patterns(dropped: u32) -> [u64; 5] {
 /// and binary64 boundaries.
 fn store_inputs() -> Vec<u128> {
     let mut random = SplitMix64::new(0x0087_5708);
-    let mut inputs: Vec<u128> = boundary_encodings(80, 15, IntegerBit::Explicit)
+    let mut inputs: Vec<u128> = boundary_encodings(Layout::X87_EXTENDED)
         .iter()
         .map(to_u128)
         .collect();

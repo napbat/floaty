@@ -11,8 +11,9 @@ use core::cmp::Ordering;
 
 pub mod decimal;
 
-use floaty::env::{NanPropagation, Tininess};
-use floaty::{Decoded, Env, Flags, Rounding};
+use floaty::env::{Mode, NanPropagation, Tininess};
+use floaty::format::Standard;
+use floaty::{Decoded, Env, Flags, Float, Rounding};
 use rug::float::Round;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
@@ -44,7 +45,46 @@ pub struct Format {
     pub specials: Specials,
 }
 
+/// A floaty `Float` type, whose format parameters the oracles read. The
+/// trait is sealed.
+pub trait Parameters: sealed::Sealed {
+    /// The precision in digits of the radix.
+    const PRECISION: u32;
+    /// The exponent of the smallest normal value, as a power of the radix.
+    const EMIN: i32;
+    /// The exponent of the largest finite value, as a power of the radix.
+    const EMAX: i32;
+}
+
+impl<S: Standard<W>, const W: usize, M: Mode> Parameters for Float<S, W, M> {
+    const PRECISION: u32 = Float::<S, W, M>::PRECISION;
+    const EMIN: i32 = Float::<S, W, M>::EMIN;
+    const EMAX: i32 = Float::<S, W, M>::EMAX;
+}
+
+mod sealed {
+    use floaty::Float;
+    use floaty::env::Mode;
+    use floaty::format::Standard;
+
+    pub trait Sealed {}
+
+    impl<S: Standard<W>, const W: usize, M: Mode> Sealed for Float<S, W, M> {}
+}
+
 impl Format {
+    /// Returns the parameters of the binary type `T` with the special values
+    /// `specials`.
+    #[must_use]
+    pub fn of<T: Parameters>(specials: Specials) -> Self {
+        Self {
+            precision: T::PRECISION,
+            emin: T::EMIN,
+            emax: T::EMAX,
+            specials,
+        }
+    }
+
     /// Returns the precision that `env` rounds to: the precision limit of the
     /// behavior, when it is below the format precision.
     #[must_use]

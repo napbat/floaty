@@ -8,13 +8,13 @@ use core::hint::black_box;
 
 use floaty::{BF16, F16, F32, F64, Lanes};
 use floaty_verify::aarch64::{FPCR_SETTINGS, with_fpcr};
-use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 
 /// Returns boundary and random encodings of a binary format, in pairs.
-fn pairs(random: &mut SplitMix64, width: u32, exponent_bits: u32) -> Vec<(u128, u128)> {
-    let mut encodings = boundary_encodings_u128(width, exponent_bits, IntegerBit::Implicit);
-    encodings.extend((0..2_000).map(|_| random.next_u128() >> (128 - width)));
+fn pairs(random: &mut SplitMix64, layout: Layout) -> Vec<(u128, u128)> {
+    let mut encodings = boundary_encodings_u128(layout);
+    encodings.extend((0..2_000).map(|_| random.next_u128() >> (128 - layout.width)));
     encodings
         .iter()
         .zip(encodings.iter().rev())
@@ -106,10 +106,10 @@ fn operators_read_fpcr_before_the_host_unit() {
     // Each setting changes a host result or traps. Under each, and under the
     // default FPCR, the operators give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00A6_4000);
-    let half = pairs(&mut random, 16, 5);
-    let single = pairs(&mut random, 32, 8);
-    let double = pairs(&mut random, 64, 11);
-    let bfloat = pairs(&mut random, 16, 8);
+    let half = pairs(&mut random, Layout::BINARY16);
+    let single = pairs(&mut random, Layout::BINARY32);
+    let double = pairs(&mut random, Layout::BINARY64);
+    let bfloat = pairs(&mut random, Layout::BFLOAT16);
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
         operators_under!(F16, u16, control, &half);
         operators_under!(BF16, u16, control, &bfloat);
@@ -291,9 +291,9 @@ fn lanes_read_fpcr_before_the_vector_unit() {
     // Under each setting of FPCR, and under the default, the operations of
     // `Lanes` without flags give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00A6_1A4E);
-    let singles = encodings::<u32>(&pairs(&mut random, 32, 8));
-    let doubles = encodings::<u64>(&pairs(&mut random, 64, 11));
-    let halves = encodings::<u16>(&pairs(&mut random, 16, 5));
+    let singles = encodings::<u32>(&pairs(&mut random, Layout::BINARY32));
+    let doubles = encodings::<u64>(&pairs(&mut random, Layout::BINARY64));
+    let halves = encodings::<u16>(&pairs(&mut random, Layout::BINARY16));
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
         for start in (0..singles.len()).step_by(3) {
             let lane = |offset: usize| singles[(start + offset) % singles.len()];
@@ -324,7 +324,7 @@ fn bfloat16_lanes_read_fpcr_before_the_vector_unit() {
     // conversions of bfloat16 lanes give the engine results of the default
     // mode.
     let mut random = SplitMix64::new(0x00A6_1ABF);
-    let encodings = encodings::<u16>(&pairs(&mut random, 16, 8));
+    let encodings = encodings::<u16>(&pairs(&mut random, Layout::BFLOAT16));
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
         for start in (0..encodings.len()).step_by(5) {
             let bits: [u16; 5] =
@@ -363,7 +363,7 @@ fn directed_rounding_reads_fpcr_before_the_vector_unit() {
         floaty::mode::Rounded<floaty::mode::Ieee, floaty::mode::direction::TowardPositive>,
     >;
     let mut random = SplitMix64::new(0x00A6_D1E0);
-    let encodings = encodings::<u32>(&pairs(&mut random, 32, 8));
+    let encodings = encodings::<u32>(&pairs(&mut random, Layout::BINARY32));
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
         for start in (0..encodings.len()).step_by(7) {
             let bits: [u32; 5] =
@@ -395,10 +395,10 @@ fn comparisons_read_fpcr_before_the_host_unit() {
     // the minimum and maximum operations give the engine results of the
     // default mode.
     let mut random = SplitMix64::new(0x00A6_C0AA);
-    let single_pairs = pairs(&mut random, 32, 8);
-    let double_pairs = pairs(&mut random, 64, 11);
-    let half_pairs = pairs(&mut random, 16, 5);
-    let bfloat_pairs = pairs(&mut random, 16, 8);
+    let single_pairs = pairs(&mut random, Layout::BINARY32);
+    let double_pairs = pairs(&mut random, Layout::BINARY64);
+    let half_pairs = pairs(&mut random, Layout::BINARY16);
+    let bfloat_pairs = pairs(&mut random, Layout::BFLOAT16);
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
         comparisons_under!(F32, u32, control, &single_pairs);
         comparisons_under!(F64, u64, control, &double_pairs);
@@ -413,7 +413,7 @@ fn lane_orders_read_fpcr_before_the_vector_unit() {
     // comparison and the minimum and maximum operations of lanes give the
     // engine results of the default mode.
     let mut random = SplitMix64::new(0x00A6_0AD5);
-    let singles = encodings::<u32>(&pairs(&mut random, 32, 8));
+    let singles = encodings::<u32>(&pairs(&mut random, Layout::BINARY32));
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
         for start in (0..singles.len()).step_by(5) {
             let lane = |offset: usize| singles[(start + offset) % singles.len()];

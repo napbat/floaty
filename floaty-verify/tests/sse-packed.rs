@@ -9,7 +9,7 @@
 use std::hint::black_box;
 
 use floaty::{BF16, F16, F32, F64, Flags, Lanes};
-use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, MXCSR_DAZ, MXCSR_EXCEPTION_MASKS, MXCSR_FTZ, MXCSR_MASKED, MXCSR_TOWARD_NEGATIVE,
@@ -19,17 +19,12 @@ use floaty_verify::x86::{
 /// Returns boundary and random encodings of a binary format in chunks of
 /// `C` lanes. Consecutive chunks shift by one encoding, so each special
 /// encoding reaches every lane.
-fn chunks<const C: usize>(
-    random: &mut SplitMix64,
-    width: u32,
-    exponent_bits: u32,
-) -> Vec<[u64; C]> {
-    let mut encodings: Vec<u64> =
-        boundary_encodings_u128(width, exponent_bits, IntegerBit::Implicit)
-            .into_iter()
-            .map(|bits| u64::try_from(bits).expect("the encoding has at most 64 bits"))
-            .collect();
-    encodings.extend((0..4_000).map(|_| random.next_u64() >> (64 - width)));
+fn chunks<const C: usize>(random: &mut SplitMix64, layout: Layout) -> Vec<[u64; C]> {
+    let mut encodings: Vec<u64> = boundary_encodings_u128(layout)
+        .into_iter()
+        .map(|bits| u64::try_from(bits).expect("the encoding has at most 64 bits"))
+        .collect();
+    encodings.extend((0..4_000).map(|_| random.next_u64() >> (64 - layout.width)));
     (0..encodings.len())
         .map(|start| core::array::from_fn(|lane| encodings[(start + lane) % encodings.len()]))
         .collect()
@@ -37,7 +32,7 @@ fn chunks<const C: usize>(
 
 /// Returns chunks of four binary32 encodings.
 fn single_chunks(random: &mut SplitMix64) -> Vec<[u32; 4]> {
-    chunks::<4>(random, 32, 8)
+    chunks::<4>(random, Layout::BINARY32)
         .into_iter()
         .map(|chunk| chunk.map(|bits| u32::try_from(bits).expect("a binary32 encoding")))
         .collect()
@@ -45,7 +40,7 @@ fn single_chunks(random: &mut SplitMix64) -> Vec<[u32; 4]> {
 
 /// Returns chunks of two binary64 encodings.
 fn double_chunks(random: &mut SplitMix64) -> Vec<[u64; 2]> {
-    chunks::<2>(random, 64, 11)
+    chunks::<2>(random, Layout::BINARY64)
 }
 
 /// Compares a packed instruction of two operands with the `_with` method of
@@ -350,7 +345,7 @@ fn lanes_read_mxcsr_before_the_packed_unit() {
     let controls = controls();
     let mut random = SplitMix64::new(0x00C5_4EAD);
     let singles = single_chunks(&mut random);
-    let doubles = chunks::<5>(&mut random, 64, 11);
+    let doubles = chunks::<5>(&mut random, Layout::BINARY64);
     for control in controls {
         for (index, pair) in singles.windows(2).enumerate().step_by(5) {
             let lanes: [[u32; 8]; 2] = [0, 1]
@@ -434,8 +429,8 @@ fn binary16_lanes_read_mxcsr_before_the_packed_unit() {
     // Under each control, the binary16 operations of `Lanes` without flags
     // give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00C5_4E16);
-    let halves = chunks::<13>(&mut random, 16, 5);
-    let singles = chunks::<13>(&mut random, 32, 8);
+    let halves = chunks::<13>(&mut random, Layout::BINARY16);
+    let singles = chunks::<13>(&mut random, Layout::BINARY32);
     for control in controls() {
         for (index, pair) in halves.windows(2).enumerate().step_by(3) {
             let lanes: [[u16; 13]; 2] = [0, 1].map(|first| {
@@ -460,7 +455,7 @@ fn bfloat16_lanes_read_mxcsr_before_the_packed_unit() {
     // Under each control, the rounding and the conversions of bfloat16 lanes
     // give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00C5_4EBF);
-    let chunks = chunks::<13>(&mut random, 16, 8);
+    let chunks = chunks::<13>(&mut random, Layout::BFLOAT16);
     for control in controls() {
         for chunk in chunks.iter().step_by(3) {
             let bits = chunk.map(|bits| u16::try_from(bits).expect("a bfloat16 encoding"));
@@ -498,7 +493,7 @@ fn directed_rounding_reads_mxcsr_before_the_unit() {
         floaty::mode::Rounded<floaty::mode::Ieee, floaty::mode::direction::TowardPositive>,
     >;
     let mut random = SplitMix64::new(0x00C5_D1E0);
-    let chunks = chunks::<5>(&mut random, 32, 8);
+    let chunks = chunks::<5>(&mut random, Layout::BINARY32);
     for control in controls() {
         for chunk in chunks.iter().step_by(7) {
             let bits = chunk.map(|bits| u32::try_from(bits).expect("a binary32 encoding"));
@@ -573,11 +568,11 @@ fn lane_orders_read_mxcsr_before_the_packed_unit() {
     // denormal exception traps. Under each control, the packed comparison and
     // the minimum and maximum operations give the engine results.
     let mut random = SplitMix64::new(0x00C5_0AD5);
-    let singles: Vec<[u32; 5]> = chunks::<5>(&mut random, 32, 8)
+    let singles: Vec<[u32; 5]> = chunks::<5>(&mut random, Layout::BINARY32)
         .into_iter()
         .map(|chunk| chunk.map(|bits| u32::try_from(bits).expect("a binary32 encoding")))
         .collect();
-    let doubles = chunks::<5>(&mut random, 64, 11);
+    let doubles = chunks::<5>(&mut random, Layout::BINARY64);
     for control in controls() {
         orders_under!(
             F32,

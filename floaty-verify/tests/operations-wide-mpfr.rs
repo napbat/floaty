@@ -19,14 +19,11 @@
 use core::num::NonZeroU32;
 
 use floaty::format::Standard;
-use floaty::{
-    B11Fnuz, Binary, Decoded, Env, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352,
-    F384, F416, F448, F480, F512, Finite, Float, Fnuz, Int, NoInf, TF32, UInt, X87,
-};
-use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs};
+use floaty::{Binary, Decoded, Env, F32, F64, F80, F128, F256, F512, Float, Int, TF32, UInt, X87};
+use floaty_verify::encodings::{IntegerBit, Layout, boundary_encodings, to_limbs};
 use floaty_verify::mpfr::{DIRECTIONS, Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
-use floaty_verify::operations::check::{self, Case, format};
+use floaty_verify::operations::check::{self, Case};
 use floaty_verify::operations::integral::IntegerValue;
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
@@ -35,61 +32,36 @@ use rug::integer::Order;
 /// A 72-bit layout whose exponent field crosses a limb boundary.
 type Wide72 = Float<Binary<15>, 72>;
 
-/// The field layout of a format.
-#[derive(Clone, Copy, Debug)]
-struct Layout {
-    width: u32,
-    exponent_bits: u32,
-    integer_bit: IntegerBit,
+/// Returns the largest exponent field of a layout: the field of the
+/// infinities and NaNs.
+fn field_max(layout: Layout) -> u64 {
+    (1 << layout.exponent_bits) - 1
 }
 
-impl Layout {
-    const fn new(width: u32, exponent_bits: u32, integer_bit: IntegerBit) -> Self {
-        Self {
-            width,
-            exponent_bits,
-            integer_bit,
-        }
-    }
+/// Returns the exponent bias of a layout.
+fn bias(layout: Layout) -> u64 {
+    u64::try_from(layout.ieee_bias()).expect("an exponent bias is positive")
+}
 
-    fn fraction_bits(self) -> u32 {
-        self.width - 1 - self.exponent_bits
-    }
+/// Returns the exponent field of an encoding.
+fn field(layout: Layout, encoding: &Integer) -> u64 {
+    (encoding.clone() >> layout.fraction_bits())
+        .keep_bits(layout.exponent_bits)
+        .to_u64()
+        .expect("an exponent field has at most 23 bits")
+}
 
-    fn precision(self) -> u32 {
-        match self.integer_bit {
-            IntegerBit::Implicit => self.fraction_bits() + 1,
-            IntegerBit::Explicit => self.fraction_bits(),
-        }
+/// Returns the encoding of a sign, an exponent field, and a fraction. An
+/// explicit integer bit is set exactly when the field is not zero, so the
+/// encoding is canonical.
+fn assemble(layout: Layout, negative: bool, field: u64, fraction: &Integer) -> Integer {
+    let mut fraction = fraction.clone().keep_bits(layout.fraction_bits());
+    if layout.integer_bit == IntegerBit::Explicit {
+        fraction.set_bit(layout.fraction_bits() - 1, field != 0);
     }
-
-    fn field_max(self) -> u64 {
-        (1 << self.exponent_bits) - 1
-    }
-
-    fn bias(self) -> u64 {
-        (1 << (self.exponent_bits - 1)) - 1
-    }
-
-    fn field(self, encoding: &Integer) -> u64 {
-        (encoding.clone() >> self.fraction_bits())
-            .keep_bits(self.exponent_bits)
-            .to_u64()
-            .expect("an exponent field has at most 23 bits")
-    }
-
-    /// Returns the encoding of a sign, an exponent field, and a fraction. An
-    /// explicit integer bit is set exactly when the field is not zero, so the
-    /// encoding is canonical.
-    fn assemble(self, negative: bool, field: u64, fraction: &Integer) -> Integer {
-        let mut fraction = fraction.clone().keep_bits(self.fraction_bits());
-        if self.integer_bit == IntegerBit::Explicit {
-            fraction.set_bit(self.fraction_bits() - 1, field != 0);
-        }
-        let mut bits = (Integer::from(field) << self.fraction_bits()) | fraction;
-        bits.set_bit(self.width - 1, negative);
-        bits
-    }
+    let mut bits = (Integer::from(field) << layout.fraction_bits()) | fraction;
+    bits.set_bit(layout.width - 1, negative);
+    bits
 }
 
 /// Returns `count` random bits.
@@ -123,7 +95,7 @@ fn with_fractions(
         ];
         for fraction in &fractions {
             for negative in [false, true] {
-                encodings.push(layout.assemble(negative, field, fraction));
+                encodings.push(assemble(layout, negative, field, fraction));
             }
         }
     }
@@ -133,7 +105,7 @@ fn with_fractions(
 /// Returns the operand encodings of a format: the boundary encodings,
 /// `count` random encodings, and values near the integers.
 fn samples(layout: Layout, count: usize, random: &mut SplitMix64) -> Vec<Integer> {
-    let mut samples = boundary_encodings(layout.width, layout.exponent_bits, layout.integer_bit);
+    let mut samples = boundary_encodings(layout);
     for index in 0..count {
         let bits = random_bits(random, layout.width);
         // One x87 encoding in four keeps its random integer bit, which gives
@@ -142,7 +114,7 @@ fn samples(layout: Layout, count: usize, random: &mut SplitMix64) -> Vec<Integer
             samples.push(bits);
         } else {
             let negative = bits.get_bit(layout.width - 1);
-            samples.push(layout.assemble(negative, layout.field(&bits), &bits));
+            samples.push(assemble(layout, negative, field(layout, &bits), &bits));
         }
     }
     // Values from below one to past the precision, and past the width of each
@@ -154,7 +126,7 @@ fn samples(layout: Layout, count: usize, random: &mut SplitMix64) -> Vec<Integer
     tops.extend([
         22, 23, 24, 98, 99, 100, 126, 127, 128, 198, 199, 200, 510, 511, 512,
     ]);
-    let (bias, field_max) = (layout.bias(), layout.field_max());
+    let (bias, field_max) = (bias(layout), field_max(layout));
     let fields = tops
         .into_iter()
         .filter_map(|top| bias.checked_add_signed(top))
@@ -172,7 +144,7 @@ fn remainder_pairs(
     random: &mut SplitMix64,
 ) -> Vec<(Integer, Integer)> {
     let span = i64::from(layout.precision()) + 4;
-    let field_max = i64::try_from(layout.field_max()).expect("a field fits an i64");
+    let field_max = i64::try_from(field_max(layout)).expect("a field fits an i64");
     let modulus = u64::try_from(field_max).expect("a field is positive");
     (0..count)
         .map(|index| {
@@ -201,7 +173,7 @@ fn remainder_pairs(
                 };
                 let negative = random.next_u64() % 2 == 0;
                 let field = u64::try_from(field).expect("a field is not negative");
-                layout.assemble(negative, field, &fraction)
+                assemble(layout, negative, field, &fraction)
             };
             (encoding(field), encoding(other))
         })
@@ -258,14 +230,10 @@ struct Plan<'a, S: Standard<W>, const W: usize> {
 /// Checks every operation beyond arithmetic on the samples of a format.
 fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
     let layout = plan.layout;
-    let format = format::<S, W>(Specials::Ieee);
+    let format = Format::of::<Float<S, W>>(Specials::Ieee);
     let mut random = SplitMix64::new(plan.seed);
     let case = |bits: &Integer| Case::new(bits.clone(), (plan.make)(bits));
-    let boundaries: Vec<Case<S, W>> =
-        boundary_encodings(layout.width, layout.exponent_bits, layout.integer_bit)
-            .iter()
-            .map(case)
-            .collect();
+    let boundaries: Vec<Case<S, W>> = boundary_encodings(layout).iter().map(case).collect();
     let samples: Vec<Case<S, W>> = samples(layout, plan.count, &mut random)
         .iter()
         .map(case)
@@ -310,7 +278,7 @@ fn from_u16<S: Standard<W, Bits = u16>, const W: usize>(bits: &Integer) -> Float
 #[test]
 fn bfloat16_and_tf32() {
     check_format(&Plan {
-        layout: Layout::new(16, 8, IntegerBit::Implicit),
+        layout: Layout::BFLOAT16,
         make: &from_u16::<Binary<8>, 16>,
         count: 4_000,
         pair_envs: &BEHAVIORS,
@@ -318,7 +286,7 @@ fn bfloat16_and_tf32() {
         seed: 0x0B16,
     });
     check_format(&Plan {
-        layout: Layout::new(19, 8, IntegerBit::Implicit),
+        layout: Layout::TF32,
         make: &|bits: &Integer| {
             TF32::from_bits(bits.to_u32().expect("a TF32 encoding has 19 bits"))
         },
@@ -332,7 +300,7 @@ fn bfloat16_and_tf32() {
 #[test]
 fn binary16_binary32_binary64_and_binary128() {
     check_format(&Plan {
-        layout: Layout::new(16, 5, IntegerBit::Implicit),
+        layout: Layout::BINARY16,
         make: &from_u16::<Binary<5>, 16>,
         count: 4_000,
         pair_envs: &BEHAVIORS,
@@ -340,7 +308,7 @@ fn binary16_binary32_binary64_and_binary128() {
         seed: 0x0F16,
     });
     check_format(&Plan {
-        layout: Layout::new(32, 8, IntegerBit::Implicit),
+        layout: Layout::BINARY32,
         make: &|bits: &Integer| {
             F32::from_bits(bits.to_u32().expect("a binary32 encoding fits a u32"))
         },
@@ -350,7 +318,7 @@ fn binary16_binary32_binary64_and_binary128() {
         seed: 0x1F32,
     });
     check_format(&Plan {
-        layout: Layout::new(64, 11, IntegerBit::Implicit),
+        layout: Layout::BINARY64,
         make: &|bits: &Integer| {
             F64::from_bits(bits.to_u64().expect("a binary64 encoding fits a u64"))
         },
@@ -360,7 +328,7 @@ fn binary16_binary32_binary64_and_binary128() {
         seed: 0x0F64,
     });
     check_format(&Plan {
-        layout: Layout::new(128, 15, IntegerBit::Implicit),
+        layout: Layout::BINARY128,
         make: &|bits: &Integer| {
             F128::from_bits(bits.to_u128().expect("a binary128 encoding fits a u128"))
         },
@@ -374,7 +342,7 @@ fn binary16_binary32_binary64_and_binary128() {
 #[test]
 fn a_layout_whose_exponent_crosses_a_limb() {
     check_format(&Plan {
-        layout: Layout::new(72, 15, IntegerBit::Implicit),
+        layout: Layout::ieee(72, 15),
         make: &|bits: &Integer| {
             Wide72::from_bits(bits.to_u128().expect("a 72-bit encoding fits a u128"))
         },
@@ -409,7 +377,7 @@ fn x87_extended_with_precision_control() {
     let mut single_envs = BEHAVIORS.to_vec();
     single_envs.extend(limited);
     check_format(&Plan {
-        layout: Layout::new(80, 15, IntegerBit::Explicit),
+        layout: Layout::X87_EXTENDED,
         make: &|bits: &Integer| {
             F80::from_bits(bits.to_u128().expect("an x87 encoding fits a u128"))
         },
@@ -423,7 +391,7 @@ fn x87_extended_with_precision_control() {
 #[test]
 fn binary256_and_binary512() {
     check_format(&Plan {
-        layout: Layout::new(256, 19, IntegerBit::Implicit),
+        layout: Layout::BINARY256,
         make: &|bits: &Integer| F256::from_bits(to_limbs::<4>(bits)),
         count: 1_500,
         pair_envs: &BEHAVIORS,
@@ -431,7 +399,7 @@ fn binary256_and_binary512() {
         seed: 0x0256,
     });
     check_format(&Plan {
-        layout: Layout::new(512, 23, IntegerBit::Implicit),
+        layout: Layout::BINARY512,
         make: &|bits: &Integer| F512::from_bits(to_limbs::<8>(bits)),
         count: 1_500,
         pair_envs: &BEHAVIORS,
@@ -440,12 +408,15 @@ fn binary256_and_binary512() {
     });
 }
 
-/// Checks one wide format of `$width` bits in `$limbs` limbs.
-macro_rules! wide_format {
-    ($alias:ty, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+/// Checks one format of the wide format list, but binary256 and binary512,
+/// which `binary256_and_binary512` checks with more operands.
+macro_rules! other_wide_format {
+    ($alias:ident, 256, $exponent_bits:literal, $limbs:literal) => {};
+    ($alias:ident, 512, $exponent_bits:literal, $limbs:literal) => {};
+    ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
         check_format(&Plan {
-            layout: Layout::new($width, $exponent_bits, IntegerBit::Implicit),
-            make: &|bits: &Integer| <$alias>::from_bits(to_limbs::<$limbs>(bits)),
+            layout: Layout::ieee($width, $exponent_bits),
+            make: &|bits: &Integer| floaty::$alias::from_bits(to_limbs::<$limbs>(bits)),
             count: 500,
             pair_envs: &BEHAVIORS,
             single_envs: &BEHAVIORS,
@@ -456,16 +427,7 @@ macro_rules! wide_format {
 
 #[test]
 fn the_other_wide_formats() {
-    wide_format!(F160, 160, 16, 3);
-    wide_format!(F192, 192, 17, 3);
-    wide_format!(F224, 224, 18, 4);
-    wide_format!(F288, 288, 20, 5);
-    wide_format!(F320, 320, 20, 5);
-    wide_format!(F352, 352, 21, 6);
-    wide_format!(F384, 384, 21, 6);
-    wide_format!(F416, 416, 22, 7);
-    wide_format!(F448, 448, 22, 7);
-    wide_format!(F480, 480, 23, 8);
+    floaty_verify::for_each_wide_format!(other_wide_format);
 }
 
 /// Returns edge and random integers of type `I`: zero, one, the limits, the
@@ -510,7 +472,7 @@ fn integers<I: IntegerValue>(count: usize, random: &mut SplitMix64) -> Vec<I> {
 
 /// Converts the integers of every test type to a format in every behavior.
 fn from_ints<S: Standard<W>, const W: usize>(specials: Specials, envs: &[Env], seed: u64) {
-    let format = format::<S, W>(specials);
+    let format = Format::of::<Float<S, W>>(specials);
     let mut random = SplitMix64::new(seed);
     let small: Vec<Int<24>> = integers(1_000, &mut random);
     let middle: Vec<Int<200>> = integers(1_000, &mut random);
@@ -536,18 +498,24 @@ fn from_ints<S: Standard<W>, const W: usize>(specials: Specials, envs: &[Env], s
     }
 }
 
+/// Converts the integers to one format of the small format lists.
+macro_rules! small_from_ints {
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal) => {
+        from_ints::<$standard, $width>($specials, &BEHAVIORS, $seed)
+    };
+}
+
+/// Converts the integers to one format of the wide format list, with its
+/// width as the seed.
+macro_rules! wide_from_ints {
+    ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+        from_ints::<Binary<$exponent_bits>, $width>(Specials::Ieee, &BEHAVIORS, $width)
+    };
+}
+
 #[test]
 fn integers_convert_to_every_format() {
-    from_ints::<Binary<4, NoInf>, 8>(Specials::NoInf, &BEHAVIORS, 1);
-    from_ints::<Binary<5>, 8>(Specials::Ieee, &BEHAVIORS, 2);
-    from_ints::<Binary<4, Fnuz>, 8>(Specials::Fnuz, &BEHAVIORS, 3);
-    from_ints::<Binary<5, Fnuz>, 8>(Specials::Fnuz, &BEHAVIORS, 4);
-    from_ints::<Binary<2, Finite>, 4>(Specials::Finite, &BEHAVIORS, 5);
-    from_ints::<Binary<2, Finite>, 6>(Specials::Finite, &BEHAVIORS, 6);
-    from_ints::<Binary<3, Finite>, 6>(Specials::Finite, &BEHAVIORS, 7);
-    from_ints::<Binary<4>, 8>(Specials::Ieee, &BEHAVIORS, 8);
-    from_ints::<Binary<3>, 8>(Specials::Ieee, &BEHAVIORS, 9);
-    from_ints::<Binary<4, B11Fnuz>, 8>(Specials::Fnuz, &BEHAVIORS, 10);
+    floaty_verify::for_each_small_format!(small_from_ints);
     from_ints::<Binary<5>, 16>(Specials::Ieee, &BEHAVIORS, 0x0F16);
     from_ints::<Binary<8>, 16>(Specials::Ieee, &BEHAVIORS, 16);
     from_ints::<Binary<8>, 19>(Specials::Ieee, &BEHAVIORS, 19);
@@ -558,16 +526,5 @@ fn integers_convert_to_every_format() {
     let mut x87 = BEHAVIORS.to_vec();
     x87.extend(precision_control());
     from_ints::<Binary<15, X87>, 80>(Specials::Ieee, &x87, 80);
-    from_ints::<Binary<16>, 160>(Specials::Ieee, &BEHAVIORS, 160);
-    from_ints::<Binary<17>, 192>(Specials::Ieee, &BEHAVIORS, 192);
-    from_ints::<Binary<18>, 224>(Specials::Ieee, &BEHAVIORS, 224);
-    from_ints::<Binary<19>, 256>(Specials::Ieee, &BEHAVIORS, 256);
-    from_ints::<Binary<20>, 288>(Specials::Ieee, &BEHAVIORS, 288);
-    from_ints::<Binary<20>, 320>(Specials::Ieee, &BEHAVIORS, 320);
-    from_ints::<Binary<21>, 352>(Specials::Ieee, &BEHAVIORS, 352);
-    from_ints::<Binary<21>, 384>(Specials::Ieee, &BEHAVIORS, 384);
-    from_ints::<Binary<22>, 416>(Specials::Ieee, &BEHAVIORS, 416);
-    from_ints::<Binary<22>, 448>(Specials::Ieee, &BEHAVIORS, 448);
-    from_ints::<Binary<23>, 480>(Specials::Ieee, &BEHAVIORS, 480);
-    from_ints::<Binary<23>, 512>(Specials::Ieee, &BEHAVIORS, 512);
+    floaty_verify::for_each_wide_format!(wide_from_ints);
 }

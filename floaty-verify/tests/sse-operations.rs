@@ -11,84 +11,66 @@
 use core::ops::{Range, RangeInclusive};
 
 use floaty::{F32, F64, Flags, Rounding};
+use floaty_verify::encodings::Layout;
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, MXCSR_ROUNDINGS, ROUND_USE_MXCSR, mxcsr_flags, mxcsr_round_flags, stored,
 };
 
-/// The fields of binary32 or binary64.
-#[derive(Clone, Copy, Debug)]
-struct Layout {
-    /// The number of fraction bits.
-    fraction_bits: u32,
-    /// The number of exponent bits.
-    exponent_bits: u32,
+/// Returns the largest biased exponent of binary32 or binary64: the field of
+/// the infinities and NaNs.
+fn field_max(layout: Layout) -> u64 {
+    (1 << layout.exponent_bits) - 1
 }
 
-const BINARY32: Layout = Layout {
-    fraction_bits: 23,
-    exponent_bits: 8,
-};
-const BINARY64: Layout = Layout {
-    fraction_bits: 52,
-    exponent_bits: 11,
-};
+/// Returns a binary32 or binary64 encoding from its sign, biased exponent,
+/// and fraction.
+fn encode(layout: Layout, negative: bool, biased: u64, fraction: u64) -> u64 {
+    u64::try_from(layout.encode(negative, biased, u128::from(fraction)))
+        .expect("a binary32 or binary64 encoding fits a u64")
+}
 
-impl Layout {
-    /// The exponent bias.
-    fn bias(self) -> i32 {
-        (1 << (self.exponent_bits - 1)) - 1
-    }
+/// Returns a random encoding with a biased exponent in `biased` and a random
+/// sign.
+fn random_encoding(layout: Layout, random: &mut SplitMix64, biased: Range<u64>) -> u64 {
+    let exponent = biased.start + random.next_u64() % (biased.end - biased.start);
+    let negative = random.next_u64() & 1 == 1;
+    encode(layout, negative, exponent, random.next_u64())
+}
 
-    /// The largest biased exponent: the field of the infinities and NaNs.
-    fn field_max(self) -> u64 {
-        (1 << self.exponent_bits) - 1
-    }
+/// Returns the biased exponent of the unbiased exponent `exponent`.
+fn biased(layout: Layout, exponent: i32) -> u64 {
+    u64::try_from(exponent + layout.ieee_bias()).expect("a normal exponent")
+}
 
-    /// Returns an encoding from its sign, biased exponent, and fraction.
-    fn encode(self, negative: bool, biased: u64, fraction: u64) -> u64 {
-        let sign = u64::from(negative) << (self.fraction_bits + self.exponent_bits);
-        sign | (biased << self.fraction_bits) | (fraction & ((1 << self.fraction_bits) - 1))
-    }
-
-    /// Returns a random encoding with a biased exponent in `biased` and a
-    /// random sign.
-    fn random(self, random: &mut SplitMix64, biased: Range<u64>) -> u64 {
-        let exponent = biased.start + random.next_u64() % (biased.end - biased.start);
-        let negative = random.next_u64() & 1 == 1;
-        self.encode(negative, exponent, random.next_u64())
-    }
-
-    /// Returns the biased exponent of the unbiased exponent `exponent`.
-    fn biased(self, exponent: i32) -> u64 {
-        u64::try_from(exponent + self.bias()).expect("a normal exponent")
-    }
-
-    /// Returns encodings around the integers with the unbiased exponents
-    /// `exponents`, for both signs.
-    ///
-    /// The fraction bits below the binary point take each edge pattern, and
-    /// the bits above the binary point are all zeros, all ones, or random. A
-    /// value below one has every fraction bit below the binary point.
-    fn integer_edges(self, random: &mut SplitMix64, exponents: RangeInclusive<i32>) -> Vec<u64> {
-        let mut encodings = Vec::new();
-        for exponent in exponents {
-            let fraction_bits = i32::try_from(self.fraction_bits).expect("at most 52");
-            let dropped = u32::try_from((fraction_bits - exponent).clamp(0, fraction_bits))
-                .expect("between 0 and the fraction width");
-            let kept = self.fraction_bits - dropped;
-            let all_ones = (1 << kept) - 1;
-            for high in [0, all_ones, random.next_u64(), random.next_u64()] {
-                for pattern in edge_patterns(dropped) {
-                    for negative in [false, true] {
-                        let fraction = ((high & all_ones) << dropped) | pattern;
-                        encodings.push(self.encode(negative, self.biased(exponent), fraction));
-                    }
+/// Returns encodings around the integers with the unbiased exponents
+/// `exponents`, for both signs.
+///
+/// The fraction bits below the binary point take each edge pattern, and the
+/// bits above the binary point are all zeros, all ones, or random. A value
+/// below one has every fraction bit below the binary point.
+fn integer_edges(
+    layout: Layout,
+    random: &mut SplitMix64,
+    exponents: RangeInclusive<i32>,
+) -> Vec<u64> {
+    let mut encodings = Vec::new();
+    for exponent in exponents {
+        let fraction_bits = i32::try_from(layout.fraction_bits()).expect("at most 52");
+        let dropped = u32::try_from((fraction_bits - exponent).clamp(0, fraction_bits))
+            .expect("between 0 and the fraction width");
+        let kept = layout.fraction_bits() - dropped;
+        let all_ones = (1 << kept) - 1;
+        for high in [0, all_ones, random.next_u64(), random.next_u64()] {
+            for pattern in edge_patterns(dropped) {
+                for negative in [false, true] {
+                    let fraction = ((high & all_ones) << dropped) | pattern;
+                    encodings.push(encode(layout, negative, biased(layout, exponent), fraction));
                 }
             }
         }
-        encodings
     }
+    encodings
 }
 
 /// Returns the patterns of `dropped` low bits that decide a rounding: exact,
@@ -164,12 +146,12 @@ fn random_operands(
     count: usize,
     near: RangeInclusive<i32>,
 ) -> Vec<u64> {
-    let near = layout.biased(*near.start())..layout.biased(*near.end()) + 1;
+    let near = biased(layout, *near.start())..biased(layout, *near.end()) + 1;
     (0..count)
         .map(|index| match index % 3 {
-            0 => layout.random(random, 0..layout.field_max() + 1),
-            1 => layout.random(random, 0..3),
-            _ => layout.random(random, near.clone()),
+            0 => random_encoding(layout, random, 0..field_max(layout) + 1),
+            1 => random_encoding(layout, random, 0..3),
+            _ => random_encoding(layout, random, near.clone()),
         })
         .collect()
 }
@@ -247,10 +229,15 @@ macro_rules! compare {
 #[test]
 fn ucomis_and_comis_match_the_quiet_and_signaling_compares() {
     let mut random = SplitMix64::new(0x0C0A_5E00);
-    let single = singles(random_operands(BINARY32, &mut random, 40_000, -2..=2));
+    let single = singles(random_operands(
+        Layout::BINARY32,
+        &mut random,
+        40_000,
+        -2..=2,
+    ));
     let pairs = compare_pairs(&SINGLE_SPECIALS, &single, 1 << 31, 1);
     compare!(pairs, F32, x86::ucomiss, x86::comiss);
-    let double = random_operands(BINARY64, &mut random, 40_000, -2..=2);
+    let double = random_operands(Layout::BINARY64, &mut random, 40_000, -2..=2);
     let pairs = compare_pairs(&DOUBLE_SPECIALS, &double, 1 << 63, 1);
     compare!(pairs, F64, x86::ucomisd, x86::comisd);
 }
@@ -268,7 +255,7 @@ fn conversion_flags(flags: Flags, daz: bool) -> u32 {
 /// around the integers up to 2^66, and random values.
 fn to_int_operands(layout: Layout, random: &mut SplitMix64, specials: &[u64]) -> Vec<u64> {
     let mut operands = specials.to_vec();
-    operands.extend(layout.integer_edges(random, -3..=66));
+    operands.extend(integer_edges(layout, random, -3..=66));
     operands.extend(random_operands(layout, random, 30_000, -3..=66));
     operands
 }
@@ -313,7 +300,7 @@ macro_rules! to_int {
 fn cvtss2si_and_cvttss2si_match_conversions_to_integers() {
     let mut random = SplitMix64::new(0x0C07_5500);
     let specials = SINGLE_SPECIALS.map(u64::from);
-    let operands = singles(to_int_operands(BINARY32, &mut random, &specials));
+    let operands = singles(to_int_operands(Layout::BINARY32, &mut random, &specials));
     to_int!(operands, F32, i32, x86::cvtss2si_r32, x86::cvttss2si_r32);
     to_int!(operands, F32, i64, x86::cvtss2si_r64, x86::cvttss2si_r64);
 }
@@ -321,7 +308,7 @@ fn cvtss2si_and_cvttss2si_match_conversions_to_integers() {
 #[test]
 fn cvtsd2si_and_cvttsd2si_match_conversions_to_integers() {
     let mut random = SplitMix64::new(0x0C07_5D00);
-    let operands = to_int_operands(BINARY64, &mut random, &DOUBLE_SPECIALS);
+    let operands = to_int_operands(Layout::BINARY64, &mut random, &DOUBLE_SPECIALS);
     to_int!(operands, F64, i32, x86::cvtsd2si_r32, x86::cvttsd2si_r32);
     to_int!(operands, F64, i64, x86::cvtsd2si_r64, x86::cvttsd2si_r64);
 }
@@ -450,12 +437,22 @@ fn roundss_and_roundsd_match_rounding_to_an_integral_value() {
     );
     let mut random = SplitMix64::new(0x0400_5D00);
     let mut single = SINGLE_SPECIALS.map(u64::from).to_vec();
-    single.extend(BINARY32.integer_edges(&mut random, -3..=25));
-    single.extend(random_operands(BINARY32, &mut random, 15_000, -3..=25));
+    single.extend(integer_edges(Layout::BINARY32, &mut random, -3..=25));
+    single.extend(random_operands(
+        Layout::BINARY32,
+        &mut random,
+        15_000,
+        -3..=25,
+    ));
     let single = singles(single);
     round!(single, F32, roundss);
     let mut double = DOUBLE_SPECIALS.to_vec();
-    double.extend(BINARY64.integer_edges(&mut random, -3..=54));
-    double.extend(random_operands(BINARY64, &mut random, 15_000, -3..=54));
+    double.extend(integer_edges(Layout::BINARY64, &mut random, -3..=54));
+    double.extend(random_operands(
+        Layout::BINARY64,
+        &mut random,
+        15_000,
+        -3..=54,
+    ));
     round!(double, F64, roundsd);
 }

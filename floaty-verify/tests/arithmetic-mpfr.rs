@@ -17,13 +17,12 @@ use core::num::NonZeroU32;
 
 use floaty::env::{FusedNanOrder, InvalidProduct, NanPropagation, NanRule, Tininess};
 use floaty::{
-    BF16, Binary, Class, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz,
-    F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F160, F192, F224, F256,
-    F288, F320, F352, F384, F416, F448, F480, F512, Float, Rounding, TF32,
+    BF16, Binary, Decoded, Env, F16, F32, F64, F80, F128, F256, F512, Float, Rounding, TF32,
 };
-use floaty_verify::arithmetic::{self, Operand, Operation};
-use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs};
+use floaty_verify::arithmetic::{self, Operation};
+use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs};
 use floaty_verify::mpfr::{DIRECTIONS, Format, Specials, Value};
+use floaty_verify::operations::operand;
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
 use rug::integer::Order;
@@ -87,28 +86,6 @@ fn behaviors() -> Vec<Env> {
     envs
 }
 
-/// Returns the oracle parameters of a format.
-macro_rules! format_of {
-    ($alias:ty, $specials:expr) => {
-        Format {
-            precision: <$alias>::PRECISION,
-            emin: <$alias>::EMIN,
-            emax: <$alias>::EMAX,
-            specials: $specials,
-        }
-    };
-}
-
-/// Returns an operand for the oracle.
-macro_rules! operand {
-    ($value:expr) => {
-        Operand::<8> {
-            decoded: $value.decode::<8>(),
-            subnormal: $value.classify() == Class::Subnormal,
-        }
-    };
-}
-
 /// Compares one operation on one operand list. A NaN result must be the NaN
 /// that the NaN rule gives, with its sign and payload.
 macro_rules! compare {
@@ -124,7 +101,7 @@ macro_rules! compare {
             _ => [0; 8],
         };
         let ours = (Value::from_decoded(decoded), payload, flags);
-        let operands = [$(operand!($operand)),+];
+        let operands = [$(operand($operand)),+];
         let expected = arithmetic::compute($operation, &operands, &$format, &$env);
         assert_eq!(
             ours,
@@ -141,7 +118,7 @@ macro_rules! compare {
 /// bits, at most 8, and random triples for the fused multiply-add.
 macro_rules! small {
     ($alias:ty, $width:literal, $specials:expr, $seed:literal) => {{
-        let format = format_of!($alias, $specials);
+        let format = Format::of::<$alias>($specials);
         let mut random = SplitMix64::new($seed);
         let encodings = || (0..1_u16 << $width).map(|bits| u8::try_from(bits).expect("8 bits"));
         for env in behaviors() {
@@ -181,22 +158,21 @@ macro_rules! small {
     }};
 }
 
+/// Checks one format of the small format lists with `small!`.
+macro_rules! small_format {
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal) => {
+        small!(floaty::$alias, $width, $specials, $seed)
+    };
+}
+
 #[test]
 fn every_fp8_operand_pair() {
-    small!(F8E4M3Fn, 8, Specials::NoInf, 1);
-    small!(F8E5M2, 8, Specials::Ieee, 2);
-    small!(F8E4M3Fnuz, 8, Specials::Fnuz, 3);
-    small!(F8E5M2Fnuz, 8, Specials::Fnuz, 4);
-    small!(F8E4M3, 8, Specials::Ieee, 8);
-    small!(F8E3M4, 8, Specials::Ieee, 9);
-    small!(F8E4M3B11Fnuz, 8, Specials::Fnuz, 10);
+    floaty_verify::for_each_fp8_format!(small_format);
 }
 
 #[test]
 fn every_mx_operand_pair() {
-    small!(F4E2M1Fn, 4, Specials::Finite, 5);
-    small!(F6E2M3Fn, 6, Specials::Finite, 6);
-    small!(F6E3M2Fn, 6, Specials::Finite, 7);
+    floaty_verify::for_each_mx_format!(small_format);
 }
 
 /// Returns the negated product `a * b`, rounded to nearest. As an addend, it
@@ -215,8 +191,13 @@ fn cancelling_addend<S: floaty::format::Standard<W>, const W: usize>(
 /// Returns the special encodings of an IEEE format `width` bits wide: both
 /// zeros, the smallest subnormals, both infinities, and quiet and signaling
 /// NaNs of both signs.
-fn special_encodings(width: u32, exponent_bits: u32) -> Vec<Integer> {
-    let fraction_bits = width - 1 - exponent_bits;
+fn special_encodings(layout: Layout) -> Vec<Integer> {
+    let Layout {
+        width,
+        exponent_bits,
+        ..
+    } = layout;
+    let fraction_bits = layout.fraction_bits();
     let field: Integer = ((Integer::from(1) << exponent_bits) - 1u32) << fraction_bits;
     let quiet = Integer::from(1) << (fraction_bits - 1);
     let magnitudes = [
@@ -236,16 +217,12 @@ fn special_encodings(width: u32, exponent_bits: u32) -> Vec<Integer> {
 /// Returns operand encodings of a format `width` bits wide: the boundary
 /// encodings, random encodings, and, after each random encoding, a nearby
 /// encoding with the other sign, which cancels in a sum.
-fn encodings(
-    width: u32,
-    exponent_bits: u32,
-    count: usize,
-    random: &mut SplitMix64,
-) -> Vec<Integer> {
+fn encodings(layout: Layout, count: usize, random: &mut SplitMix64) -> Vec<Integer> {
+    let width = layout.width;
     let mask: Integer = (Integer::from(1) << width) - 1u32;
     let nan_field: Integer =
-        ((Integer::from(1) << exponent_bits) - 1u32) << (width - 1 - exponent_bits);
-    let mut values = boundary_encodings(width, exponent_bits, IntegerBit::Implicit);
+        ((Integer::from(1) << layout.exponent_bits) - 1u32) << layout.fraction_bits();
+    let mut values = boundary_encodings(layout);
     let limbs = width.div_ceil(64);
     for index in 0..count {
         let digits: Vec<u64> = (0..limbs).map(|_| random.next_u64()).collect();
@@ -265,14 +242,14 @@ fn encodings(
 
 /// Checks random operand pairs and triples of a wider format.
 macro_rules! wide {
-    ($alias:ty, $width:literal, $exponent_bits:literal, $bits:expr, $count:literal, $seed:literal) => {{
-        let format = format_of!($alias, Specials::Ieee);
+    ($alias:ty, $layout:expr, $bits:expr, $count:literal, $seed:literal) => {{
+        let format = Format::of::<$alias>(Specials::Ieee);
         let mut random = SplitMix64::new($seed);
-        let values: Vec<$alias> = encodings($width, $exponent_bits, $count, &mut random)
+        let values: Vec<$alias> = encodings($layout, $count, &mut random)
             .iter()
             .map(|encoding| <$alias>::from_bits($bits(encoding)))
             .collect();
-        let specials: Vec<$alias> = special_encodings($width, $exponent_bits)
+        let specials: Vec<$alias> = special_encodings($layout)
             .iter()
             .map(|encoding| <$alias>::from_bits($bits(encoding)))
             .collect();
@@ -342,44 +319,51 @@ fn to_u128(encoding: &Integer) -> u128 {
 
 #[test]
 fn bfloat16_tf32_and_a_crossing_layout() {
-    wide!(BF16, 16, 8, to_u16, 20_000, 16);
-    wide!(TF32, 19, 8, to_u32, 20_000, 19);
-    wide!(Wide72, 72, 15, to_u128, 10_000, 72);
+    wide!(BF16, Layout::BFLOAT16, to_u16, 20_000, 16);
+    wide!(TF32, Layout::TF32, to_u32, 20_000, 19);
+    wide!(Wide72, Layout::ieee(72, 15), to_u128, 10_000, 72);
 }
 
 #[test]
 fn layouts_at_the_width_of_the_addition() {
-    wide!(Edge64, 64, 5, to_u64, 20_000, 64);
-    wide!(Short64, 64, 4, to_u64, 20_000, 65);
-    wide!(Edge128, 128, 5, to_u128, 10_000, 128);
+    wide!(Edge64, Layout::ieee(64, 5), to_u64, 20_000, 64);
+    wide!(Short64, Layout::ieee(64, 4), to_u64, 20_000, 65);
+    wide!(Edge128, Layout::ieee(128, 5), to_u128, 10_000, 128);
 }
 
 #[test]
 fn binary16_to_binary128() {
-    wide!(F16, 16, 5, to_u16, 20_000, 0x16);
-    wide!(F32, 32, 8, to_u32, 20_000, 0x32);
-    wide!(F64, 64, 11, to_u64, 20_000, 0x64);
-    wide!(F128, 128, 15, to_u128, 10_000, 0x128);
+    wide!(F16, Layout::BINARY16, to_u16, 20_000, 0x16);
+    wide!(F32, Layout::BINARY32, to_u32, 20_000, 0x32);
+    wide!(F64, Layout::BINARY64, to_u64, 20_000, 0x64);
+    wide!(F128, Layout::BINARY128, to_u128, 10_000, 0x128);
 }
 
 #[test]
 fn binary256_and_binary512() {
-    wide!(F256, 256, 19, to_limbs::<4>, 3_000, 256);
-    wide!(F512, 512, 23, to_limbs::<8>, 3_000, 512);
+    wide!(F256, Layout::BINARY256, to_limbs::<4>, 3_000, 256);
+    wide!(F512, Layout::BINARY512, to_limbs::<8>, 3_000, 512);
+}
+
+/// Checks one format of the wide format list with `wide!`, but binary256
+/// and binary512, which `binary256_and_binary512` checks with more operands.
+macro_rules! other_wide_format {
+    ($alias:ident, 256, $exponent_bits:literal, $limbs:literal) => {};
+    ($alias:ident, 512, $exponent_bits:literal, $limbs:literal) => {};
+    ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+        wide!(
+            floaty::$alias,
+            Layout::ieee($width, $exponent_bits),
+            to_limbs::<$limbs>,
+            1_000,
+            $width
+        )
+    };
 }
 
 #[test]
 fn the_other_wide_formats() {
-    wide!(F160, 160, 16, to_limbs::<3>, 1_000, 160);
-    wide!(F192, 192, 17, to_limbs::<3>, 1_000, 192);
-    wide!(F224, 224, 18, to_limbs::<4>, 1_000, 224);
-    wide!(F288, 288, 20, to_limbs::<5>, 1_000, 288);
-    wide!(F320, 320, 20, to_limbs::<5>, 1_000, 320);
-    wide!(F352, 352, 21, to_limbs::<6>, 1_000, 352);
-    wide!(F384, 384, 21, to_limbs::<6>, 1_000, 384);
-    wide!(F416, 416, 22, to_limbs::<7>, 1_000, 416);
-    wide!(F448, 448, 22, to_limbs::<7>, 1_000, 448);
-    wide!(F480, 480, 23, to_limbs::<8>, 1_000, 480);
+    floaty_verify::for_each_wide_format!(other_wide_format);
 }
 
 /// Checks the arithmetic of the values of one format in the static mode
@@ -392,7 +376,7 @@ macro_rules! in_mode {
             env,
             "the mode names the behavior"
         );
-        let format = format_of!($alias, Specials::Ieee);
+        let format = Format::of::<$alias>(Specials::Ieee);
         let mode = <$mode>::default();
         let values: Vec<_> = $values
             .iter()
@@ -426,11 +410,11 @@ macro_rules! in_mode {
 #[test]
 fn static_modes() {
     let mut random = SplitMix64::new(0x0057_471C);
-    let doubles: Vec<F64> = encodings(64, 11, 2_000, &mut random)
+    let doubles: Vec<F64> = encodings(Layout::BINARY64, 2_000, &mut random)
         .iter()
         .map(|encoding| F64::from_bits(to_u64(encoding)))
         .collect();
-    let quads: Vec<F128> = encodings(128, 15, 1_000, &mut random)
+    let quads: Vec<F128> = encodings(Layout::BINARY128, 1_000, &mut random)
         .iter()
         .map(|encoding| F128::from_bits(to_u128(encoding)))
         .collect();
@@ -455,7 +439,7 @@ fn static_modes() {
 /// has no fused multiply-add, so MPFR is its only reference.
 #[test]
 fn x87_arithmetic_with_precision_control() {
-    let format = format_of!(F80, Specials::Ieee);
+    let format = Format::of::<F80>(Specials::Ieee);
     let mut random = SplitMix64::new(0x0087_F3A0);
     let mask = (1_u128 << 80) - 1;
     // Canonical encodings: the integer bit is set exactly when the exponent

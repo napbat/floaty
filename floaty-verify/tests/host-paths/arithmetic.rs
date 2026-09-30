@@ -1,6 +1,7 @@
 //! The operators, `sqrt`, and `mul_add`.
 
 use floaty::{BF16, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F80, TF32};
+use floaty_verify::encodings::Layout;
 use floaty_verify::random::SplitMix64;
 
 use super::operands::{every_16_bit_pair, random_pairs, triples};
@@ -50,25 +51,37 @@ fn operators_give_the_default_mode_results() {
     operators_match!(
         floaty::F16,
         u16,
-        random_pairs::<u16>(&mut random, 16, 5, 20_000)
+        random_pairs::<u16>(&mut random, Layout::BINARY16, 20_000)
     );
-    operators_match!(BF16, u16, random_pairs::<u16>(&mut random, 16, 8, 20_000));
-    operators_match!(TF32, u32, random_pairs::<u32>(&mut random, 19, 8, 20_000));
+    operators_match!(
+        BF16,
+        u16,
+        random_pairs::<u16>(&mut random, Layout::BFLOAT16, 20_000)
+    );
+    operators_match!(
+        TF32,
+        u32,
+        random_pairs::<u32>(&mut random, Layout::TF32, 20_000)
+    );
     operators_match!(
         floaty::F32,
         u32,
-        random_pairs::<u32>(&mut random, 32, 8, 100_000)
+        random_pairs::<u32>(&mut random, Layout::BINARY32, 100_000)
     );
     operators_match!(
         floaty::F64,
         u64,
-        random_pairs::<u64>(&mut random, 64, 11, 100_000)
+        random_pairs::<u64>(&mut random, Layout::BINARY64, 100_000)
     );
-    operators_match!(F80, u128, random_pairs::<u128>(&mut random, 80, 15, 20_000));
+    operators_match!(
+        F80,
+        u128,
+        random_pairs::<u128>(&mut random, Layout::X87_EXTENDED, 20_000)
+    );
     operators_match!(
         floaty::F128,
         u128,
-        random_pairs::<u128>(&mut random, 128, 15, 20_000)
+        random_pairs::<u128>(&mut random, Layout::BINARY128, 20_000)
     );
 }
 
@@ -108,31 +121,39 @@ fn square_roots_and_fused_products_give_the_default_mode_results() {
     let mut random = SplitMix64::new(0x5A5A);
     methods_match!(
         floaty::F16,
-        triples(&random_pairs::<u16>(&mut random, 16, 5, 20_000))
+        triples(&random_pairs::<u16>(&mut random, Layout::BINARY16, 20_000))
     );
     methods_match!(
         BF16,
-        triples(&random_pairs::<u16>(&mut random, 16, 8, 20_000))
+        triples(&random_pairs::<u16>(&mut random, Layout::BFLOAT16, 20_000))
     );
     methods_match!(
         TF32,
-        triples(&random_pairs::<u32>(&mut random, 19, 8, 20_000))
+        triples(&random_pairs::<u32>(&mut random, Layout::TF32, 20_000))
     );
     methods_match!(
         floaty::F32,
-        triples(&random_pairs::<u32>(&mut random, 32, 8, 100_000))
+        triples(&random_pairs::<u32>(&mut random, Layout::BINARY32, 100_000))
     );
     methods_match!(
         floaty::F64,
-        triples(&random_pairs::<u64>(&mut random, 64, 11, 100_000))
+        triples(&random_pairs::<u64>(&mut random, Layout::BINARY64, 100_000))
     );
     methods_match!(
         F80,
-        triples(&random_pairs::<u128>(&mut random, 80, 15, 20_000))
+        triples(&random_pairs::<u128>(
+            &mut random,
+            Layout::X87_EXTENDED,
+            20_000
+        ))
     );
     methods_match!(
         floaty::F128,
-        triples(&random_pairs::<u128>(&mut random, 128, 15, 20_000))
+        triples(&random_pairs::<u128>(
+            &mut random,
+            Layout::BINARY128,
+            20_000
+        ))
     );
 }
 

@@ -8,11 +8,7 @@
 use core::num::NonZeroU32;
 
 use floaty::env::Tininess;
-use floaty::{
-    BF16, Env, Exact, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn,
-    F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320,
-    F352, F384, F416, F448, F480, F512, TF32,
-};
+use floaty::{BF16, Env, Exact, F16, F32, F64, F80, F128, TF32};
 use floaty_verify::encodings::to_limbs;
 use floaty_verify::mpfr::{self, Format, Input, Specials, Value};
 use floaty_verify::random::SplitMix64;
@@ -119,13 +115,8 @@ fn inputs(format: &Format, env: &Env, random: &mut SplitMix64) -> Vec<Input> {
 
 /// Checks one format against the oracle.
 macro_rules! check_format {
-    ($alias:ty, $specials:expr, $precisions:expr, $seed:literal) => {{
-        let format = Format {
-            precision: <$alias>::PRECISION,
-            emin: <$alias>::EMIN,
-            emax: <$alias>::EMAX,
-            specials: $specials,
-        };
+    ($alias:ty, $specials:expr, $precisions:expr, $seed:expr) => {{
+        let format = Format::of::<$alias>($specials);
         let mut random = SplitMix64::new($seed);
         for env in behaviors($precisions) {
             for input in inputs(&format, &env, &mut random) {
@@ -155,22 +146,42 @@ fn ieee_formats_up_to_binary128() {
     check_format!(F128, Specials::Ieee, &[], 128);
 }
 
+/// Returns the precision limits and the seed of a small format, by its alias.
+/// A format without an entry runs without a precision limit, with the seed of
+/// its format list.
+fn small_plan(alias: &str, seed: u64) -> (&'static [u32], u64) {
+    match alias {
+        "F8E4M3Fn" => (&[2], 43),
+        "F8E5M2" => (&[], 52),
+        "F8E4M3Fnuz" => (&[], 431),
+        "F8E5M2Fnuz" => (&[], 521),
+        "F8E4M3" => (&[2], 434),
+        "F8E3M4" => (&[3], 345),
+        "F8E4M3B11Fnuz" => (&[], 4311),
+        "F4E2M1Fn" => (&[1], 44),
+        "F6E2M3Fn" => (&[2], 62),
+        "F6E3M2Fn" => (&[2], 63),
+        _ => (&[], seed),
+    }
+}
+
+/// Checks one format of the small format lists with the plan of
+/// [`small_plan`].
+macro_rules! small_format {
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal) => {{
+        let (precisions, seed) = small_plan(stringify!($alias), $seed);
+        check_format!(floaty::$alias, $specials, precisions, seed);
+    }};
+}
+
 #[test]
 fn fp8_formats() {
-    check_format!(F8E4M3Fn, Specials::NoInf, &[2], 43);
-    check_format!(F8E5M2, Specials::Ieee, &[], 52);
-    check_format!(F8E4M3Fnuz, Specials::Fnuz, &[], 431);
-    check_format!(F8E5M2Fnuz, Specials::Fnuz, &[], 521);
-    check_format!(F8E4M3, Specials::Ieee, &[2], 434);
-    check_format!(F8E3M4, Specials::Ieee, &[3], 345);
-    check_format!(F8E4M3B11Fnuz, Specials::Fnuz, &[], 4311);
+    floaty_verify::for_each_fp8_format!(small_format);
 }
 
 #[test]
 fn mx_formats() {
-    check_format!(F4E2M1Fn, Specials::Finite, &[1], 44);
-    check_format!(F6E2M3Fn, Specials::Finite, &[2], 62);
-    check_format!(F6E3M2Fn, Specials::Finite, &[2], 63);
+    floaty_verify::for_each_mx_format!(small_format);
 }
 
 #[test]
@@ -178,20 +189,33 @@ fn x87_with_precision_control() {
     check_format!(F80, Specials::Ieee, &[24, 53, 64], 80);
 }
 
+/// Returns the precision limits of a wide format, by its width. A format
+/// without an entry runs without a precision limit.
+fn wide_precisions(width: u32) -> &'static [u32] {
+    match width {
+        160 => &[64],
+        256 => &[113],
+        288 => &[200],
+        384 => &[237],
+        _ => &[],
+    }
+}
+
+/// Checks one format of the wide format list, with its width as the seed.
+macro_rules! wide_format {
+    ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+        check_format!(
+            floaty::$alias,
+            Specials::Ieee,
+            wide_precisions($width),
+            $width
+        )
+    };
+}
+
 #[test]
 fn wide_formats() {
-    check_format!(F160, Specials::Ieee, &[64], 160);
-    check_format!(F192, Specials::Ieee, &[], 192);
-    check_format!(F224, Specials::Ieee, &[], 224);
-    check_format!(F256, Specials::Ieee, &[113], 256);
-    check_format!(F288, Specials::Ieee, &[200], 288);
-    check_format!(F320, Specials::Ieee, &[], 320);
-    check_format!(F352, Specials::Ieee, &[], 352);
-    check_format!(F384, Specials::Ieee, &[237], 384);
-    check_format!(F416, Specials::Ieee, &[], 416);
-    check_format!(F448, Specials::Ieee, &[], 448);
-    check_format!(F480, Specials::Ieee, &[], 480);
-    check_format!(F512, Specials::Ieee, &[], 512);
+    floaty_verify::for_each_wide_format!(wide_format);
 }
 
 /// Rounds every significand below 2^8 to each FP8 format, at every exponent
@@ -203,12 +227,7 @@ fn wide_formats() {
 fn every_small_input_to_the_fp8_formats() {
     macro_rules! sweep {
         ($alias:ty, $specials:expr) => {{
-            let format = Format {
-                precision: <$alias>::PRECISION,
-                emin: <$alias>::EMIN,
-                emax: <$alias>::EMAX,
-                specials: $specials,
-            };
+            let format = Format::of::<$alias>($specials);
             let p = i32::try_from(format.precision).expect("a precision fits an i32");
             for env in behaviors(&[1, 2, 3]) {
                 let limit = format.precision_in(&env);
@@ -243,14 +262,10 @@ fn every_small_input_to_the_fp8_formats() {
             }
         }};
     }
-    sweep!(F8E4M3Fn, Specials::NoInf);
-    sweep!(F8E5M2, Specials::Ieee);
-    sweep!(F8E4M3Fnuz, Specials::Fnuz);
-    sweep!(F8E5M2Fnuz, Specials::Fnuz);
-    sweep!(F8E4M3, Specials::Ieee);
-    sweep!(F8E3M4, Specials::Ieee);
-    sweep!(F8E4M3B11Fnuz, Specials::Fnuz);
-    sweep!(F4E2M1Fn, Specials::Finite);
-    sweep!(F6E2M3Fn, Specials::Finite);
-    sweep!(F6E3M2Fn, Specials::Finite);
+    macro_rules! sweep_format {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal) => {
+            sweep!(floaty::$alias, $specials)
+        };
+    }
+    floaty_verify::for_each_small_format!(sweep_format);
 }

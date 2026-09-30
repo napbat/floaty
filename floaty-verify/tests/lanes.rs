@@ -10,18 +10,13 @@
 use floaty::env::Rounding;
 use floaty::mode::{Rounded, X86Sse, direction::TowardZero};
 use floaty::{BF16, Env, F16, F32, F64, F80, F128, Flags, Float, Lanes};
-use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 
 /// Returns boundary and random encodings of a layout, NaNs among them.
-fn encodings(random: &mut SplitMix64, width: u32, exponent_bits: u32) -> Vec<u128> {
-    let integer_bit = if width == 80 {
-        IntegerBit::Explicit
-    } else {
-        IntegerBit::Implicit
-    };
-    let mut encodings = boundary_encodings_u128(width, exponent_bits, integer_bit);
-    encodings.extend((0..600).map(|_| random.next_u128() >> (128 - width)));
+fn encodings(random: &mut SplitMix64, layout: Layout) -> Vec<u128> {
+    let mut encodings = boundary_encodings_u128(layout);
+    encodings.extend((0..600).map(|_| random.next_u128() >> (128 - layout.width)));
     encodings
 }
 
@@ -118,7 +113,7 @@ fn behaviors() -> [Env; 4] {
 #[test]
 fn binary32_lanes_give_the_scalar_results() {
     let mut random = SplitMix64::new(0x1A4E_0032);
-    let encodings = encodings(&mut random, 32, 8);
+    let encodings = encodings(&mut random, Layout::BINARY32);
     lanes_match!(F32, u32, 1, &encodings, behaviors());
     lanes_match!(F32, u32, 3, &encodings, behaviors());
     lanes_match!(F32, u32, 4, &encodings, behaviors());
@@ -131,7 +126,7 @@ fn binary32_lanes_give_the_scalar_results() {
 #[test]
 fn binary64_lanes_give_the_scalar_results() {
     let mut random = SplitMix64::new(0x1A4E_0064);
-    let encodings = encodings(&mut random, 64, 11);
+    let encodings = encodings(&mut random, Layout::BINARY64);
     lanes_match!(F64, u64, 1, &encodings, behaviors());
     lanes_match!(F64, u64, 2, &encodings, behaviors());
     lanes_match!(F64, u64, 3, &encodings, behaviors());
@@ -143,7 +138,7 @@ fn binary64_lanes_give_the_scalar_results() {
 #[test]
 fn binary16_lanes_give_the_scalar_results() {
     let mut random = SplitMix64::new(0x1A4E_0016);
-    let encodings = encodings(&mut random, 16, 5);
+    let encodings = encodings(&mut random, Layout::BINARY16);
     lanes_match!(F16, u16, 1, &encodings, behaviors());
     lanes_match!(F16, u16, 3, &encodings, behaviors());
     lanes_match!(F16, u16, 4, &encodings, behaviors());
@@ -156,7 +151,7 @@ fn binary16_lanes_give_the_scalar_results() {
 #[test]
 fn bfloat16_lanes_give_the_scalar_results() {
     let mut random = SplitMix64::new(0x1A4E_00BF);
-    let encodings = encodings(&mut random, 16, 8);
+    let encodings = encodings(&mut random, Layout::BFLOAT16);
     lanes_match!(BF16, u16, 1, &encodings, behaviors());
     lanes_match!(BF16, u16, 3, &encodings, behaviors());
     lanes_match!(BF16, u16, 4, &encodings, behaviors());
@@ -169,8 +164,20 @@ fn bfloat16_lanes_give_the_scalar_results() {
 #[test]
 fn lanes_of_the_other_formats_give_the_scalar_results() {
     let mut random = SplitMix64::new(0x1A4E_0000);
-    lanes_match!(F80, u128, 2, &encodings(&mut random, 80, 15), behaviors());
-    lanes_match!(F128, u128, 3, &encodings(&mut random, 128, 15), behaviors());
+    lanes_match!(
+        F80,
+        u128,
+        2,
+        &encodings(&mut random, Layout::X87_EXTENDED),
+        behaviors()
+    );
+    lanes_match!(
+        F128,
+        u128,
+        3,
+        &encodings(&mut random, Layout::BINARY128),
+        behaviors()
+    );
 }
 
 #[test]
@@ -180,12 +187,18 @@ fn lanes_of_other_modes_give_the_scalar_results() {
     type Sse = Float<floaty::Binary<8>, 32, X86Sse>;
     type Truncating = Float<floaty::Binary<11>, 64, Rounded<floaty::mode::Ieee, TowardZero>>;
     let mut random = SplitMix64::new(0x1A4E_00DE);
-    lanes_match!(Sse, u32, 8, &encodings(&mut random, 32, 8), [Env::X86_SSE]);
+    lanes_match!(
+        Sse,
+        u32,
+        8,
+        &encodings(&mut random, Layout::BINARY32),
+        [Env::X86_SSE]
+    );
     lanes_match!(
         Truncating,
         u64,
         4,
-        &encodings(&mut random, 64, 11),
+        &encodings(&mut random, Layout::BINARY64),
         [Env::IEEE]
     );
 }
@@ -219,16 +232,16 @@ fn lanes_round_in_the_direction_of_their_mode() {
         encodings.extend(ties.iter().map(|&value| tie(value)));
         encodings
     };
-    let singles = with_ties(encodings(&mut random, 32, 8), |value| {
+    let singles = with_ties(encodings(&mut random, Layout::BINARY32), |value| {
         u128::from(value.convert::<F32>().to_bits())
     });
-    let halves = with_ties(encodings(&mut random, 16, 5), |value| {
+    let halves = with_ties(encodings(&mut random, Layout::BINARY16), |value| {
         u128::from(value.convert::<F16>().to_bits())
     });
-    let doubles = with_ties(encodings(&mut random, 64, 11), |value| {
+    let doubles = with_ties(encodings(&mut random, Layout::BINARY64), |value| {
         u128::from(value.to_bits())
     });
-    let bfloats = with_ties(encodings(&mut random, 16, 8), |value| {
+    let bfloats = with_ties(encodings(&mut random, Layout::BFLOAT16), |value| {
         u128::from(value.convert::<BF16>().to_bits())
     });
     lanes_match!(Up, u32, 13, &singles, [Env::IEEE]);
@@ -255,10 +268,10 @@ fn lanes_round_in_the_direction_of_their_mode() {
 #[test]
 fn lanes_convert_as_their_lanes_do() {
     let mut random = SplitMix64::new(0x1A4E_C0F7);
-    let singles = encodings(&mut random, 32, 8);
-    let doubles = encodings(&mut random, 64, 11);
-    let binary16 = encodings(&mut random, 16, 5);
-    let bfloat16 = encodings(&mut random, 16, 8);
+    let singles = encodings(&mut random, Layout::BINARY32);
+    let doubles = encodings(&mut random, Layout::BINARY64);
+    let binary16 = encodings(&mut random, Layout::BINARY16);
+    let bfloat16 = encodings(&mut random, Layout::BFLOAT16);
     for start in 0..singles.len().max(doubles.len()) {
         let x = Lanes::<F32, 9>::from_bits(window::<u32, 9>(&singles, start));
         let widened: Lanes<F64, 9> = x.convert();
@@ -638,19 +651,43 @@ fn the_other_methods_of_lanes_give_the_scalar_results() {
     // The pairs of the windows meet zeros of both signs, NaNs, and equal
     // values, which the packed minimum and maximum send to the scalar paths.
     let mut random = SplitMix64::new(0x1A4E_3E7D);
-    let singles = encodings(&mut random, 32, 8);
+    let singles = encodings(&mut random, Layout::BINARY32);
     let behavior = Env::IEEE.with_denormals_are_zero(true);
     methods_match!(F32, u32, 1, &singles, Env::IEEE);
     methods_match!(F32, u32, 4, &singles, behavior);
     methods_match!(F32, u32, 5, &singles, Env::X86_SSE);
     methods_match!(F32, u32, 13, &singles, Env::IEEE);
-    let doubles = encodings(&mut random, 64, 11);
+    let doubles = encodings(&mut random, Layout::BINARY64);
     methods_match!(F64, u64, 2, &doubles, Env::IEEE);
     methods_match!(F64, u64, 7, &doubles, behavior);
-    methods_match!(F16, u16, 8, &encodings(&mut random, 16, 5), Env::IEEE);
-    methods_match!(BF16, u16, 8, &encodings(&mut random, 16, 8), Env::IEEE);
-    methods_match!(F80, u128, 2, &encodings(&mut random, 80, 15), Env::IEEE);
-    methods_match!(F128, u128, 3, &encodings(&mut random, 128, 15), Env::IEEE);
+    methods_match!(
+        F16,
+        u16,
+        8,
+        &encodings(&mut random, Layout::BINARY16),
+        Env::IEEE
+    );
+    methods_match!(
+        BF16,
+        u16,
+        8,
+        &encodings(&mut random, Layout::BFLOAT16),
+        Env::IEEE
+    );
+    methods_match!(
+        F80,
+        u128,
+        2,
+        &encodings(&mut random, Layout::X87_EXTENDED),
+        Env::IEEE
+    );
+    methods_match!(
+        F128,
+        u128,
+        3,
+        &encodings(&mut random, Layout::BINARY128),
+        Env::IEEE
+    );
     let decimals: Vec<u128> = (0..400).map(|_| u128::from(random.next_u64())).collect();
     methods_match!(floaty::D64Bid, u64, 2, &decimals, floaty::D64Bid::ENV);
 }
@@ -660,7 +697,7 @@ fn every_pair_of_boundary_values_orders_as_the_scalar_operations() {
     // Each pair of boundary encodings, such as `+0` and `-0`, a NaN and a
     // number, or two equal values, fills the lanes, so every chunk of the
     // packed comparison and minimum and maximum meets it.
-    let singles = boundary_encodings_u128(32, 8, IntegerBit::Implicit);
+    let singles = boundary_encodings_u128(Layout::BINARY32);
     let pairs: Vec<(u32, u32)> = singles
         .iter()
         .flat_map(|&a| singles.iter().map(move |&b| (a, b)))
@@ -712,7 +749,7 @@ fn every_pair_of_boundary_values_orders_as_the_scalar_operations() {
             core::array::from_fn(|lane| a[lane].partial_cmp(&b[lane]));
         assert_eq!(x.compare_quiet(y), orders, "{chunk:x?}: compare_quiet");
     }
-    let doubles = boundary_encodings_u128(64, 11, IntegerBit::Implicit);
+    let doubles = boundary_encodings_u128(Layout::BINARY64);
     for &a in &doubles {
         for pair in doubles.chunks_exact(4) {
             let x = Lanes::<F64, 4>::from_bits([u64::try_from(a).expect("64 bits"); 4]);

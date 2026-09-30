@@ -12,7 +12,7 @@
 use core::ops::RangeInclusive;
 
 use floaty::{F80, Flags, Rounding};
-use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings, to_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
     self, X87_C1, X87_STATUS_FLAGS, stored, x87_arithmetic_status, x87_env, x87_status,
@@ -69,17 +69,14 @@ const SPECIALS: [u128; 30] = [
     0xC03E_8000_0000_0000_0000,
 ];
 
-/// The exponent bias of the x87 format.
-const BIAS: i32 = 16383;
-
 /// Returns an encoding from its sign, biased exponent, and significand.
 fn encode(negative: bool, biased: u64, significand: u64) -> u128 {
-    (u128::from(negative) << 79) | (u128::from(biased) << 64) | u128::from(significand)
+    Layout::X87_EXTENDED.encode(negative, biased, u128::from(significand))
 }
 
 /// Returns the biased exponent of the unbiased exponent `exponent`.
 fn biased(exponent: i32) -> u64 {
-    u64::try_from(exponent + BIAS)
+    u64::try_from(exponent + Layout::X87_EXTENDED.ieee_bias())
         .expect("an exponent in the x87 range has a biased field that is not negative")
 }
 
@@ -469,7 +466,7 @@ fn scale_pairs(random: &mut SplitMix64) -> Vec<(u128, i32)> {
     for value in random_operands(random, 40_000, -2..=2) {
         let field =
             i32::try_from((value >> 64) & 0x7FFF).expect("the x87 exponent field has 15 bits");
-        let exponent = field.max(1) - BIAS;
+        let exponent = field.max(1) - Layout::X87_EXTENDED.ieee_bias();
         let offset = i32::try_from(random.next_u64() % 80).expect("an offset below 80 fits an i32");
         let scale = match random.next_u64() % 4 {
             0 => -16_382 - 70 + offset - exponent,
@@ -522,7 +519,7 @@ fn fscale_matches_scale_b_without_precision_control() {
 #[test]
 fn fchs_and_fabs_change_only_the_sign_of_every_encoding() {
     let mut random = SplitMix64::new(0x0087_5165);
-    let mut encodings: Vec<u128> = boundary_encodings(80, 15, IntegerBit::Explicit)
+    let mut encodings: Vec<u128> = boundary_encodings(Layout::X87_EXTENDED)
         .iter()
         .map(to_u128)
         .collect();

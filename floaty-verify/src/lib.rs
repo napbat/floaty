@@ -25,6 +25,8 @@ pub mod dectest;
 pub mod double_double;
 pub mod encodings;
 #[cfg(target_arch = "x86_64")]
+pub mod formats;
+#[cfg(target_arch = "x86_64")]
 pub mod ibm_ldouble;
 #[cfg(target_arch = "x86_64")]
 pub mod intel_decimal;
@@ -48,7 +50,7 @@ pub mod testfloat;
 #[cfg(target_arch = "x86_64")]
 pub mod x86;
 
-/// The floaty crate, for the macros of [`modes`], so that a caller need not
-/// name floaty.
+/// The floaty crate, for the macros of [`modes`] and of the format lists, so
+/// that a caller need not name floaty.
 #[doc(hidden)]
 pub use floaty as __floaty;

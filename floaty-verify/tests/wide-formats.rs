@@ -5,11 +5,8 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
-use floaty::{
-    Binary, Class, Decoded, F160, F192, F224, F256, F288, F320, F352, F384, F416, F448, F480, F512,
-    Float,
-};
-use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs};
+use floaty::{Binary, Class, Decoded, Float};
+use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::shape::{self, trailing_payload};
 use rug::integer::Order;
@@ -143,7 +140,7 @@ macro_rules! check_format {
     ($alias:ty, $width:literal, $exponent_bits:literal, $limbs:literal, $seed:literal) => {{
         let mut random = SplitMix64::new($seed);
         let mask: Integer = (Integer::from(1) << $width) - 1u32;
-        let mut encodings = boundary_encodings($width, $exponent_bits, IntegerBit::Implicit);
+        let mut encodings = boundary_encodings(Layout::ieee($width, $exponent_bits));
         for _ in 0..RANDOM_SAMPLES {
             let limbs: Vec<u64> = (0..$limbs).map(|_| random.next_u64()).collect();
             let encoding: Integer = Integer::from_digits(&limbs, Order::Lsf) & &mask;
@@ -175,20 +172,16 @@ macro_rules! check_format {
     }};
 }
 
+/// Checks one format of the wide format list, with its width as the seed.
+macro_rules! wide_format {
+    ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+        check_format!(floaty::$alias, $width, $exponent_bits, $limbs, $width)
+    };
+}
+
 #[test]
 fn binary160_to_binary512_follow_the_ieee_definition() {
-    check_format!(F160, 160, 16, 3, 160);
-    check_format!(F192, 192, 17, 3, 192);
-    check_format!(F224, 224, 18, 4, 224);
-    check_format!(F256, 256, 19, 4, 256);
-    check_format!(F288, 288, 20, 5, 288);
-    check_format!(F320, 320, 20, 5, 320);
-    check_format!(F352, 352, 21, 6, 352);
-    check_format!(F384, 384, 21, 6, 384);
-    check_format!(F416, 416, 22, 7, 416);
-    check_format!(F448, 448, 22, 7, 448);
-    check_format!(F480, 480, 23, 8, 480);
-    check_format!(F512, 512, 23, 8, 512);
+    floaty_verify::for_each_wide_format!(wide_format);
 }
 
 #[test]

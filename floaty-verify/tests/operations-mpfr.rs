@@ -14,10 +14,10 @@
 #![cfg(target_arch = "x86_64")]
 
 use floaty::format::Standard;
-use floaty::{B11Fnuz, Binary, Finite, Float, Fnuz, Int, NoInf, UInt};
-use floaty_verify::mpfr::Specials;
+use floaty::{Binary, Float, Int, NoInf, UInt};
+use floaty_verify::mpfr::{Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
-use floaty_verify::operations::check::{self, Case, format};
+use floaty_verify::operations::check::{self, Case};
 use rug::Integer;
 
 /// Returns a case for every encoding of a format of at most 8 bits.
@@ -35,24 +35,15 @@ fn make<S: Standard<W, Bits = u8>, const W: usize>(bits: &Integer) -> Float<S, W
     Float::from_bits(bits.to_u8().expect("the format has at most 8 bits"))
 }
 
-/// Runs a check for each FP8 format and each MX format of 4 and 6 bits.
-macro_rules! each_format {
-    ($check:ident) => {
-        $check::<Binary<4, NoInf>, 8>(Specials::NoInf);
-        $check::<Binary<5>, 8>(Specials::Ieee);
-        $check::<Binary<4, Fnuz>, 8>(Specials::Fnuz);
-        $check::<Binary<5, Fnuz>, 8>(Specials::Fnuz);
-        $check::<Binary<4>, 8>(Specials::Ieee);
-        $check::<Binary<3>, 8>(Specials::Ieee);
-        $check::<Binary<4, B11Fnuz>, 8>(Specials::Fnuz);
-        $check::<Binary<2, Finite>, 4>(Specials::Finite);
-        $check::<Binary<2, Finite>, 6>(Specials::Finite);
-        $check::<Binary<3, Finite>, 6>(Specials::Finite);
+/// Runs the check `$check` on one format of the small format lists.
+macro_rules! run_check {
+    ($check:ident, $alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal) => {
+        $check::<$standard, $width>($specials)
     };
 }
 
 fn comparisons<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
-    let format = format::<S, W>(specials);
+    let format = Format::of::<Float<S, W>>(specials);
     let cases = cases::<S, W>();
     for x in &cases {
         for y in &cases {
@@ -67,11 +58,11 @@ fn comparisons<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
 
 #[test]
 fn every_small_format_pair_compares_orders_and_copies_signs() {
-    each_format!(comparisons);
+    floaty_verify::for_each_small_format!(run_check, comparisons);
 }
 
 fn min_max<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
-    let format = format::<S, W>(specials);
+    let format = Format::of::<Float<S, W>>(specials);
     let cases = cases::<S, W>();
     for env in &BEHAVIORS {
         for x in &cases {
@@ -84,11 +75,11 @@ fn min_max<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
 
 #[test]
 fn every_small_format_pair_minimum_and_maximum() {
-    each_format!(min_max);
+    floaty_verify::for_each_small_format!(run_check, min_max);
 }
 
 fn remainder<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
-    let format = format::<S, W>(specials);
+    let format = Format::of::<Float<S, W>>(specials);
     let cases = cases::<S, W>();
     for env in &BEHAVIORS {
         for x in &cases {
@@ -101,7 +92,7 @@ fn remainder<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
 
 #[test]
 fn every_small_format_pair_remainder() {
-    each_format!(remainder);
+    floaty_verify::for_each_small_format!(run_check, remainder);
 }
 
 /// The scales of `scale_b`: every scale that moves an FP8 value across its
@@ -120,7 +111,7 @@ fn scales() -> Vec<i32> {
 }
 
 fn one_operand<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
-    let format = format::<S, W>(specials);
+    let format = Format::of::<Float<S, W>>(specials);
     let scales = scales();
     for env in &BEHAVIORS {
         for x in &cases::<S, W>() {
@@ -139,7 +130,7 @@ fn one_operand<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
 
 #[test]
 fn every_small_format_operand_rounds_converts_scales_and_steps() {
-    each_format!(one_operand);
+    floaty_verify::for_each_small_format!(run_check, one_operand);
 }
 
 /// Runs a check for 8-bit layouts whose largest finite value is below

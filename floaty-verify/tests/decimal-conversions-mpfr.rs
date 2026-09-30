@@ -34,7 +34,7 @@ use floaty::{
     F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz,
     F16, F256, F512, Flags, Rounding, TF32,
 };
-use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs, to_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs, to_u128};
 use floaty_verify::mpfr::decimal::{
     DecimalFormat, DecimalValue, align, decimal_payload, to_decimal,
 };
@@ -239,10 +239,7 @@ macro_rules! check_to_decimal {
                 let decoded = source.decode::<8>();
                 let subnormal = source.classify() == Class::Subnormal;
                 $(
-                    let format = DecimalFormat {
-                        precision: <$destination>::PRECISION,
-                        emax: <$destination>::EMAX,
-                    };
+                    let format = DecimalFormat::of::<$destination>();
                     let (ours, flags): ($destination, _) = source.convert_with(env);
                     assert!(ours.is_canonical(), "{ours:?} is canonical");
                     let ours = (DecimalValue::from_decoded(ours.decode::<2>()), flags);
@@ -260,35 +257,19 @@ macro_rules! check_to_decimal {
     }};
 }
 
-/// The oracle parameters of a binary destination.
-macro_rules! oracle_format {
-    ($alias:ty, $specials:expr) => {
-        Format {
-            precision: <$alias>::PRECISION,
-            emin: <$alias>::EMIN,
-            emax: <$alias>::EMAX,
-            specials: $specials,
-        }
-    };
-}
-
 /// Converts every decimal source value to every binary destination in every
 /// behavior. A NaN result must be quiet, with the payload of
 /// [`binary_payload`].
 macro_rules! check_to_binary {
     ($source:ty, $values:expr => $($destination:ty: $specials:expr),+) => {{
-        let trailing = DecimalFormat {
-            precision: <$source>::PRECISION,
-            emax: <$source>::EMAX,
-        }
-        .trailing_bits();
+        let trailing = DecimalFormat::of::<$source>().trailing_bits();
         for env in binary_behaviors() {
             for source in &$values {
                 let source: $source = *source;
                 let decoded = source.decode::<2>();
                 let subnormal = source.classify() == Class::Subnormal;
                 $(
-                    let format = oracle_format!($destination, $specials);
+                    let format = Format::of::<$destination>($specials);
                     let (ours, flags): ($destination, _) = source.convert_with(env);
                     assert!(ours.is_canonical(), "{ours:?} is canonical");
                     let result = ours.decode::<8>();
@@ -438,19 +419,19 @@ fn from_binary16_and_bfloat16_to_decimal() {
 #[test]
 fn from_the_wide_formats_to_decimal() {
     let mut random = SplitMix64::new(0xDEC_0512);
-    let tf32: Vec<u32> = boundary_encodings(19, 8, IntegerBit::Implicit)
+    let tf32: Vec<u32> = boundary_encodings(Layout::TF32)
         .iter()
         .map(|encoding| u32::try_from(to_u128(encoding)).expect("19 bits"))
         .chain((0..5_000).map(|_| u32::try_from(random.next_u64() >> 45).expect("19 bits")))
         .collect();
     check_to_decimal!(TF32, tf32 => D32Bid, D128Dpd);
-    let mut wide: Vec<[u64; 8]> = boundary_encodings(512, 23, IntegerBit::Implicit)
+    let mut wide: Vec<[u64; 8]> = boundary_encodings(Layout::BINARY512)
         .iter()
         .map(to_limbs::<8>)
         .collect();
     wide.extend((0..1_000).map(|_| core::array::from_fn(|_| random.next_u64())));
     check_to_decimal!(F512, wide => D32Dpd, D64Bid, D128Bid);
-    let mut narrow: Vec<[u64; 4]> = boundary_encodings(256, 19, IntegerBit::Implicit)
+    let mut narrow: Vec<[u64; 4]> = boundary_encodings(Layout::BINARY256)
         .iter()
         .map(to_limbs::<4>)
         .collect();
@@ -458,15 +439,14 @@ fn from_the_wide_formats_to_decimal() {
     check_to_decimal!(F256, narrow => D32Bid, D64Dpd, D128Dpd);
 }
 
-/// Returns `count` random encodings of a binary interchange format of
-/// `width` bits with `exponent_bits` exponent bits, in `N` limbs. Each has a
-/// random sign and random bits in the whole fraction. Its exponent is in
-/// the range of `format`, from the smallest subnormal value to the largest
-/// value, or up to 16 binades beyond either end.
+/// Returns `count` random encodings of a binary interchange format with the
+/// layout `layout`, in `N` limbs. Each has a random sign and random bits in
+/// the whole fraction. Its exponent is in the range of `format`, from the
+/// smallest subnormal value to the largest value, or up to 16 binades beyond
+/// either end.
 fn in_decimal_range<const N: usize>(
     random: &mut SplitMix64,
-    width: u32,
-    exponent_bits: u32,
+    layout: Layout,
     format: DecimalFormat,
     count: usize,
 ) -> Vec<[u64; N]> {
@@ -475,29 +455,19 @@ fn in_decimal_range<const N: usize>(
     let (lowest, _) = format.exponents();
     let low = binary(lowest) - 16;
     let span = binary(i64::from(format.emax) + 1) + 16 - low + 1;
-    let fraction_bits = width - 1 - exponent_bits;
-    let bias = (1_i64 << (exponent_bits - 1)) - 1;
+    let fraction_bits = layout.fraction_bits();
+    let bias = i64::from(layout.ieee_bias());
     (0..count)
         .map(|_| {
             let offset = random.next_u64() % span.unsigned_abs();
             let exponent = low + i64::try_from(offset).expect("the offset fits an i64");
             let limbs: [u64; N] = core::array::from_fn(|_| random.next_u64());
             let fraction = Integer::from_digits(&limbs, Order::Lsf).keep_bits(fraction_bits);
-            let sign = Integer::from(random.next_u64() & 1) << (width - 1);
+            let sign = Integer::from(random.next_u64() & 1) << (layout.width - 1);
             let field = Integer::from(bias + exponent) << fraction_bits;
             to_limbs::<N>(&(sign | field | fraction))
         })
         .collect()
-}
-
-/// The parameters of the decimal format `$alias`.
-macro_rules! decimal_format {
-    ($alias:ty) => {
-        DecimalFormat {
-            precision: <$alias>::PRECISION,
-            emax: <$alias>::EMAX,
-        }
-    };
 }
 
 /// The number of random binary256 and binary512 values in the range of each
@@ -508,20 +478,50 @@ const IN_RANGE: usize = 3_000;
 fn from_the_wide_formats_in_the_decimal_ranges_to_decimal() {
     let mut random = SplitMix64::new(0xDEC_0256);
     let (wide, narrow) = (
-        in_decimal_range::<8>(&mut random, 512, 23, decimal_format!(D32Bid), IN_RANGE),
-        in_decimal_range::<4>(&mut random, 256, 19, decimal_format!(D32Bid), IN_RANGE),
+        in_decimal_range::<8>(
+            &mut random,
+            Layout::BINARY512,
+            DecimalFormat::of::<D32Bid>(),
+            IN_RANGE,
+        ),
+        in_decimal_range::<4>(
+            &mut random,
+            Layout::BINARY256,
+            DecimalFormat::of::<D32Bid>(),
+            IN_RANGE,
+        ),
     );
     check_to_decimal!(F512, wide => D32Bid, D32Dpd);
     check_to_decimal!(F256, narrow => D32Dpd, D32Bid);
     let (wide, narrow) = (
-        in_decimal_range::<8>(&mut random, 512, 23, decimal_format!(D64Bid), IN_RANGE),
-        in_decimal_range::<4>(&mut random, 256, 19, decimal_format!(D64Bid), IN_RANGE),
+        in_decimal_range::<8>(
+            &mut random,
+            Layout::BINARY512,
+            DecimalFormat::of::<D64Bid>(),
+            IN_RANGE,
+        ),
+        in_decimal_range::<4>(
+            &mut random,
+            Layout::BINARY256,
+            DecimalFormat::of::<D64Bid>(),
+            IN_RANGE,
+        ),
     );
     check_to_decimal!(F512, wide => D64Dpd, D64Bid);
     check_to_decimal!(F256, narrow => D64Bid, D64Dpd);
     let (wide, narrow) = (
-        in_decimal_range::<8>(&mut random, 512, 23, decimal_format!(D128Bid), IN_RANGE),
-        in_decimal_range::<4>(&mut random, 256, 19, decimal_format!(D128Bid), IN_RANGE),
+        in_decimal_range::<8>(
+            &mut random,
+            Layout::BINARY512,
+            DecimalFormat::of::<D128Bid>(),
+            IN_RANGE,
+        ),
+        in_decimal_range::<4>(
+            &mut random,
+            Layout::BINARY256,
+            DecimalFormat::of::<D128Bid>(),
+            IN_RANGE,
+        ),
     );
     check_to_decimal!(F512, wide => D128Bid, D128Dpd);
     check_to_decimal!(F256, narrow => D128Dpd, D128Bid);
@@ -533,9 +533,9 @@ fn from_the_wide_formats_in_the_decimal_ranges_to_decimal() {
 /// only picks the inputs here.
 macro_rules! near_wide_values {
     ($alias:ty, $random:expr) => {{
-        let format = decimal_format!($alias);
-        let wide = in_decimal_range::<8>($random, 512, 23, format, IN_RANGE);
-        let narrow = in_decimal_range::<4>($random, 256, 19, format, IN_RANGE);
+        let format = DecimalFormat::of::<$alias>();
+        let wide = in_decimal_range::<8>($random, Layout::BINARY512, format, IN_RANGE);
+        let narrow = in_decimal_range::<4>($random, Layout::BINARY256, format, IN_RANGE);
         let from_wide = wide
             .into_iter()
             .map(|bits| F512::from_bits(bits).convert::<$alias>());

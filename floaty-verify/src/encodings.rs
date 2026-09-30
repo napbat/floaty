@@ -1,7 +1,8 @@
-//! Test encodings at the field boundaries of a binary format.
+//! The field layouts of the binary formats, and test encodings at the field
+//! boundaries of a layout.
 //!
-//! [`boundary_encodings_u128`] builds on every target. The functions on
-//! MPFR's integers build only for x86-64, with MPFR.
+//! [`Layout`] and [`boundary_encodings_u128`] build on every target. The
+//! functions on MPFR's integers build only for x86-64, with MPFR.
 
 #[cfg(target_arch = "x86_64")]
 use rug::Integer;
@@ -15,6 +16,113 @@ pub enum IntegerBit {
     Explicit,
 }
 
+/// The field layout of a binary format: its width, the width of its exponent
+/// field, and whether it stores its integer bit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    /// The width in bits.
+    pub width: u32,
+    /// The width of the exponent field.
+    pub exponent_bits: u32,
+    /// Whether the format stores its integer bit.
+    pub integer_bit: IntegerBit,
+}
+
+impl Layout {
+    /// binary16.
+    pub const BINARY16: Self = Self::ieee(16, 5);
+    /// bfloat16.
+    pub const BFLOAT16: Self = Self::ieee(16, 8);
+    /// TF32, 19 bits wide.
+    pub const TF32: Self = Self::ieee(19, 8);
+    /// binary32.
+    pub const BINARY32: Self = Self::ieee(32, 8);
+    /// binary64.
+    pub const BINARY64: Self = Self::ieee(64, 11);
+    /// x87 extended precision, with its explicit integer bit.
+    pub const X87_EXTENDED: Self = Self {
+        width: 80,
+        exponent_bits: 15,
+        integer_bit: IntegerBit::Explicit,
+    };
+    /// binary128.
+    pub const BINARY128: Self = Self::ieee(128, 15);
+    /// binary160.
+    pub const BINARY160: Self = Self::ieee(160, 16);
+    /// binary192.
+    pub const BINARY192: Self = Self::ieee(192, 17);
+    /// binary224.
+    pub const BINARY224: Self = Self::ieee(224, 18);
+    /// binary256.
+    pub const BINARY256: Self = Self::ieee(256, 19);
+    /// binary288.
+    pub const BINARY288: Self = Self::ieee(288, 20);
+    /// binary320.
+    pub const BINARY320: Self = Self::ieee(320, 20);
+    /// binary352.
+    pub const BINARY352: Self = Self::ieee(352, 21);
+    /// binary384.
+    pub const BINARY384: Self = Self::ieee(384, 21);
+    /// binary416.
+    pub const BINARY416: Self = Self::ieee(416, 22);
+    /// binary448.
+    pub const BINARY448: Self = Self::ieee(448, 22);
+    /// binary480.
+    pub const BINARY480: Self = Self::ieee(480, 23);
+    /// binary512.
+    pub const BINARY512: Self = Self::ieee(512, 23);
+
+    /// Returns the layout of a format `width` bits wide with `exponent_bits`
+    /// exponent bits and an implicit integer bit, as in the IEEE 754 formats.
+    #[must_use]
+    pub const fn ieee(width: u32, exponent_bits: u32) -> Self {
+        Self {
+            width,
+            exponent_bits,
+            integer_bit: IntegerBit::Implicit,
+        }
+    }
+
+    /// Returns the number of bits below the exponent field, with a stored
+    /// integer bit.
+    #[must_use]
+    pub const fn fraction_bits(self) -> u32 {
+        self.width - 1 - self.exponent_bits
+    }
+
+    /// Returns the precision in bits.
+    #[must_use]
+    pub const fn precision(self) -> u32 {
+        match self.integer_bit {
+            IntegerBit::Implicit => self.fraction_bits() + 1,
+            IntegerBit::Explicit => self.fraction_bits(),
+        }
+    }
+
+    /// Returns the exponent bias by the rule of IEEE 754, `2^(e - 1) - 1` for
+    /// `e` exponent bits. The x87 format has the same bias. A format with
+    /// another bias, such as a Fnuz format, does not use this method.
+    #[must_use]
+    pub const fn ieee_bias(self) -> i32 {
+        (1 << (self.exponent_bits - 1)) - 1
+    }
+
+    /// Returns the encoding of a sign, an exponent field, and a fraction in a
+    /// format of at most 128 bits. The bits of `fraction` above the fraction
+    /// field do not change the encoding.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the format has more than 128 bits.
+    #[must_use]
+    pub fn encode(self, negative: bool, field: u64, fraction: u128) -> u128 {
+        assert!(self.width <= 128, "the format has at most 128 bits");
+        let fraction_bits = self.fraction_bits();
+        let fraction = fraction & ((1 << fraction_bits) - 1);
+        (u128::from(negative) << (self.width - 1)) | (u128::from(field) << fraction_bits) | fraction
+    }
+}
+
 /// Returns the encodings of `boundary_encodings` for a format of at most 128
 /// bits, as `u128` values. The patterns are the same, and a test checks that
 /// both functions give the same encodings.
@@ -23,13 +131,14 @@ pub enum IntegerBit {
 ///
 /// Panics when the format has more than 128 bits.
 #[must_use]
-pub fn boundary_encodings_u128(
-    width: u32,
-    exponent_bits: u32,
-    integer_bit: IntegerBit,
-) -> Vec<u128> {
+pub fn boundary_encodings_u128(layout: Layout) -> Vec<u128> {
+    let Layout {
+        width,
+        exponent_bits,
+        integer_bit,
+    } = layout;
     assert!(width <= 128, "the format has at most 128 bits");
-    let fraction_bits = width - 1 - exponent_bits;
+    let fraction_bits = layout.fraction_bits();
     let field_max = (1_u128 << exponent_bits) - 1;
     let fraction_all = (1_u128 << fraction_bits) - 1;
     let top = 1_u128 << (fraction_bits - 1);
@@ -59,14 +168,19 @@ pub fn boundary_encodings_u128(
 }
 
 /// Returns encodings that exercise every field boundary of a binary format
-/// `width` bits wide with `exponent_bits` exponent bits.
+/// with the layout `layout`.
 ///
 /// Each encoding combines a sign, an exponent field from both ends and the
 /// middle of its range, and a fraction from a set of edge patterns.
 #[cfg(target_arch = "x86_64")]
 #[must_use]
-pub fn boundary_encodings(width: u32, exponent_bits: u32, integer_bit: IntegerBit) -> Vec<Integer> {
-    let fraction_bits = width - 1 - exponent_bits;
+pub fn boundary_encodings(layout: Layout) -> Vec<Integer> {
+    let Layout {
+        width,
+        exponent_bits,
+        integer_bit,
+    } = layout;
+    let fraction_bits = layout.fraction_bits();
     let field_max = (Integer::from(1) << exponent_bits) - 1u32;
     let fraction_all = (Integer::from(1) << fraction_bits) - 1u32;
     let top = Integer::from(1) << (fraction_bits - 1);
@@ -138,30 +252,23 @@ pub fn to_limbs<const N: usize>(encoding: &Integer) -> [u64; N] {
 
 #[cfg(all(test, target_arch = "x86_64"))]
 mod tests {
-    use super::{IntegerBit, boundary_encodings, boundary_encodings_u128, to_u128};
+    use super::{Layout, boundary_encodings, boundary_encodings_u128, to_u128};
 
     #[test]
     fn both_forms_give_the_same_encodings() {
         let layouts = [
-            (8, 4, IntegerBit::Implicit),
-            (16, 5, IntegerBit::Implicit),
-            (16, 8, IntegerBit::Implicit),
-            (19, 8, IntegerBit::Implicit),
-            (32, 8, IntegerBit::Implicit),
-            (64, 11, IntegerBit::Implicit),
-            (80, 15, IntegerBit::Explicit),
-            (128, 15, IntegerBit::Implicit),
+            Layout::ieee(8, 4),
+            Layout::BINARY16,
+            Layout::BFLOAT16,
+            Layout::TF32,
+            Layout::BINARY32,
+            Layout::BINARY64,
+            Layout::X87_EXTENDED,
+            Layout::BINARY128,
         ];
-        for (width, exponent_bits, integer_bit) in layouts {
-            let shared: Vec<u128> = boundary_encodings(width, exponent_bits, integer_bit)
-                .iter()
-                .map(to_u128)
-                .collect();
-            assert_eq!(
-                boundary_encodings_u128(width, exponent_bits, integer_bit),
-                shared,
-                "{width} bits"
-            );
+        for layout in layouts {
+            let shared: Vec<u128> = boundary_encodings(layout).iter().map(to_u128).collect();
+            assert_eq!(boundary_encodings_u128(layout), shared, "{layout:?}");
         }
     }
 }

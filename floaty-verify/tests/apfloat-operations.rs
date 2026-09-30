@@ -48,7 +48,7 @@ use floaty::{
     Binary, Class, Decoded, Env, F80, Flags, Float, Int, NoInf, Rounding, ToInt, UInt, X87,
 };
 use floaty_verify::apfloat::Tf32;
-use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings, to_u128};
 use floaty_verify::operations::integral::{IntegerValue, to_int_value};
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
@@ -428,20 +428,14 @@ fn every_fp8_operand_and_pair() {
 /// Returns the boundary encodings, random encodings, and pairs of a format:
 /// every pair of boundary encodings, and random pairs.
 fn samples(
-    width: u32,
-    exponent_bits: u32,
+    layout: Layout,
     count: usize,
     seed: u64,
     canonical: &dyn Fn(u128) -> bool,
 ) -> (Vec<u128>, Vec<(u128, u128)>) {
-    let mask = u128::MAX >> (128 - width);
+    let mask = u128::MAX >> (128 - layout.width);
     let mut random = SplitMix64::new(seed);
-    let integer_bit = if width == 80 {
-        IntegerBit::Explicit
-    } else {
-        IntegerBit::Implicit
-    };
-    let boundaries: Vec<u128> = boundary_encodings(width, exponent_bits, integer_bit)
+    let boundaries: Vec<u128> = boundary_encodings(layout)
         .iter()
         .map(to_u128)
         .filter(|&bits| canonical(bits))
@@ -463,27 +457,27 @@ fn samples(
 #[test]
 fn every_binary16_and_bfloat16_operand() {
     let every: Vec<u128> = (0..1 << 16).collect();
-    let (_, pairs) = samples(16, 5, 20_000, 16, &|_| true);
+    let (_, pairs) = samples(Layout::BINARY16, 20_000, 16, &|_| true);
     Formats::<Binary<5>, 16, Half>::check(&every, pairs.into_iter(), 16);
-    let (_, pairs) = samples(16, 8, 20_000, 17, &|_| true);
+    let (_, pairs) = samples(Layout::BFLOAT16, 20_000, 17, &|_| true);
     Formats::<Binary<8>, 16, BFloat>::check(&every, pairs.into_iter(), 17);
 }
 
 #[test]
 fn tf32_binary32_and_binary64() {
-    let (encodings, pairs) = samples(19, 8, 20_000, 19, &|_| true);
+    let (encodings, pairs) = samples(Layout::TF32, 20_000, 19, &|_| true);
     Formats::<Binary<8>, 19, Tf32>::check(&encodings, pairs.into_iter(), 19);
-    let (encodings, pairs) = samples(32, 8, 20_000, 32, &|_| true);
+    let (encodings, pairs) = samples(Layout::BINARY32, 20_000, 32, &|_| true);
     Formats::<Binary<8>, 32, Single>::check(&encodings, pairs.into_iter(), 32);
-    let (encodings, pairs) = samples(64, 11, 20_000, 64, &|_| true);
+    let (encodings, pairs) = samples(Layout::BINARY64, 20_000, 64, &|_| true);
     Formats::<Binary<11>, 64, Double>::check(&encodings, pairs.into_iter(), 64);
 }
 
 #[test]
 fn binary128_and_canonical_x87() {
-    let (encodings, pairs) = samples(128, 15, 10_000, 128, &|_| true);
+    let (encodings, pairs) = samples(Layout::BINARY128, 10_000, 128, &|_| true);
     Formats::<Binary<15>, 128, Quad>::check(&encodings, pairs.into_iter(), 128);
     let canonical = |bits: u128| F80::from_bits(bits).is_canonical();
-    let (encodings, pairs) = samples(80, 15, 10_000, 80, &canonical);
+    let (encodings, pairs) = samples(Layout::X87_EXTENDED, 10_000, 80, &canonical);
     Formats::<Binary<15, X87>, 80, X87DoubleExtended>::check(&encodings, pairs.into_iter(), 80);
 }

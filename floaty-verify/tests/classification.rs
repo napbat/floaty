@@ -6,7 +6,7 @@
 
 use floaty::{BF16, Binary, Class, F8E4M3Fn, F8E5M2, F16, F32, F64, F80, F128, Float, NoInf, TF32};
 use floaty_verify::apfloat::{Tf32, check_value, class};
-use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_u128};
+use floaty_verify::encodings::{Layout, boundary_encodings, to_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::shape::{self, Payload, trailing_payload};
 use rug::Integer;
@@ -106,17 +106,14 @@ fn every_encoding_of_the_small_formats() {
 }
 
 /// Returns the boundary encodings and random encodings of a format.
-fn samples(width: u32, exponent_bits: u32, seed: u64) -> impl Iterator<Item = u128> {
-    let mask = if width == 128 {
+fn samples(layout: Layout, seed: u64) -> impl Iterator<Item = u128> {
+    let mask = if layout.width == 128 {
         u128::MAX
     } else {
-        (1 << width) - 1
+        (1 << layout.width) - 1
     };
     let mut random = SplitMix64::new(seed);
-    let boundaries: Vec<u128> = boundary_encodings(width, exponent_bits, IntegerBit::Implicit)
-        .iter()
-        .map(to_u128)
-        .collect();
+    let boundaries: Vec<u128> = boundary_encodings(layout).iter().map(to_u128).collect();
     boundaries
         .into_iter()
         .chain((0..RANDOM_SAMPLES).map(move |_| random.next_u128() & mask))
@@ -124,27 +121,27 @@ fn samples(width: u32, exponent_bits: u32, seed: u64) -> impl Iterator<Item = u1
 
 #[test]
 fn boundary_and_random_encodings_of_the_wide_formats() {
-    for bits in samples(32, 8, 1) {
+    for bits in samples(Layout::BINARY32, 1) {
         check!(F32, Single, bits);
     }
-    for bits in samples(64, 11, 2) {
+    for bits in samples(Layout::BINARY64, 2) {
         check!(F64, Double, bits);
     }
-    for bits in samples(128, 15, 3) {
+    for bits in samples(Layout::BINARY128, 3) {
         check!(F128, Quad, bits);
     }
 }
 
 #[test]
 fn layouts_whose_exponent_field_crosses_a_limb_boundary() {
-    for bits in samples(72, 15, 4) {
+    for bits in samples(Layout::ieee(72, 15), 4) {
         check!(Wide72, IeeeFloat<Wide72Semantics>, bits);
     }
-    for bits in samples(69, 8, 5) {
+    for bits in samples(Layout::ieee(69, 8), 5) {
         check!(Wide69, IeeeFloat<Wide69Semantics>, bits);
         check!(Wide69NoInf, IeeeFloat<Wide69NoInfSemantics>, bits, false);
     }
-    for bits in samples(80, 20, 6) {
+    for bits in samples(Layout::ieee(80, 20), 6) {
         check!(Wide80, IeeeFloat<Wide80Semantics>, bits);
     }
 }
@@ -170,7 +167,7 @@ fn x87_canonical(bits: u128) -> bool {
 fn x87_encodings() {
     let mask = (1_u128 << 80) - 1;
     let mut random = SplitMix64::new(0x0087_0087);
-    let boundaries: Vec<u128> = boundary_encodings(80, 15, IntegerBit::Explicit)
+    let boundaries: Vec<u128> = boundary_encodings(Layout::X87_EXTENDED)
         .iter()
         .map(to_u128)
         .collect();

@@ -39,17 +39,6 @@ impl<S: Standard<W>, const W: usize> Case<S, W> {
     }
 }
 
-/// Returns the oracle parameters of a format.
-#[must_use]
-pub fn format<S: Standard<W>, const W: usize>(specials: Specials) -> Format {
-    Format {
-        precision: Float::<S, W>::PRECISION,
-        emin: Float::<S, W>::EMIN,
-        emax: Float::<S, W>::EMAX,
-        specials,
-    }
-}
-
 /// Checks a float result against the expected outcome and flags.
 fn check_float<S: Standard<W>, const W: usize>(
     (result, flags): (Float<S, W>, Flags),

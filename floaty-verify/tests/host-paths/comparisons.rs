@@ -1,6 +1,7 @@
 //! The comparison, and each minimum and maximum operation.
 
 use floaty::{BF16, F64};
+use floaty_verify::encodings::Layout;
 use floaty_verify::random::SplitMix64;
 
 use super::operands::{boundary_pairs, random_pairs};
@@ -46,17 +47,17 @@ macro_rules! comparisons_match {
 #[test]
 fn comparisons_give_the_default_mode_results() {
     let mut random = SplitMix64::new(0xC0AA);
-    let mut halves = boundary_pairs::<u16>(16, 5);
-    halves.extend(random_pairs::<u16>(&mut random, 16, 5, 20_000));
+    let mut halves = boundary_pairs::<u16>(Layout::BINARY16);
+    halves.extend(random_pairs::<u16>(&mut random, Layout::BINARY16, 20_000));
     comparisons_match!(floaty::F16, &halves);
-    let mut bfloats = boundary_pairs::<u16>(16, 8);
-    bfloats.extend(random_pairs::<u16>(&mut random, 16, 8, 20_000));
+    let mut bfloats = boundary_pairs::<u16>(Layout::BFLOAT16);
+    bfloats.extend(random_pairs::<u16>(&mut random, Layout::BFLOAT16, 20_000));
     comparisons_match!(BF16, &bfloats);
-    let mut singles = boundary_pairs::<u32>(32, 8);
-    singles.extend(random_pairs::<u32>(&mut random, 32, 8, 20_000));
+    let mut singles = boundary_pairs::<u32>(Layout::BINARY32);
+    singles.extend(random_pairs::<u32>(&mut random, Layout::BINARY32, 20_000));
     comparisons_match!(floaty::F32, &singles);
-    let mut doubles = boundary_pairs::<u64>(64, 11);
-    doubles.extend(random_pairs::<u64>(&mut random, 64, 11, 20_000));
+    let mut doubles = boundary_pairs::<u64>(Layout::BINARY64);
+    doubles.extend(random_pairs::<u64>(&mut random, Layout::BINARY64, 20_000));
     comparisons_match!(F64, &doubles);
     // Equal values of each sign, which random pairs rarely give.
     let equal: Vec<(u32, u32)> = (0..2_000)

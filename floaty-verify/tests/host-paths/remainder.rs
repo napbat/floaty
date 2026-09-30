@@ -1,6 +1,7 @@
 //! The remainder.
 
 use floaty::{BF16, F16, F64, F80};
+use floaty_verify::encodings::Layout;
 use floaty_verify::random::SplitMix64;
 
 use super::operands::{close_pairs, every_16_bit_pair, random_pairs};
@@ -10,8 +11,8 @@ fn remainders_give_the_default_mode_results() {
     // The x87 path takes operands whose exponents differ by up to 630, and
     // the pairs reach past that bound.
     let mut random = SplitMix64::new(0xE3E3);
-    let mut singles = close_pairs(&mut random, 8, 23, false, 300);
-    singles.extend(random_pairs::<u128>(&mut random, 32, 8, 4_000));
+    let mut singles = close_pairs(&mut random, Layout::BINARY32, 300);
+    singles.extend(random_pairs::<u128>(&mut random, Layout::BINARY32, 4_000));
     for (a, b) in singles {
         let bits = |value: u128| u32::try_from(value).expect("a binary32 encoding");
         let (x, y) = (
@@ -25,8 +26,8 @@ fn remainders_give_the_default_mode_results() {
             "{a:#x} {b:#x}"
         );
     }
-    let mut doubles = close_pairs(&mut random, 11, 52, false, 900);
-    doubles.extend(random_pairs::<u128>(&mut random, 64, 11, 4_000));
+    let mut doubles = close_pairs(&mut random, Layout::BINARY64, 900);
+    doubles.extend(random_pairs::<u128>(&mut random, Layout::BINARY64, 4_000));
     for (a, b) in doubles {
         let bits = |value: u128| u64::try_from(value).expect("a binary64 encoding");
         let (x, y) = (F64::from_bits(bits(a)), F64::from_bits(bits(b)));
@@ -37,8 +38,12 @@ fn remainders_give_the_default_mode_results() {
             "{a:#x} {b:#x}"
         );
     }
-    let mut extended = close_pairs(&mut random, 15, 64, true, 900);
-    extended.extend(random_pairs::<u128>(&mut random, 80, 15, 4_000));
+    let mut extended = close_pairs(&mut random, Layout::X87_EXTENDED, 900);
+    extended.extend(random_pairs::<u128>(
+        &mut random,
+        Layout::X87_EXTENDED,
+        4_000,
+    ));
     for (a, b) in extended {
         let (x, y) = (F80::from_bits(a), F80::from_bits(b));
         let expected = x.remainder_with(y, F80::ENV).0;
@@ -49,10 +54,10 @@ fn remainders_give_the_default_mode_results() {
         );
     }
     // binary16 and bfloat16 take the binary32 path on their widened values.
-    let mut halves = close_pairs(&mut random, 5, 10, false, 40);
-    halves.extend(random_pairs::<u128>(&mut random, 16, 5, 4_000));
-    let mut bfloats = close_pairs(&mut random, 8, 7, false, 300);
-    bfloats.extend(random_pairs::<u128>(&mut random, 16, 8, 4_000));
+    let mut halves = close_pairs(&mut random, Layout::BINARY16, 40);
+    halves.extend(random_pairs::<u128>(&mut random, Layout::BINARY16, 4_000));
+    let mut bfloats = close_pairs(&mut random, Layout::BFLOAT16, 300);
+    bfloats.extend(random_pairs::<u128>(&mut random, Layout::BFLOAT16, 4_000));
     let bits = |value: u128| u16::try_from(value).expect("a 16-bit encoding");
     for (a, b) in halves {
         let (x, y) = (F16::from_bits(bits(a)), F16::from_bits(bits(b)));

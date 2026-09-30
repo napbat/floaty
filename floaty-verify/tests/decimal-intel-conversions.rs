@@ -34,6 +34,7 @@ use std::collections::BTreeMap;
 
 use floaty::format::{Bid, Binary, Decimal, Dpd, Standard, X87};
 use floaty::{Env, Flags, Float};
+use floaty_verify::encodings::{IntegerBit, Layout as BinaryLayout};
 use floaty_verify::intel_decimal::{
     self, Bid32, Bid64, Bid128, Flags as IntelFlags, Format, Layout, Outcome,
     Rounding as IntelRounding, narrow,
@@ -41,164 +42,135 @@ use floaty_verify::intel_decimal::{
 use floaty_verify::random::SplitMix64;
 use floaty_verify::readtest::{self, Field, FieldError};
 
-/// The layout of a binary interchange format, or of x87 extended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct BinaryLayout {
-    /// The width in bits.
-    width: u32,
-    /// The width of the exponent field.
-    exponent_bits: u32,
+/// Returns whether a binary format stores its integer bit: x87 extended.
+fn explicit_integer(binary: BinaryLayout) -> bool {
+    binary.integer_bit == IntegerBit::Explicit
 }
 
-/// binary32.
-const BINARY32: BinaryLayout = BinaryLayout {
-    width: 32,
-    exponent_bits: 8,
-};
-/// binary64.
-const BINARY64: BinaryLayout = BinaryLayout {
-    width: 64,
-    exponent_bits: 11,
-};
-/// x87 extended, with its explicit integer bit.
-const BINARY80: BinaryLayout = BinaryLayout {
-    width: 80,
-    exponent_bits: 15,
-};
-/// binary128.
-const BINARY128: BinaryLayout = BinaryLayout {
-    width: 128,
-    exponent_bits: 15,
-};
+/// Returns the largest exponent field of a binary format, which infinities
+/// and NaNs use.
+fn largest_field(binary: BinaryLayout) -> u32 {
+    (1 << binary.exponent_bits) - 1
+}
 
-impl BinaryLayout {
-    /// Returns whether the format stores its integer bit: x87 extended.
-    fn explicit_integer(self) -> bool {
-        self.width == 80
+/// Returns the exponent bias of a binary format.
+fn bias(binary: BinaryLayout) -> i64 {
+    i64::from(binary.ieee_bias())
+}
+
+/// Returns an encoding of a binary format from its sign, exponent field, and
+/// fraction.
+fn encode(binary: BinaryLayout, negative: bool, field: u32, fraction: u128) -> u128 {
+    binary.encode(negative, u64::from(field), fraction)
+}
+
+/// Returns whether an x87 encoding is unsupported: an unnormal, a
+/// pseudo-infinity, or a pseudo-NaN, which has a nonzero exponent field and
+/// a clear integer bit (Intel SDM Volume 1, Table 8-3).
+fn unsupported(binary: BinaryLayout, bits: u128) -> bool {
+    explicit_integer(binary) && (bits >> 64) & 0x7fff != 0 && (bits >> 63) & 1 == 0
+}
+
+/// Returns the normal encoding of `magnitude * 2^exponent` in a binary
+/// format, or `None` when the value is not a normal value of the format.
+fn normal_encoding(
+    binary: BinaryLayout,
+    negative: bool,
+    magnitude: u128,
+    exponent: i64,
+) -> Option<u128> {
+    let top = magnitude.checked_ilog2()?;
+    let precision = binary.precision();
+    if top >= precision {
+        return None;
     }
-
-    /// The bits below the exponent field, with the x87 integer bit.
-    fn fraction_bits(self) -> u32 {
-        self.width - 1 - self.exponent_bits
+    let field = exponent + i64::from(top) + bias(binary);
+    if field < 1 || field >= i64::from(largest_field(binary)) {
+        return None;
     }
+    let significand = magnitude << (precision - 1 - top);
+    let fraction = if explicit_integer(binary) {
+        significand
+    } else {
+        significand - (1 << (precision - 1))
+    };
+    Some(encode(
+        binary,
+        negative,
+        u32::try_from(field).ok()?,
+        fraction,
+    ))
+}
 
-    /// The precision in bits.
-    fn precision(self) -> u32 {
-        if self.explicit_integer() {
-            self.fraction_bits()
-        } else {
-            self.fraction_bits() + 1
+/// Returns a random encoding of a binary format, biased to zeros, subnormal
+/// values, both ends of the exponent range, infinities, and NaNs with
+/// payloads. An x87 encoding has a wrong integer bit at times: a
+/// pseudo-denormal, an unnormal, a pseudo-infinity, or a pseudo-NaN.
+fn random_binary(binary: BinaryLayout, rng: &mut SplitMix64) -> u128 {
+    let negative = rng.next_u64() & 1 == 1;
+    let largest = largest_field(binary);
+    let field = match below(rng, 8) {
+        0 => 0,
+        1 => largest,
+        2 => 1 + below_u32(rng, 3),
+        3 => largest - 1 - below_u32(rng, 3),
+        4 => {
+            let bias = u32::try_from(bias(binary)).expect("a bias fits a u32");
+            bias - 70 + below_u32(rng, 140)
         }
+        _ => below_u32(rng, largest + 1),
+    };
+    let bits = if explicit_integer(binary) {
+        binary.fraction_bits() - 1
+    } else {
+        binary.fraction_bits()
+    };
+    let mask = (1 << bits) - 1;
+    let fraction = match below(rng, 8) {
+        0 => 0,
+        1 => mask,
+        2 => 1,
+        3 => 1 << below(rng, u64::from(bits)),
+        4 => 1 << (bits - 1),
+        5 => (rng.next_u128() & mask) >> below(rng, u64::from(bits)) << below(rng, 8),
+        _ => rng.next_u128(),
+    } & mask;
+    if !explicit_integer(binary) {
+        return encode(binary, negative, field, fraction);
     }
+    let integer = (field != 0) != (below(rng, 8) == 0);
+    encode(
+        binary,
+        negative,
+        field,
+        fraction | (u128::from(integer) << bits),
+    )
+}
 
-    /// The largest exponent field, which infinities and NaNs use.
-    fn largest_field(self) -> u32 {
-        (1 << self.exponent_bits) - 1
-    }
+/// Returns a value of a binary format with few significant bits, whose exact
+/// decimal value has few digits: an exact, a halfway, or a near-halfway
+/// decimal case.
+fn short(binary: BinaryLayout, rng: &mut SplitMix64) -> u128 {
+    let bits = 1 + below_u32(rng, binary.precision().min(60));
+    let magnitude = (rng.next_u128() & ((1 << bits) - 1)) | (1 << (bits - 1));
+    let exponent = i64::from(below_u32(rng, 161)) - 80;
+    normal_encoding(binary, rng.next_u64() & 1 == 1, magnitude, exponent)
+        .unwrap_or_else(|| random_binary(binary, rng))
+}
 
-    /// The exponent bias.
-    fn bias(self) -> i64 {
-        (1 << (self.exponent_bits - 1)) - 1
-    }
-
-    fn encode(self, negative: bool, field: u32, fraction: u128) -> u128 {
-        (u128::from(negative) << (self.width - 1))
-            | (u128::from(field) << self.fraction_bits())
-            | fraction
-    }
-
-    /// Returns whether an x87 encoding is unsupported: an unnormal, a
-    /// pseudo-infinity, or a pseudo-NaN, which has a nonzero exponent field
-    /// and a clear integer bit (Intel SDM Volume 1, Table 8-3).
-    fn unsupported(self, bits: u128) -> bool {
-        self.explicit_integer() && (bits >> 64) & 0x7fff != 0 && (bits >> 63) & 1 == 0
-    }
-
-    /// Returns the normal encoding of `magnitude * 2^exponent`, or `None`
-    /// when the value is not a normal value of the format.
-    fn exact(self, negative: bool, magnitude: u128, exponent: i64) -> Option<u128> {
-        let top = magnitude.checked_ilog2()?;
-        let precision = self.precision();
-        if top >= precision {
-            return None;
-        }
-        let field = exponent + i64::from(top) + self.bias();
-        if field < 1 || field >= i64::from(self.largest_field()) {
-            return None;
-        }
-        let significand = magnitude << (precision - 1 - top);
-        let fraction = if self.explicit_integer() {
-            significand
-        } else {
-            significand - (1 << (precision - 1))
-        };
-        Some(self.encode(negative, u32::try_from(field).ok()?, fraction))
-    }
-
-    /// Returns a random encoding, biased to zeros, subnormal values, both
-    /// ends of the exponent range, infinities, and NaNs with payloads. An x87
-    /// encoding has a wrong integer bit at times: a pseudo-denormal, an
-    /// unnormal, a pseudo-infinity, or a pseudo-NaN.
-    fn random(self, rng: &mut SplitMix64) -> u128 {
-        let negative = rng.next_u64() & 1 == 1;
-        let largest = self.largest_field();
-        let field = match below(rng, 8) {
-            0 => 0,
-            1 => largest,
-            2 => 1 + below_u32(rng, 3),
-            3 => largest - 1 - below_u32(rng, 3),
-            4 => {
-                let bias = u32::try_from(self.bias()).expect("a bias fits a u32");
-                bias - 70 + below_u32(rng, 140)
-            }
-            _ => below_u32(rng, largest + 1),
-        };
-        let bits = if self.explicit_integer() {
-            self.fraction_bits() - 1
-        } else {
-            self.fraction_bits()
-        };
-        let mask = (1 << bits) - 1;
-        let fraction = match below(rng, 8) {
-            0 => 0,
-            1 => mask,
-            2 => 1,
-            3 => 1 << below(rng, u64::from(bits)),
-            4 => 1 << (bits - 1),
-            5 => (rng.next_u128() & mask) >> below(rng, u64::from(bits)) << below(rng, 8),
-            _ => rng.next_u128(),
-        } & mask;
-        if !self.explicit_integer() {
-            return self.encode(negative, field, fraction);
-        }
-        let integer = (field != 0) != (below(rng, 8) == 0);
-        self.encode(negative, field, fraction | (u128::from(integer) << bits))
-    }
-
-    /// Returns a value with few significant bits, whose exact decimal value
-    /// has few digits: an exact, a halfway, or a near-halfway decimal case.
-    fn short(self, rng: &mut SplitMix64) -> u128 {
-        let bits = 1 + below_u32(rng, self.precision().min(60));
-        let magnitude = (rng.next_u128() & ((1 << bits) - 1)) | (1 << (bits - 1));
-        let exponent = i64::from(below_u32(rng, 161)) - 80;
-        self.exact(rng.next_u64() & 1 == 1, magnitude, exponent)
-            .unwrap_or_else(|| self.random(rng))
-    }
-
-    /// Returns an integer halfway between two values of `layout`: `p + 1`
-    /// digits that end in 5, or a neighbor of such an integer.
-    fn decimal_tie(self, rng: &mut SplitMix64, layout: Layout) -> u128 {
-        let unit = Layout::power_of_ten(layout.precision());
-        let head = unit + below_u128(rng, 9 * unit);
-        let tie = head / 10 * 10 + 5;
-        let magnitude = match below(rng, 3) {
-            0 => tie - 1,
-            1 => tie + 1,
-            _ => tie,
-        };
-        self.exact(rng.next_u64() & 1 == 1, magnitude, 0)
-            .unwrap_or_else(|| self.short(rng))
-    }
+/// Returns an integer of a binary format halfway between two values of
+/// `layout`: `p + 1` digits that end in 5, or a neighbor of such an integer.
+fn decimal_tie(binary: BinaryLayout, rng: &mut SplitMix64, layout: Layout) -> u128 {
+    let unit = Layout::power_of_ten(layout.precision());
+    let head = unit + below_u128(rng, 9 * unit);
+    let tie = head / 10 * 10 + 5;
+    let magnitude = match below(rng, 3) {
+        0 => tie - 1,
+        1 => tie + 1,
+        _ => tie,
+    };
+    normal_encoding(binary, rng.next_u64() & 1 == 1, magnitude, 0)
+        .unwrap_or_else(|| short(binary, rng))
 }
 
 /// Returns a random value below `bound`.
@@ -221,9 +193,9 @@ fn below_u128(rng: &mut SplitMix64, bound: u128) -> u128 {
 /// its largest value, or anywhere between.
 fn near_binary(rng: &mut SplitMix64, layout: Layout, binary: BinaryLayout) -> u128 {
     let precision = i64::from(binary.precision());
-    let smallest = 1 - binary.bias() - (precision - 1);
-    let normal = 1 - binary.bias();
-    let largest = binary.bias() + 1;
+    let smallest = 1 - bias(binary) - (precision - 1);
+    let normal = 1 - bias(binary);
+    let largest = bias(binary) + 1;
     let near = |rng: &mut SplitMix64, at: i64| at + i64::from(below_u32(rng, 9)) - 4;
     let exponent = match below(rng, 4) {
         0 => near(rng, smallest),
@@ -495,7 +467,12 @@ where
             from_dpd::<F>,
         ),
     ];
-    let binary = [BINARY32, BINARY64, BINARY80, BINARY128];
+    let binary = [
+        BinaryLayout::BINARY32,
+        BinaryLayout::BINARY64,
+        BinaryLayout::X87_EXTENDED,
+        BinaryLayout::BINARY128,
+    ];
     for ((layout, (floaty_from, library_from)), (floaty_to, library_to)) in
         binary.into_iter().zip(from).zip(to)
     {
@@ -601,7 +578,7 @@ impl Conversion {
     /// library, and the rule of floaty that changes it, if any.
     fn expected(&self, x: u128, library: Outcome<u128>) -> (Outcome<u128>, Option<&'static str>) {
         match (self.source, self.target) {
-            (Side::Binary(binary), Side::Bid(layout)) if binary.unsupported(x) => {
+            (Side::Binary(binary), Side::Bid(layout)) if unsupported(binary, x) => {
                 let nan = Outcome {
                     value: layout.nan(false, false, 0, 0),
                     flags: IntelFlags::INVALID,
@@ -808,9 +785,9 @@ fn readtest_conversions() {
 fn operand(rng: &mut SplitMix64, conversion: &Conversion) -> u128 {
     match (conversion.source, conversion.target) {
         (Side::Binary(binary), Side::Bid(layout)) => match below(rng, 5) {
-            0 => binary.short(rng),
-            1 => binary.decimal_tie(rng, layout),
-            _ => binary.random(rng),
+            0 => short(binary, rng),
+            1 => decimal_tie(binary, rng, layout),
+            _ => random_binary(binary, rng),
         },
         (Side::Bid(layout), Side::Binary(binary)) => match below(rng, 4) {
             0 => layout.random(rng),
