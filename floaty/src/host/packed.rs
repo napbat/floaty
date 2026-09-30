@@ -87,6 +87,15 @@ pub const fn convertible(from: Host, to: Host) -> bool {
     }
 }
 
+/// Returns `true` when `test` holds for any item. The fold has no branch,
+/// so LLVM tests all lanes at once.
+#[inline]
+fn any_lane<T>(items: impl IntoIterator<Item = T>, test: impl Fn(T) -> bool) -> bool {
+    items
+        .into_iter()
+        .fold(false, |found, item| found | test(item))
+}
+
 /// The masks of a packed comparison. A lane of `less` is not zero when the
 /// left lane is less, a lane of `greater` when the left lane is greater, and
 /// a lane of `unordered` when the pair is unordered.
@@ -258,10 +267,7 @@ fn single_lanes<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     let mut lanes = *first;
     let values = singles_mut(&mut lanes)?;
     compute(values)?;
-    // A fold without a branch lets LLVM test all lanes at once.
-    let nan = values
-        .iter()
-        .fold(false, |nan, value| nan | nan_32(value.to_bits()));
+    let nan = any_lane(values.iter().map(|value| value.to_bits()), nan_32);
     (!nan).then_some(lanes)
 }
 
@@ -275,10 +281,7 @@ fn double_lanes<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     let mut lanes = *first;
     let values = doubles_mut(&mut lanes)?;
     compute(values)?;
-    // A fold without a branch lets LLVM test all lanes at once.
-    let nan = values
-        .iter()
-        .fold(false, |nan, value| nan | nan_64(value.to_bits()));
+    let nan = any_lane(values.iter().map(|value| value.to_bits()), nan_64);
     (!nan).then_some(lanes)
 }
 
@@ -294,8 +297,7 @@ fn lanes_u16<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     let mut lanes = *first;
     let values = encodings_u16_mut(&mut lanes)?;
     compute(values)?;
-    // A fold without a branch lets LLVM test all lanes at once.
-    let nan = values.iter().fold(false, |nan, &bits| nan | is_nan(bits));
+    let nan = any_lane(values.iter().copied(), is_nan);
     (!nan).then_some(lanes)
 }
 
@@ -506,7 +508,7 @@ pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 |index| Some(environment::widen_single(x[index])),
             )?;
             let lanes = lanes.map(f64::to_bits);
-            let nan = lanes.iter().fold(false, |nan, &bits| nan | nan_64(bits));
+            let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
         }
         (Host::Double, Host::Single) => {
@@ -519,37 +521,37 @@ pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 |index| Some(environment::narrow_double(x[index])),
             )?;
             let bits = lanes.map(f32::to_bits);
-            let nan = bits.iter().fold(false, |nan, &bits| nan | nan_32(bits));
+            let nan = any_lane(bits.iter().copied(), nan_32);
             (!nan).then_some(bits.map(u64::from))
         }
         (Host::Half, Host::Single) => {
             let bits = half::to_singles(value)?.map(f32::to_bits);
-            let nan = bits.iter().fold(false, |nan, &bits| nan | nan_32(bits));
+            let nan = any_lane(bits.iter().copied(), nan_32);
             (!nan).then_some(bits.map(u64::from))
         }
         (Host::Half, Host::Double) => {
             let lanes = half::to_doubles(value)?.map(f64::to_bits);
-            let nan = lanes.iter().fold(false, |nan, &bits| nan | nan_64(bits));
+            let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
         }
         (Host::Single, Host::Half) => {
             let bits = half::from_singles(value)?;
-            let nan = bits.iter().fold(false, |nan, &bits| nan | nan_16(bits));
+            let nan = any_lane(bits.iter().copied(), nan_16);
             (!nan).then_some(bits.map(u64::from))
         }
         (Host::BFloat, Host::Single) => {
             let bits = bfloat::to_singles(value)?.map(f32::to_bits);
-            let nan = bits.iter().fold(false, |nan, &bits| nan | nan_32(bits));
+            let nan = any_lane(bits.iter().copied(), nan_32);
             (!nan).then_some(bits.map(u64::from))
         }
         (Host::BFloat, Host::Double) => {
             let lanes = bfloat::to_doubles(value)?.map(f64::to_bits);
-            let nan = lanes.iter().fold(false, |nan, &bits| nan | nan_64(bits));
+            let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
         }
         (Host::Single, Host::BFloat) => {
             let bits = bfloat::from_singles(value)?;
-            let nan = bits.iter().fold(false, |nan, &bits| nan | nan_bfloat(bits));
+            let nan = any_lane(bits.iter().copied(), nan_bfloat);
             (!nan).then_some(bits.map(u64::from))
         }
         _ => None,
@@ -568,13 +570,14 @@ fn indefinite_unless_i32(integer: Option<i64>) -> i32 {
 
 /// Returns each lane rounded to a 32-bit integer to nearest even by the host
 /// unit, or `None` when the path does not apply. A lane that the scalar
-/// conversion must decide holds the integer indefinite `i32::MIN`: a NaN, a
-/// value outside the range of `i32`, and `-2^31` itself.
+/// conversion must decide is `None`: a NaN, a value outside the range of
+/// `i32`, and `-2^31` itself. The host unit gives each of them as the
+/// integer indefinite, `i32::MIN`.
 #[inline]
 pub fn to_int_i32<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
     env: &Env,
-) -> Option<[i32; N]> {
+) -> Option<[Option<i32>; N]> {
     if !ready_for(S::HOST, env, S::PRECISION) {
         return None;
     }
@@ -600,7 +603,7 @@ pub fn to_int_i32<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
         }
         Host::None | Host::Half | Host::BFloat | Host::Extended => return None,
     }
-    Some(lanes)
+    Some(lanes.map(|integer| (integer != i32::MIN).then_some(integer)))
 }
 
 /// Returns the order of each pair of lanes from the host unit, as the quiet

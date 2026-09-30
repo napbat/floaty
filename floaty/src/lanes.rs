@@ -431,10 +431,9 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         };
         let mut results = [ToInt::Nan; N];
         for ((result, lane), integer) in results.iter_mut().zip(self.lanes).zip(integers) {
-            *result = if integer == i32::MIN {
-                lane.to_int()
-            } else {
-                from_host_integer(i64::from(integer))
+            *result = match integer {
+                Some(integer) => from_host_integer(i64::from(integer)),
+                None => lane.to_int(),
             };
         }
         results

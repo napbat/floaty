@@ -16,6 +16,7 @@ use core::cmp::Ordering;
 use super::super::bits::{min_max_differs, min_max_differs_64};
 use super::super::environment::{self, packed};
 use super::super::paths::{min_max_f32, min_max_f64};
+use super::any_lane;
 use super::{bfloat, chunk, double_lanes, doubles, half, in_chunks, single_lanes, singles};
 use crate::env::Mode;
 use crate::float::Float;
@@ -90,8 +91,8 @@ pub(super) fn min_max<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     match S::HOST {
         Host::Single => {
             let (x, y) = (singles(left)?, singles(right)?);
-            let differs = x.iter().zip(y).fold(false, |differs, (a, b)| {
-                differs | min_max_differs(a.to_bits(), b.to_bits())
+            let differs = any_lane(x.iter().zip(y), |(a, b)| {
+                min_max_differs(a.to_bits(), b.to_bits())
             });
             if differs {
                 return None;
@@ -113,8 +114,8 @@ pub(super) fn min_max<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
         }
         Host::Double => {
             let (x, y) = (doubles(left)?, doubles(right)?);
-            let differs = x.iter().zip(y).fold(false, |differs, (a, b)| {
-                differs | min_max_differs_64(a.to_bits(), b.to_bits())
+            let differs = any_lane(x.iter().zip(y), |(a, b)| {
+                min_max_differs_64(a.to_bits(), b.to_bits())
             });
             if differs {
                 return None;
@@ -136,8 +137,8 @@ pub(super) fn min_max<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
         }
         Host::Half | Host::BFloat => {
             let (x, y) = (widened(left)?, widened(right)?);
-            let differs = x.iter().zip(&y).fold(false, |differs, (a, b)| {
-                differs | min_max_differs(a.to_bits(), b.to_bits())
+            let differs = any_lane(x.iter().zip(&y), |(a, b)| {
+                min_max_differs(a.to_bits(), b.to_bits())
             });
             if differs {
                 return None;

@@ -499,7 +499,7 @@ mod none {
         pub fn to_int_i32<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             _value: &[Float<S, W, M>; N],
             _env: &Env,
-        ) -> Option<[i32; N]> {
+        ) -> Option<[Option<i32>; N]> {
             None
         }
     }
