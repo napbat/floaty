@@ -26,11 +26,13 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
+use core::marker::PhantomData;
+
 use floaty::env::NanPropagation;
+use floaty::format::Standard;
 use floaty::{
-    BF16, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F4E2M1Fn,
-    F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz,
-    F16, F256, F512, Flags, TF32,
+    BF16, Binary, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F16, F256,
+    F512, Flags, Float, TF32,
 };
 use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs, to_u128};
 use floaty_verify::mpfr::decimal::{
@@ -111,70 +113,138 @@ fn decimal_to_binary(source: &Operand<2>, format: &Format, env: &Env) -> (Value,
 }
 
 /// Converts every binary source value to every decimal destination in every
-/// behavior.
+/// behavior, by [`check_to_decimal_format`].
 macro_rules! check_to_decimal {
     ($source:ty, $values:expr => $($destination:ty),+) => {{
-        // The fraction bits below the quiet bit. A format with one NaN
-        // encoding decodes a zero payload, so its width does not matter.
-        let payload_bits = <$source>::PRECISION - 2;
-        for env in TO_DECIMAL_BEHAVIORS {
-            for &bits in &$values {
-                let source = <$source>::from_bits(bits);
-                let operand = Operand::<8>::of(source);
-                $(
-                    let format = DecimalFormat::of::<$destination>();
-                    let (ours, flags): ($destination, _) = source.convert_with(env);
-                    assert!(ours.is_canonical(), "{ours:?} is canonical");
-                    let ours = (DecimalValue::from_decoded(ours.decode::<2>()), flags);
-                    let expected = decimal::convert(&operand, payload_bits, format, &env);
-                    let context = format!(
-                        "{} {bits:x?} to {} {env:?}",
-                        stringify!($source),
-                        stringify!($destination)
-                    );
-                    assert_eq!(ours, expected, "{context}");
-                )+
-            }
-        }
+        let values: Vec<$source> = $values.iter().map(|&bits| <$source>::from_bits(bits)).collect();
+        $(
+            check_to_decimal_format(
+                &values,
+                PhantomData::<$destination>,
+                (stringify!($source), stringify!($destination)),
+            );
+        )+
     }};
 }
 
 /// Converts every decimal source value to every binary destination in every
-/// behavior. A NaN result must be quiet, with the payload of
-/// [`binary_payload`].
+/// behavior, by [`check_to_binary_format`].
 macro_rules! check_to_binary {
     ($source:ty, $values:expr => $($destination:ty: $specials:expr),+) => {{
-        let trailing = DecimalFormat::of::<$source>().trailing_bits();
-        for env in FROM_DECIMAL_BEHAVIORS {
-            for source in &$values {
-                let source: $source = *source;
-                let operand = Operand::<2>::of(source);
-                $(
-                    let format = Format::of::<$destination>($specials);
-                    let (ours, flags): ($destination, _) = source.convert_with(env);
-                    assert!(ours.is_canonical(), "{ours:?} is canonical");
-                    let result = ours.decode::<8>();
-                    let ours = (Value::from_decoded(result), flags);
-                    let expected = decimal_to_binary(&operand, &format, &env);
-                    let context = format!(
-                        "{} {:x?} to {} {env:?}",
-                        stringify!($source),
-                        source.to_bits(),
-                        stringify!($destination)
-                    );
-                    assert_eq!(ours, expected, "{context}");
-                    if let Decoded::Nan { signaling, payload, .. } = result {
-                        assert!(!signaling, "{context}: a conversion quiets a NaN");
-                        assert_eq!(
-                            Integer::from_digits(&payload, Order::Lsf),
-                            binary_payload(&operand.decoded, trailing, &format, &env),
-                            "{context}: the NaN payload"
-                        );
-                    }
-                )+
+        $(
+            check_to_binary_format(
+                &$values,
+                PhantomData::<$destination>,
+                $specials,
+                (stringify!($source), stringify!($destination)),
+            );
+        )+
+    }};
+}
+
+/// Converts every binary source value to the decimal format `D` in every
+/// behavior, and compares the result and the flags with the oracle.
+/// `names` names the source and the destination in a failure.
+fn check_to_decimal_format<S: Standard<SW>, const SW: usize, D: Standard<DW>, const DW: usize>(
+    values: &[Float<S, SW>],
+    _destination: PhantomData<Float<D, DW>>,
+    names: (&str, &str),
+) {
+    let format = DecimalFormat::of::<Float<D, DW>>();
+    // The fraction bits below the quiet bit. A format with one NaN encoding
+    // decodes a zero payload, so its width does not matter.
+    let payload_bits = Float::<S, SW>::PRECISION - 2;
+    for env in TO_DECIMAL_BEHAVIORS {
+        for &source in values {
+            let operand = Operand::<8>::of(source);
+            let (ours, flags): (Float<D, DW>, _) = source.convert_with(env);
+            let bits = source.to_bits();
+            let context = format!("{} {bits:x?} to {} {env:?}", names.0, names.1);
+            assert!(ours.is_canonical(), "{context}: {ours:?} is canonical");
+            let ours = (DecimalValue::from_decoded(ours.decode::<2>()), flags);
+            let expected = decimal::convert(&operand, payload_bits, format, &env);
+            assert_eq!(ours, expected, "{context}");
+        }
+    }
+}
+
+/// Converts every decimal source value to the binary format `D`, which has
+/// the special values `specials`, in every behavior. A NaN result must be
+/// quiet, with the payload of [`binary_payload`]. `names` names the source
+/// and the destination in a failure.
+fn check_to_binary_format<S: Standard<SW>, const SW: usize, D: Standard<DW>, const DW: usize>(
+    values: &[Float<S, SW>],
+    _destination: PhantomData<Float<D, DW>>,
+    specials: Specials,
+    names: (&str, &str),
+) {
+    let trailing = DecimalFormat::of::<Float<S, SW>>().trailing_bits();
+    let format = Format::of::<Float<D, DW>>(specials);
+    for env in FROM_DECIMAL_BEHAVIORS {
+        for &source in values {
+            let operand = Operand::<2>::of(source);
+            let (ours, flags): (Float<D, DW>, _) = source.convert_with(env);
+            let bits = source.to_bits();
+            let context = format!("{} {bits:x?} to {} {env:?}", names.0, names.1);
+            assert!(ours.is_canonical(), "{context}: {ours:?} is canonical");
+            let result = ours.decode::<8>();
+            let ours = (Value::from_decoded(result), flags);
+            assert_eq!(
+                ours,
+                decimal_to_binary(&operand, &format, &env),
+                "{context}"
+            );
+            if let Decoded::Nan {
+                signaling, payload, ..
+            } = result
+            {
+                assert!(!signaling, "{context}: a conversion quiets a NaN");
+                assert_eq!(
+                    Integer::from_digits(&payload, Order::Lsf),
+                    binary_payload(&operand.decoded, trailing, &format, &env),
+                    "{context}: the NaN payload"
+                );
             }
         }
-    }};
+    }
+}
+
+/// Converts every binary source value, of the format named `name`, to every
+/// decimal interchange format in both encodings.
+fn to_every_decimal_format<S: Standard<SW>, const SW: usize>(values: &[Float<S, SW>], name: &str) {
+    check_to_decimal_format(values, PhantomData::<D32Bid>, (name, "D32Bid"));
+    check_to_decimal_format(values, PhantomData::<D32Dpd>, (name, "D32Dpd"));
+    check_to_decimal_format(values, PhantomData::<D64Bid>, (name, "D64Bid"));
+    check_to_decimal_format(values, PhantomData::<D64Dpd>, (name, "D64Dpd"));
+    check_to_decimal_format(values, PhantomData::<D128Bid>, (name, "D128Bid"));
+    check_to_decimal_format(values, PhantomData::<D128Dpd>, (name, "D128Dpd"));
+}
+
+/// Converts every decimal source value, of the format named `name`, to
+/// every format of `for_each_small_format!` and of `for_each_wide_format!`.
+fn to_every_listed_format<S: Standard<SW>, const SW: usize>(values: &[Float<S, SW>], name: &str) {
+    macro_rules! to_small {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
+            check_to_binary_format(
+                values,
+                PhantomData::<Float<$standard, $width>>,
+                $specials,
+                (name, stringify!($alias)),
+            )
+        };
+    }
+    floaty_verify::for_each_small_format!(to_small);
+    macro_rules! to_wide {
+        ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+            check_to_binary_format(
+                values,
+                PhantomData::<Float<Binary<$exponent_bits>, $width>>,
+                Specials::Ieee,
+                (name, stringify!($alias)),
+            )
+        };
+    }
+    floaty_verify::for_each_wide_format!(to_wide);
 }
 
 /// Returns decimal values at the edges of the coefficient range, at every
@@ -272,21 +342,19 @@ const DECIMAL128_SPECIALS: [u128; 9] = [
     (0xFE00 << 112) | ((u128::MAX >> 18) / 3),
 ];
 
+/// Every encoding of each format of `for_each_small_format!` converts to
+/// every decimal format.
 #[test]
-fn from_the_fp8_formats_to_decimal() {
-    let every: Vec<u8> = (0..=u8::MAX).collect();
-    check_to_decimal!(F8E4M3Fn, every => D32Bid, D64Dpd, D128Bid);
-    check_to_decimal!(F8E5M2, every => D32Dpd, D64Bid, D128Dpd);
-    check_to_decimal!(F8E4M3Fnuz, every => D32Bid, D64Bid);
-    check_to_decimal!(F8E5M2Fnuz, every => D32Dpd, D128Bid);
-    check_to_decimal!(F8E4M3, every => D32Bid, D64Dpd);
-    check_to_decimal!(F8E3M4, every => D32Dpd, D128Bid);
-    check_to_decimal!(F8E4M3B11Fnuz, every => D32Bid, D64Bid);
-    let four: Vec<u8> = (0..16).collect();
-    let six: Vec<u8> = (0..64).collect();
-    check_to_decimal!(F4E2M1Fn, four => D32Bid, D64Dpd);
-    check_to_decimal!(F6E2M3Fn, six => D32Dpd, D64Bid);
-    check_to_decimal!(F6E3M2Fn, six => D32Bid, D128Dpd);
+fn from_the_small_formats_to_decimal() {
+    macro_rules! from_listed {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+            let values: Vec<Float<$standard, $width>> = (0..1_u16 << $width)
+                .map(|bits| Float::from_bits(u8::try_from(bits).expect("at most 8 bits")))
+                .collect();
+            to_every_decimal_format(&values, stringify!($alias));
+        }};
+    }
+    floaty_verify::for_each_small_format!(from_listed);
 }
 
 #[test]
@@ -317,6 +385,30 @@ fn from_the_wide_formats_to_decimal() {
         .collect();
     narrow.extend((0..1_000).map(|_| core::array::from_fn(|_| random.next_u64())));
     check_to_decimal!(F256, narrow => D32Bid, D64Dpd, D128Dpd);
+}
+
+/// The boundary and random encodings of each format of
+/// `for_each_wide_format!` convert to every decimal format.
+#[test]
+fn from_every_wide_format_to_decimal() {
+    let mut random = SplitMix64::new(0xDEC_0160);
+    macro_rules! from_listed {
+        ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {{
+            let layout = Layout::ieee($width, $exponent_bits);
+            let values: Vec<Float<Binary<$exponent_bits>, $width>> = boundary_encodings(layout)
+                .iter()
+                .map(to_limbs::<$limbs>)
+                .chain((0..300).map(|_| {
+                    let digits: [u64; $limbs] = core::array::from_fn(|_| random.next_u64());
+                    let mask = (Integer::from(1) << layout.width) - 1u32;
+                    to_limbs::<$limbs>(&(Integer::from_digits(&digits, Order::Lsf) & mask))
+                }))
+                .map(Float::from_bits)
+                .collect();
+            to_every_decimal_format(&values, stringify!($alias));
+        }};
+    }
+    floaty_verify::for_each_wide_format!(from_listed);
 }
 
 /// Returns `count` random encodings of a binary interchange format with the
@@ -441,29 +533,23 @@ fn from_decimal_values_near_wide_binary_values() {
 fn from_decimal32_to_binary() {
     let values: Vec<D32Bid> = decimal_values!(D32Bid, 1, 2_000, 0xD32, DECIMAL32_SPECIALS);
     check_to_binary!(D32Bid, values =>
-        F16: Specials::Ieee, BF16: Specials::Ieee, TF32: Specials::Ieee,
-        F8E4M3Fn: Specials::NoInf, F8E5M2: Specials::Ieee,
-        F8E4M3Fnuz: Specials::Fnuz, F8E5M2Fnuz: Specials::Fnuz,
-        F8E4M3: Specials::Ieee, F8E3M4: Specials::Ieee, F8E4M3B11Fnuz: Specials::Fnuz,
-        F4E2M1Fn: Specials::Finite, F6E2M3Fn: Specials::Finite, F6E3M2Fn: Specials::Finite,
-        F256: Specials::Ieee, F512: Specials::Ieee);
+        F16: Specials::Ieee, BF16: Specials::Ieee, TF32: Specials::Ieee);
+    to_every_listed_format(&values, "D32Bid");
 }
 
 #[test]
 fn from_decimal64_to_binary() {
     let values: Vec<D64Dpd> = decimal_values!(D64Dpd, 5, 2_000, 0xD64, DECIMAL64_SPECIALS);
-    check_to_binary!(D64Dpd, values =>
-        F16: Specials::Ieee, BF16: Specials::Ieee, F8E4M3Fn: Specials::NoInf,
-        F8E5M2Fnuz: Specials::Fnuz, F6E3M2Fn: Specials::Finite, F256: Specials::Ieee,
-        F512: Specials::Ieee);
+    check_to_binary!(D64Dpd, values => F16: Specials::Ieee, BF16: Specials::Ieee);
+    to_every_listed_format(&values, "D64Dpd");
 }
 
 #[test]
 fn from_decimal128_to_binary() {
     let values: Vec<D128Bid> = decimal_values!(D128Bid, 97, 500, 0xD128, DECIMAL128_SPECIALS);
-    check_to_binary!(D128Bid, values =>
-        F16: Specials::Ieee, BF16: Specials::Ieee, F8E5M2: Specials::Ieee,
-        F256: Specials::Ieee, F512: Specials::Ieee);
+    check_to_binary!(D128Bid, values => F16: Specials::Ieee, BF16: Specials::Ieee);
+    to_every_listed_format(&values, "D128Bid");
     let dpd: Vec<D128Dpd> = decimal_values!(D128Dpd, 389, 100, 0xD128D, DECIMAL128_SPECIALS);
-    check_to_binary!(D128Dpd, dpd => F8E4M3Fnuz: Specials::Fnuz, TF32: Specials::Ieee, F4E2M1Fn: Specials::Finite);
+    check_to_binary!(D128Dpd, dpd => TF32: Specials::Ieee);
+    to_every_listed_format(&dpd, "D128Dpd");
 }

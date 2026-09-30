@@ -6,15 +6,22 @@
 //! conversion rules. A NaN result must also have the payload of the rule of
 //! `convert_with`: the high-order payload bits of the source NaN, and a zero
 //! payload in a format with one NaN encoding.
+//!
+//! The lists `for_each_small_format!` and `for_each_wide_format!` give the
+//! sources and the destinations of most tests, so a new format joins them:
+//! every pair of small formats, each small format and the standard formats,
+//! each small format and each wide format, and every pair of wide formats.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
+use core::marker::PhantomData;
+
 use floaty::env::NanPropagation;
+use floaty::format::Standard;
 use floaty::{
-    BF16, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn,
-    F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F128, F160, F192, F224, F256, F288, F320, F352,
-    F384, F416, F448, F480, F512, TF32,
+    BF16, Binary, Decoded, Env, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F16, F32, F64, F128, F160, F192,
+    F224, F256, F288, F320, F352, F384, F416, F448, F480, F512, Float, TF32,
 };
 use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs, to_u128};
 use floaty_verify::mpfr::decimal::align;
@@ -45,86 +52,160 @@ fn nan_payload(
     to_limbs::<8>(&align(payload, from_bits, to_bits))
 }
 
-/// Converts every source value to every destination in every behavior.
+/// Converts every source value to every destination in every behavior, by
+/// [`check_conversion`].
 macro_rules! check {
     ($source:ty, $values:expr => $($destination:ty: $specials:expr),+) => {{
-        for env in CONVERSION_BEHAVIORS {
-            for &bits in &$values {
-                let source = <$source>::from_bits(bits);
-                let operand = Operand::<8>::of(source);
-                let decoded = operand.decoded;
-                $(
-                    let format = Format::of::<$destination>($specials);
-                    let (ours, flags): ($destination, _) = source.convert_with(env);
-                    assert!(ours.is_canonical(), "{ours:?} is canonical");
-                    let result = ours.decode::<8>();
-                    let ours = (Value::from_decoded(result), flags);
-                    let expected = mpfr::convert(&operand, &format, &env);
-                    let context = format!(
-                        "{} {bits:x?} to {} {env:?}",
-                        stringify!($source),
-                        stringify!($destination)
-                    );
-                    assert_eq!(ours, expected, "{context}");
-                    if let Decoded::Nan { signaling, payload, .. } = result {
-                        assert!(!signaling, "{context}: a NaN result is quiet");
-                        // A binary NaN has two bits less payload than precision.
-                        let from_bits = <$source>::PRECISION - 2;
-                        let to_bits = <$destination>::PRECISION - 2;
-                        let expected = nan_payload(&decoded, from_bits, to_bits, $specials, &env);
-                        assert_eq!(payload, expected, "{context}: payload");
-                    }
-                )+
-            }
-        }
+        let values: Vec<$source> = $values.iter().map(|&bits| <$source>::from_bits(bits)).collect();
+        $(
+            check_conversion(
+                &values,
+                PhantomData::<$destination>,
+                $specials,
+                (stringify!($source), stringify!($destination)),
+            );
+        )+
     }};
 }
 
+/// Converts every source value to the format `D`, which has the special
+/// values `specials`, in every behavior. A NaN result must also have the
+/// payload of [`nan_payload`]. `names` names the source and the destination
+/// in a failure.
+fn check_conversion<S: Standard<SW>, const SW: usize, D: Standard<DW>, const DW: usize>(
+    values: &[Float<S, SW>],
+    _destination: PhantomData<Float<D, DW>>,
+    specials: Specials,
+    names: (&str, &str),
+) {
+    let format = Format::of::<Float<D, DW>>(specials);
+    // A binary NaN has two bits less payload than precision.
+    let from_bits = Float::<S, SW>::PRECISION - 2;
+    let to_bits = Float::<D, DW>::PRECISION - 2;
+    for env in CONVERSION_BEHAVIORS {
+        for &source in values {
+            let operand = Operand::<8>::of(source);
+            let (ours, flags): (Float<D, DW>, _) = source.convert_with(env);
+            let bits = source.to_bits();
+            let context = format!("{} {bits:x?} to {} {env:?}", names.0, names.1);
+            assert!(ours.is_canonical(), "{context}: {ours:?} is canonical");
+            let result = ours.decode::<8>();
+            let expected = mpfr::convert(&operand, &format, &env);
+            assert_eq!((Value::from_decoded(result), flags), expected, "{context}");
+            if let Decoded::Nan {
+                signaling, payload, ..
+            } = result
+            {
+                assert!(!signaling, "{context}: a NaN result is quiet");
+                let expected = nan_payload(&operand.decoded, from_bits, to_bits, specials, &env);
+                assert_eq!(payload, expected, "{context}: payload");
+            }
+        }
+    }
+}
+
+/// Converts every source value, of the format named `name`, to every format
+/// of `for_each_small_format!`.
+fn to_every_small_format<S: Standard<SW>, const SW: usize>(values: &[Float<S, SW>], name: &str) {
+    macro_rules! to_listed {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
+            check_conversion(
+                values,
+                PhantomData::<Float<$standard, $width>>,
+                $specials,
+                (name, stringify!($alias)),
+            )
+        };
+    }
+    floaty_verify::for_each_small_format!(to_listed);
+}
+
+/// Converts every source value, of the format named `name`, to every format
+/// of `for_each_wide_format!`.
+fn to_every_wide_format<S: Standard<SW>, const SW: usize>(values: &[Float<S, SW>], name: &str) {
+    macro_rules! to_listed {
+        ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+            check_conversion(
+                values,
+                PhantomData::<Float<Binary<$exponent_bits>, $width>>,
+                Specials::Ieee,
+                (name, stringify!($alias)),
+            )
+        };
+    }
+    floaty_verify::for_each_wide_format!(to_listed);
+}
+
+/// Converts every source value, of the format named `name`, to the standard
+/// formats: binary16, bfloat16, TF32, binary32, binary64, and binary128.
+fn to_the_standard_formats<S: Standard<SW>, const SW: usize>(values: &[Float<S, SW>], name: &str) {
+    let ieee = Specials::Ieee;
+    check_conversion(values, PhantomData::<F16>, ieee, (name, "F16"));
+    check_conversion(values, PhantomData::<BF16>, ieee, (name, "BF16"));
+    check_conversion(values, PhantomData::<TF32>, ieee, (name, "TF32"));
+    check_conversion(values, PhantomData::<F32>, ieee, (name, "F32"));
+    check_conversion(values, PhantomData::<F64>, ieee, (name, "F64"));
+    check_conversion(values, PhantomData::<F128>, ieee, (name, "F128"));
+}
+
+/// Returns the value of every encoding of a format of at most 8 bits.
+fn every_value<S: Standard<W, Bits = u8>, const W: usize>() -> Vec<Float<S, W>> {
+    (0..1_u16 << W)
+        .map(|bits| Float::from_bits(u8::try_from(bits).expect("the format has at most 8 bits")))
+        .collect()
+}
+
+/// Returns the values of `encodings` in the format `S`.
+fn values_of<S: Standard<W>, const W: usize>(encodings: &[S::Bits]) -> Vec<Float<S, W>> {
+    encodings
+        .iter()
+        .map(|&bits| Float::from_bits(bits))
+        .collect()
+}
+
+/// Every encoding of each small format converts to every small format. The
+/// infinities and NaNs of the sources meet destinations without them.
 #[test]
-fn from_the_fp8_formats() {
-    let every: Vec<u8> = (0..=u8::MAX).collect();
-    check!(F8E4M3Fn, every => F8E5M2Fnuz: Specials::Fnuz, F8E5M2: Specials::Ieee, BF16: Specials::Ieee, F16: Specials::Ieee);
-    check!(F8E5M2, every => F8E4M3Fn: Specials::NoInf, F8E4M3Fnuz: Specials::Fnuz, TF32: Specials::Ieee);
-    check!(F8E4M3Fnuz, every => F8E4M3Fn: Specials::NoInf, F8E5M2: Specials::Ieee, F64: Specials::Ieee);
-    check!(F8E5M2Fnuz, every => F8E4M3Fnuz: Specials::Fnuz, F8E4M3Fn: Specials::NoInf, BF16: Specials::Ieee);
-    check!(F8E4M3, every => F8E3M4: Specials::Ieee, F8E4M3B11Fnuz: Specials::Fnuz, F8E4M3Fn: Specials::NoInf, F16: Specials::Ieee);
-    check!(F8E3M4, every => F8E4M3: Specials::Ieee, F8E5M2Fnuz: Specials::Fnuz, BF16: Specials::Ieee);
-    check!(F8E4M3B11Fnuz, every => F8E4M3Fnuz: Specials::Fnuz, F8E4M3: Specials::Ieee, F8E3M4: Specials::Ieee, F32: Specials::Ieee);
+fn every_small_format_pair() {
+    macro_rules! from_listed {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
+            to_every_small_format(&every_value::<$standard, $width>(), stringify!($alias))
+        };
+    }
+    floaty_verify::for_each_small_format!(from_listed);
 }
 
 #[test]
-fn from_and_to_the_mx_formats() {
-    let four: Vec<u8> = (0..16).collect();
-    let six: Vec<u8> = (0..64).collect();
-    check!(F4E2M1Fn, four => F6E2M3Fn: Specials::Finite, F8E4M3Fn: Specials::NoInf, F16: Specials::Ieee);
-    check!(F6E2M3Fn, six => F4E2M1Fn: Specials::Finite, F6E3M2Fn: Specials::Finite, BF16: Specials::Ieee);
-    check!(F6E3M2Fn, six => F6E2M3Fn: Specials::Finite, F8E5M2: Specials::Ieee, F4E2M1Fn: Specials::Finite);
-    // The infinities and NaNs of the sources meet destinations without them.
-    let every: Vec<u8> = (0..=u8::MAX).collect();
-    check!(F8E5M2, every => F4E2M1Fn: Specials::Finite, F6E3M2Fn: Specials::Finite);
-    check!(F8E4M3Fn, every => F6E2M3Fn: Specials::Finite);
-    let halves: Vec<u16> = (0..=u16::MAX).collect();
-    check!(F16, halves => F6E3M2Fn: Specials::Finite, F4E2M1Fn: Specials::Finite);
+fn from_the_small_formats_to_the_standard_formats() {
+    macro_rules! from_listed {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
+            to_the_standard_formats(&every_value::<$standard, $width>(), stringify!($alias))
+        };
+    }
+    floaty_verify::for_each_small_format!(from_listed);
 }
 
 /// Every binary16 NaN drops payload bits in bfloat16 and in E5M2.
 #[test]
 fn from_binary16() {
     let halves: Vec<u16> = (0..=u16::MAX).collect();
-    check!(F16, halves => BF16: Specials::Ieee, F8E5M2: Specials::Ieee, F8E4M3Fnuz: Specials::Fnuz);
+    check!(F16, halves => BF16: Specials::Ieee);
+    to_every_small_format(&values_of::<Binary<5>, 16>(&halves), "F16");
 }
 
 #[test]
 fn from_bfloat16_and_tf32() {
     let every: Vec<u16> = (0..=u16::MAX).collect();
-    check!(BF16, every => F8E4M3Fn: Specials::NoInf, F8E5M2Fnuz: Specials::Fnuz, F16: Specials::Ieee, TF32: Specials::Ieee);
+    check!(BF16, every => F16: Specials::Ieee, TF32: Specials::Ieee);
+    to_every_small_format(&values_of::<Binary<8>, 16>(&every), "BF16");
     let mut random = SplitMix64::new(0x7F32);
     let mut samples: Vec<u32> = boundary_encodings(Layout::TF32)
         .iter()
         .map(|encoding| u32::try_from(to_u128(encoding)).expect("19 bits"))
         .collect();
     samples.extend((0..20_000).map(|_| u32::try_from(random.next_u64() >> 45).expect("19 bits")));
-    check!(TF32, samples => BF16: Specials::Ieee, F8E5M2: Specials::Ieee, F8E4M3Fn: Specials::NoInf, F16: Specials::Ieee);
+    check!(TF32, samples => BF16: Specials::Ieee, F16: Specials::Ieee);
+    to_every_small_format(&values_of::<Binary<8>, 19>(&samples), "TF32");
 }
 
 /// Returns the boundary encodings and `count` random encodings of a format
@@ -187,6 +268,43 @@ fn between_the_wide_formats() {
     check!(F480, f480 => F448: Specials::Ieee, F512: Specials::Ieee, F160: Specials::Ieee);
     let f512 = samples!(Layout::BINARY512, 8, 1_000, random);
     check!(F512, f512 => F480: Specials::Ieee, F128: Specials::Ieee);
+}
+
+/// Every encoding of each small format converts to every wide format, and
+/// the boundary and random encodings of each wide format convert to every
+/// small format.
+#[test]
+fn between_the_small_and_the_wide_formats() {
+    macro_rules! from_small {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
+            to_every_wide_format(&every_value::<$standard, $width>(), stringify!($alias))
+        };
+    }
+    floaty_verify::for_each_small_format!(from_small);
+    let mut random = SplitMix64::new(0x5A11);
+    macro_rules! from_wide {
+        ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {{
+            let encodings = samples!(Layout::ieee($width, $exponent_bits), $limbs, 200, random);
+            let values = values_of::<Binary<$exponent_bits>, $width>(&encodings);
+            to_every_small_format(&values, stringify!($alias));
+        }};
+    }
+    floaty_verify::for_each_wide_format!(from_wide);
+}
+
+/// The boundary and random encodings of each wide format convert to every
+/// wide format.
+#[test]
+fn every_wide_format_pair() {
+    let mut random = SplitMix64::new(0x0161);
+    macro_rules! from_wide {
+        ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {{
+            let encodings = samples!(Layout::ieee($width, $exponent_bits), $limbs, 100, random);
+            let values = values_of::<Binary<$exponent_bits>, $width>(&encodings);
+            to_every_wide_format(&values, stringify!($alias));
+        }};
+    }
+    floaty_verify::for_each_wide_format!(from_wide);
 }
 
 #[test]
