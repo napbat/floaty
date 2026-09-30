@@ -2,6 +2,7 @@
 
 use floaty::{BF16, F16, F64, F80};
 use floaty_verify::encodings::Layout;
+use floaty_verify::entry_points::{remainder, remainder_with};
 use floaty_verify::random::SplitMix64;
 
 use super::operands::{close_pairs, every_16_bit_pair, random_pairs};
@@ -19,24 +20,14 @@ fn remainders_give_the_default_mode_results() {
             floaty::F32::from_bits(bits(a)),
             floaty::F32::from_bits(bits(b)),
         );
-        let expected = x.remainder_with(y, floaty::F32::ENV).0;
-        assert_eq!(
-            x.remainder(y).to_bits(),
-            expected.to_bits(),
-            "{a:#x} {b:#x}"
-        );
+        assert_eq!(remainder(x, y), remainder_with(x, y), "{a:#x} {b:#x}");
     }
     let mut doubles = close_pairs(&mut random, Layout::BINARY64, 900);
     doubles.extend(random_pairs::<u128>(&mut random, Layout::BINARY64, 4_000));
     for (a, b) in doubles {
         let bits = |value: u128| u64::try_from(value).expect("a binary64 encoding");
         let (x, y) = (F64::from_bits(bits(a)), F64::from_bits(bits(b)));
-        let expected = x.remainder_with(y, F64::ENV).0;
-        assert_eq!(
-            x.remainder(y).to_bits(),
-            expected.to_bits(),
-            "{a:#x} {b:#x}"
-        );
+        assert_eq!(remainder(x, y), remainder_with(x, y), "{a:#x} {b:#x}");
     }
     let mut extended = close_pairs(&mut random, Layout::X87_EXTENDED, 900);
     extended.extend(random_pairs::<u128>(
@@ -46,12 +37,7 @@ fn remainders_give_the_default_mode_results() {
     ));
     for (a, b) in extended {
         let (x, y) = (F80::from_bits(a), F80::from_bits(b));
-        let expected = x.remainder_with(y, F80::ENV).0;
-        assert_eq!(
-            x.remainder(y).to_bits(),
-            expected.to_bits(),
-            "{a:#x} {b:#x}"
-        );
+        assert_eq!(remainder(x, y), remainder_with(x, y), "{a:#x} {b:#x}");
     }
     // binary16 and bfloat16 take the binary32 path on their widened values.
     let mut halves = close_pairs(&mut random, Layout::BINARY16, 40);
@@ -61,21 +47,11 @@ fn remainders_give_the_default_mode_results() {
     let bits = |value: u128| u16::try_from(value).expect("a 16-bit encoding");
     for (a, b) in halves {
         let (x, y) = (F16::from_bits(bits(a)), F16::from_bits(bits(b)));
-        let expected = x.remainder_with(y, F16::ENV).0;
-        assert_eq!(
-            x.remainder(y).to_bits(),
-            expected.to_bits(),
-            "{a:#x} {b:#x}"
-        );
+        assert_eq!(remainder(x, y), remainder_with(x, y), "{a:#x} {b:#x}");
     }
     for (a, b) in bfloats {
         let (x, y) = (BF16::from_bits(bits(a)), BF16::from_bits(bits(b)));
-        let expected = x.remainder_with(y, BF16::ENV).0;
-        assert_eq!(
-            x.remainder(y).to_bits(),
-            expected.to_bits(),
-            "{a:#x} {b:#x}"
-        );
+        assert_eq!(remainder(x, y), remainder_with(x, y), "{a:#x} {b:#x}");
     }
 }
 
@@ -88,17 +64,15 @@ fn remainders_give_the_default_mode_results() {
 fn every_16_bit_remainder_gives_the_default_mode_result() {
     every_16_bit_pair(|high, low| {
         let (x, y) = (F16::from_bits(high), F16::from_bits(low));
-        let engine = x.remainder_with(y, F16::ENV).0;
         assert_eq!(
-            x.remainder(y).to_bits(),
-            engine.to_bits(),
+            remainder(x, y),
+            remainder_with(x, y),
             "F16 {high:#06x} {low:#06x}"
         );
         let (x, y) = (BF16::from_bits(high), BF16::from_bits(low));
-        let engine = x.remainder_with(y, BF16::ENV).0;
         assert_eq!(
-            x.remainder(y).to_bits(),
-            engine.to_bits(),
+            remainder(x, y),
+            remainder_with(x, y),
             "BF16 {high:#06x} {low:#06x}"
         );
     });
@@ -122,8 +96,8 @@ macro_rules! ties_and_multiples_match {
             let multiple = <$alias>::from_int(sign * quotient * odd).scale_b(scale);
             for dividend in [tie, multiple] {
                 assert_eq!(
-                    dividend.remainder(divisor).to_bits(),
-                    dividend.remainder_with(divisor, <$alias>::ENV).0.to_bits(),
+                    remainder(dividend, divisor),
+                    remainder_with(dividend, divisor),
                     "{dividend:?} {divisor:?}"
                 );
             }

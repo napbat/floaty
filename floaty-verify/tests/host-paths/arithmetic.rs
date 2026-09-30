@@ -8,74 +8,10 @@ use floaty_verify::random::SplitMix64;
 use super::operands::{every_16_bit_pair, random_pairs, triples};
 
 /// Checks that each arithmetic entry point of [`arithmetic`] gives the result
-/// of its `_with` method under the default mode, for each pair `x` and `y`,
-/// with `x` as the addend. The operands are random and boundary encodings,
-/// and every pair of an FP8 format. An entry point takes a host path where the
-/// build has one, and the engine otherwise.
-macro_rules! operators_match {
-    ($alias:ty, $bits:ty, $pairs:expr) => {{
-        for (a, b) in $pairs {
-            let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
-            assert_eq!(
-                arithmetic(x, y, x),
-                arithmetic_with(x, y, x),
-                "{} {x:?} {y:?}",
-                stringify!($alias)
-            );
-        }
-    }};
-}
-
-#[test]
-fn operators_give_the_default_mode_results() {
-    let every_pair = || (0..=u8::MAX).flat_map(|a| (0..=u8::MAX).map(move |b| (a, b)));
-    operators_match!(F8E4M3Fn, u8, every_pair());
-    operators_match!(F8E5M2, u8, every_pair());
-    operators_match!(F8E4M3Fnuz, u8, every_pair());
-    operators_match!(F8E5M2Fnuz, u8, every_pair());
-    let mut random = SplitMix64::new(0x0B0B);
-    operators_match!(
-        floaty::F16,
-        u16,
-        random_pairs::<u16>(&mut random, Layout::BINARY16, 20_000)
-    );
-    operators_match!(
-        BF16,
-        u16,
-        random_pairs::<u16>(&mut random, Layout::BFLOAT16, 20_000)
-    );
-    operators_match!(
-        TF32,
-        u32,
-        random_pairs::<u32>(&mut random, Layout::TF32, 20_000)
-    );
-    operators_match!(
-        floaty::F32,
-        u32,
-        random_pairs::<u32>(&mut random, Layout::BINARY32, 100_000)
-    );
-    operators_match!(
-        floaty::F64,
-        u64,
-        random_pairs::<u64>(&mut random, Layout::BINARY64, 100_000)
-    );
-    operators_match!(
-        F80,
-        u128,
-        random_pairs::<u128>(&mut random, Layout::X87_EXTENDED, 20_000)
-    );
-    operators_match!(
-        floaty::F128,
-        u128,
-        random_pairs::<u128>(&mut random, Layout::BINARY128, 20_000)
-    );
-}
-
-/// Checks that each arithmetic entry point of [`arithmetic`] gives the result
 /// of its `_with` method under the default mode, for each triple `x`, `y`,
 /// and the addend `z`. An entry point takes a host path where the build has
 /// one, and the engine otherwise.
-macro_rules! methods_match {
+macro_rules! arithmetic_matches {
     ($alias:ty, $triples:expr) => {{
         for (a, b, c) in $triples {
             let [x, y, z] = [a, b, c].map(<$alias>::from_bits);
@@ -89,37 +25,86 @@ macro_rules! methods_match {
     }};
 }
 
+/// Returns each pair `x` and `y` as a triple with `x` as the addend.
+fn with_first_addend<T: Copy>(pairs: impl IntoIterator<Item = (T, T)>) -> Vec<(T, T, T)> {
+    pairs.into_iter().map(|(a, b)| (a, b, a)).collect()
+}
+
+/// The pairs are random and boundary encodings, and every pair of an FP8
+/// format, with the first operand as the addend.
+#[test]
+fn operators_give_the_default_mode_results() {
+    let every_pair = || (0..=u8::MAX).flat_map(|a| (0..=u8::MAX).map(move |b| (a, b)));
+    arithmetic_matches!(F8E4M3Fn, with_first_addend(every_pair()));
+    arithmetic_matches!(F8E5M2, with_first_addend(every_pair()));
+    arithmetic_matches!(F8E4M3Fnuz, with_first_addend(every_pair()));
+    arithmetic_matches!(F8E5M2Fnuz, with_first_addend(every_pair()));
+    let mut random = SplitMix64::new(0x0B0B);
+    arithmetic_matches!(
+        floaty::F16,
+        with_first_addend(random_pairs::<u16>(&mut random, Layout::BINARY16, 20_000))
+    );
+    arithmetic_matches!(
+        BF16,
+        with_first_addend(random_pairs::<u16>(&mut random, Layout::BFLOAT16, 20_000))
+    );
+    arithmetic_matches!(
+        TF32,
+        with_first_addend(random_pairs::<u32>(&mut random, Layout::TF32, 20_000))
+    );
+    arithmetic_matches!(
+        floaty::F32,
+        with_first_addend(random_pairs::<u32>(&mut random, Layout::BINARY32, 100_000))
+    );
+    arithmetic_matches!(
+        floaty::F64,
+        with_first_addend(random_pairs::<u64>(&mut random, Layout::BINARY64, 100_000))
+    );
+    arithmetic_matches!(
+        F80,
+        with_first_addend(random_pairs::<u128>(
+            &mut random,
+            Layout::X87_EXTENDED,
+            20_000
+        ))
+    );
+    arithmetic_matches!(
+        floaty::F128,
+        with_first_addend(random_pairs::<u128>(&mut random, Layout::BINARY128, 20_000))
+    );
+}
+
 #[test]
 fn square_roots_and_fused_products_give_the_default_mode_results() {
     let every_pair: Vec<(u8, u8)> = (0..=u8::MAX)
         .flat_map(|a| (0..=u8::MAX).map(move |b| (a, b)))
         .collect();
-    methods_match!(F8E4M3Fn, triples(&every_pair));
-    methods_match!(F8E5M2, triples(&every_pair));
-    methods_match!(F8E4M3Fnuz, triples(&every_pair));
-    methods_match!(F8E5M2Fnuz, triples(&every_pair));
+    arithmetic_matches!(F8E4M3Fn, triples(&every_pair));
+    arithmetic_matches!(F8E5M2, triples(&every_pair));
+    arithmetic_matches!(F8E4M3Fnuz, triples(&every_pair));
+    arithmetic_matches!(F8E5M2Fnuz, triples(&every_pair));
     let mut random = SplitMix64::new(0x5A5A);
-    methods_match!(
+    arithmetic_matches!(
         floaty::F16,
         triples(&random_pairs::<u16>(&mut random, Layout::BINARY16, 20_000))
     );
-    methods_match!(
+    arithmetic_matches!(
         BF16,
         triples(&random_pairs::<u16>(&mut random, Layout::BFLOAT16, 20_000))
     );
-    methods_match!(
+    arithmetic_matches!(
         TF32,
         triples(&random_pairs::<u32>(&mut random, Layout::TF32, 20_000))
     );
-    methods_match!(
+    arithmetic_matches!(
         floaty::F32,
         triples(&random_pairs::<u32>(&mut random, Layout::BINARY32, 100_000))
     );
-    methods_match!(
+    arithmetic_matches!(
         floaty::F64,
         triples(&random_pairs::<u64>(&mut random, Layout::BINARY64, 100_000))
     );
-    methods_match!(
+    arithmetic_matches!(
         F80,
         triples(&random_pairs::<u128>(
             &mut random,
@@ -127,7 +112,7 @@ fn square_roots_and_fused_products_give_the_default_mode_results() {
             20_000
         ))
     );
-    methods_match!(
+    arithmetic_matches!(
         floaty::F128,
         triples(&random_pairs::<u128>(
             &mut random,

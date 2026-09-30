@@ -8,13 +8,15 @@
 
 use std::hint::black_box;
 
-use floaty::{BF16, F16, F32, F64, Flags, Lanes};
+use floaty::{F16, F32, F64, Flags, Lanes};
 use floaty_verify::encodings::{Layout, boundary_encodings_u128};
-use floaty_verify::entry_points::{LaneArithmetic, lane_arithmetic, lane_arithmetic_with};
+use floaty_verify::entry_points::{
+    LaneArithmetic, assert_bfloat16_lanes_under, assert_directed_rounding_under,
+    assert_lane_comparisons_under, lane_arithmetic, lane_arithmetic_with,
+};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
-    self, MXCSR_DAZ, MXCSR_EXCEPTION_MASKS, MXCSR_FTZ, MXCSR_MASKED, MXCSR_TOWARD_NEGATIVE,
-    MXCSR_TOWARD_POSITIVE, MXCSR_TOWARD_ZERO, ROUND_USE_MXCSR, mxcsr_flags, mxcsr_round_flags,
+    self, MXCSR_LANE_CONTROLS, ROUND_USE_MXCSR, mxcsr_flags, mxcsr_round_flags,
 };
 
 /// Returns boundary and random encodings of a binary format in chunks of
@@ -286,32 +288,14 @@ fn engine_results(singles: [[u32; 8]; 2], doubles: [[u64; 5]; 2]) -> LaneResults
     }
 }
 
-/// Returns the MXCSR values under which the paths of `Lanes` must give the
-/// engine results: the default, FTZ, DAZ, each directed rounding, and each
-/// unmasked exception. FTZ, DAZ, and each directed rounding change the packed
-/// results, and an unmasked exception traps.
-fn controls() -> Vec<u32> {
-    let directions = [
-        MXCSR_MASKED,
-        MXCSR_MASKED | MXCSR_FTZ,
-        MXCSR_MASKED | MXCSR_DAZ,
-        MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
-        MXCSR_MASKED | MXCSR_TOWARD_POSITIVE,
-        MXCSR_MASKED | MXCSR_TOWARD_ZERO,
-    ];
-    let unmasked = MXCSR_EXCEPTION_MASKS.map(|mask| MXCSR_MASKED & !mask);
-    directions.into_iter().chain(unmasked).collect()
-}
-
 #[test]
 fn lanes_read_mxcsr_before_the_packed_unit() {
-    // Under each control, the operations of `Lanes` without flags give the
-    // engine results of the default mode.
-    let controls = controls();
+    // Under each control of `MXCSR_LANE_CONTROLS`, the operations of `Lanes`
+    // without flags give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00C5_4EAD);
     let singles = single_chunks(&mut random);
     let doubles = chunks::<5>(&mut random, Layout::BINARY64);
-    for control in controls {
+    for control in MXCSR_LANE_CONTROLS {
         for (index, pair) in singles.windows(2).enumerate().step_by(5) {
             let lanes: [[u32; 8]; 2] = [0, 1]
                 .map(|first| core::array::from_fn(|lane| pair[(first + lane / 4) % 2][lane % 4]));
@@ -380,7 +364,7 @@ fn binary16_lanes_read_mxcsr_before_the_packed_unit() {
     let mut random = SplitMix64::new(0x00C5_4E16);
     let halves = chunks::<13>(&mut random, Layout::BINARY16);
     let singles = chunks::<13>(&mut random, Layout::BINARY32);
-    for control in controls() {
+    for control in MXCSR_LANE_CONTROLS {
         for (index, pair) in halves.windows(2).enumerate().step_by(3) {
             let lanes: [[u16; 13]; 2] = [0, 1].map(|first| {
                 pair[first].map(|bits| u16::try_from(bits).expect("a binary16 encoding"))
@@ -405,27 +389,11 @@ fn bfloat16_lanes_read_mxcsr_before_the_packed_unit() {
     // give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00C5_4EBF);
     let chunks = chunks::<13>(&mut random, Layout::BFLOAT16);
-    for control in controls() {
+    for control in MXCSR_LANE_CONTROLS {
+        let setting = format!("{control:#x}");
         for chunk in chunks.iter().step_by(3) {
             let bits = chunk.map(|bits| u16::try_from(bits).expect("a bfloat16 encoding"));
-            let lanes = Lanes::<BF16, 13>::from_bits(bits);
-            let ours = x86::with_mxcsr(control, || {
-                let lanes = black_box(lanes);
-                let single: Lanes<F32, 13> = lanes.convert();
-                let double: Lanes<F64, 13> = lanes.convert();
-                (
-                    lanes.round_to_integral().to_bits(),
-                    single.to_bits(),
-                    double.to_bits(),
-                )
-            });
-            let values = bits.map(BF16::from_bits);
-            let engine = (
-                values.map(|value| value.round_to_integral_with(BF16::ENV).0.to_bits()),
-                values.map(|value| value.convert_with::<F32>(F32::ENV).0.to_bits()),
-                values.map(|value| value.convert_with::<F64>(F64::ENV).0.to_bits()),
-            );
-            assert_eq!(ours, engine, "{bits:x?} under {control:#x}");
+            assert_bfloat16_lanes_under(bits, &setting, x86::under_mxcsr(control));
         }
     }
 }
@@ -436,77 +404,26 @@ fn directed_rounding_reads_mxcsr_before_the_unit() {
     // from the immediate of `ROUNDPS` and `ROUNDSS`, but FTZ, DAZ, and the
     // exception masks of MXCSR still apply. Under each control, the lanes and
     // the scalar values give the engine results of the mode.
-    type Up = floaty::Float<
-        floaty::Binary<8>,
-        32,
-        floaty::mode::Rounded<floaty::mode::Ieee, floaty::mode::direction::TowardPositive>,
-    >;
     let mut random = SplitMix64::new(0x00C5_D1E0);
     let chunks = chunks::<5>(&mut random, Layout::BINARY32);
-    for control in controls() {
+    for control in MXCSR_LANE_CONTROLS {
+        let setting = format!("{control:#x}");
         for chunk in chunks.iter().step_by(7) {
             let bits = chunk.map(|bits| u32::try_from(bits).expect("a binary32 encoding"));
-            let lanes = Lanes::<Up, 5>::from_bits(bits);
-            let ours = x86::with_mxcsr(control, || {
-                let lanes = black_box(lanes);
-                (
-                    lanes.round_to_integral().to_bits(),
-                    lanes
-                        .into_array()
-                        .map(|value| value.round_to_integral().to_bits()),
-                )
-            });
-            let engine = bits.map(|bits| {
-                Up::from_bits(bits)
-                    .round_to_integral_with(Up::ENV)
-                    .0
-                    .to_bits()
-            });
-            assert_eq!(ours, (engine, engine), "{bits:x?} under {control:#x}");
+            assert_directed_rounding_under(bits, &setting, x86::under_mxcsr(control));
         }
     }
 }
 
 /// Checks the comparison and the minimum and maximum operations of lanes of
-/// one type under one MXCSR value against the scalar results of the engine.
+/// one type under one MXCSR value against the engine results of the default
+/// mode.
 macro_rules! orders_under {
     ($alias:ty, $control:expr, $lanes:expr) => {
+        let setting = format!("{:#x}", $control);
         for pair in $lanes.windows(2) {
-            let (x, y) = (
-                Lanes::<$alias, 5>::from_bits(pair[0]),
-                Lanes::<$alias, 5>::from_bits(pair[1]),
-            );
-            let ours = x86::with_mxcsr($control, || {
-                let (x, y) = (black_box(x), black_box(y));
-                (
-                    x.compare_quiet(y),
-                    [
-                        x.minimum(y).to_bits(),
-                        x.maximum(y).to_bits(),
-                        x.minimum_number(y).to_bits(),
-                        x.maximum_number(y).to_bits(),
-                        x.min_num(y).to_bits(),
-                        x.max_num(y).to_bits(),
-                    ],
-                )
-            });
-            let (a, b) = (x.into_array(), y.into_array());
-            let env = <$alias>::ENV;
-            let each = |operation: &dyn Fn($alias, $alias) -> $alias| {
-                core::array::from_fn::<_, 5, _>(|lane| operation(a[lane], b[lane]).to_bits())
-            };
-            let engine = (
-                core::array::from_fn::<_, 5, _>(|lane| a[lane].compare_quiet_with(b[lane], env).0),
-                [
-                    each(&|x, y| x.minimum_with(y, env).0),
-                    each(&|x, y| x.maximum_with(y, env).0),
-                    each(&|x, y| x.minimum_number_with(y, env).0),
-                    each(&|x, y| x.maximum_number_with(y, env).0),
-                    each(&|x, y| x.min_num_with(y, env).0),
-                    each(&|x, y| x.max_num_with(y, env).0),
-                ],
-            );
-            assert_eq!(ours, engine, "{:x?} under {:#x}", pair, $control);
+            let lanes = [pair[0], pair[1]].map(Lanes::<$alias, 5>::from_bits);
+            assert_lane_comparisons_under(lanes, &setting, x86::under_mxcsr($control));
         }
     };
 }
@@ -522,7 +439,7 @@ fn lane_orders_read_mxcsr_before_the_packed_unit() {
         .map(|chunk| chunk.map(|bits| u32::try_from(bits).expect("a binary32 encoding")))
         .collect();
     let doubles = chunks::<5>(&mut random, Layout::BINARY64);
-    for control in controls() {
+    for control in MXCSR_LANE_CONTROLS {
         orders_under!(
             F32,
             control,

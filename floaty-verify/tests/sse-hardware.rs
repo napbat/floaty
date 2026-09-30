@@ -9,17 +9,15 @@
 
 #![cfg(target_arch = "x86_64")]
 
-use std::hint::black_box;
-
 use floaty::{BF16, Env, F16, F32, F64, mode};
 use floaty_verify::encodings::{Layout, boundary_encodings_u128};
 use floaty_verify::entry_points::{
-    arithmetic, arithmetic_with, comparisons, comparisons_with, conversions, conversions_with,
+    assert_arithmetic_under, assert_comparisons_under, assert_conversions_under,
+    assert_remainder_under,
 };
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
-    self, MXCSR_DAZ, MXCSR_EXCEPTION_MASKS, MXCSR_FTZ, MXCSR_MASKED, MXCSR_TOWARD_NEGATIVE,
-    MXCSR_TOWARD_POSITIVE, MXCSR_TOWARD_ZERO, mxcsr_flags,
+    self, MXCSR_COMPARISON_CONTROLS, MXCSR_MASKED, MXCSR_OPERATOR_CONTROLS, mxcsr_flags,
 };
 
 /// Returns the low-bit patterns of `dropped` discarded bits that decide a
@@ -406,66 +404,59 @@ fn check_single(first: u32, second: u32, third: u32, control: u32, env: Env, daz
     );
 }
 
-/// Checks the arithmetic entry points of [`arithmetic`] of one type under one
-/// MXCSR value against the engine results of the default mode, with the
-/// first operand as the addend.
-macro_rules! operators_under {
-    ($alias:ty, $control:expr, $pairs:expr) => {
+/// Checks the arithmetic entry points of one type on each pair under one
+/// MXCSR value, with the first operand as the addend.
+macro_rules! arithmetic_under {
+    ($alias:ty, $control:expr, $pairs:expr) => {{
+        let setting = format!("MXCSR {:#x}", $control);
         for &(a, b) in $pairs {
             let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
-            let expected = arithmetic_with(x, y, x);
-            let ours = x86::with_mxcsr($control, || {
-                let (x, y) = (black_box(x), black_box(y));
-                arithmetic(x, y, x)
-            });
-            assert_eq!(ours, expected, "{a:#x} {b:#x} under MXCSR {:#x}", $control);
+            assert_arithmetic_under([x, y, x], &setting, x86::under_mxcsr($control));
         }
-    };
+    }};
 }
 
-/// Checks the remainder of one type under one MXCSR value against the engine
-/// result of the default mode. The binary16 path widens and rounds in F16C,
-/// which reads MXCSR, before `FPREM1`.
+/// Checks the remainder of one type on each pair under one MXCSR value.
 macro_rules! remainders_under {
-    ($alias:ty, $control:expr, $pairs:expr) => {
+    ($alias:ty, $control:expr, $pairs:expr) => {{
+        let setting = format!("MXCSR {:#x}", $control);
         for &(a, b) in $pairs {
             let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
-            let expected = x.remainder_with(y, <$alias>::ENV).0.to_bits();
-            let ours = x86::with_mxcsr($control, || black_box(x).remainder(black_box(y)).to_bits());
-            assert_eq!(ours, expected, "{a:#x} {b:#x} under MXCSR {:#x}", $control);
+            assert_remainder_under([x, y], &setting, x86::under_mxcsr($control));
         }
-    };
+    }};
 }
 
-/// Checks the conversion entry points of [`conversions`] of one type under
-/// one control value against the engine results of the default mode.
+/// Checks the comparison entry points of one type on each pair under one
+/// MXCSR value.
+macro_rules! comparisons_under {
+    ($alias:ty, $control:expr, $pairs:expr) => {{
+        let setting = format!("MXCSR {:#x}", $control);
+        for &(a, b) in $pairs {
+            let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
+            assert_comparisons_under([x, y], &setting, x86::under_mxcsr($control));
+        }
+    }};
+}
+
+/// Checks the conversion entry points of one type on each value under one
+/// control value, with an integer made from the bits of the value.
 macro_rules! conversions_under {
-    ($alias:ty, $control:expr, $values:expr) => {
+    ($alias:ty, $control:expr, $values:expr) => {{
+        let setting = format!("MXCSR {:#x}", $control);
         for &bits in $values {
             let x = <$alias>::from_bits(bits);
             let integer =
                 i64::from_ne_bytes(u64::from(bits).to_ne_bytes()) >> (u64::from(bits) % 64);
-            let expected = conversions_with(x, integer);
-            let ours = x86::with_mxcsr($control, || conversions(black_box(x), black_box(integer)));
-            assert_eq!(ours, expected, "{bits:#x} {integer} under {:#x}", $control);
+            assert_conversions_under(x, integer, &setting, x86::under_mxcsr($control));
         }
-    };
+    }};
 }
 
 #[test]
 fn operators_read_mxcsr_before_the_host_unit() {
-    // FTZ, DAZ, and each directed rounding change the host results, and an
-    // unmasked exception traps in the host unit. Under each, the operators
-    // still give the engine results of the default mode.
-    let directions = [
-        MXCSR_MASKED | MXCSR_FTZ,
-        MXCSR_MASKED | MXCSR_DAZ,
-        MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
-        MXCSR_MASKED | MXCSR_TOWARD_POSITIVE,
-        MXCSR_MASKED | MXCSR_TOWARD_ZERO,
-    ];
-    let unmasked = MXCSR_EXCEPTION_MASKS.map(|mask| MXCSR_MASKED & !mask);
-    let controls: Vec<u32> = directions.into_iter().chain(unmasked).collect();
+    // Under each control of `MXCSR_OPERATOR_CONTROLS`, the operators still
+    // give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00C5_0000);
     let single = single_operands(&mut random, 4_000);
     let single_pairs = pairs(&single, SINGLE_SPECIALS.len(), 1 << 31, 1);
@@ -502,13 +493,16 @@ fn operators_read_mxcsr_before_the_host_unit() {
         .zip(bfloats.iter().rev())
         .map(|(&a, &b)| (a, b))
         .collect();
-    for control in controls {
-        operators_under!(F16, control, &half_pairs);
-        operators_under!(BF16, control, &bfloat_pairs);
+    for control in MXCSR_OPERATOR_CONTROLS {
+        // The first operand is also the addend.
+        arithmetic_under!(F16, control, &half_pairs);
+        arithmetic_under!(BF16, control, &bfloat_pairs);
+        // The binary16 remainder widens and rounds in F16C, which reads
+        // MXCSR, before `FPREM1`.
         remainders_under!(F16, control, &half_pairs);
         remainders_under!(BF16, control, &bfloat_pairs);
-        operators_under!(F32, control, &single_pairs);
-        operators_under!(F64, control, &double_pairs);
+        arithmetic_under!(F32, control, &single_pairs);
+        arithmetic_under!(F64, control, &double_pairs);
         conversions_under!(F16, control, &halves);
         conversions_under!(BF16, control, &bfloats);
         conversions_under!(F32, control, &single);
@@ -516,33 +510,12 @@ fn operators_read_mxcsr_before_the_host_unit() {
     }
 }
 
-/// Checks the comparison entry points of [`comparisons`] of one type under
-/// one MXCSR value against the engine results of the default mode.
-macro_rules! comparisons_under {
-    ($alias:ty, $control:expr, $pairs:expr) => {
-        for &(a, b) in $pairs {
-            let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
-            let expected = comparisons_with(x, y);
-            let ours = x86::with_mxcsr($control, || comparisons(black_box(x), black_box(y)));
-            assert_eq!(ours, expected, "{a:#x} {b:#x} under MXCSR {:#x}", $control);
-        }
-    };
-}
-
 #[test]
 fn comparisons_read_mxcsr_before_the_host_unit() {
     // DAZ changes the order of a subnormal operand, and an unmasked invalid
-    // or denormal exception traps. Under each control, the comparison and the
-    // minimum and maximum operations give the engine results of the default
-    // mode.
-    let directions = [
-        MXCSR_MASKED,
-        MXCSR_MASKED | MXCSR_FTZ,
-        MXCSR_MASKED | MXCSR_DAZ,
-        MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
-    ];
-    let unmasked = MXCSR_EXCEPTION_MASKS.map(|mask| MXCSR_MASKED & !mask);
-    let controls: Vec<u32> = directions.into_iter().chain(unmasked).collect();
+    // or denormal exception traps. Under each control of
+    // `MXCSR_COMPARISON_CONTROLS`, the comparison and the minimum and maximum
+    // operations give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00C5_C0AA);
     let single = single_operands(&mut random, 2_000);
     let single_pairs = pairs(&single, SINGLE_SPECIALS.len(), 1 << 31, 1);
@@ -560,7 +533,7 @@ fn comparisons_read_mxcsr_before_the_host_unit() {
     };
     let half_pairs = sixteen(Layout::BINARY16, &mut random);
     let bfloat_pairs = sixteen(Layout::BFLOAT16, &mut random);
-    for control in controls {
+    for control in MXCSR_COMPARISON_CONTROLS {
         comparisons_under!(F16, control, &half_pairs);
         comparisons_under!(BF16, control, &bfloat_pairs);
         comparisons_under!(F32, control, &single_pairs);

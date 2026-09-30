@@ -50,6 +50,58 @@ pub const MXCSR_ROUNDINGS: [(Rounding, u32); 4] = [
 /// exception whose mask is clear traps.
 pub const MXCSR_EXCEPTION_MASKS: [u32; 6] = [1 << 7, 1 << 8, 1 << 9, 1 << 10, 1 << 11, 1 << 12];
 
+/// The MXCSR values under which the scalar operators and conversions must
+/// give the engine results: FTZ, DAZ, each directed rounding, and each
+/// unmasked exception. FTZ, DAZ, and each directed rounding change the host
+/// results, and an unmasked exception traps.
+pub const MXCSR_OPERATOR_CONTROLS: [u32; 11] = [
+    MXCSR_MASKED | MXCSR_FTZ,
+    MXCSR_MASKED | MXCSR_DAZ,
+    MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
+    MXCSR_MASKED | MXCSR_TOWARD_POSITIVE,
+    MXCSR_MASKED | MXCSR_TOWARD_ZERO,
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[0],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[1],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[2],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[3],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[4],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[5],
+];
+
+/// The MXCSR values under which the scalar comparisons and the minimum and
+/// maximum operations must give the engine results: the default, FTZ, DAZ,
+/// rounding toward negative infinity, and each unmasked exception.
+pub const MXCSR_COMPARISON_CONTROLS: [u32; 10] = [
+    MXCSR_MASKED,
+    MXCSR_MASKED | MXCSR_FTZ,
+    MXCSR_MASKED | MXCSR_DAZ,
+    MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[0],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[1],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[2],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[3],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[4],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[5],
+];
+
+/// The MXCSR values under which the paths of `Lanes` must give the engine
+/// results: the default, FTZ, DAZ, each directed rounding, and each unmasked
+/// exception.
+pub const MXCSR_LANE_CONTROLS: [u32; 12] = [
+    MXCSR_MASKED,
+    MXCSR_MASKED | MXCSR_FTZ,
+    MXCSR_MASKED | MXCSR_DAZ,
+    MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
+    MXCSR_MASKED | MXCSR_TOWARD_POSITIVE,
+    MXCSR_MASKED | MXCSR_TOWARD_ZERO,
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[0],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[1],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[2],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[3],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[4],
+    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[5],
+];
+
 /// Bit 2 of a `ROUNDSS`, `ROUNDSD`, `ROUNDPS`, or `ROUNDPD` immediate: round
 /// in the MXCSR direction.
 pub const ROUND_USE_MXCSR: u8 = 1 << 2;
@@ -102,20 +154,61 @@ pub fn sse_settings() -> Vec<SseSetting> {
     settings
 }
 
+/// The x87 rounding-control field that rounds toward negative infinity.
+pub const X87_TOWARD_NEGATIVE: u16 = 1 << 10;
+/// The x87 rounding-control field that rounds toward positive infinity.
+pub const X87_TOWARD_POSITIVE: u16 = 2 << 10;
+/// The x87 rounding-control field that rounds toward zero.
+pub const X87_TOWARD_ZERO: u16 = 3 << 10;
+
 /// The rounding directions and their x87 rounding-control field.
 pub const X87_ROUNDINGS: [(Rounding, u16); 4] = [
     (Rounding::TiesToEven, 0),
-    (Rounding::TowardNegative, 1 << 10),
-    (Rounding::TowardPositive, 2 << 10),
-    (Rounding::TowardZero, 3 << 10),
+    (Rounding::TowardNegative, X87_TOWARD_NEGATIVE),
+    (Rounding::TowardPositive, X87_TOWARD_POSITIVE),
+    (Rounding::TowardZero, X87_TOWARD_ZERO),
 ];
 
+/// The x87 precision-control field for 53 bits.
+pub const X87_DOUBLE_PRECISION: u16 = 2 << 8;
+/// The x87 precision-control field for 64 bits, the full precision.
+pub const X87_FULL_PRECISION: u16 = 3 << 8;
+
 /// The x87 precision-control field: 24, 53, and 64 bits.
-pub const X87_PRECISIONS: [(u32, u16); 3] = [(24, 0), (53, 2 << 8), (64, 3 << 8)];
+pub const X87_PRECISIONS: [(u32, u16); 3] = [
+    (24, 0),
+    (53, X87_DOUBLE_PRECISION),
+    (64, X87_FULL_PRECISION),
+];
 
 /// The x87 control word with every exception masked, before the rounding and
 /// precision fields.
 pub const X87_MASKED: u16 = 0x007F;
+
+/// The x87 exception masks IM, DM, ZM, OM, UM, and PM, bits 0 to 5. An
+/// exception whose mask is clear traps.
+pub const X87_EXCEPTION_MASKS: [u16; 6] = [1, 1 << 1, 1 << 2, 1 << 3, 1 << 4, 1 << 5];
+
+/// The x87 control words under which the x87 paths must give the engine
+/// results: each rounding direction at full precision, each precision at
+/// round to nearest, and each unmasked exception at full precision. Each
+/// directed rounding and each precision below 64 bits changes the x87
+/// results, and an unmasked exception traps.
+pub const X87_HOST_PATH_CONTROLS: [u16; 13] = [
+    X87_MASKED | X87_FULL_PRECISION,
+    X87_MASKED | X87_FULL_PRECISION | X87_TOWARD_NEGATIVE,
+    X87_MASKED | X87_FULL_PRECISION | X87_TOWARD_POSITIVE,
+    X87_MASKED | X87_FULL_PRECISION | X87_TOWARD_ZERO,
+    X87_MASKED,
+    X87_MASKED | X87_DOUBLE_PRECISION,
+    X87_MASKED | X87_FULL_PRECISION,
+    (X87_MASKED | X87_FULL_PRECISION) & !X87_EXCEPTION_MASKS[0],
+    (X87_MASKED | X87_FULL_PRECISION) & !X87_EXCEPTION_MASKS[1],
+    (X87_MASKED | X87_FULL_PRECISION) & !X87_EXCEPTION_MASKS[2],
+    (X87_MASKED | X87_FULL_PRECISION) & !X87_EXCEPTION_MASKS[3],
+    (X87_MASKED | X87_FULL_PRECISION) & !X87_EXCEPTION_MASKS[4],
+    (X87_MASKED | X87_FULL_PRECISION) & !X87_EXCEPTION_MASKS[5],
+];
 
 /// An x87 control setting of the x87 hardware tests.
 #[derive(Clone, Copy, Debug)]
@@ -206,7 +299,7 @@ pub fn mxcsr_flags(flags: Flags, daz: bool, nan_operand: bool) -> u32 {
         }
     }
     if flags.contains(Flags::DENORMAL_INPUT) && !daz && !denormal_yields(flags, nan_operand) {
-        bits |= 1 << 1;
+        bits |= MXCSR_DE;
     }
     bits
 }

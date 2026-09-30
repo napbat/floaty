@@ -43,6 +43,13 @@ pub fn with_mxcsr<T>(control: u32, body: impl FnOnce() -> T) -> T {
     result
 }
 
+/// Returns a runner that runs a body with MXCSR set to `control`, by
+/// [`with_mxcsr`], for the `assert_*_under` functions of
+/// [`crate::entry_points`].
+pub fn under_mxcsr<T>(control: u32) -> impl FnOnce(&dyn Fn() -> T) -> T {
+    move |body| with_mxcsr(control, body)
+}
+
 /// Defines a function that runs a two-operand SSE instruction on 32-bit or
 /// 64-bit values under an MXCSR value, and returns the result and the flags.
 macro_rules! sse_binary {

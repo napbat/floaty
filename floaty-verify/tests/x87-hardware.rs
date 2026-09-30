@@ -7,10 +7,14 @@ use core::num::NonZeroU32;
 
 use floaty::{Class, Env, F32, F64, F80, ToInt};
 use floaty_verify::encodings::{Layout, boundary_encodings, to_u128};
+use floaty_verify::entry_points::{
+    Arithmetic, Conversions, arithmetic, arithmetic_with, conversions, conversions_with, remainder,
+    remainder_with,
+};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
-    self, X87_DE, X87_MASKED, X87_PRECISIONS, X87_ROUNDINGS, X87_STATUS_FLAGS,
-    x87_arithmetic_status, x87_env, x87_status,
+    self, X87_DE, X87_HOST_PATH_CONTROLS, X87_ROUNDINGS, X87_STATUS_FLAGS, x87_arithmetic_status,
+    x87_env, x87_status,
 };
 
 /// The classes that `FXAM` reports in condition codes C3, C2, and C0.
@@ -339,7 +343,8 @@ fn arithmetic_matches_at_every_rounding_and_precision() {
     }
 }
 
-/// The results of the x87 extended entry points for one pair of operands.
+/// The results of the x87 extended entry points for one pair of operands,
+/// which the x87 paths cover, from the shared lists of entry points.
 #[derive(Debug, PartialEq)]
 struct Results {
     /// The operators, `sqrt`, `round_to_integral`, `from_int`, and the
@@ -349,6 +354,37 @@ struct Results {
     signed: ToInt<i64>,
     /// `to_int` to `u32`.
     unsigned: ToInt<u32>,
+}
+
+impl Results {
+    /// Selects the results of the x87 paths from the results of the lists:
+    /// the arithmetic of `x` without `mul_add`, the conversions of `x`
+    /// without those to binary16, bfloat16, and x87 extended, and the
+    /// conversions of the binary64 and binary32 operands to x87 extended.
+    fn select(
+        arithmetic: Arithmetic<u128>,
+        conversions: Conversions<u128>,
+        from_double: u128,
+        from_single: u128,
+    ) -> Self {
+        Self {
+            encodings: [
+                arithmetic.add,
+                arithmetic.sub,
+                arithmetic.mul,
+                arithmetic.div,
+                arithmetic.sqrt,
+                conversions.round_to_integral,
+                conversions.from_i64,
+                u128::from(conversions.to_binary64),
+                u128::from(conversions.to_binary32),
+                from_double,
+                from_single,
+            ],
+            signed: conversions.to_i64,
+            unsigned: conversions.to_u32,
+        }
+    }
 }
 
 /// Returns the other operands of the entry points for a pair: an `i64` from
@@ -374,23 +410,12 @@ fn other_operands(a: u128, b: u128) -> (i64, F64, F32) {
 fn entry_points(a: u128, b: u128) -> Results {
     let (x, y) = (F80::from_bits(a), F80::from_bits(b));
     let (integer, double, single) = other_operands(a, b);
-    Results {
-        encodings: [
-            (x + y).to_bits(),
-            (x - y).to_bits(),
-            (x * y).to_bits(),
-            (x / y).to_bits(),
-            x.sqrt().to_bits(),
-            x.round_to_integral().to_bits(),
-            F80::from_int(integer).to_bits(),
-            u128::from(x.convert::<F64>().to_bits()),
-            u128::from(x.convert::<F32>().to_bits()),
-            double.convert::<F80>().to_bits(),
-            single.convert::<F80>().to_bits(),
-        ],
-        signed: x.to_int(),
-        unsigned: x.to_int(),
-    }
+    Results::select(
+        arithmetic(x, y, x),
+        conversions(x, integer),
+        conversions(double, integer).to_x87,
+        conversions(single, integer).to_x87,
+    )
 }
 
 /// Returns the results of the `_with` methods under the default modes, which
@@ -398,43 +423,18 @@ fn entry_points(a: u128, b: u128) -> Results {
 fn engine_results(a: u128, b: u128) -> Results {
     let (x, y) = (F80::from_bits(a), F80::from_bits(b));
     let (integer, double, single) = other_operands(a, b);
-    let env = F80::ENV;
-    let to_double: F64 = x.convert_with(F64::ENV).0;
-    let to_single: F32 = x.convert_with(F32::ENV).0;
-    let from_double: F80 = double.convert_with(env).0;
-    let from_single: F80 = single.convert_with(env).0;
-    Results {
-        encodings: [
-            x.add_with(y, env).0.to_bits(),
-            x.sub_with(y, env).0.to_bits(),
-            x.mul_with(y, env).0.to_bits(),
-            x.div_with(y, env).0.to_bits(),
-            x.sqrt_with(env).0.to_bits(),
-            x.round_to_integral_with(env).0.to_bits(),
-            F80::from_int_with(integer, env).0.to_bits(),
-            u128::from(to_double.to_bits()),
-            u128::from(to_single.to_bits()),
-            from_double.to_bits(),
-            from_single.to_bits(),
-        ],
-        signed: x.to_int_with(env).0,
-        unsigned: x.to_int_with(env).0,
-    }
+    Results::select(
+        arithmetic_with(x, y, x),
+        conversions_with(x, integer),
+        conversions_with(double, integer).to_x87,
+        conversions_with(single, integer).to_x87,
+    )
 }
 
 #[test]
 fn entry_points_read_the_control_word_before_the_x87_unit() {
-    // Each directed rounding and each precision below 64 bits changes the
-    // x87 results, and an unmasked exception traps. Under each, the entry
-    // points still give the engine results of the default mode. The masks
-    // IM, DM, ZM, OM, UM, and PM are bits 0 to 5.
-    let full = X87_MASKED | (3 << 8);
-    let directed = X87_ROUNDINGS.into_iter().map(|(_, field)| full | field);
-    let precisions = X87_PRECISIONS
-        .into_iter()
-        .map(|(_, field)| X87_MASKED | field);
-    let unmasked = (0..=5).map(|mask| full & !(1 << mask));
-    let controls: Vec<u16> = directed.chain(precisions).chain(unmasked).collect();
+    // Under each control word of `X87_HOST_PATH_CONTROLS`, the entry points
+    // still give the engine results of the default mode.
     let mut random = SplitMix64::new(0x0087_C0DE);
     let operands = operands(&mut random, 4_000);
     let pairs: Vec<(u128, u128)> = operands
@@ -442,7 +442,7 @@ fn entry_points_read_the_control_word_before_the_x87_unit() {
         .zip(operands.iter().rev())
         .map(|(&a, &b)| (a, b))
         .collect();
-    for control in controls {
+    for control in X87_HOST_PATH_CONTROLS {
         for &(a, b) in &pairs {
             let ours = x86::with_control_word(control, || entry_points(a, b));
             assert_eq!(
@@ -461,16 +461,9 @@ fn remainders_read_the_control_word_before_the_x87_unit() {
     // word. Under each control, the remainders of binary32, binary64, and x87
     // extended values give the engine results of the default mode. The
     // divisors lie near the dividends, where the path applies.
-    let full = X87_MASKED | (3 << 8);
-    let directed = X87_ROUNDINGS.into_iter().map(|(_, field)| full | field);
-    let precisions = X87_PRECISIONS
-        .into_iter()
-        .map(|(_, field)| X87_MASKED | field);
-    let unmasked = (0..=5).map(|mask| full & !(1 << mask));
-    let controls: Vec<u16> = directed.chain(precisions).chain(unmasked).collect();
     let mut random = SplitMix64::new(0x0087_E3E3);
     let dividends = operands(&mut random, 2_000);
-    for control in controls {
+    for control in X87_HOST_PATH_CONTROLS {
         for &dividend in &dividends {
             // A divisor with a nearby exponent: the dividend shifted right by
             // up to 31 exponent steps, with a changed significand.
@@ -489,18 +482,15 @@ fn remainders_read_the_control_word_before_the_x87_unit() {
             );
             let ours = x86::with_control_word(control, || {
                 (
-                    x.remainder(y).to_bits(),
-                    u.remainder(v).to_bits(),
-                    single_left.remainder(single_right).to_bits(),
+                    remainder(x, y),
+                    remainder(u, v),
+                    remainder(single_left, single_right),
                 )
             });
             let engine = (
-                x.remainder_with(y, F80::ENV).0.to_bits(),
-                u.remainder_with(v, F64::ENV).0.to_bits(),
-                single_left
-                    .remainder_with(single_right, F32::ENV)
-                    .0
-                    .to_bits(),
+                remainder_with(x, y),
+                remainder_with(u, v),
+                remainder_with(single_left, single_right),
             );
             assert_eq!(
                 ours, engine,

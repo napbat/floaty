@@ -7,11 +7,12 @@
 use core::hint::black_box;
 
 use floaty::{BF16, F16, F32, F64, Lanes};
-use floaty_verify::aarch64::{FPCR_SETTINGS, with_fpcr};
+use floaty_verify::aarch64::{FPCR_SETTINGS, under_fpcr, with_fpcr};
 use floaty_verify::encodings::{Layout, boundary_encodings_u128};
 use floaty_verify::entry_points::{
-    LaneArithmetic, arithmetic, arithmetic_with, comparisons, comparisons_with, conversions,
-    conversions_with, lane_arithmetic, lane_arithmetic_with,
+    LaneArithmetic, LaneComparisons, assert_arithmetic_under, assert_bfloat16_lanes_under,
+    assert_comparisons_under, assert_conversions_under, assert_directed_rounding_under,
+    lane_arithmetic, lane_arithmetic_with, lane_comparisons, lane_comparisons_with,
 };
 use floaty_verify::random::SplitMix64;
 
@@ -34,40 +35,50 @@ fn encodings<T: TryFrom<u128, Error: core::fmt::Debug>>(pairs: &[(u128, u128)]) 
         .collect()
 }
 
-/// Checks the arithmetic entry points of [`arithmetic`] of one type under one
-/// FPCR value against the engine results of the default mode, with the first
-/// operand as the addend.
-macro_rules! operators_under {
-    ($alias:ty, $bits:ty, $control:expr, $pairs:expr) => {
+/// Checks the arithmetic entry points of one type on each pair under one
+/// FPCR value, with the first operand as the addend.
+macro_rules! arithmetic_under {
+    ($alias:ty, $bits:ty, $control:expr, $pairs:expr) => {{
+        let setting = format!("FPCR {:#x}", $control);
         for &(a, b) in $pairs {
             let convert = |bits: u128| <$bits>::try_from(bits).expect("the encoding fits");
             let (x, y) = (
                 <$alias>::from_bits(convert(a)),
                 <$alias>::from_bits(convert(b)),
             );
-            let expected = arithmetic_with(x, y, x);
-            let ours = with_fpcr($control, || {
-                let (x, y) = (black_box(x), black_box(y));
-                arithmetic(x, y, x)
-            });
-            assert_eq!(ours, expected, "{a:#x} {b:#x} under FPCR {:#x}", $control);
+            assert_arithmetic_under([x, y, x], &setting, under_fpcr($control));
         }
-    };
+    }};
 }
 
-/// Checks the conversion entry points of [`conversions`] of one type under
-/// one control value against the engine results of the default mode.
+/// Checks the comparison entry points of one type on each pair under one
+/// FPCR value.
+macro_rules! comparisons_under {
+    ($alias:ty, $bits:ty, $control:expr, $pairs:expr) => {{
+        let setting = format!("FPCR {:#x}", $control);
+        for &(a, b) in $pairs {
+            let convert = |bits: u128| <$bits>::try_from(bits).expect("the encoding fits");
+            let (x, y) = (
+                <$alias>::from_bits(convert(a)),
+                <$alias>::from_bits(convert(b)),
+            );
+            assert_comparisons_under([x, y], &setting, under_fpcr($control));
+        }
+    }};
+}
+
+/// Checks the conversion entry points of one type on each value under one
+/// control value, with an integer made from the bits of the value.
 macro_rules! conversions_under {
-    ($alias:ty, $control:expr, $values:expr) => {
+    ($alias:ty, $control:expr, $values:expr) => {{
+        let setting = format!("FPCR {:#x}", $control);
         for &bits in $values {
             let x = <$alias>::from_bits(bits);
             let integer =
                 i64::from_ne_bytes(u64::from(bits).to_ne_bytes()) >> (u64::from(bits) % 64);
-            let expected = conversions_with(x, integer);
-            let ours = with_fpcr($control, || conversions(black_box(x), black_box(integer)));
-            assert_eq!(ours, expected, "{bits:#x} {integer} under {:#x}", $control);
+            assert_conversions_under(x, integer, &setting, under_fpcr($control));
         }
-    };
+    }};
 }
 
 #[test]
@@ -80,37 +91,18 @@ fn operators_read_fpcr_before_the_host_unit() {
     let double = pairs(&mut random, Layout::BINARY64);
     let bfloat = pairs(&mut random, Layout::BFLOAT16);
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
-        operators_under!(F16, u16, control, &half);
-        operators_under!(BF16, u16, control, &bfloat);
-        operators_under!(F32, u32, control, &single);
-        operators_under!(F64, u64, control, &double);
+        // The first operand is also the addend.
+        arithmetic_under!(F16, u16, control, &half);
+        arithmetic_under!(BF16, u16, control, &bfloat);
+        arithmetic_under!(F32, u32, control, &single);
+        arithmetic_under!(F64, u64, control, &double);
         conversions_under!(F16, control, &encodings::<u16>(&half));
         conversions_under!(BF16, control, &encodings::<u16>(&bfloat));
+        // The conversions include binary32 to bfloat16, which rounds in
+        // `BFCVT` with `+bf16`.
         conversions_under!(F32, control, &encodings::<u32>(&single));
         conversions_under!(F64, control, &encodings::<u64>(&double));
-        for x in encodings::<u32>(&single).into_iter().map(F32::from_bits) {
-            let expected = x.convert_with::<BF16>(BF16::ENV).0.to_bits();
-            let ours = with_fpcr(control, || black_box(x).convert::<BF16>().to_bits());
-            assert_eq!(ours, expected, "{x:?} to BF16 under FPCR {control:#x}");
-        }
     }
-}
-
-/// Checks the comparison entry points of [`comparisons`] of one type under
-/// one FPCR value against the engine results of the default mode.
-macro_rules! comparisons_under {
-    ($alias:ty, $bits:ty, $control:expr, $pairs:expr) => {
-        for &(a, b) in $pairs {
-            let convert = |bits: u128| <$bits>::try_from(bits).expect("the encoding fits");
-            let (x, y) = (
-                <$alias>::from_bits(convert(a)),
-                <$alias>::from_bits(convert(b)),
-            );
-            let expected = comparisons_with(x, y);
-            let ours = with_fpcr($control, || comparisons(black_box(x), black_box(y)));
-            assert_eq!(ours, expected, "{a:#x} {b:#x} under FPCR {:#x}", $control);
-        }
-    };
 }
 
 /// The results of the operations of `Lanes` on five binary32 lanes, three
@@ -233,27 +225,11 @@ fn bfloat16_lanes_read_fpcr_before_the_vector_unit() {
     let mut random = SplitMix64::new(0x00A6_1ABF);
     let encodings = encodings::<u16>(&pairs(&mut random, Layout::BFLOAT16));
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
+        let setting = format!("FPCR {control:#x}");
         for start in (0..encodings.len()).step_by(5) {
             let bits: [u16; 5] =
                 core::array::from_fn(|offset| encodings[(start + offset) % encodings.len()]);
-            let lanes = Lanes::<BF16, 5>::from_bits(bits);
-            let ours = with_fpcr(control, || {
-                let lanes = black_box(lanes);
-                let single: Lanes<F32, 5> = lanes.convert();
-                let double: Lanes<F64, 5> = lanes.convert();
-                (
-                    lanes.round_to_integral().to_bits(),
-                    single.to_bits(),
-                    double.to_bits(),
-                )
-            });
-            let values = bits.map(BF16::from_bits);
-            let engine = (
-                values.map(|value| value.round_to_integral_with(BF16::ENV).0.to_bits()),
-                values.map(|value| value.convert_with::<F32>(F32::ENV).0.to_bits()),
-                values.map(|value| value.convert_with::<F64>(F64::ENV).0.to_bits()),
-            );
-            assert_eq!(ours, engine, "{bits:x?} under FPCR {control:#x}");
+            assert_bfloat16_lanes_under(bits, &setting, under_fpcr(control));
         }
     }
 }
@@ -264,34 +240,14 @@ fn directed_rounding_reads_fpcr_before_the_vector_unit() {
     // from the instruction, `FRINTP` here, but the other fields of FPCR still
     // apply. Under each setting, the lanes and the scalar values give the
     // engine results of the mode.
-    type Up = floaty::Float<
-        floaty::Binary<8>,
-        32,
-        floaty::mode::Rounded<floaty::mode::Ieee, floaty::mode::direction::TowardPositive>,
-    >;
     let mut random = SplitMix64::new(0x00A6_D1E0);
     let encodings = encodings::<u32>(&pairs(&mut random, Layout::BINARY32));
     for control in core::iter::once(0).chain(FPCR_SETTINGS) {
+        let setting = format!("FPCR {control:#x}");
         for start in (0..encodings.len()).step_by(7) {
             let bits: [u32; 5] =
                 core::array::from_fn(|offset| encodings[(start + offset) % encodings.len()]);
-            let lanes = Lanes::<Up, 5>::from_bits(bits);
-            let ours = with_fpcr(control, || {
-                let lanes = black_box(lanes);
-                (
-                    lanes.round_to_integral().to_bits(),
-                    lanes
-                        .into_array()
-                        .map(|value| value.round_to_integral().to_bits()),
-                )
-            });
-            let engine = bits.map(|bits| {
-                Up::from_bits(bits)
-                    .round_to_integral_with(Up::ENV)
-                    .0
-                    .to_bits()
-            });
-            assert_eq!(ours, (engine, engine), "{bits:x?} under FPCR {control:#x}");
+            assert_directed_rounding_under(bits, &setting, under_fpcr(control));
         }
     }
 }
@@ -326,36 +282,21 @@ fn lane_orders_read_fpcr_before_the_vector_unit() {
             let lane = |offset: usize| singles[(start + offset) % singles.len()];
             let x = Lanes::<F32, 5>::from_bits(core::array::from_fn(lane));
             let y = Lanes::<F32, 5>::from_bits(core::array::from_fn(|offset| lane(offset + 3)));
-            let ours = with_fpcr(control, || {
-                let (x, y) = (black_box(x), black_box(y));
+            let ours = with_fpcr(control, || lane_comparisons(black_box(x), black_box(y)));
+            let engine = lane_comparisons_with(x, y);
+            // The test checks the order, `minimum`, `maximumNumber`, and
+            // `minNum` of the shared list.
+            let checked = |results: LaneComparisons<u32, 5>| {
                 (
-                    x.compare_quiet(y),
-                    [
-                        x.minimum(y).to_bits(),
-                        x.maximum_number(y).to_bits(),
-                        x.min_num(y).to_bits(),
-                    ],
+                    results.order,
+                    [results.minimum, results.maximum_number, results.min_num],
                 )
-            });
-            let (a, b) = (x.into_array(), y.into_array());
-            let env = F32::ENV;
-            let engine = (
-                core::array::from_fn::<_, 5, _>(|index| {
-                    a[index].compare_quiet_with(b[index], env).0
-                }),
-                [
-                    core::array::from_fn::<_, 5, _>(|index| {
-                        a[index].minimum_with(b[index], env).0.to_bits()
-                    }),
-                    core::array::from_fn::<_, 5, _>(|index| {
-                        a[index].maximum_number_with(b[index], env).0.to_bits()
-                    }),
-                    core::array::from_fn::<_, 5, _>(|index| {
-                        a[index].min_num_with(b[index], env).0.to_bits()
-                    }),
-                ],
+            };
+            assert_eq!(
+                checked(ours),
+                checked(engine),
+                "lanes at {start} under FPCR {control:#x}"
             );
-            assert_eq!(ours, engine, "lanes at {start} under FPCR {control:#x}");
         }
     }
 }

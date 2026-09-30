@@ -57,3 +57,10 @@ pub fn with_fpcr<T>(control: u64, body: impl FnOnce() -> T) -> T {
     }
     result
 }
+
+/// Returns a runner that runs a body with FPCR set to `control`, by
+/// [`with_fpcr`], for the `assert_*_under` functions of
+/// [`crate::entry_points`].
+pub fn under_fpcr<T>(control: u64) -> impl FnOnce(&dyn Fn() -> T) -> T {
+    move |body| with_fpcr(control, body)
+}
