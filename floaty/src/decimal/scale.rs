@@ -10,12 +10,7 @@ use crate::format::internal::Step;
 use crate::format::{DecimalEncoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
 use crate::nan::{self, default_nan};
-use crate::unpacked::Unpacked;
-
-/// The largest scale that `scale_b` applies. Every format overflows or
-/// underflows at a smaller scale, and the limit keeps every exponent inside
-/// an `i32`.
-const SCALE_LIMIT: i32 = 1 << 30;
+use crate::unpacked::{SCALE_LIMIT, Unpacked};
 
 impl<Enc: DecimalEncoding, const W: usize> DecimalLayout<Enc, W>
 where
@@ -203,12 +198,7 @@ where
                 let coefficient: Wide<L> = if drop >= 0 {
                     let integral: Integral<Wide<L>> =
                         round::round_digits(&value, drop, env.rounding);
-                    if integral.inexact {
-                        flags |= Flags::INEXACT;
-                    }
-                    if integral.rounded_up {
-                        flags |= Flags::ROUNDED_UP;
-                    }
+                    flags |= integral.flags();
                     integral.magnitude
                 } else {
                     let shift = u32::try_from(-drop).unwrap_or(u32::MAX);

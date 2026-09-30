@@ -553,7 +553,7 @@ where
             return (Self::encode(Unpacked::Infinity { negative }), Flags::NONE);
         }
         let value = if env.saturate || !Self::TARGET.has_nan {
-            exact::largest(negative, Self::TARGET.precision_in(env), &Self::TARGET)
+            exact::largest(negative, env.precision_within(Self::TARGET.precision), &Self::TARGET)
         } else {
             Unpacked::Nan {
                 negative,

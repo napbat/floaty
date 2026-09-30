@@ -10,7 +10,7 @@ use core::cmp::Ordering;
 
 use super::digits::{self, digit_count, last_digit, power_of_ten};
 use crate::env::{Behavior, Env, Flags, Rounding};
-use crate::exact::{self, Dropped, Integral, Unrounded};
+use crate::exact::{self, Dropped, Integral, Underflow, Unrounded};
 use crate::limbs::{self, Limbs};
 use crate::unpacked::Unpacked;
 
@@ -26,14 +26,6 @@ pub struct DecimalTarget {
 }
 
 impl DecimalTarget {
-    /// Returns the precision that `env` rounds to: the precision limit of the
-    /// behavior, in digits, when it is below the format precision.
-    #[inline]
-    pub fn precision_in(&self, env: &Env) -> u32 {
-        env.precision
-            .map_or(self.precision, |limit| limit.get().min(self.precision))
-    }
-
     /// Returns the smallest and the largest exponent of a coefficient of
     /// `precision` digits.
     #[inline]
@@ -83,7 +75,7 @@ pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
     let target = &F::TARGET;
     let env = &behavior.env();
     let negative = value.negative;
-    let precision = target.precision_in(env);
+    let precision = env.precision_within(target.precision);
     let (lowest, _) = target.exponents(precision);
     let (full_lowest, full_highest) = target.exponents(target.precision);
     let digits = digit_count(&value.significand);
@@ -119,23 +111,14 @@ pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
             position += 1;
         }
     }
-    let mut flags = Flags::NONE;
     let zero = Unpacked::Zero {
         negative,
         exponent: narrow(full_lowest),
     };
-    if tiny {
-        flags |= Flags::TINY;
-        if env.flush_to_zero {
-            return (zero, flags | Flags::UNDERFLOW | Flags::INEXACT);
-        }
-    }
-    if inexact {
-        flags |= Flags::INEXACT;
-        if tiny {
-            flags |= Flags::UNDERFLOW;
-        }
-    }
+    let mut flags = match exact::underflow(tiny, inexact, env) {
+        Underflow::Flushed(flags) => return (zero, flags),
+        Underflow::Kept(flags) => flags,
+    };
     if step {
         flags |= Flags::ROUNDED_UP;
     }
@@ -331,16 +314,7 @@ fn overflow<L: Limbs>(
     env: &Env,
 ) -> (Unpacked<L>, Flags) {
     let flags = Flags::OVERFLOW | Flags::INEXACT;
-    let to_infinity = match env.rounding {
-        Rounding::TiesToEven
-        | Rounding::TiesToAway
-        | Rounding::TiesTowardZero
-        | Rounding::AwayFromZero => true,
-        Rounding::TowardPositive => !negative,
-        Rounding::TowardNegative => negative,
-        Rounding::TowardZero | Rounding::ToOdd => false,
-    };
-    if to_infinity {
+    if exact::overflows_to_infinity(env.rounding, negative) {
         return (Unpacked::Infinity { negative }, flags | Flags::ROUNDED_UP);
     }
     (largest(negative, precision, target), flags)

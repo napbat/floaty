@@ -9,7 +9,7 @@
 
 use super::digits::{self, digit_count, power_of_ten};
 use super::{DecimalLayout, Wide, round};
-use crate::env::{Behavior, Env, Flags, Rounding};
+use crate::env::{Behavior, Env, Flags};
 use crate::exact::Unrounded;
 use crate::format::{DecimalEncoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
@@ -55,13 +55,6 @@ enum Sum<L> {
 #[inline]
 fn narrow(exponent: i64) -> i32 {
     i32::try_from(exponent).expect("an exponent of an exact decimal result fits an i32")
-}
-
-/// Returns the sign of an exact zero sum of values with different signs:
-/// negative only when rounding toward negative.
-#[inline]
-fn zero_sum_sign(env: &Env) -> bool {
-    env.rounding == Rounding::TowardNegative
 }
 
 /// Adds two terms.
@@ -290,7 +283,7 @@ where
                 let zero_sign = if a.negative == b.negative {
                     a.negative
                 } else {
-                    zero_sum_sign(env)
+                    env.zero_sum_is_negative()
                 };
                 // The sum stays in the limbs of the operands.
                 const { assert!(holds_sums::<L>(Self::PRECISION), "the limbs hold every sum") };
@@ -370,7 +363,7 @@ where
                     Self::term::<L, Wide<L>>(&x).coefficient,
                     Self::term::<L, Wide<L>>(&y).coefficient,
                 );
-                let precision = Self::TARGET.precision_in(env);
+                let precision = env.precision_within(Self::TARGET.precision);
                 // Scale the dividend so that the quotient has at least
                 // precision + 1 digits.
                 let scale = (i64::from(precision) + 1 + i64::from(digit_count(&divisor))
@@ -411,7 +404,7 @@ where
             }
             Unpacked::Finite { exponent, .. } => {
                 let coefficient = Self::term::<L, Wide<L>>(&x).coefficient;
-                let precision = Self::TARGET.precision_in(env);
+                let precision = env.precision_within(Self::TARGET.precision);
                 let exponent = i64::from(exponent);
                 // Scale to at least 2 * precision + 2 digits and an even
                 // exponent, so that the root has precision + 1 digits.
@@ -494,7 +487,7 @@ where
                 let zero_sign = if product.negative == addend.negative {
                     product.negative
                 } else {
-                    zero_sum_sign(env)
+                    env.zero_sum_is_negative()
                 };
                 Self::finish_sum(
                     &sum(product, addend, Self::PRECISION),

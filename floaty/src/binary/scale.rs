@@ -8,11 +8,7 @@ use crate::format::internal::Step;
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::Limbs;
 use crate::nan;
-
-/// The largest scale that `scale_b` applies. Every format overflows or
-/// underflows at a smaller scale, and the limit keeps every exponent inside
-/// an `i32`.
-const SCALE_LIMIT: i32 = 1 << 30;
+use crate::unpacked::SCALE_LIMIT;
 
 impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
 where

@@ -75,12 +75,7 @@ where
                     sticky: false,
                 };
                 let integral: Integral<L> = round::round_to_integer(&value, env.rounding);
-                if integral.inexact {
-                    flags |= Flags::INEXACT;
-                }
-                if integral.rounded_up {
-                    flags |= Flags::ROUNDED_UP;
-                }
+                flags |= integral.flags();
                 let result = if integral.magnitude.is_zero() {
                     Unpacked::Zero {
                         negative,
@@ -151,12 +146,7 @@ where
         let Some(parts) = fit::<I, _>(negative, &integral.magnitude) else {
             return out_of_range;
         };
-        if integral.inexact {
-            flags |= Flags::INEXACT;
-        }
-        if integral.rounded_up {
-            flags |= Flags::ROUNDED_UP;
-        }
+        flags |= integral.flags();
         (ToInt::Value(I::from_parts(parts)), flags)
     }
 

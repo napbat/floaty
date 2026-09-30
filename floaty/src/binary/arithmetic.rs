@@ -10,7 +10,7 @@
 use core::cmp::Ordering;
 
 use super::{Layout, Number, Unpacked};
-use crate::env::{Behavior, Env, Flags, Rounding};
+use crate::env::{Behavior, Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
@@ -91,13 +91,6 @@ fn sum<L: Limbs>(first: Term<L>, second: Term<L>) -> Sum<L> {
     })
 }
 
-/// Returns the sign of an exact zero sum of operands with different signs:
-/// negative only when rounding toward negative.
-#[inline]
-fn zero_sum_sign(env: &Env) -> bool {
-    env.rounding == Rounding::TowardNegative
-}
-
 impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
 where
     Width<W>: Storage,
@@ -138,7 +131,7 @@ where
     ) -> (L, Flags) {
         match sum {
             Sum::Value(value) => Self::finish(value, behavior, flags),
-            Sum::Zero => Self::exact(Unpacked::zero(zero_sum_sign(&behavior.env())), flags),
+            Sum::Zero => Self::exact(Unpacked::zero(behavior.env().zero_sum_is_negative()), flags),
         }
     }
 
@@ -154,7 +147,7 @@ where
         if Self::TARGET.has_infinity {
             Unpacked::Infinity { negative }
         } else if env.saturate || !Self::TARGET.has_nan {
-            exact::largest(negative, Self::TARGET.precision_in(env), &Self::TARGET)
+            exact::largest(negative, env.precision_within(Self::TARGET.precision), &Self::TARGET)
         } else {
             Unpacked::Nan {
                 negative,
@@ -241,7 +234,7 @@ where
             (Unpacked::Infinity { .. }, _) => Self::exact(x, flags),
             (_, Unpacked::Infinity { .. }) => Self::exact(y, flags),
             (Unpacked::Zero { negative: a, .. }, Unpacked::Zero { negative: b, .. }) => {
-                let negative = if a == b { a } else { zero_sum_sign(env) };
+                let negative = if a == b { a } else { env.zero_sum_is_negative() };
                 Self::exact(Unpacked::zero(negative), flags)
             }
             (
@@ -590,7 +583,7 @@ where
                 let negative = if negative == product_negative {
                     negative
                 } else {
-                    zero_sum_sign(env)
+                    env.zero_sum_is_negative()
                 };
                 Self::exact(Unpacked::zero(negative), flags)
             }

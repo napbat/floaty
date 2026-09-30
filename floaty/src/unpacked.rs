@@ -1,5 +1,10 @@
 //! The decoded form of a value that the engines compute with.
 
+/// The largest scale that `scale_b` applies. Every format overflows or
+/// underflows at a smaller scale, and the limit keeps every exponent of an
+/// [`Unpacked`] value inside an `i32`.
+pub const SCALE_LIMIT: i32 = 1 << 30;
+
 /// A decoded value of a binary or a decimal format.
 ///
 /// A finite value is `significand * RADIX^exponent`. `exponent` is the weight

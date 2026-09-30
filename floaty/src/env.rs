@@ -424,6 +424,21 @@ impl Env {
     pub const fn with_saturate(self, saturate: bool) -> Self {
         Self { saturate, ..self }
     }
+
+    /// Returns the precision that the behavior rounds to in a format of
+    /// `full` bits or digits: the precision limit, when it is below `full`.
+    #[inline]
+    pub(crate) fn precision_within(&self, full: u32) -> u32 {
+        self.precision.map_or(full, |limit| limit.get().min(full))
+    }
+
+    /// Returns the sign of an exact zero sum of operands with different
+    /// signs: negative only when rounding toward negative, as IEEE 754-2019
+    /// section 6.3 requires.
+    #[inline]
+    pub(crate) fn zero_sum_is_negative(&self) -> bool {
+        self.rounding == Rounding::TowardNegative
+    }
 }
 
 /// The exception flags and the extra status that an operation reports.

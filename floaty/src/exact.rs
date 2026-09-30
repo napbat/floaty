@@ -61,16 +61,6 @@ pub struct Target {
     pub has_nan: bool,
 }
 
-impl Target {
-    /// Returns the precision that `env` rounds to: the precision limit of the
-    /// behavior, when it is below the format precision.
-    #[inline]
-    pub fn precision_in(&self, env: &Env) -> u32 {
-        env.precision
-            .map_or(self.precision, |limit| limit.get().min(self.precision))
-    }
-}
-
 /// A value to round, with a significand of any limb type.
 ///
 /// [`Exact`] names its significand by a limb count. Generic engine code knows
@@ -257,7 +247,7 @@ fn round_small<In: Limbs, Out: Limbs>(
         debug_assert!(!value.sticky, "a sticky bit needs a nonzero significand");
         return (Unpacked::zero(negative), Flags::NONE);
     }
-    let precision = target.precision_in(env);
+    let precision = env.precision_within(target.precision);
     debug_assert!(
         !value.sticky || width >= precision + 2,
         "a sticky value has at least p + 2 significant bits"
@@ -287,22 +277,10 @@ fn round_small<In: Limbs, Out: Limbs>(
                 })
         }
     };
-    let mut flags = Flags::NONE;
-    if tiny {
-        flags |= Flags::TINY;
-        if env.flush_to_zero {
-            return (
-                Unpacked::zero(negative),
-                flags | Flags::UNDERFLOW | Flags::INEXACT,
-            );
-        }
-    }
-    if inexact {
-        flags |= Flags::INEXACT;
-        if tiny {
-            flags |= Flags::UNDERFLOW;
-        }
-    }
+    let mut flags = match underflow(tiny, inexact, env) {
+        Underflow::Flushed(flags) => return (Unpacked::zero(negative), flags),
+        Underflow::Kept(flags) => flags,
+    };
     if kept.is_zero() {
         return (Unpacked::zero(negative), flags);
     }
@@ -335,7 +313,7 @@ fn round_normal<In: Limbs, Out: Limbs, F: RoundingTarget, B: Behavior>(
 ) -> (Unpacked<Out>, Flags) {
     let target = &F::TARGET;
     let env = &behavior.env();
-    let precision = target.precision_in(env);
+    let precision = env.precision_within(target.precision);
     debug_assert!(
         !value.sticky || width >= precision + 2,
         "a sticky value has at least p + 2 significant bits"
@@ -386,6 +364,37 @@ fn round_normal<In: Limbs, Out: Limbs, F: RoundingTarget, B: Behavior>(
     )
 }
 
+/// The flags of a rounded result that can be tiny or inexact.
+pub enum Underflow {
+    /// Flush-to-zero replaces the tiny result with a zero of its sign, with
+    /// these flags.
+    Flushed(Flags),
+    /// The result stays, with these flags.
+    Kept(Flags),
+}
+
+/// Returns the flags of a rounded result from whether it is tiny and
+/// inexact: `TINY`, `INEXACT`, and `UNDERFLOW` for a result that is both.
+/// With flush-to-zero, a tiny result becomes a zero that is tiny, underflows,
+/// and is inexact. [`round`] and the decimal rounding routine share the rule.
+#[inline]
+pub fn underflow(tiny: bool, inexact: bool, env: &Env) -> Underflow {
+    let mut flags = Flags::NONE;
+    if tiny {
+        flags |= Flags::TINY;
+        if env.flush_to_zero {
+            return Underflow::Flushed(flags | Flags::UNDERFLOW | Flags::INEXACT);
+        }
+    }
+    if inexact {
+        flags |= Flags::INEXACT;
+        if tiny {
+            flags |= Flags::UNDERFLOW;
+        }
+    }
+    Underflow::Kept(flags)
+}
+
 /// The integer that a value rounds to.
 #[derive(Clone, Copy, Debug)]
 pub struct Integral<L> {
@@ -396,6 +405,22 @@ pub struct Integral<L> {
     /// `true` when the magnitude of the integer is above the magnitude of the
     /// value.
     pub rounded_up: bool,
+}
+
+impl<L> Integral<L> {
+    /// Returns the flags of the rounding: `INEXACT` when the integer differs
+    /// from the value, and `ROUNDED_UP` when its magnitude is above it.
+    #[inline]
+    pub fn flags(&self) -> Flags {
+        let mut flags = Flags::NONE;
+        if self.inexact {
+            flags |= Flags::INEXACT;
+        }
+        if self.rounded_up {
+            flags |= Flags::ROUNDED_UP;
+        }
+        flags
+    }
 }
 
 /// Rounds a value to an integer in the direction of `rounding`, with the same

@@ -18,15 +18,11 @@ use crate::format::internal::MinMax;
 use crate::format::{Binary, Standard};
 use crate::integer::{Integer, Parts, ToInt, fit};
 use crate::limbs::Limbs;
-use crate::unpacked::Unpacked;
+use crate::unpacked::{SCALE_LIMIT, Unpacked};
 
 /// The limbs of the integer part of a finite pair, below 2^1025, with the
 /// carry of a rounding.
 type Whole = [u64; 17];
-
-/// The largest scale that [`DoubleDouble::scale_b_with`] applies, as for
-/// [`Float::scale_b_with`](crate::Float::scale_b_with).
-const SCALE_LIMIT: i32 = 1 << 30;
 
 /// The bit length of `2^-969 * 2^1074`, the magnitude of `LDBL_MIN`: a
 /// finite value with a shorter [`Magnitude`] is below `LDBL_MIN`.
@@ -42,18 +38,6 @@ fn integral(negative: bool, magnitude: &Magnitude, env: &Env) -> Integral<Whole>
         sticky: false,
     };
     exact::round_to_integer(&value, env.rounding)
-}
-
-/// Returns the flags of a rounding to an integer.
-fn integral_flags(integral: &Integral<Whole>) -> Flags {
-    let mut flags = Flags::NONE;
-    if integral.inexact {
-        flags |= Flags::INEXACT;
-    }
-    if integral.rounded_up {
-        flags |= Flags::ROUNDED_UP;
-    }
-    flags
 }
 
 /// Defines a minimum or maximum operation: a method with the default mode and
@@ -128,7 +112,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
                 match fit::<I, _>(negative, &integral.magnitude) {
                     Some(parts) => (
                         ToInt::Value(I::from_parts(parts)),
-                        integral_flags(&integral),
+                        integral.flags(),
                     ),
                     None => (ToInt::OutOfRange { negative }, Flags::INVALID),
                 }
@@ -185,7 +169,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
                         significand: integral.magnitude.resize::<Magnitude>(),
                     }
                 };
-                (value, integral_flags(&integral))
+                (value, integral.flags())
             }
             other => (other, Flags::NONE),
         };

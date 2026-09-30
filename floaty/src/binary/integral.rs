@@ -51,12 +51,7 @@ where
             },
             env.rounding,
         );
-        if integral.inexact {
-            flags |= Flags::INEXACT;
-        }
-        if integral.rounded_up {
-            flags |= Flags::ROUNDED_UP;
-        }
+        flags |= integral.flags();
         if integral.magnitude.is_zero() {
             return Self::exact(Unpacked::zero(negative), flags);
         }
@@ -145,12 +140,7 @@ where
         let Some(parts) = fit::<I, M>(negative, &integral.magnitude) else {
             return (ToInt::OutOfRange { negative }, flags | Flags::INVALID);
         };
-        if integral.inexact {
-            flags |= Flags::INEXACT;
-        }
-        if integral.rounded_up {
-            flags |= Flags::ROUNDED_UP;
-        }
+        flags |= integral.flags();
         (ToInt::Value(I::from_parts(parts)), flags)
     }
 }
