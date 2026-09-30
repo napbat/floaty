@@ -468,6 +468,8 @@ beside its test with the evidence and the resolution.
 | --- | --- |
 | `x86_64-unknown-linux-gnu` | Tested, in the baseline build and with `-C target-cpu=x86-64-v3` |
 | `aarch64-unknown-linux-gnu` | Tested under QEMU, without and with `+fp16,+bf16` |
+| `i686-unknown-linux-gnu` | Tested under QEMU, as a 32-bit target |
+| `s390x-unknown-linux-gnu` | Tested under QEMU, as a big-endian target |
 | Other targets | The engine has no target-specific code. The gates do not test these targets. |
 
 The minimum supported Rust version is 1.85. The crate uses edition 2024.

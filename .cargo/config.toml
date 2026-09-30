@@ -5,3 +5,15 @@
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
 runner = ["qemu-aarch64", "-cpu", "max", "-L", "/usr/aarch64-linux-gnu"]
+
+# The i686 and s390x gates of AGENTS.md test a 32-bit target and a big-endian
+# target under QEMU 10.2.1. The packages gcc-i686-linux-gnu,
+# libc6-dev-i386-cross, gcc-s390x-linux-gnu, and libc6-dev-s390x-cross give
+# the linkers and the C libraries that QEMU loads.
+[target.i686-unknown-linux-gnu]
+linker = "i686-linux-gnu-gcc"
+runner = ["qemu-i386", "-L", "/usr/i686-linux-gnu"]
+
+[target.s390x-unknown-linux-gnu]
+linker = "s390x-linux-gnu-gcc"
+runner = ["qemu-s390x", "-L", "/usr/s390x-linux-gnu"]
