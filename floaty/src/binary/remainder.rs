@@ -177,13 +177,81 @@ fn multiply_mod<L: Widen>(left: L, right: L, modulus: L) -> L {
     rest.resize()
 }
 
+/// Barrett's reduction modulo a fixed modulus of `width` bits: the quotient
+/// of a product comes from two products with `factor = floor(4^width /
+/// modulus)`, not from a long division. The factor costs one long division.
+#[derive(Clone, Copy)]
+struct Barrett<L> {
+    modulus: L,
+    factor: L,
+    width: u32,
+}
+
+impl<L: Widen> Barrett<L> {
+    /// Returns the reduction for `modulus`, or `None` when its factor does
+    /// not fit `L`. The factor has at most `width + 2` bits.
+    fn new(modulus: L) -> Option<Self> {
+        let width = modulus.bit_length();
+        let power = L::Double::ZERO.with_bit(2 * width);
+        let (factor, _) = limbs::divide(power, modulus.resize());
+        (factor.bit_length() <= L::BITS).then(|| Self {
+            modulus,
+            factor: factor.resize(),
+            width,
+        })
+    }
+
+    /// Returns `left * right mod modulus`. Both factors are below the modulus,
+    /// so the product is below `4^width`, and the estimated quotient is at
+    /// most two below the quotient.
+    fn multiply(&self, left: L, right: L) -> L {
+        let product = left.widening_mul(right);
+        let top: L = product.shr(self.width - 1).resize();
+        let quotient: L = top.widening_mul(self.factor).shr(self.width + 1).resize();
+        let modulus = self.modulus.resize::<L::Double>();
+        let mut rest = product.sub(quotient.widening_mul(self.modulus));
+        while rest.compare(&modulus) != Ordering::Less {
+            rest = rest.sub(modulus);
+        }
+        rest.resize()
+    }
+}
+
+/// The number of squarings from which Barrett's reduction repays its long
+/// division. With fewer, the remainder divides at each step. For binary128,
+/// a Barrett step saved about 21 ns and the factor cost about 190 ns in the
+/// benchmark, so the two meet near 9 squarings.
+const BARRETT_SQUARINGS: u32 = 10;
+
 /// Returns `2^exponent mod modulus` by square and multiply, so the cost grows
 /// with the bit length of the exponent, not with the exponent. The modulus
 /// is at least 2, and twice a residue fits `L`.
+///
+/// A modulus of two limbs, as in binary128 and x87 extended precision, takes
+/// Barrett's reduction when the exponent needs many squarings. It cut the
+/// remainder of binary128 operands `EMAX / 2` apart from 390 to 308 ns. A
+/// modulus of one limb divides natively, and a longer modulus divided as fast
+/// as Barrett's two products in the benchmark.
 fn power_of_two_mod<L: Widen>(exponent: u32, modulus: L) -> L {
+    let squarings = u32::BITS - exponent.leading_zeros();
+    if squarings >= BARRETT_SQUARINGS && (65..=128).contains(&modulus.bit_length()) {
+        if let Some(barrett) = Barrett::new(modulus) {
+            return power_of_two(exponent, modulus, |left, right| {
+                barrett.multiply(left, right)
+            });
+        }
+    }
+    power_of_two(exponent, modulus, |left, right| {
+        multiply_mod(left, right, modulus)
+    })
+}
+
+/// Returns `2^exponent mod modulus` by square and multiply, with `multiply`
+/// as the product modulo the modulus.
+fn power_of_two<L: Widen>(exponent: u32, modulus: L, multiply: impl Fn(L, L) -> L) -> L {
     let mut power = L::ZERO.with_bit(0);
     for position in (0..u32::BITS - exponent.leading_zeros()).rev() {
-        power = multiply_mod(power, power, modulus);
+        power = multiply(power, power);
         if (exponent >> position) & 1 == 1 {
             power = power.shl(1);
             if power.compare(&modulus) != Ordering::Less {
