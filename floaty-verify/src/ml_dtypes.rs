@@ -4,6 +4,7 @@
 use floaty::{Class, Decoded};
 
 /// One line of the table: the parameters of a format, or one encoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Row<'a> {
     /// The parameters of a format, as `ml_dtypes.finfo` gives them.
     Format {

@@ -52,8 +52,9 @@ where
     /// The step does not round, so the precision limit and flush-to-zero do
     /// not apply. In a format without an infinity, the value past the largest
     /// finite value is the NaN. When the behavior saturates, or the format has
-    /// no NaN, it is the largest finite value itself. Only a signaling NaN or an unsupported operand
-    /// signals invalid. A subnormal operand reports `DENORMAL_INPUT`.
+    /// no NaN, it is the largest finite value itself. Only a signaling NaN or
+    /// an unsupported operand signals invalid. A subnormal operand reports
+    /// `DENORMAL_INPUT`.
     pub fn next<L: Limbs>(bits: L, step: Step, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let value = Self::operand(bits, env, &mut flags);

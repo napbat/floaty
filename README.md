@@ -23,8 +23,8 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   `next_up` and `next_down`, the sign operations, and the decimal quantum
   operations.
 - **Hardware behavior as data.** Flush-to-zero, denormals-are-zero, tininess
-  detection, NaN propagation rules, x87 precision control, and FP8
-  saturation. Presets give the x86 SSE and x87 behavior.
+  detection, NaN propagation rules, x87 precision control, and saturation
+  of overflows. Presets give the x86 SSE and x87 behavior.
 - **Flags.** The five IEEE 754 flags, and `TINY`, `ROUNDED_UP`, and
   `DENORMAL_INPUT`, which emulators need.
 - **Vector lanes.** `Lanes<T, N>` applies each operation to the lanes of a
@@ -101,10 +101,10 @@ let largest = Minifloat::from_bits(0x77).decode::<1>();
 assert_eq!(largest, Decoded::Finite { negative: false, exponent: 4, significand: [15] });
 ```
 
-The formats without an infinity overflow to the NaN. A saturating behavior
-gives the largest finite value instead, in every binary format. The MX
-formats have neither an infinity nor a NaN, so they always saturate, and an
-invalid operation gives `+0` with `INVALID`:
+An overflow in a format without an infinity gives the NaN when the format
+has one. A saturating behavior gives the largest finite value instead, in
+every binary format. The MX formats have neither an infinity nor a NaN, so
+they always saturate, and an invalid operation gives `+0` with `INVALID`:
 
 ```rust
 use floaty::{F4E2M1Fn, F8E4M3Fn, F8E5M2, Flags};
@@ -370,9 +370,9 @@ path.
 - Only the entry points without flags use a host path: the operators, and
   the methods that drop the flags of the default mode. The `_with` methods
   always run the engine.
-- The mode must round to nearest even without FTZ, DAZ, or a precision
-  limit below the format precision. `round_to_integral` also takes the
-  other directions that its instructions encode.
+- The mode must round to nearest even without FTZ, DAZ, saturation, or a
+  precision limit below the format precision. `round_to_integral` also
+  takes the other directions that its instructions encode.
 - Each call reads MXCSR, the x87 control word, or FPCR. Another setting, or
   an unmasked exception, sends the operation to the engine. So does a NaN
   result: the engine selects the NaN by the rule of the mode.
@@ -455,9 +455,10 @@ IEEE 754 or a vendor manual with MPFR or decNumber.
 | QD 2.3.24 | `DoubleDouble<Qd>` |
 | Mesa 25.2.0, `format_r11g11b10f.h` | The R11G11B10 recipe: every rounding case of both channels, and every channel code |
 
-The normal test run tests every FP8 operand pair of every operation. Ignored
-sweeps test every binary16 and bfloat16 operand pair of the host paths,
-every binary32 encoding, and all 318 million TestFloat `mulAdd` cases.
+The normal test run tests every FP8, FP6, and FP4 operand pair of every
+operation. Ignored sweeps test every binary16 and bfloat16 operand pair of
+the host paths, every binary32 encoding, and all 318 million TestFloat
+`mulAdd` cases.
 A reference that disagrees with IEEE 754 or with the processor has a comment
 beside its test with the evidence and the resolution.
 

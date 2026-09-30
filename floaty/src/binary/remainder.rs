@@ -180,7 +180,7 @@ fn multiply_mod<L: Widen>(left: L, right: L, modulus: L) -> L {
 /// Barrett's reduction modulo a fixed modulus of `width` bits: the quotient
 /// of a product comes from two products with `factor = floor(4^width /
 /// modulus)`, not from a long division. The factor costs one long division.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Barrett<L> {
     modulus: L,
     factor: L,
@@ -264,8 +264,10 @@ fn power_of_two<L: Widen>(exponent: u32, modulus: L, multiply: impl Fn(L, L) -> 
 
 #[cfg(test)]
 mod tests {
+    use super::{Barrett, multiply_mod};
     use crate::env::{Env, Flags};
     use crate::float::F64;
+    use crate::limbs::{self, Limbs};
 
     fn remainder(left: u64, right: u64) -> (u64, Flags) {
         let (value, flags) = F64::from_bits(left).remainder_with(F64::from_bits(right), Env::IEEE);
@@ -305,5 +307,40 @@ mod tests {
         assert_eq!(remainder(FIVE, 0), (0x7FF8_0000_0000_0000, Flags::INVALID));
         // The smallest subnormal is its own remainder by 1.
         assert_eq!(remainder(1, ONE), (1, Flags::DENORMAL_INPUT | Flags::TINY));
+    }
+
+    #[test]
+    fn barrett_products_match_the_division() {
+        // 2^126 has the factor 2^128, which does not fit two limbs.
+        assert_eq!(Barrett::new([0_u64, 1 << 62]), None);
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        // The smallest modulus of two limbs, all ones at 127 bits, one above
+        // a power of two, and random moduli.
+        let random: [[u64; 2]; 20] =
+            core::array::from_fn(|_| [next(), (next() >> (next() % 63 + 1)) | 1]);
+        let fixed = [[1_u64, 1], [u64::MAX, u64::MAX >> 1], [1, 1 << 62]];
+        for modulus in fixed.into_iter().chain(random) {
+            let barrett = Barrett::new(modulus).expect("the factor fits two limbs");
+            let below = |value: [u64; 2]| limbs::divide(value, modulus).1;
+            let one = [1_u64, 0];
+            let edges = [[0_u64, 0], one, modulus.sub(one), modulus.sub([2, 0])];
+            let lefts: [[u64; 2]; 50] = core::array::from_fn(|_| below([next(), next()]));
+            let rights: [[u64; 2]; 5] = core::array::from_fn(|_| below([next(), next()]));
+            for left in edges.into_iter().chain(lefts) {
+                for right in edges.into_iter().chain(rights) {
+                    assert_eq!(
+                        barrett.multiply(left, right),
+                        multiply_mod(left, right, modulus),
+                        "{left:x?} * {right:x?} mod {modulus:x?}"
+                    );
+                }
+            }
+        }
     }
 }

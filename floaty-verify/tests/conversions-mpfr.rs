@@ -12,8 +12,8 @@ use core::num::NonZeroU32;
 
 use floaty::env::Tininess;
 use floaty::{
-    BF16, Class, Env, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F64, F256, F512, Rounding,
-    TF32,
+    BF16, Class, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16,
+    F64, F256, F512, Rounding, TF32,
 };
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs, to_u128};
 use floaty_verify::mpfr::{self, Format, Specials, Value};
@@ -92,6 +92,21 @@ fn from_the_fp8_formats() {
     check!(F8E5M2, every => F8E4M3Fn: Specials::NoInf, F8E4M3Fnuz: Specials::Fnuz, TF32: Specials::Ieee);
     check!(F8E4M3Fnuz, every => F8E4M3Fn: Specials::NoInf, F8E5M2: Specials::Ieee, F64: Specials::Ieee);
     check!(F8E5M2Fnuz, every => F8E4M3Fnuz: Specials::Fnuz, F8E4M3Fn: Specials::NoInf, BF16: Specials::Ieee);
+}
+
+#[test]
+fn from_and_to_the_mx_formats() {
+    let four: Vec<u8> = (0..16).collect();
+    let six: Vec<u8> = (0..64).collect();
+    check!(F4E2M1Fn, four => F6E2M3Fn: Specials::Finite, F8E4M3Fn: Specials::NoInf, F16: Specials::Ieee);
+    check!(F6E2M3Fn, six => F4E2M1Fn: Specials::Finite, F6E3M2Fn: Specials::Finite, BF16: Specials::Ieee);
+    check!(F6E3M2Fn, six => F6E2M3Fn: Specials::Finite, F8E5M2: Specials::Ieee, F4E2M1Fn: Specials::Finite);
+    // The infinities and NaNs of the sources meet destinations without them.
+    let every: Vec<u8> = (0..=u8::MAX).collect();
+    check!(F8E5M2, every => F4E2M1Fn: Specials::Finite, F6E3M2Fn: Specials::Finite);
+    check!(F8E4M3Fn, every => F6E2M3Fn: Specials::Finite);
+    let halves: Vec<u16> = (0..=u16::MAX).collect();
+    check!(F16, halves => F6E3M2Fn: Specials::Finite, F4E2M1Fn: Specials::Finite);
 }
 
 #[test]

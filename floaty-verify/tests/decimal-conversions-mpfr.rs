@@ -30,8 +30,9 @@ use core::num::NonZeroU32;
 
 use floaty::env::Tininess;
 use floaty::{
-    BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F8E4M3Fn,
-    F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F256, F512, Flags, Rounding, TF32,
+    BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F4E2M1Fn,
+    F6E2M3Fn, F6E3M2Fn, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F256, F512, Flags, Rounding,
+    TF32,
 };
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs, to_u128};
 use floaty_verify::mpfr::decimal::{
@@ -417,6 +418,11 @@ fn from_the_fp8_formats_to_decimal() {
     check_to_decimal!(F8E5M2, every => D32Dpd, D64Bid, D128Dpd);
     check_to_decimal!(F8E4M3Fnuz, every => D32Bid, D64Bid);
     check_to_decimal!(F8E5M2Fnuz, every => D32Dpd, D128Bid);
+    let four: Vec<u8> = (0..16).collect();
+    let six: Vec<u8> = (0..64).collect();
+    check_to_decimal!(F4E2M1Fn, four => D32Bid, D64Dpd);
+    check_to_decimal!(F6E2M3Fn, six => D32Dpd, D64Bid);
+    check_to_decimal!(F6E3M2Fn, six => D32Bid, D128Dpd);
 }
 
 #[test]
@@ -555,6 +561,7 @@ fn from_decimal32_to_binary() {
         F16: Specials::Ieee, BF16: Specials::Ieee, TF32: Specials::Ieee,
         F8E4M3Fn: Specials::NoInf, F8E5M2: Specials::Ieee,
         F8E4M3Fnuz: Specials::Fnuz, F8E5M2Fnuz: Specials::Fnuz,
+        F4E2M1Fn: Specials::Finite, F6E2M3Fn: Specials::Finite, F6E3M2Fn: Specials::Finite,
         F256: Specials::Ieee, F512: Specials::Ieee);
 }
 
@@ -563,7 +570,8 @@ fn from_decimal64_to_binary() {
     let values: Vec<D64Dpd> = decimal_values!(D64Dpd, 5, 2_000, 0xD64, DECIMAL64_SPECIALS);
     check_to_binary!(D64Dpd, values =>
         F16: Specials::Ieee, BF16: Specials::Ieee, F8E4M3Fn: Specials::NoInf,
-        F8E5M2Fnuz: Specials::Fnuz, F256: Specials::Ieee, F512: Specials::Ieee);
+        F8E5M2Fnuz: Specials::Fnuz, F6E3M2Fn: Specials::Finite, F256: Specials::Ieee,
+        F512: Specials::Ieee);
 }
 
 #[test]
@@ -573,5 +581,5 @@ fn from_decimal128_to_binary() {
         F16: Specials::Ieee, BF16: Specials::Ieee, F8E5M2: Specials::Ieee,
         F256: Specials::Ieee, F512: Specials::Ieee);
     let dpd: Vec<D128Dpd> = decimal_values!(D128Dpd, 389, 100, 0xD128D, DECIMAL128_SPECIALS);
-    check_to_binary!(D128Dpd, dpd => F8E4M3Fnuz: Specials::Fnuz, TF32: Specials::Ieee);
+    check_to_binary!(D128Dpd, dpd => F8E4M3Fnuz: Specials::Fnuz, TF32: Specials::Ieee, F4E2M1Fn: Specials::Finite);
 }

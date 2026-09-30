@@ -128,7 +128,8 @@ pub enum FusedNanOrder {
 /// An operation with a NaN input returns a NaN that
 /// [`propagation`](Self::propagation) selects, made quiet. An invalid
 /// operation returns the default NaN: a quiet NaN with a zero payload and the
-/// sign that [`default_negative`](Self::default_negative) sets.
+/// sign that [`default_negative`](Self::default_negative) sets. A format
+/// without a NaN, [`Finite`](crate::Finite), returns `+0` instead.
 ///
 /// Build a `NanRule` with [`NanRule::new`] and the builder methods. The struct
 /// is `#[non_exhaustive]`, so a new field does not break callers.

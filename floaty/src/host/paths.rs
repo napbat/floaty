@@ -700,6 +700,8 @@ mod tests {
         ));
         assert!(!compatible(&Env::IEEE.with_flush_to_zero(true), 24));
         assert!(!compatible(&Env::IEEE.with_denormals_are_zero(true), 24));
+        // The host unit carries an overflow to an infinity.
+        assert!(!compatible(&Env::IEEE.with_saturate(true), 24));
         assert!(!compatible(
             &Env::IEEE.with_precision(NonZeroU32::new(52)),
             53

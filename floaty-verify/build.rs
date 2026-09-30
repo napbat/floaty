@@ -188,6 +188,10 @@ const MESA_ROUNDING: Archive = Archive {
     sha256: "4265b083f0424e5243c6a81771e1fc077203d2fa829e43a6caafa26f20fb1a02",
 };
 
+/// The compiler options of the Mesa shim. `-fPIC` lets the object link into
+/// the position-independent test executables.
+const MESA_FLAGS: [&str; 3] = ["-std=gnu11", "-O2", "-fPIC"];
+
 /// The `configure` options of QD. The first three select the arithmetic
 /// that floaty's `Qd` follows.
 ///
@@ -790,19 +794,16 @@ fn build_mesa(manifest: &Path, out: &Path) {
     );
     let content = fs::read_to_string(&shim).expect("the Mesa shim can be read");
     let key = format!(
-        "{} {}\n{content}",
-        MESA_R11G11B10.sha256, MESA_ROUNDING.sha256
+        "{} {} {}\n{content}",
+        MESA_R11G11B10.sha256,
+        MESA_ROUNDING.sha256,
+        MESA_FLAGS.join(" ")
     );
     run_once(&out.join("floaty_mesa.stamp"), &key, || {
         let format_include = format!("-I{}", format.display());
         let rounding_include = format!("-I{}", rounding.display());
-        let flags = [
-            "-std=gnu11",
-            "-O2",
-            "-fPIC",
-            format_include.as_str(),
-            rounding_include.as_str(),
-        ];
+        let mut flags = MESA_FLAGS.to_vec();
+        flags.extend([format_include.as_str(), rounding_include.as_str()]);
         let object = out.join("floaty_mesa.o");
         compile("gcc", &shim, &flags, &object);
         archive(&out.join("libfloaty_mesa.a"), &[object]);

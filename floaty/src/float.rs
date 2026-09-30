@@ -143,8 +143,8 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// when the behavior has denormals-are-zero set. A signaling NaN input
     /// signals invalid. A destination without an infinity converts an infinity
     /// to a NaN, or to the largest finite value when the behavior saturates or
-    /// the destination has no NaN, and signals invalid. An unsupported x87 input signals invalid and gives
-    /// the default NaN.
+    /// the destination has no NaN, and signals invalid. An unsupported x87
+    /// input signals invalid and gives the default NaN.
     ///
     /// A NaN converts by the NaN rule of the behavior.
     /// [`DefaultNan`](crate::env::NanPropagation::DefaultNan) gives the
@@ -152,11 +152,12 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// keep the high-order payload bits, as x86 and ARM do. A narrowing
     /// conversion drops the low-order payload bits, and a format with one NaN
     /// encoding gives that NaN. A format without a NaN, such as
-    /// [`F4E2M1Fn`](crate::F4E2M1Fn), gives `+0` and signals invalid. Between two decimal formats, the payload keeps
-    /// its high-order digits. Between a binary and a decimal format, the
-    /// payload bits align with the trailing significand field of the decimal
-    /// format, and a decimal payload above `10^(PRECISION - 1) - 1` becomes
-    /// zero, as the Intel decimal library does.
+    /// [`F4E2M1Fn`](crate::F4E2M1Fn), gives `+0` and signals invalid. Between
+    /// two decimal formats, the payload keeps its high-order digits. Between a
+    /// binary and a decimal format, the payload bits align with the trailing
+    /// significand field of the decimal format, and a decimal payload above
+    /// `10^(PRECISION - 1) - 1` becomes zero, as the Intel decimal library
+    /// does.
     ///
     /// A conversion between a binary and a decimal format can hold exact
     /// values of up to 16,384 bits on the stack, tens of KiB. A `no_std`

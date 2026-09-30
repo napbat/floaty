@@ -124,6 +124,13 @@ pub fn round_to_integral<const N: usize>(
         sticky: false,
     };
     let (rounded, overflow_flags) = mpfr::round(&input, format, &full_precision);
+    // An infinity is above the value, and the NaN and the largest finite
+    // value are not, so an overflow decides `ROUNDED_UP`.
+    let flags = if overflow_flags.contains(Flags::OVERFLOW) {
+        flags.difference(Flags::ROUNDED_UP)
+    } else {
+        flags
+    };
     (Outcome::from_value(rounded), flags | overflow_flags)
 }
 

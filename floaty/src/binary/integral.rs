@@ -74,6 +74,14 @@ where
             ..*env
         };
         let (rounded, overflow_flags) = exact::round::<L, L, Self, Env>(&integer, full_precision);
+        // An overflow gives an infinity, which is above the value, or the NaN
+        // or the largest finite value, which are not. So the overflow decides
+        // `ROUNDED_UP`.
+        let flags = if overflow_flags.contains(Flags::OVERFLOW) {
+            flags.difference(Flags::ROUNDED_UP)
+        } else {
+            flags
+        };
         Self::exact(rounded, flags | overflow_flags)
     }
 
@@ -151,7 +159,7 @@ where
 mod tests {
     use crate::env::{Env, Flags, Rounding};
     use crate::exact::Exact;
-    use crate::float::{F32, F80, F128, F512, Float};
+    use crate::float::{F6E2M3Fn, F32, F80, F128, F512, Float};
     use crate::format::Binary;
     use crate::integer::{Int, ToInt, UInt};
 
@@ -225,6 +233,19 @@ mod tests {
         );
         let (truncated, flags) = largest.round_to_integral_with(Rounding::TowardZero);
         assert_eq!((truncated.to_bits(), flags), (0x6E, Flags::INEXACT));
+        // A saturated overflow gives the largest value, which is not above
+        // the operand.
+        let saturate = Env::IEEE.with_saturate(true);
+        let (saturated, flags) = largest.round_to_integral_with(saturate);
+        assert_eq!(
+            (saturated.to_bits(), flags),
+            (0x6F, Flags::OVERFLOW | Flags::INEXACT)
+        );
+        let (mx, flags) = F6E2M3Fn::from_bits(0x1F).round_to_integral_with(Rounding::TiesToEven);
+        assert_eq!(
+            (mx.to_bits(), flags),
+            (0x1F, Flags::OVERFLOW | Flags::INEXACT)
+        );
     }
 
     #[test]

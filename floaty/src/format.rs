@@ -512,9 +512,11 @@ impl Encoding for Fnuz {
 ///
 /// Every encoding is a number, and the format has a negative zero. The bias
 /// is `2^(E-1) - 1`. Every overflow gives the largest finite value of its
-/// sign, as the MX formats saturate, and so does an infinite operand of a
-/// conversion. A NaN result, from an invalid operation or from a NaN operand
-/// of a conversion, gives positive zero, and the operation signals invalid.
+/// sign, as the MX formats saturate. So do an infinite operand of a
+/// conversion, a division by zero, which also signals divide-by-zero, and a
+/// step past the largest value with `next_up` or `next_down`. A NaN result,
+/// from an invalid operation or from a NaN operand of a conversion, gives
+/// positive zero, and the operation signals invalid.
 pub enum Finite {}
 
 impl Sealed for Finite {}

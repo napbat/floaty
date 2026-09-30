@@ -12,9 +12,6 @@
 //! that is a NaN in binary32, an invalid operation or a NaN operand, is
 //! checked by floaty's rule.
 
-// The references of this test build only for x86-64.
-#![cfg(target_arch = "x86_64")]
-
 use floaty::{Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F16, Flags};
 use floaty_verify::ml_dtypes::{Row, check, rows};
 

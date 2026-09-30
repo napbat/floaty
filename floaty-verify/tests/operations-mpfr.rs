@@ -63,7 +63,7 @@ fn comparisons<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
 }
 
 #[test]
-fn every_fp8_pair_compares_orders_and_copies_signs() {
+fn every_small_format_pair_compares_orders_and_copies_signs() {
     each_format!(comparisons);
 }
 
@@ -80,7 +80,7 @@ fn min_max<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
 }
 
 #[test]
-fn every_fp8_pair_minimum_and_maximum() {
+fn every_small_format_pair_minimum_and_maximum() {
     each_format!(min_max);
 }
 
@@ -97,7 +97,7 @@ fn remainder<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
 }
 
 #[test]
-fn every_fp8_pair_remainder() {
+fn every_small_format_pair_remainder() {
     each_format!(remainder);
 }
 
@@ -135,7 +135,7 @@ fn one_operand<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
 }
 
 #[test]
-fn every_fp8_operand_rounds_converts_scales_and_steps() {
+fn every_small_format_operand_rounds_converts_scales_and_steps() {
     each_format!(one_operand);
 }
 

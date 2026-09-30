@@ -116,9 +116,9 @@ RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo +1.85 clippy -p flo
   (package qemu-user). The build compiles TestFloat, MPFR, decNumber, the Intel
   decimal library, and QD from source. The first build downloads the
   decimal and QD archives and two Mesa headers, so it needs network access
-  once. The `Qd` tests
-  need a processor on which glibc's `fma` is the FMA3 instruction. On
-  another host, run the gates with `-p floaty` instead of `--workspace`.
+  once. The `Qd` tests need a processor on which glibc's `fma` is the FMA3
+  instruction. On another host, run the gates with `-p floaty` instead of
+  `--workspace`.
 - Keep the submodules under `floaty-verify/reference/`, the pinned archives
   in `floaty-verify/build.rs`, the pinned compilers, and the pinned QEMU at
   their pinned releases. Make a change of release in its own commit, and
