@@ -437,6 +437,19 @@ one. A `Lanes` figure is per lane.
 | `Lanes<F32, 8>` `+` | 17.1 | 0.4 | 0.3 | |
 | `Lanes<F16, 8>` `+` | 15.8 | 11.5 | 0.3 | |
 
+The decimal formats against the Intel Decimal Floating-Point Math Library
+for BID, and against the `decDouble` and `decQuad` functions of decNumber
+for DPD, on the same operands. Each cell gives floaty, then the reference.
+decNumber has no square root of its fixed-size formats, and each decNumber
+call also sets up a context.
+
+| Format | add | mul | div | sqrt | mul_add |
+| --- | --- | --- | --- | --- | --- |
+| decimal64, BID | 78.0 / 45.4 | 52.7 / 65.4 | 80.7 / 64.7 | 70.0 / 41.9 | 82.9 / 109.3 |
+| decimal128, BID | 79.6 / 37.7 | 71.1 / 150.9 | 117.4 / 167.4 | 188.9 / 301.6 | 126.1 / 226.9 |
+| decimal64, DPD | 99.6 / 68.1 | 78.4 / 57.3 | 107.6 / 152.1 | 90.3 | 107.9 / 165.8 |
+| decimal128, DPD | 117.5 / 92.8 | 110.5 / 81.0 | 161.4 / 326.0 | 222.2 | 175.9 / 216.2 |
+
 ## Verification
 
 Every behavior has a test against an established reference. Where no

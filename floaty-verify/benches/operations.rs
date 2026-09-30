@@ -17,7 +17,9 @@
 //! binary32, binary16, x87 extended, and decimal64 and from `i64`, additions
 //! of subnormal operands and of a zero, and the comparison and the minimum of
 //! two operands. A third table measures the double-double types, and a
-//! fourth the operations of `Lanes` in nanoseconds per lane.
+//! fourth the operations of `Lanes` in nanoseconds per lane. On x86-64, a
+//! fifth table compares the decimal formats with the Intel decimal library
+//! for BID and with decNumber for DPD.
 
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -27,6 +29,10 @@ use floaty::{
     BF16, Bid, Binary, D64Bid, Decimal, DoubleDouble, Dpd, Env, Exact, F16, F32, F64, F80, F128,
     Float, Fnuz, Gcc, Lanes, NoInf, Qd, X87, mode,
 };
+#[cfg(target_arch = "x86_64")]
+use floaty_verify::decnumber::{self, Arithmetic as _};
+#[cfg(target_arch = "x86_64")]
+use floaty_verify::intel_decimal::{self, Bid64, Bid128, Format as _};
 use floaty_verify::random::SplitMix64;
 use rustc_apfloat::ieee::{BFloat, Double, Half, Quad, Single, X87DoubleExtended};
 use rustc_apfloat::{Float as _, FloatConvert as _};
@@ -85,6 +91,10 @@ const LANES_COLUMNS: [&str; 11] = [
     "add_with",
     "scalar_add",
 ];
+
+/// The operations of the decimal reference table, in column order.
+#[cfg(target_arch = "x86_64")]
+const DECIMAL_COLUMNS: [&str; 5] = ["add", "mul", "div", "sqrt", "mul_add"];
 
 /// Returns the median time of one operation of `batch`, which runs `COUNT`
 /// operations, in nanoseconds.
@@ -568,6 +578,167 @@ macro_rules! apfloat_row {
     }};
 }
 
+/// Measures one row of the decimal reference table. The operands are the
+/// encodings of the random operands of `Float<$format, $width>`, the same
+/// for floaty and for the reference. `$sqrt` is `None` for a reference
+/// without a square root.
+#[cfg(target_arch = "x86_64")]
+macro_rules! decimal_row {
+    (
+        $name:literal, $format:ty, $width:literal, $seed:literal,
+        $add:expr, $mul:expr, $div:expr, $sqrt:expr, $fma:expr
+    ) => {{
+        let mut random = SplitMix64::new($seed);
+        let (x, y, z) = (
+            operands::<$format, $width>(&mut random),
+            operands::<$format, $width>(&mut random),
+            operands::<$format, $width>(&mut random),
+        );
+        let bits = |values: &[Float<$format, $width>]| -> Vec<_> {
+            values.iter().map(|value| value.to_bits()).collect()
+        };
+        let (a, b, c, roots) = (bits(&x), bits(&y), bits(&z), bits(&positive(&x)));
+        let fma = $fma;
+        let times = [
+            Some(each_pair(&a, &b, $add)),
+            Some(each_pair(&a, &b, $mul)),
+            Some(each_pair(&a, &b, $div)),
+            $sqrt.map(|sqrt| each_pair(&roots, &roots, |x, _| sqrt(x))),
+            Some(measure(|| {
+                for ((&x, &y), &z) in a.iter().zip(&b).zip(&c) {
+                    black_box(fma(black_box(x), black_box(y), black_box(z)));
+                }
+            })),
+        ];
+        row($name, &times);
+    }};
+}
+
+/// Prints the decimal reference table: floaty against the Intel decimal
+/// library for BID, and against the `decDouble` and `decQuad` functions of
+/// decNumber for DPD. Each decNumber call also sets up a context. decNumber
+/// has no square root of its fixed-size formats.
+#[cfg(target_arch = "x86_64")]
+fn decimal_table() {
+    println!();
+    println!("Decimal against the references, nanoseconds per operation.");
+    println!();
+    println!("| Format | {} |", DECIMAL_COLUMNS.join(" | "));
+    println!("|---{}|", "|---".repeat(DECIMAL_COLUMNS.len()));
+    bid_rows();
+    dpd_rows();
+}
+
+/// Measures the BID rows of the decimal reference table.
+#[cfg(target_arch = "x86_64")]
+fn bid_rows() {
+    use intel_decimal::Rounding::TiesToEven;
+    type BidDecimal = Decimal<Bid>;
+    decimal_row!(
+        "floaty D64Bid",
+        BidDecimal,
+        64,
+        12,
+        |x, y| (Float::<BidDecimal, 64>::from_bits(x) + Float::from_bits(y)).to_bits(),
+        |x, y| (Float::<BidDecimal, 64>::from_bits(x) * Float::from_bits(y)).to_bits(),
+        |x, y| (Float::<BidDecimal, 64>::from_bits(x) / Float::from_bits(y)).to_bits(),
+        Some(|x| Float::<BidDecimal, 64>::from_bits(x).sqrt().to_bits()),
+        |x, y, z| Float::<BidDecimal, 64>::from_bits(x)
+            .mul_add(Float::from_bits(y), Float::from_bits(z))
+            .to_bits()
+    );
+    decimal_row!(
+        "Intel bid64",
+        BidDecimal,
+        64,
+        12,
+        |x, y| Bid64::add(x, y, TiesToEven).value,
+        |x, y| Bid64::mul(x, y, TiesToEven).value,
+        |x, y| Bid64::div(x, y, TiesToEven).value,
+        Some(|x| Bid64::sqrt(x, TiesToEven).value),
+        |x, y, z| Bid64::fma(x, y, z, TiesToEven).value
+    );
+    decimal_row!(
+        "floaty D128Bid",
+        BidDecimal,
+        128,
+        13,
+        |x, y| (Float::<BidDecimal, 128>::from_bits(x) + Float::from_bits(y)).to_bits(),
+        |x, y| (Float::<BidDecimal, 128>::from_bits(x) * Float::from_bits(y)).to_bits(),
+        |x, y| (Float::<BidDecimal, 128>::from_bits(x) / Float::from_bits(y)).to_bits(),
+        Some(|x| Float::<BidDecimal, 128>::from_bits(x).sqrt().to_bits()),
+        |x, y, z| Float::<BidDecimal, 128>::from_bits(x)
+            .mul_add(Float::from_bits(y), Float::from_bits(z))
+            .to_bits()
+    );
+    decimal_row!(
+        "Intel bid128",
+        BidDecimal,
+        128,
+        13,
+        |x, y| Bid128::add(x, y, TiesToEven).value,
+        |x, y| Bid128::mul(x, y, TiesToEven).value,
+        |x, y| Bid128::div(x, y, TiesToEven).value,
+        Some(|x| Bid128::sqrt(x, TiesToEven).value),
+        |x, y, z| Bid128::fma(x, y, z, TiesToEven).value
+    );
+}
+
+/// Measures the DPD rows of the decimal reference table.
+#[cfg(target_arch = "x86_64")]
+fn dpd_rows() {
+    type DpdDecimal = Decimal<Dpd>;
+    const HALF_EVEN: decnumber::Rounding = decnumber::Rounding::HalfEven;
+    decimal_row!(
+        "floaty D64Dpd",
+        DpdDecimal,
+        64,
+        14,
+        |x, y| (Float::<DpdDecimal, 64>::from_bits(x) + Float::from_bits(y)).to_bits(),
+        |x, y| (Float::<DpdDecimal, 64>::from_bits(x) * Float::from_bits(y)).to_bits(),
+        |x, y| (Float::<DpdDecimal, 64>::from_bits(x) / Float::from_bits(y)).to_bits(),
+        Some(|x| Float::<DpdDecimal, 64>::from_bits(x).sqrt().to_bits()),
+        |x, y, z| Float::<DpdDecimal, 64>::from_bits(x)
+            .mul_add(Float::from_bits(y), Float::from_bits(z))
+            .to_bits()
+    );
+    decimal_row!(
+        "decNumber decDouble",
+        DpdDecimal,
+        64,
+        14,
+        |x, y| decnumber::Double::binary(decnumber::Binary::Add, x, y, HALF_EVEN).value,
+        |x, y| decnumber::Double::binary(decnumber::Binary::Multiply, x, y, HALF_EVEN).value,
+        |x, y| decnumber::Double::binary(decnumber::Binary::Divide, x, y, HALF_EVEN).value,
+        None::<fn(u64) -> u64>,
+        |x, y, z| decnumber::Double::fma(x, y, z, HALF_EVEN).value
+    );
+    decimal_row!(
+        "floaty D128Dpd",
+        DpdDecimal,
+        128,
+        15,
+        |x, y| (Float::<DpdDecimal, 128>::from_bits(x) + Float::from_bits(y)).to_bits(),
+        |x, y| (Float::<DpdDecimal, 128>::from_bits(x) * Float::from_bits(y)).to_bits(),
+        |x, y| (Float::<DpdDecimal, 128>::from_bits(x) / Float::from_bits(y)).to_bits(),
+        Some(|x| Float::<DpdDecimal, 128>::from_bits(x).sqrt().to_bits()),
+        |x, y, z| Float::<DpdDecimal, 128>::from_bits(x)
+            .mul_add(Float::from_bits(y), Float::from_bits(z))
+            .to_bits()
+    );
+    decimal_row!(
+        "decNumber decQuad",
+        DpdDecimal,
+        128,
+        15,
+        |x, y| decnumber::Quad::binary(decnumber::Binary::Add, x, y, HALF_EVEN).value,
+        |x, y| decnumber::Quad::binary(decnumber::Binary::Multiply, x, y, HALF_EVEN).value,
+        |x, y| decnumber::Quad::binary(decnumber::Binary::Divide, x, y, HALF_EVEN).value,
+        None::<fn(u128) -> u128>,
+        |x, y, z| decnumber::Quad::fma(x, y, z, HALF_EVEN).value
+    );
+}
+
 fn main() {
     println!("Nanoseconds per operation, median of {SAMPLES} samples.");
     println!();
@@ -635,4 +806,6 @@ fn main() {
     lanes_row::<Binary<5>, 16, 8, _>("F16 x 8", 55, Lanes::convert::<F32>);
     lanes_row::<Binary<8>, 16, 8, _>("BF16 x 8", 56, Lanes::convert::<F32>);
     lanes_row::<Binary<15, X87>, 80, 2, _>("F80 x 2", 57, Lanes::convert::<F64>);
+    #[cfg(target_arch = "x86_64")]
+    decimal_table();
 }
