@@ -13,11 +13,12 @@
 //! gives the one rule by which every oracle reads an operand.
 
 use core::cmp::Ordering;
+use core::num::NonZeroU32;
 
 pub mod decimal;
 mod operand;
 
-use floaty::env::{Mode, NanPropagation, Tininess};
+use floaty::env::{Mode, NanPropagation, NanRule, Tininess};
 use floaty::format::Standard;
 use floaty::{Decoded, Env, Flags, Float, Rounding};
 use rug::float::Round;
@@ -486,6 +487,35 @@ fn is_odd(value: &BigFloat, precision: u32, emin: Option<i32>) -> bool {
         }
     }
 }
+
+/// The behaviors of the conversion tests between binary formats: every
+/// rounding direction, both tininess rules, flush-to-zero,
+/// denormals-are-zero, saturation, precision limits, and the default NaN.
+pub const CONVERSION_BEHAVIORS: [Env; 10] = [
+    Env::IEEE,
+    Env::IEEE
+        .with_rounding(Rounding::TowardZero)
+        .with_tininess(Tininess::BeforeRounding),
+    Env::IEEE
+        .with_rounding(Rounding::TowardPositive)
+        .with_flush_to_zero(true),
+    Env::IEEE.with_rounding(Rounding::ToOdd).with_saturate(true),
+    Env::IEEE
+        .with_rounding(Rounding::TiesToAway)
+        .with_denormals_are_zero(true),
+    Env::IEEE
+        .with_rounding(Rounding::TowardNegative)
+        .with_precision(NonZeroU32::new(3)),
+    // A saturated infinity and a saturated overflow both use the limit.
+    Env::IEEE
+        .with_saturate(true)
+        .with_precision(NonZeroU32::new(2)),
+    Env::IEEE
+        .with_rounding(Rounding::TiesTowardZero)
+        .with_flush_to_zero(true),
+    Env::IEEE.with_rounding(Rounding::AwayFromZero),
+    Env::IEEE.with_nan(NanRule::new(NanPropagation::DefaultNan).with_default_negative(true)),
+];
 
 /// Returns the expected result and flags of converting an operand to
 /// `format`, by floaty's conversion rules. MPFR rounds the finite values.

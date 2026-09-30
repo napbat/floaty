@@ -17,8 +17,8 @@ use floaty::{
     BF16, D64Bid, D128Dpd, Decoded, DoubleDouble, Env, F16, F32, F64, F80, F128, Flags, Gcc,
 };
 use floaty_verify::double_double::{Exact, behaviors, exact, pair};
-use floaty_verify::mpfr::decimal::{DecimalFormat, DecimalValue, decimal_payload, to_decimal};
-use floaty_verify::mpfr::{self, Format, Input, Operand, Specials, Value};
+use floaty_verify::mpfr::decimal::{self, DecimalFormat, DecimalValue};
+use floaty_verify::mpfr::{self, Format, Operand, Specials, Value};
 use floaty_verify::random::SplitMix64;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
@@ -72,85 +72,25 @@ fn expected_decode(value: &Exact) -> Decoded<33> {
     }
 }
 
-/// Returns the expected result of a conversion to a binary format.
-fn to_binary(value: &Exact, format: &Format, env: &Env) -> (Value, Flags) {
-    match value {
-        Exact::Number(number) => {
-            let (negative, magnitude, exponent) = odd_parts(number);
-            let input = Input {
-                negative,
-                exponent,
-                significand: magnitude,
-                sticky: false,
-            };
-            mpfr::round(&input, format, env)
-        }
-        Exact::Nan(bits) => mpfr::convert(
-            &Operand {
-                decoded: nan_half::<1>(*bits),
-                subnormal: false,
-            },
-            format,
-            env,
-        ),
-        Exact::Infinity { negative } => mpfr::convert(
-            &Operand {
-                decoded: Decoded::<1>::Infinity {
-                    negative: *negative,
-                },
-                subnormal: false,
-            },
-            format,
-            env,
-        ),
-        Exact::Zero { negative } => mpfr::convert(
-            &Operand {
-                decoded: Decoded::<1>::Zero {
-                    negative: *negative,
-                    exponent: 0,
-                },
-                subnormal: false,
-            },
-            format,
-            env,
-        ),
+/// Returns the exact value as an operand of the conversion oracles. The
+/// value of a pair is never a subnormal operand: a conversion of a pair
+/// signals no `DENORMAL_INPUT`.
+fn operand(value: &Exact) -> Operand<33> {
+    Operand {
+        decoded: expected_decode(value),
+        subnormal: false,
     }
 }
 
-/// Returns the expected result of a conversion to a decimal format.
+/// Returns the expected result of a conversion to a binary format.
+fn to_binary(value: &Exact, format: &Format, env: &Env) -> (Value, Flags) {
+    mpfr::convert(&operand(value), format, env)
+}
+
+/// Returns the expected result of a conversion to a decimal format. The
+/// payload of a NaN half is its 51 bits below the quiet bit.
 fn to_decimal_format(value: &Exact, format: DecimalFormat, env: &Env) -> (DecimalValue, Flags) {
-    match value {
-        Exact::Number(number) => to_decimal(number, format, env),
-        Exact::Nan(bits) => {
-            let payload = Integer::from(bits & ((1 << 51) - 1));
-            let signaling = bits & (1 << 51) == 0;
-            let value = DecimalValue::Nan {
-                negative: bits >> 63 == 1,
-                payload: decimal_payload(payload, 51, format),
-            };
-            (
-                value,
-                if signaling {
-                    Flags::INVALID
-                } else {
-                    Flags::NONE
-                },
-            )
-        }
-        Exact::Infinity { negative } => (
-            DecimalValue::Infinity {
-                negative: *negative,
-            },
-            Flags::NONE,
-        ),
-        Exact::Zero { negative } => (
-            DecimalValue::Zero {
-                negative: *negative,
-                exponent: 0,
-            },
-            Flags::NONE,
-        ),
-    }
+    decimal::convert(&operand(value), 51, format, env)
 }
 
 /// Returns the expected order of two exact values, and whether a value is a

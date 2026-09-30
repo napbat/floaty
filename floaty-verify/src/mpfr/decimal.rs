@@ -5,13 +5,70 @@
 //! follow from those digits by their IEEE 754 definitions, and IBM's round
 //! to prepare for shorter precision for `ToOdd`. The exponent follows the
 //! IEEE 754 preferred exponent rules, with preferred exponent 0.
+//!
+//! [`convert`] adds floaty's rules for the zeros, the infinities, and the
+//! NaNs of a decimal destination.
 
+use core::num::NonZeroU32;
+
+use floaty::env::Tininess;
 use floaty::{Decoded, Env, Flags, Rounding};
 use rug::float::Round;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
-use super::{Parameters, Underflow, limit_precision, overflows_to_infinity, underflow_flags};
+use super::{
+    Operand, Parameters, Read, Underflow, limit_precision, overflows_to_infinity, underflow_flags,
+};
+
+/// The behaviors of the conversion tests from a binary format to a decimal
+/// format. The tininess rule and `saturate` do not apply to a decimal
+/// destination.
+pub const TO_DECIMAL_BEHAVIORS: [Env; 9] = [
+    Env::IEEE,
+    Env::IEEE.with_rounding(Rounding::TowardZero),
+    Env::IEEE
+        .with_rounding(Rounding::TowardPositive)
+        .with_flush_to_zero(true),
+    Env::IEEE.with_rounding(Rounding::ToOdd),
+    Env::IEEE
+        .with_rounding(Rounding::TiesToAway)
+        .with_denormals_are_zero(true),
+    Env::IEEE
+        .with_rounding(Rounding::TowardNegative)
+        .with_precision(NonZeroU32::new(3)),
+    Env::IEEE.with_precision(NonZeroU32::new(1)),
+    Env::IEEE.with_rounding(Rounding::TiesTowardZero),
+    Env::IEEE
+        .with_rounding(Rounding::AwayFromZero)
+        .with_flush_to_zero(true),
+];
+
+/// The behaviors of the conversion tests from a decimal format to a binary
+/// format.
+pub const FROM_DECIMAL_BEHAVIORS: [Env; 9] = [
+    Env::IEEE,
+    Env::IEEE
+        .with_rounding(Rounding::TowardZero)
+        .with_tininess(Tininess::BeforeRounding),
+    Env::IEEE
+        .with_rounding(Rounding::TowardPositive)
+        .with_flush_to_zero(true),
+    Env::IEEE.with_rounding(Rounding::ToOdd).with_saturate(true),
+    Env::IEEE
+        .with_rounding(Rounding::TiesToAway)
+        .with_denormals_are_zero(true),
+    Env::IEEE
+        .with_rounding(Rounding::TowardNegative)
+        .with_precision(NonZeroU32::new(3)),
+    Env::IEEE
+        .with_saturate(true)
+        .with_precision(NonZeroU32::new(2)),
+    Env::IEEE
+        .with_rounding(Rounding::TiesTowardZero)
+        .with_tininess(Tininess::BeforeRounding),
+    Env::IEEE.with_rounding(Rounding::AwayFromZero),
+];
 
 /// The parameters of a decimal format.
 #[derive(Clone, Copy, Debug)]
@@ -305,6 +362,56 @@ fn overflow(
         exponent: highest,
     };
     (largest, flags)
+}
+
+/// Returns the expected result and flags of converting a binary operand to a
+/// decimal format, by floaty's conversion rules. MPFR rounds the finite
+/// values by [`to_decimal`].
+///
+/// A zero keeps its sign and gets exponent 0, the preferred exponent. An
+/// infinity keeps its sign. A NaN keeps its sign, and its payload follows
+/// [`decimal_payload`] from a field of `payload_bits` bits. A signaling NaN
+/// signals invalid.
+///
+/// # Panics
+///
+/// Panics for an unsupported source encoding.
+#[must_use]
+pub fn convert<const N: usize>(
+    source: &Operand<N>,
+    payload_bits: u32,
+    format: DecimalFormat,
+    env: &Env,
+) -> (DecimalValue, Flags) {
+    let mut flags = Flags::NONE;
+    match source.read(env, &mut flags) {
+        Read::Number(value) if value.is_zero() => (
+            DecimalValue::Zero {
+                negative: value.is_sign_negative(),
+                exponent: 0,
+            },
+            flags,
+        ),
+        Read::Number(value) if value.is_infinite() => (
+            DecimalValue::Infinity {
+                negative: value.is_sign_negative(),
+            },
+            flags,
+        ),
+        Read::Number(exact) => {
+            let (value, round_flags) = to_decimal(&exact, format, env);
+            (value, flags | round_flags)
+        }
+        Read::Nan(nan) => {
+            if nan.signaling {
+                flags |= Flags::INVALID;
+            }
+            let payload = decimal_payload(nan.payload, payload_bits, format);
+            let negative = nan.negative;
+            (DecimalValue::Nan { negative, payload }, flags)
+        }
+        Read::Unsupported => panic!("the oracle has no rule for an unsupported encoding"),
+    }
 }
 
 /// Aligns the high-order bits of a field of `from` bits with a field of `to`

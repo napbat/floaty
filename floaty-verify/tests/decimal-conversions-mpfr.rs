@@ -26,19 +26,16 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
-use core::num::NonZeroU32;
-
-use floaty::env::Tininess;
 use floaty::{
     BF16, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F4E2M1Fn,
     F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz,
-    F16, F256, F512, Flags, Rounding, TF32,
+    F16, F256, F512, Flags, TF32,
 };
 use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs, to_u128};
 use floaty_verify::mpfr::decimal::{
-    DecimalFormat, DecimalValue, align, decimal_payload, to_decimal,
+    self, DecimalFormat, DecimalValue, FROM_DECIMAL_BEHAVIORS, TO_DECIMAL_BEHAVIORS, align,
 };
-use floaty_verify::mpfr::{self, Format, Input, Operand, Read, Specials, Value};
+use floaty_verify::mpfr::{self, Format, Input, Operand, Specials, Value};
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
 use rug::integer::Order;
@@ -59,46 +56,6 @@ fn binary_payload(source: &Decoded<2>, trailing: u32, format: &Format) -> Intege
             format.precision - 2,
         ),
         Specials::NoInf | Specials::Fnuz | Specials::Finite => Integer::ZERO,
-    }
-}
-
-/// Returns the expected result of converting a binary operand to a decimal
-/// format, by floaty's conversion rules. A NaN payload of the source is a
-/// field of `payload_bits` bits.
-fn binary_to_decimal<const N: usize>(
-    source: &Operand<N>,
-    payload_bits: u32,
-    format: DecimalFormat,
-    env: &Env,
-) -> (DecimalValue, Flags) {
-    let mut flags = Flags::NONE;
-    match source.read(env, &mut flags) {
-        Read::Number(value) if value.is_zero() => (
-            DecimalValue::Zero {
-                negative: value.is_sign_negative(),
-                exponent: 0,
-            },
-            flags,
-        ),
-        Read::Number(value) if value.is_infinite() => (
-            DecimalValue::Infinity {
-                negative: value.is_sign_negative(),
-            },
-            flags,
-        ),
-        Read::Number(exact) => {
-            let (value, round_flags) = to_decimal(&exact, format, env);
-            (value, flags | round_flags)
-        }
-        Read::Nan(nan) => {
-            if nan.signaling {
-                flags |= Flags::INVALID;
-            }
-            let payload = decimal_payload(nan.payload, payload_bits, format);
-            let negative = nan.negative;
-            (DecimalValue::Nan { negative, payload }, flags)
-        }
-        Read::Unsupported => panic!("the sources have no unsupported encoding"),
     }
 }
 
@@ -148,57 +105,6 @@ fn decimal_to_binary(source: &Operand<2>, format: &Format, env: &Env) -> (Value,
     (value, flags)
 }
 
-/// The behaviors of a conversion to a decimal format. The tininess rule and
-/// `saturate` do not apply to a decimal destination.
-fn decimal_behaviors() -> [Env; 9] {
-    [
-        Env::IEEE,
-        Env::IEEE.with_rounding(Rounding::TowardZero),
-        Env::IEEE
-            .with_rounding(Rounding::TowardPositive)
-            .with_flush_to_zero(true),
-        Env::IEEE.with_rounding(Rounding::ToOdd),
-        Env::IEEE
-            .with_rounding(Rounding::TiesToAway)
-            .with_denormals_are_zero(true),
-        Env::IEEE
-            .with_rounding(Rounding::TowardNegative)
-            .with_precision(NonZeroU32::new(3)),
-        Env::IEEE.with_precision(NonZeroU32::new(1)),
-        Env::IEEE.with_rounding(Rounding::TiesTowardZero),
-        Env::IEEE
-            .with_rounding(Rounding::AwayFromZero)
-            .with_flush_to_zero(true),
-    ]
-}
-
-/// The behaviors of a conversion to a binary format.
-fn binary_behaviors() -> [Env; 9] {
-    [
-        Env::IEEE,
-        Env::IEEE
-            .with_rounding(Rounding::TowardZero)
-            .with_tininess(Tininess::BeforeRounding),
-        Env::IEEE
-            .with_rounding(Rounding::TowardPositive)
-            .with_flush_to_zero(true),
-        Env::IEEE.with_rounding(Rounding::ToOdd).with_saturate(true),
-        Env::IEEE
-            .with_rounding(Rounding::TiesToAway)
-            .with_denormals_are_zero(true),
-        Env::IEEE
-            .with_rounding(Rounding::TowardNegative)
-            .with_precision(NonZeroU32::new(3)),
-        Env::IEEE
-            .with_saturate(true)
-            .with_precision(NonZeroU32::new(2)),
-        Env::IEEE
-            .with_rounding(Rounding::TiesTowardZero)
-            .with_tininess(Tininess::BeforeRounding),
-        Env::IEEE.with_rounding(Rounding::AwayFromZero),
-    ]
-}
-
 /// Converts every binary source value to every decimal destination in every
 /// behavior.
 macro_rules! check_to_decimal {
@@ -206,7 +112,7 @@ macro_rules! check_to_decimal {
         // The fraction bits below the quiet bit. A format with one NaN
         // encoding decodes a zero payload, so its width does not matter.
         let payload_bits = <$source>::PRECISION - 2;
-        for env in decimal_behaviors() {
+        for env in TO_DECIMAL_BEHAVIORS {
             for &bits in &$values {
                 let source = <$source>::from_bits(bits);
                 let operand = Operand::<8>::of(source);
@@ -215,7 +121,7 @@ macro_rules! check_to_decimal {
                     let (ours, flags): ($destination, _) = source.convert_with(env);
                     assert!(ours.is_canonical(), "{ours:?} is canonical");
                     let ours = (DecimalValue::from_decoded(ours.decode::<2>()), flags);
-                    let expected = binary_to_decimal(&operand, payload_bits, format, &env);
+                    let expected = decimal::convert(&operand, payload_bits, format, &env);
                     let context = format!(
                         "{} {bits:x?} to {} {env:?}",
                         stringify!($source),
@@ -234,7 +140,7 @@ macro_rules! check_to_decimal {
 macro_rules! check_to_binary {
     ($source:ty, $values:expr => $($destination:ty: $specials:expr),+) => {{
         let trailing = DecimalFormat::of::<$source>().trailing_bits();
-        for env in binary_behaviors() {
+        for env in FROM_DECIMAL_BEHAVIORS {
             for source in &$values {
                 let source: $source = *source;
                 let operand = Operand::<2>::of(source);

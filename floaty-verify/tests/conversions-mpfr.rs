@@ -10,48 +10,18 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
-use core::num::NonZeroU32;
-
-use floaty::env::{NanPropagation, NanRule, Tininess};
+use floaty::env::NanPropagation;
 use floaty::{
     BF16, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn,
     F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F128, F160, F192, F224, F256, F288, F320, F352,
-    F384, F416, F448, F480, F512, Rounding, TF32,
+    F384, F416, F448, F480, F512, TF32,
 };
 use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs, to_u128};
-use floaty_verify::mpfr::{self, Format, Operand, Specials, Value};
+use floaty_verify::mpfr::decimal::align;
+use floaty_verify::mpfr::{self, CONVERSION_BEHAVIORS, Format, Operand, Specials, Value};
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
 use rug::integer::Order;
-
-/// The behaviors of each conversion.
-fn behaviors() -> [Env; 10] {
-    [
-        Env::IEEE,
-        Env::IEEE
-            .with_rounding(Rounding::TowardZero)
-            .with_tininess(Tininess::BeforeRounding),
-        Env::IEEE
-            .with_rounding(Rounding::TowardPositive)
-            .with_flush_to_zero(true),
-        Env::IEEE.with_rounding(Rounding::ToOdd).with_saturate(true),
-        Env::IEEE
-            .with_rounding(Rounding::TiesToAway)
-            .with_denormals_are_zero(true),
-        Env::IEEE
-            .with_rounding(Rounding::TowardNegative)
-            .with_precision(NonZeroU32::new(3)),
-        // A saturated infinity and a saturated overflow both use the limit.
-        Env::IEEE
-            .with_saturate(true)
-            .with_precision(NonZeroU32::new(2)),
-        Env::IEEE
-            .with_rounding(Rounding::TiesTowardZero)
-            .with_flush_to_zero(true),
-        Env::IEEE.with_rounding(Rounding::AwayFromZero),
-        Env::IEEE.with_nan(NanRule::new(NanPropagation::DefaultNan).with_default_negative(true)),
-    ]
-}
 
 /// Returns the payload of the NaN that converting `source` gives in a format
 /// with a payload of `to_bits` bits. The payload of a NaN source moves from
@@ -72,18 +42,13 @@ fn nan_payload(
         return [0; 8];
     }
     let payload = Integer::from_digits(payload, Order::Lsf);
-    let aligned = if to_bits >= from_bits {
-        payload << (to_bits - from_bits)
-    } else {
-        payload >> (from_bits - to_bits)
-    };
-    to_limbs::<8>(&aligned)
+    to_limbs::<8>(&align(payload, from_bits, to_bits))
 }
 
 /// Converts every source value to every destination in every behavior.
 macro_rules! check {
     ($source:ty, $values:expr => $($destination:ty: $specials:expr),+) => {{
-        for env in behaviors() {
+        for env in CONVERSION_BEHAVIORS {
             for &bits in &$values {
                 let source = <$source>::from_bits(bits);
                 let operand = Operand::<8>::of(source);
