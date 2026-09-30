@@ -169,15 +169,57 @@ where
         }
     }
 
-    /// Rounds an exact value to the format. The preferred exponent is the
-    /// exponent of the value.
+    /// Decodes an operand, reports a subnormal operand, and applies DAZ. A
+    /// zero from DAZ keeps the exponent of the subnormal value.
+    // `Float::convert_with` and every decimal operation read their operands
+    // here. With `#[inline]` only on the forwarder of `Standard::operand`, a
+    // decimal32 to decimal64 `convert` took 24.3 ns instead of 22.8 ns.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn operand<L: Limbs>(bits: L, env: &Env, flags: &mut Flags) -> Unpacked<L> {
+        let value = Self::decode(bits);
+        let Unpacked::Finite {
+            negative,
+            exponent,
+            significand,
+        } = value
+        else {
+            return value;
+        };
+        if !Self::is_subnormal(exponent, limbs::to_u128(&significand)) {
+            return value;
+        }
+        *flags |= Flags::DENORMAL_INPUT;
+        if env.denormals_are_zero {
+            Unpacked::Zero { negative, exponent }
+        } else {
+            value
+        }
+    }
+
+    /// Rounds an exact result with a preferred exponent, and encodes it.
     #[inline]
-    pub fn round<In: Limbs, Out: Limbs, B: Behavior>(
+    fn finish<L: Limbs, In: Limbs, B: Behavior>(
         value: &Unrounded<In>,
+        preferred: i64,
         behavior: B,
-    ) -> (Out, Flags) {
-        let (rounded, flags) = round::round::<In, Out, Self, B>(value, value.exponent, behavior);
-        (Self::encode(rounded), flags)
+        flags: Flags,
+    ) -> (L, Flags) {
+        let preferred = i32::try_from(preferred.clamp(i64::from(i32::MIN), i64::from(i32::MAX)))
+            .expect("a clamped exponent fits an i32");
+        let (rounded, round_flags) = round::round::<In, L, Self, B>(value, preferred, behavior);
+        (Self::encode(rounded), flags | round_flags)
+    }
+
+    /// Encodes a result that needs no rounding.
+    fn exact<L: Limbs>(value: Unpacked<L>, flags: Flags) -> (L, Flags) {
+        (Self::encode(value), flags)
+    }
+
+    /// Returns a zero with the exponent nearest `exponent` in the range of the
+    /// format.
+    fn zero<L>(negative: bool, exponent: i64) -> Unpacked<L> {
+        round::zero(negative, exponent, &Self::TARGET)
     }
 }
 
@@ -243,7 +285,9 @@ where
     }
 
     fn round<L: Limbs, B: Behavior>(value: &Unrounded<L>, behavior: B) -> (Self::Bits, Flags) {
-        let (bits, flags) = DecimalLayout::<Enc, W>::round(value, behavior);
+        let preferred = i64::from(value.exponent);
+        let (bits, flags) =
+            DecimalLayout::<Enc, W>::finish(value, preferred, behavior, Flags::NONE);
         (Self::Bits::from_limbs(bits), flags)
     }
 

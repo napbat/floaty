@@ -8,8 +8,8 @@
 //! as the binary engine jams its lowest bit.
 
 use super::digits::{self, digit_count, power_of_ten};
-use super::{DecimalLayout, Wide, round};
-use crate::env::{Behavior, Env, Flags};
+use super::{DecimalLayout, Wide};
+use crate::env::{Behavior, Flags};
 use crate::exact::Unrounded;
 use crate::format::{DecimalEncoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
@@ -145,58 +145,6 @@ impl<Enc: DecimalEncoding, const W: usize> DecimalLayout<Enc, W>
 where
     Width<W>: Storage,
 {
-    /// Decodes an operand, reports a subnormal operand, and applies DAZ. A
-    /// zero from DAZ keeps the exponent of the subnormal value.
-    // `Float::convert_with` and every decimal operation read their operands
-    // here. With `#[inline]` only on the forwarder of `Standard::operand`, a
-    // decimal32 to decimal64 `convert` took 24.3 ns instead of 22.8 ns.
-    #[allow(clippy::inline_always)]
-    #[inline(always)]
-    pub(super) fn operand<L: Limbs>(bits: L, env: &Env, flags: &mut Flags) -> Unpacked<L> {
-        let value = Self::decode(bits);
-        let Unpacked::Finite {
-            negative,
-            exponent,
-            significand,
-        } = value
-        else {
-            return value;
-        };
-        if !Self::is_subnormal(exponent, limbs::to_u128(&significand)) {
-            return value;
-        }
-        *flags |= Flags::DENORMAL_INPUT;
-        if env.denormals_are_zero {
-            Unpacked::Zero { negative, exponent }
-        } else {
-            value
-        }
-    }
-
-    /// Rounds an exact result with a preferred exponent, and encodes it.
-    #[inline]
-    pub(super) fn finish<L: Widen, In: Limbs, B: Behavior>(
-        value: &Unrounded<In>,
-        preferred: i64,
-        behavior: B,
-        flags: Flags,
-    ) -> (L, Flags) {
-        let preferred = narrow(preferred.clamp(i64::from(i32::MIN), i64::from(i32::MAX)));
-        let (rounded, round_flags) = round::round::<In, L, Self, B>(value, preferred, behavior);
-        (Self::encode(rounded), flags | round_flags)
-    }
-
-    /// Encodes a result that needs no rounding.
-    pub(super) fn exact<L: Limbs>(value: Unpacked<L>, flags: Flags) -> (L, Flags) {
-        (Self::encode(value), flags)
-    }
-
-    /// Returns a zero with the exponent nearest `exponent` in the range of the
-    /// format.
-    pub(super) fn zero<L>(negative: bool, exponent: i64) -> Unpacked<L> {
-        round::zero(negative, exponent, &Self::TARGET)
-    }
-
     /// Returns the term of a zero or a finite value, in the limbs `Out`.
     fn term<L: Limbs, Out: Limbs>(value: &Unpacked<L>) -> Term<Out> {
         match *value {

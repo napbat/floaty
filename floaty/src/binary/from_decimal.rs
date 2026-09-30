@@ -61,7 +61,7 @@ where
                 sticky: !remainder.is_zero(),
             }
         };
-        Self::round(&exact, *env)
+        Self::finish(&exact, *env, Flags::NONE)
     }
 }
 

@@ -43,7 +43,7 @@ where
                 if source.radix == 10 {
                     Self::from_decimal(&value, env)
                 } else {
-                    Self::round(&value, behavior)
+                    Self::finish(&value, behavior, Flags::NONE)
                 }
             }
             Unpacked::Infinity { negative } => Self::convert_infinity(negative, env),

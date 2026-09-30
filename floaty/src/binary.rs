@@ -433,14 +433,63 @@ where
         }
     }
 
-    /// Rounds an exact value to the format and encodes it.
+    /// Decodes an operand, reports a subnormal operand, and applies DAZ.
+    // `Float::convert_with` and the special paths read their operands here.
+    // With only `#[inline]`, a binary32 to binary32 `convert` took 8.0 ns
+    // instead of 7.3 ns.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn operand<L: Limbs>(bits: L, env: &Env, flags: &mut Flags) -> Unpacked<L> {
+        let value = Self::decode(bits);
+        let subnormal =
+            matches!(value, Unpacked::Finite { .. }) && bits.field(Self::FRACTION_BITS, E) == 0;
+        if !subnormal {
+            return value;
+        }
+        *flags |= Flags::DENORMAL_INPUT;
+        if env.denormals_are_zero {
+            Unpacked::zero(bits.bit(Self::WIDTH - 1))
+        } else {
+            value
+        }
+    }
+
+    /// Rounds an exact value, encodes it, and adds the flags of the rounding to
+    /// `flags`.
     #[inline]
-    pub fn round<In: Limbs, Out: Limbs, B: Behavior>(
+    fn finish<In: Limbs, L: Limbs, B: Behavior>(
         value: &Unrounded<In>,
         behavior: B,
-    ) -> (Out, Flags) {
-        let (rounded, flags) = exact::round::<In, Out, Self, B>(value, behavior);
-        (Self::encode(rounded), flags)
+        flags: Flags,
+    ) -> (L, Flags) {
+        let (rounded, round_flags) = exact::round::<In, L, Self, B>(value, behavior);
+        (Self::encode(rounded), flags | round_flags)
+    }
+
+    /// Encodes a result that needs no rounding.
+    #[inline]
+    fn exact<L: Limbs>(value: Unpacked<L>, flags: Flags) -> (L, Flags) {
+        (Self::encode(value), flags)
+    }
+
+    /// Returns an infinity, or for a format without one the NaN or, when the
+    /// behavior saturates or the format has no NaN, the largest finite value.
+    fn infinity<L: Limbs>(negative: bool, env: &Env) -> Unpacked<L> {
+        if Self::TARGET.has_infinity {
+            Unpacked::Infinity { negative }
+        } else if env.saturate || !Self::TARGET.has_nan {
+            exact::largest(
+                negative,
+                env.precision_within(Self::TARGET.precision),
+                &Self::TARGET,
+            )
+        } else {
+            Unpacked::Nan {
+                negative,
+                signaling: false,
+                payload: L::ZERO,
+            }
+        }
     }
 
     /// Places the sign, the exponent field, and the fraction in an encoding.
@@ -513,7 +562,7 @@ where
 
     #[inline]
     fn round<L: Limbs, B: Behavior>(value: &Unrounded<L>, behavior: B) -> (Self::Bits, Flags) {
-        let (bits, flags) = Layout::<E, Enc, W>::round(value, behavior);
+        let (bits, flags) = Layout::<E, Enc, W>::finish(value, behavior, Flags::NONE);
         (Self::Bits::from_limbs(bits), flags)
     }
 

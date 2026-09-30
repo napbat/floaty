@@ -31,8 +31,7 @@ where
                     significand,
                     sticky: false,
                 };
-                let (rounded, round_flags) = exact::round::<L, L, Self, Env>(&scaled, *env);
-                (Self::encode(rounded), flags | round_flags)
+                Self::finish(&scaled, *env, flags)
             }
             Unpacked::Nan { .. } | Unpacked::Unsupported => {
                 let (nan, special) = nan::special_unary(&value, env)
