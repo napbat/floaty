@@ -25,12 +25,7 @@ use crate::random::SplitMix64;
 pub const EXACT_BITS: u32 = 2_200;
 
 /// binary64, as the oracle rounds to it.
-pub const BINARY64: Format = Format {
-    precision: 53,
-    emin: -1022,
-    emax: 1023,
-    specials: Specials::Ieee,
-};
+pub const BINARY64: Format = Format::of::<floaty::F64>(Specials::Ieee);
 
 /// The precision of the rounding of a rational to an [`Input`]. A value below
 /// 2^1025 keeps every bit above 2^-1975, far below the binary64 quantum

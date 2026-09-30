@@ -73,7 +73,7 @@ impl Format {
     /// Returns the parameters of the binary type `T` with the special values
     /// `specials`.
     #[must_use]
-    pub fn of<T: Parameters>(specials: Specials) -> Self {
+    pub const fn of<T: Parameters>(specials: Specials) -> Self {
         Self {
             precision: T::PRECISION,
             emin: T::EMIN,
@@ -127,6 +127,30 @@ impl Format {
         let shift = self.emax - i32::try_from(precision - 1).expect("a precision fits an i32");
         BigFloat::with_val(precision, significand) << shift
     }
+
+    /// Returns the largest finite value at `precision` bits, by
+    /// [`Format::largest`], with the sign `negative`.
+    #[must_use]
+    pub fn signed_largest(&self, negative: bool, precision: u32) -> Value {
+        let largest = self.largest(precision);
+        Value::Finite(if negative { -largest } else { largest })
+    }
+
+    /// Returns the value of an infinity with the sign `negative` in `env`. An
+    /// IEEE format keeps the infinity. A format without an infinity gives its
+    /// NaN, by [`Format::nan`]. It gives the largest finite value of the
+    /// precision of `env` when the behavior saturates or the format has no
+    /// NaN.
+    #[must_use]
+    pub fn infinity(&self, negative: bool, env: &Env) -> Value {
+        if self.specials == Specials::Ieee {
+            return Value::Infinity { negative };
+        }
+        if !env.saturate && self.specials != Specials::Finite {
+            return self.nan(negative);
+        }
+        self.signed_largest(negative, self.precision_in(env))
+    }
 }
 
 /// Returns the precision that `env` rounds to in a format of `precision`
@@ -177,6 +201,19 @@ pub struct Nan {
     pub payload: Integer,
 }
 
+impl Nan {
+    /// Returns the default NaN of the NaN rule of `env`: a quiet NaN with the
+    /// default sign of the rule and a zero payload.
+    #[must_use]
+    pub fn default_of(env: &Env) -> Self {
+        Self {
+            negative: env.nan.default_negative,
+            signaling: false,
+            payload: Integer::ZERO,
+        }
+    }
+}
+
 /// Selects a NaN among `offered`, in the order of the list, by the
 /// propagation rule of `env`, and makes it quiet.
 ///
@@ -196,13 +233,7 @@ pub fn select_nan(offered: &[Nan], env: &Env) -> Nan {
         .first()
         .expect("the rule selects from at least one NaN");
     let chosen = match env.nan.propagation {
-        NanPropagation::DefaultNan => {
-            return Nan {
-                negative: env.nan.default_negative,
-                signaling: false,
-                payload: Integer::ZERO,
-            };
-        }
+        NanPropagation::DefaultNan => return Nan::default_of(env),
         NanPropagation::SignalingFirst => offered.iter().find(|nan| nan.signaling).unwrap_or(first),
         NanPropagation::FirstOperand => first,
         NanPropagation::LargerSignificand => offered
@@ -316,23 +347,10 @@ pub fn round(input: &Input, format: &Format, env: &Env) -> (Value, Flags) {
     };
     let rounded = round_to(&exact, precision, Some(format.emin), env.rounding);
 
-    let mut flags = Flags::NONE;
-    if tiny {
-        flags |= Flags::TINY;
-        if env.flush_to_zero {
-            return (
-                format.zero(negative),
-                flags | Flags::UNDERFLOW | Flags::INEXACT,
-            );
-        }
-    }
-    let inexact = rounded != exact;
-    if inexact {
-        flags |= Flags::INEXACT;
-        if tiny {
-            flags |= Flags::UNDERFLOW;
-        }
-    }
+    let mut flags = match underflow_flags(tiny, rounded != exact, env) {
+        Underflow::Flushed(flags) => return (format.zero(negative), flags),
+        Underflow::Kept(flags) => flags,
+    };
     if rounded.is_zero() {
         return (format.zero(negative), flags);
     }
@@ -343,6 +361,37 @@ pub fn round(input: &Input, format: &Format, env: &Env) -> (Value, Flags) {
         flags |= Flags::ROUNDED_UP;
     }
     (Value::Finite(rounded), flags)
+}
+
+/// The flags of a rounded result, and whether flush-to-zero replaces it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Underflow {
+    /// Flush-to-zero replaces the tiny result with a zero of its sign, with
+    /// these flags.
+    Flushed(Flags),
+    /// The result stays, with these flags.
+    Kept(Flags),
+}
+
+/// Returns the flags of a rounded result by its tininess and its exactness,
+/// for a binary and a decimal destination alike. A tiny result signals
+/// `TINY`, and `UNDERFLOW` when it is inexact. Flush-to-zero replaces a tiny
+/// result with a zero, which signals `UNDERFLOW` and `INEXACT`.
+pub(crate) fn underflow_flags(tiny: bool, inexact: bool, env: &Env) -> Underflow {
+    let mut flags = Flags::NONE;
+    if tiny {
+        flags |= Flags::TINY;
+        if env.flush_to_zero {
+            return Underflow::Flushed(flags | Flags::UNDERFLOW | Flags::INEXACT);
+        }
+    }
+    if inexact {
+        flags |= Flags::INEXACT;
+        if tiny {
+            flags |= Flags::UNDERFLOW;
+        }
+    }
+    Underflow::Kept(flags)
 }
 
 /// Every rounding direction of floaty, which the oracle knows.
@@ -368,11 +417,7 @@ fn overflow(negative: bool, format: &Format, precision: u32, env: &Env) -> (Valu
         }
         return (format.nan(negative), flags);
     }
-    let mut value = format.largest(precision);
-    if negative {
-        value = -value;
-    }
-    (Value::Finite(value), flags)
+    (format.signed_largest(negative, precision), flags)
 }
 
 /// Rounds to `precision` bits. With `emin`, the result keeps the subnormal
@@ -458,18 +503,11 @@ pub fn convert<const N: usize>(source: &Operand<N>, format: &Format, env: &Env) 
     match source.read(env, &mut flags) {
         Read::Number(value) if value.is_zero() => (format.zero(value.is_sign_negative()), flags),
         Read::Number(value) if value.is_infinite() => {
-            let negative = value.is_sign_negative();
-            if format.specials == Specials::Ieee {
-                return (Value::Infinity { negative }, flags);
+            // A format without an infinity cannot hold the infinity.
+            if format.specials != Specials::Ieee {
+                flags |= Flags::INVALID;
             }
-            if env.saturate || format.specials == Specials::Finite {
-                let mut value = format.largest(format.precision_in(env));
-                if negative {
-                    value = -value;
-                }
-                return (Value::Finite(value), flags | Flags::INVALID);
-            }
-            (format.nan(negative), flags | Flags::INVALID)
+            (format.infinity(value.is_sign_negative(), env), flags)
         }
         Read::Number(value) => {
             let (significand, exponent) = value.to_integer_exp().expect("the value is finite");
@@ -488,12 +526,7 @@ pub fn convert<const N: usize>(source: &Operand<N>, format: &Format, env: &Env) 
                 flags |= Flags::INVALID;
             }
             // `DefaultNan` gives the default NaN. The other rules keep the sign.
-            let negative = if env.nan.propagation == NanPropagation::DefaultNan {
-                env.nan.default_negative
-            } else {
-                nan.negative
-            };
-            (format.nan(negative), flags)
+            (format.nan(select_nan(&[nan], env).negative), flags)
         }
         Read::Unsupported => panic!("the oracle has no rule for an unsupported encoding"),
     }

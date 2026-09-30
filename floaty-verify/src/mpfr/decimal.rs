@@ -11,7 +11,7 @@ use rug::float::Round;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
-use super::{Parameters, limit_precision, overflows_to_infinity};
+use super::{Parameters, Underflow, limit_precision, overflows_to_infinity, underflow_flags};
 
 /// The parameters of a decimal format.
 #[derive(Clone, Copy, Debug)]
@@ -232,24 +232,14 @@ pub fn to_decimal(exact: &BigFloat, format: DecimalFormat, env: &Env) -> (Decima
         coefficient /= 10u32;
         exponent += 1;
     }
-    let tiny = top < emin;
-    let mut flags = Flags::NONE;
     let zero = DecimalValue::Zero {
         negative,
         exponent: full_lowest,
     };
-    if tiny {
-        flags |= Flags::TINY;
-        if env.flush_to_zero {
-            return (zero, flags | Flags::UNDERFLOW | Flags::INEXACT);
-        }
-    }
-    if inexact {
-        flags |= Flags::INEXACT;
-        if tiny {
-            flags |= Flags::UNDERFLOW;
-        }
-    }
+    let mut flags = match underflow_flags(top < emin, inexact, env) {
+        Underflow::Flushed(flags) => return (zero, flags),
+        Underflow::Kept(flags) => flags,
+    };
     if step {
         flags |= Flags::ROUNDED_UP;
     }

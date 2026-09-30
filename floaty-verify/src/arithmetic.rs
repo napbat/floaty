@@ -16,11 +16,11 @@ use core::cmp::Ordering;
 
 use floaty::env::{FusedNanOrder, InvalidProduct};
 use floaty::{Env, Flags, Rounding};
+use rug::Float as BigFloat;
 use rug::float::Round;
-use rug::{Float as BigFloat, Integer};
 
 use crate::encodings::to_limbs;
-use crate::mpfr::{self, Format, Input, Nan, Operand, Read, Specials, Value, select_nan};
+use crate::mpfr::{self, Format, Input, Nan, Operand, Read, Value, select_nan};
 
 /// An arithmetic operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,12 +178,7 @@ fn propagate(operation: Operation, operands: &[Read], numbers: &[Number], env: &
     if product.is_empty() && is_zero_times_infinity(&numbers[0], &numbers[1]) {
         return match env.nan.invalid_product {
             InvalidProduct::Signals => {
-                let default = Nan {
-                    negative: env.nan.default_negative,
-                    signaling: false,
-                    payload: Integer::ZERO,
-                };
-                let mut offered = vec![default];
+                let mut offered = vec![Nan::default_of(env)];
                 offered.extend(offer(&[2]));
                 select_nan(&offered, env)
             }
@@ -229,22 +224,6 @@ fn invalid(format: &Format, env: &Env) -> (Value, Flags) {
     (format.nan(env.nan.default_negative), Flags::INVALID)
 }
 
-/// Returns an infinity, or for a format without one the NaN or, when the
-/// behavior saturates or the format has no NaN, the largest finite value.
-fn infinity(negative: bool, format: &Format, env: &Env) -> Value {
-    if format.specials == Specials::Ieee {
-        return Value::Infinity { negative };
-    }
-    if !env.saturate && format.specials != Specials::Finite {
-        return format.nan(negative);
-    }
-    let mut value = format.largest(format.precision_in(env));
-    if negative {
-        value = -value;
-    }
-    Value::Finite(value)
-}
-
 /// The sign of an exact zero sum of values with different signs.
 fn zero_sum_sign(env: &Env) -> bool {
     env.rounding == Rounding::TowardNegative
@@ -274,7 +253,7 @@ fn add(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, F
     match (first, second) {
         (Number::Infinity(a), Number::Infinity(b)) if a != b => invalid(format, env),
         (Number::Infinity(negative), _) | (_, Number::Infinity(negative)) => {
-            (infinity(*negative, format, env), Flags::NONE)
+            (format.infinity(*negative, env), Flags::NONE)
         }
         (Number::Zero(a), Number::Zero(b)) => {
             let negative = if a == b { *a } else { zero_sum_sign(env) };
@@ -298,7 +277,7 @@ fn mul(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, F
     match (first, second) {
         _ if is_zero_times_infinity(first, second) => invalid(format, env),
         (Number::Infinity(_), _) | (_, Number::Infinity(_)) => {
-            (infinity(negative, format, env), Flags::NONE)
+            (format.infinity(negative, env), Flags::NONE)
         }
         (Number::Zero(_), _) | (_, Number::Zero(_)) => (format.zero(negative), Flags::NONE),
         (Number::Finite(a), Number::Finite(b)) => {
@@ -314,9 +293,9 @@ fn div(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, F
         (Number::Infinity(_), Number::Infinity(_)) | (Number::Zero(_), Number::Zero(_)) => {
             invalid(format, env)
         }
-        (Number::Infinity(_), _) => (infinity(negative, format, env), Flags::NONE),
+        (Number::Infinity(_), _) => (format.infinity(negative, env), Flags::NONE),
         (_, Number::Infinity(_)) | (Number::Zero(_), _) => (format.zero(negative), Flags::NONE),
-        (_, Number::Zero(_)) => (infinity(negative, format, env), Flags::DIVIDE_BY_ZERO),
+        (_, Number::Zero(_)) => (format.infinity(negative, env), Flags::DIVIDE_BY_ZERO),
         (Number::Finite(a), Number::Finite(b)) => {
             let (quotient, ordering) =
                 BigFloat::with_val_round(working(format), a / b, Round::Zero);
@@ -328,7 +307,7 @@ fn div(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, F
 fn sqrt(value: &Number, format: &Format, env: &Env) -> (Value, Flags) {
     match value {
         Number::Zero(negative) => (format.zero(*negative), Flags::NONE),
-        Number::Infinity(false) => (infinity(false, format, env), Flags::NONE),
+        Number::Infinity(false) => (format.infinity(false, env), Flags::NONE),
         Number::Infinity(true) => invalid(format, env),
         Number::Finite(value) if value.is_sign_negative() => invalid(format, env),
         Number::Finite(value) => {
@@ -356,9 +335,9 @@ fn mul_add(
     match addend {
         _ if product_infinite => match addend {
             Number::Infinity(negative) if *negative != product_negative => invalid(format, env),
-            _ => (infinity(product_negative, format, env), Flags::NONE),
+            _ => (format.infinity(product_negative, env), Flags::NONE),
         },
-        Number::Infinity(negative) => (infinity(*negative, format, env), Flags::NONE),
+        Number::Infinity(negative) => (format.infinity(*negative, env), Flags::NONE),
         Number::Zero(negative) if product_zero => {
             let negative = if *negative == product_negative {
                 *negative
