@@ -20,6 +20,22 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         core::array::from_fn(|index| operation(self.lanes[index], other.lanes[index]))
     }
 
+    /// Applies `operation`, which returns a result and flags, to each pair of
+    /// lanes, and returns the results and the union of the flags.
+    fn pairs_with<R>(
+        self,
+        other: Self,
+        mut operation: impl FnMut(Float<S, W, M>, Float<S, W, M>) -> (R, Flags),
+    ) -> ([R; N], Flags) {
+        let mut flags = Flags::NONE;
+        let results = self.each(other, |left, right| {
+            let (result, lane_flags) = operation(left, right);
+            flags |= lane_flags;
+            result
+        });
+        (results, flags)
+    }
+
     /// Compares each pair of lanes in the engine or the scalar paths, for
     /// lanes whose packed host path declines.
     #[cold]
@@ -52,13 +68,9 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         behavior: impl Override,
     ) -> ([Option<Ordering>; N], Flags) {
         let behavior = behavior.apply::<M>();
-        let mut flags = Flags::NONE;
-        let orders = self.each(other, |left, right| {
-            let (order, lane_flags) = left.compare_quiet_with(right, behavior);
-            flags |= lane_flags;
-            order
-        });
-        (orders, flags)
+        self.pairs_with(other, |left, right| {
+            left.compare_quiet_with(right, behavior)
+        })
     }
 
     /// Compares each pair of lanes as the IEEE 754 signaling predicates do,
@@ -70,13 +82,9 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         behavior: impl Override,
     ) -> ([Option<Ordering>; N], Flags) {
         let behavior = behavior.apply::<M>();
-        let mut flags = Flags::NONE;
-        let orders = self.each(other, |left, right| {
-            let (order, lane_flags) = left.compare_signaling_with(right, behavior);
-            flags |= lane_flags;
-            order
-        });
-        (orders, flags)
+        self.pairs_with(other, |left, right| {
+            left.compare_signaling_with(right, behavior)
+        })
     }
 
     /// Orders each pair of lanes as IEEE 754 `totalOrder` does, with the rule
@@ -105,8 +113,7 @@ macro_rules! min_max {
             #[must_use]
             #[inline]
             pub fn $name(self, other: Self) -> Self {
-                if !host::packed::available(S::HOST, Kind::Comparison)
-                {
+                if !host::packed::available(S::HOST, Kind::Comparison) {
                     return self.zip(other, Float::$name);
                 }
                 let operation = MinMax::$operation;

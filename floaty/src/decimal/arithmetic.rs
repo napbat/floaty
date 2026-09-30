@@ -390,7 +390,7 @@ where
         let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(value, env, &mut flags);
-        if let Some((result, special)) = nan::special(&x, &Unpacked::zero(false), env) {
+        if let Some((result, special)) = nan::special_unary(&x, env) {
             return Self::exact(result, flags | special);
         }
         match x {
@@ -432,28 +432,14 @@ where
 
     /// Returns `left * right + addend`, rounded once. The preferred exponent
     /// is the smaller of the product exponent and the addend exponent. The NaN
-    /// cases follow the binary engine and the fused order of the NaN rule.
+    /// cases follow `nan::fused_special`, as in the binary engine.
     pub fn mul_add<L: Widen, B: Behavior>(left: L, right: L, addend: L, behavior: B) -> (L, Flags) {
         let env = &behavior.env();
         let mut flags = Flags::NONE;
         let x = Self::operand(left, env, &mut flags);
         let y = Self::operand(right, env, &mut flags);
         let z = Self::operand(addend, env, &mut flags);
-        let invalid_product = matches!(
-            (x, y),
-            (Unpacked::Infinity { .. }, Unpacked::Zero { .. })
-                | (Unpacked::Zero { .. }, Unpacked::Infinity { .. })
-        );
-        if x.is_nan() || y.is_nan() {
-            let (value, special) = nan::fused(&x, &y, &z, env);
-            return Self::exact(value, flags | special);
-        }
-        if invalid_product {
-            let (value, special) = nan::invalid_product(&z, env);
-            return Self::exact(value, flags | special);
-        }
-        if z.is_nan() {
-            let (value, special) = nan::propagate(&Unpacked::zero(false), &z, env);
+        if let Some((value, special)) = nan::fused_special(&x, &y, &z, env) {
             return Self::exact(value, flags | special);
         }
         let product_negative = Self::sign(&x) != Self::sign(&y);

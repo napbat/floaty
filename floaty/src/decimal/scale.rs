@@ -24,8 +24,8 @@ where
         let scale = i64::from(scale.clamp(-SCALE_LIMIT, SCALE_LIMIT));
         match value {
             Unpacked::Nan { .. } => {
-                let (nan, special) = nan::special(&value, &Unpacked::zero(false), env)
-                    .expect("a NaN has a special result");
+                let (nan, special) =
+                    nan::special_unary(&value, env).expect("a NaN has a special result");
                 Self::exact(nan, flags | special)
             }
             Unpacked::Zero { negative, exponent } => {
@@ -57,7 +57,7 @@ where
     pub fn next<L: Limbs>(bits: L, step: Step, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let value = Self::operand(bits, env, &mut flags);
-        if let Some((nan, special)) = nan::special(&value, &Unpacked::zero(false), env) {
+        if let Some((nan, special)) = nan::special_unary(&value, env) {
             return Self::exact(nan, flags | special);
         }
         let result = match step {
@@ -231,8 +231,8 @@ where
         let value = Self::operand(bits, env, &mut flags);
         match value {
             Unpacked::Nan { .. } => {
-                let (nan, special) = nan::special(&value, &Unpacked::zero(false), env)
-                    .expect("a NaN has a special result");
+                let (nan, special) =
+                    nan::special_unary(&value, env).expect("a NaN has a special result");
                 Self::exact(nan, flags | special)
             }
             Unpacked::Infinity { .. } => Self::exact(Unpacked::Infinity { negative: false }, flags),
@@ -256,8 +256,8 @@ where
         let value = Self::operand(bits, env, &mut flags);
         match value {
             Unpacked::Nan { .. } => {
-                let (nan, special) = nan::special(&value, &Unpacked::zero(false), env)
-                    .expect("a NaN has a special result");
+                let (nan, special) =
+                    nan::special_unary(&value, env).expect("a NaN has a special result");
                 Self::exact(nan, flags | special)
             }
             Unpacked::Infinity { .. } => Self::exact(Unpacked::Infinity { negative: false }, flags),

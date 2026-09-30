@@ -36,7 +36,7 @@ where
                 significand,
             } if exponent < 0 => (negative, exponent, significand),
             Unpacked::Nan { .. } | Unpacked::Unsupported => {
-                let (nan, special) = nan::special(&value, &Unpacked::zero(false), env)
+                let (nan, special) = nan::special_unary(&value, env)
                     .expect("a NaN or an unsupported operand has a special result");
                 return Self::exact(nan, flags | special);
             }

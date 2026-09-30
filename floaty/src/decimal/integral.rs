@@ -52,8 +52,8 @@ where
         let value = Self::operand(bits, env, &mut flags);
         match value {
             Unpacked::Nan { .. } => {
-                let (nan, special) = nan::special(&value, &Unpacked::zero(false), env)
-                    .expect("a NaN has a special result");
+                let (nan, special) =
+                    nan::special_unary(&value, env).expect("a NaN has a special result");
                 Self::exact(nan, flags | special)
             }
             Unpacked::Zero { negative, exponent } if exponent < 0 => Self::exact(

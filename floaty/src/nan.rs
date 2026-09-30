@@ -103,6 +103,12 @@ pub fn special<L: Limbs>(
     None
 }
 
+/// Returns the result of a one-operand operation with an unsupported or a NaN
+/// operand, or `None` for a number, as [`special`] gives it.
+pub fn special_unary<L: Limbs>(value: &Unpacked<L>, env: &Env) -> Option<(Unpacked<L>, Flags)> {
+    special(value, &Unpacked::zero(false), env)
+}
+
 /// Selects the NaN that a two-operand operation returns, made quiet. At least
 /// one operand is a NaN. A signaling NaN operand signals invalid.
 ///
@@ -138,6 +144,43 @@ pub fn fused<L: Limbs>(
         FusedNanOrder::AddendFirst => select(&[addend, first, second], env),
         FusedNanOrder::AddendSecond => select(&[first, addend, second], env),
     }
+}
+
+/// Returns the result of a fused multiply-add with an unsupported or a NaN
+/// operand, or with the invalid product `0 * inf`, or `None` otherwise.
+///
+/// The cases apply in order: an unsupported operand signals invalid and gives
+/// the default NaN, a NaN factor gives the NaN of [`fused`], the invalid
+/// product follows [`invalid_product`], and a NaN addend gives that NaN,
+/// made quiet. The binary and the decimal engines share this order.
+#[inline]
+pub fn fused_special<L: Limbs>(
+    first: &Unpacked<L>,
+    second: &Unpacked<L>,
+    addend: &Unpacked<L>,
+    env: &Env,
+) -> Option<(Unpacked<L>, Flags)> {
+    if [first, second, addend]
+        .iter()
+        .any(|value| matches!(value, Unpacked::Unsupported))
+    {
+        return Some((default_nan(env), Flags::INVALID));
+    }
+    if first.is_nan() || second.is_nan() {
+        return Some(fused(first, second, addend, env));
+    }
+    if matches!(
+        (first, second),
+        (Unpacked::Infinity { .. }, Unpacked::Zero { .. })
+            | (Unpacked::Zero { .. }, Unpacked::Infinity { .. })
+    ) {
+        return Some(invalid_product(addend, env));
+    }
+    if addend.is_nan() {
+        // Every rule picks the NaN over the number that the product is.
+        return Some(propagate(&Unpacked::zero(false), addend, env));
+    }
+    None
 }
 
 /// Returns the result of a fused multiply-add whose product is the invalid

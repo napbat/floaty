@@ -449,7 +449,7 @@ where
         let mut flags = Flags::NONE;
         let x = Self::operand(value, env, &mut flags);
         // A one-operand NaN propagates as SoftFloat does, against a zero.
-        if let Some((result, special)) = nan::special(&x, &Unpacked::zero(false), env) {
+        if let Some((result, special)) = nan::special_unary(&x, env) {
             return Self::exact(result, flags | special);
         }
         match x {
@@ -503,55 +503,23 @@ where
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
         let third = Self::operand(addend, env, &mut flags);
-        if [&first, &second, &third]
-            .iter()
-            .any(|value| matches!(value, Unpacked::Unsupported))
-        {
-            return Self::exact(default_nan(env), flags | Flags::INVALID);
-        }
-        if first.is_nan() || second.is_nan() {
-            let (value, special) = nan::fused(&first, &second, &third, env);
+        if let Some((value, special)) = nan::fused_special(&first, &second, &third, env) {
             return Self::exact(value, flags | special);
         }
         let product_negative = sign(&first) != sign(&second);
         // The product of the first two operands, as a value to combine with
-        // the addend: an infinity, an invalid product, or a number.
-        let product = {
-            match (first, second) {
-                (Unpacked::Infinity { .. }, Unpacked::Zero { .. })
-                | (Unpacked::Zero { .. }, Unpacked::Infinity { .. }) => {
-                    let (value, special) = nan::invalid_product(&third, env);
-                    return Self::exact(value, flags | special);
+        // the addend: an infinity, or a number.
+        let product = match (first, second) {
+            (Unpacked::Infinity { .. }, _) | (_, Unpacked::Infinity { .. }) => Unpacked::Infinity {
+                negative: product_negative,
+            },
+            _ => {
+                if matches!(third, Unpacked::Infinity { .. }) {
+                    return Self::exact(third, flags);
                 }
-                (Unpacked::Infinity { .. }, _) | (_, Unpacked::Infinity { .. }) => {
-                    Unpacked::Infinity {
-                        negative: product_negative,
-                    }
-                }
-                _ => {
-                    if let Some((value, special)) =
-                        nan::special(&Unpacked::zero(false), &third, env)
-                    {
-                        return Self::exact(value, flags | special);
-                    }
-                    if matches!(third, Unpacked::Infinity { .. }) {
-                        return Self::exact(third, flags);
-                    }
-                    return Self::finite_mul_add(
-                        first,
-                        second,
-                        third,
-                        product_negative,
-                        env,
-                        flags,
-                    );
-                }
+                return Self::finite_mul_add(first, second, third, product_negative, env, flags);
             }
         };
-        if third.is_nan() {
-            let (value, special) = nan::propagate(&product, &third, env);
-            return Self::exact(value, flags | special);
-        }
         match (product, third) {
             (
                 Unpacked::Infinity {

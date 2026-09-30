@@ -145,13 +145,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     pub fn sqrt_with(self, behavior: impl Override) -> (Self, Flags) {
         let behavior = behavior.apply::<M>();
-        let mut flags = Flags::NONE;
-        let lanes = self.map(|lane| {
-            let (value, lane_flags) = lane.sqrt_with(behavior);
-            flags |= lane_flags;
-            value
-        });
-        (lanes, flags)
+        self.map_with(|lane| lane.sqrt_with(behavior))
     }
 
     /// Returns `self * multiplier + addend` of each triple of lanes, each
@@ -209,13 +203,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     pub fn round_to_integral_with(self, behavior: impl Override) -> (Self, Flags) {
         let behavior = behavior.apply::<M>();
-        let mut flags = Flags::NONE;
-        let lanes = self.map(|lane| {
-            let (value, lane_flags) = lane.round_to_integral_with(behavior);
-            flags |= lane_flags;
-            value
-        });
-        (lanes, flags)
+        self.map_with(|lane| lane.round_to_integral_with(behavior))
     }
 
     /// Converts each lane to the float type `T`, rounding with the mode of
@@ -246,12 +234,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (Lanes<T, N>, Flags) {
         let behavior = behavior.apply::<T::Mode>();
-        let mut flags = Flags::NONE;
-        let lanes = self.lanes.map(|lane| {
-            let (value, lane_flags) = lane.convert_with::<T>(behavior);
-            flags |= lane_flags;
-            value
-        });
+        let (lanes, flags) = self.each_with(|lane| lane.convert_with::<T>(behavior));
         (Lanes::new(lanes), flags)
     }
 }
@@ -268,8 +251,7 @@ macro_rules! operator {
 
             #[inline]
             fn $method(self, other: Self) -> Self {
-                if !host::packed::available(S::HOST, Kind::Arithmetic)
-                {
+                if !host::packed::available(S::HOST, Kind::Arithmetic) {
                     return self.zip(other, ops::$trait::$method);
                 }
                 match host::packed::binary(&self.lanes, &other.lanes, Operation::$trait, &M::ENV) {
@@ -284,13 +266,7 @@ macro_rules! operator {
             #[must_use]
             pub fn $with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
                 let behavior = behavior.apply::<M>();
-                let mut flags = Flags::NONE;
-                let lanes = self.zip(other, |left, right| {
-                    let (value, lane_flags) = left.$with(right, behavior);
-                    flags |= lane_flags;
-                    value
-                });
-                (lanes, flags)
+                self.zip_with(other, |left, right| left.$with(right, behavior))
             }
         }
     };
@@ -378,15 +354,25 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     /// the lanes and the union of the flags.
     fn map_with(
         self,
-        mut operation: impl FnMut(Float<S, W, M>) -> (Float<S, W, M>, Flags),
+        operation: impl FnMut(Float<S, W, M>) -> (Float<S, W, M>, Flags),
     ) -> (Self, Flags) {
+        let (lanes, flags) = self.each_with(operation);
+        (Self::new(lanes), flags)
+    }
+
+    /// Applies `operation`, which returns a result and flags, to each lane,
+    /// and returns the results and the union of the flags.
+    fn each_with<R>(
+        self,
+        mut operation: impl FnMut(Float<S, W, M>) -> (R, Flags),
+    ) -> ([R; N], Flags) {
         let mut flags = Flags::NONE;
-        let lanes = self.map(|lane| {
-            let (value, lane_flags) = operation(lane);
+        let results = self.lanes.map(|lane| {
+            let (result, lane_flags) = operation(lane);
             flags |= lane_flags;
-            value
+            result
         });
-        (lanes, flags)
+        (results, flags)
     }
 
     /// Applies `operation`, which returns flags, to each pair of lanes, and
@@ -453,13 +439,7 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     pub fn to_int_with<I: Integer>(self, behavior: impl Override) -> ([ToInt<I>; N], Flags) {
         let behavior = behavior.apply::<M>();
-        let mut flags = Flags::NONE;
-        let results = self.lanes.map(|lane| {
-            let (result, lane_flags) = lane.to_int_with::<I>(behavior);
-            flags |= lane_flags;
-            result
-        });
-        (results, flags)
+        self.each_with(|lane| lane.to_int_with::<I>(behavior))
     }
 
     /// Makes lanes from integers, each rounded with the default mode, lane 0

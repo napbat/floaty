@@ -35,7 +35,7 @@ where
                 (Self::encode(rounded), flags | round_flags)
             }
             Unpacked::Nan { .. } | Unpacked::Unsupported => {
-                let (nan, special) = nan::special(&value, &Unpacked::zero(false), env)
+                let (nan, special) = nan::special_unary(&value, env)
                     .expect("a NaN or an unsupported operand has a special result");
                 Self::exact(nan, flags | special)
             }
@@ -55,7 +55,7 @@ where
     pub fn next<L: Limbs>(bits: L, step: Step, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let value = Self::operand(bits, env, &mut flags);
-        if let Some((nan, special)) = nan::special(&value, &Unpacked::zero(false), env) {
+        if let Some((nan, special)) = nan::special_unary(&value, env) {
             return Self::exact(nan, flags | special);
         }
         let past_largest = |negative| {
