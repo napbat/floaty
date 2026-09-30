@@ -52,6 +52,62 @@ pub enum Unpacked<L> {
 }
 
 impl<L> Unpacked<L> {
+    /// Returns `true` for a NaN.
+    #[inline]
+    pub fn is_nan(&self) -> bool {
+        matches!(self, Self::Nan { .. })
+    }
+
+    /// Returns `true` for a signaling NaN.
+    #[inline]
+    pub fn is_signaling(&self) -> bool {
+        matches!(
+            self,
+            Self::Nan {
+                signaling: true,
+                ..
+            }
+        )
+    }
+
+    /// Returns the value with the other sign. A NaN keeps its sign.
+    #[must_use]
+    #[inline]
+    pub fn negate(self) -> Self {
+        match self {
+            Self::Zero { negative, exponent } => Self::Zero {
+                negative: !negative,
+                exponent,
+            },
+            Self::Finite {
+                negative,
+                exponent,
+                significand,
+            } => Self::Finite {
+                negative: !negative,
+                exponent,
+                significand,
+            },
+            Self::Infinity { negative } => Self::Infinity {
+                negative: !negative,
+            },
+            Self::Nan { .. } | Self::Unsupported => self,
+        }
+    }
+
+    /// Returns `true` for a negative zero, finite, or infinite value. A NaN
+    /// or an unsupported value gives `false`: an operation reads the sign of
+    /// a number only after it handles those values.
+    #[inline]
+    pub fn is_negative(&self) -> bool {
+        match *self {
+            Self::Zero { negative, .. }
+            | Self::Finite { negative, .. }
+            | Self::Infinity { negative } => negative,
+            Self::Nan { .. } | Self::Unsupported => false,
+        }
+    }
+
     /// Returns a zero of the binary engine, whose exponent is 0.
     #[inline]
     pub const fn zero(negative: bool) -> Self {

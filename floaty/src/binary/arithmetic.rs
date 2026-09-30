@@ -325,7 +325,7 @@ where
         if let (Some(a), Some(b)) = (x.number(), y.number()) {
             return Self::mul_finite(a, b, *env, flags);
         }
-        let negative = sign(&x) != sign(&y);
+        let negative = x.is_negative() != y.is_negative();
         match (x, y) {
             (Unpacked::Infinity { .. }, Unpacked::Zero { .. })
             | (Unpacked::Zero { .. }, Unpacked::Infinity { .. }) => {
@@ -384,7 +384,7 @@ where
         if let (Some(a), Some(b)) = (x.number(), y.number()) {
             return Self::div_finite(a, b, *env, flags);
         }
-        let negative = sign(&x) != sign(&y);
+        let negative = x.is_negative() != y.is_negative();
         match (x, y) {
             (Unpacked::Infinity { .. }, Unpacked::Infinity { .. })
             | (Unpacked::Zero { .. }, Unpacked::Zero { .. }) => {
@@ -502,7 +502,7 @@ where
         if let Some((value, special)) = nan::fused_special(&first, &second, &third, env) {
             return Self::exact(value, flags | special);
         }
-        let product_negative = sign(&first) != sign(&second);
+        let product_negative = first.is_negative() != second.is_negative();
         // The product of the first two operands, as a value to combine with
         // the addend: an infinity, or a number.
         let product = match (first, second) {
@@ -590,16 +590,6 @@ where
             ),
             _ => unreachable!("the addend is zero or finite"),
         }
-    }
-}
-
-/// Returns the sign of a zero, finite, or infinite value.
-fn sign<L: Limbs>(value: &Unpacked<L>) -> bool {
-    match value {
-        Unpacked::Zero { negative, .. }
-        | Unpacked::Finite { negative, .. }
-        | Unpacked::Infinity { negative } => *negative,
-        Unpacked::Nan { .. } | Unpacked::Unsupported => false,
     }
 }
 

@@ -228,16 +228,6 @@ where
         }
     }
 
-    /// Returns the sign of a zero, finite, or infinite value.
-    fn sign<L>(value: &Unpacked<L>) -> bool {
-        match *value {
-            Unpacked::Zero { negative, .. }
-            | Unpacked::Finite { negative, .. }
-            | Unpacked::Infinity { negative } => negative,
-            Unpacked::Nan { .. } | Unpacked::Unsupported => false,
-        }
-    }
-
     /// Rounds a sum with a preferred exponent, or encodes an exact zero sum.
     #[inline]
     fn finish_sum<L: Widen, In: Limbs, B: Behavior>(
@@ -299,7 +289,7 @@ where
         if let Some((value, special)) = nan::special(&x, &y, env) {
             return Self::exact(value, flags | special);
         }
-        let negative = Self::sign(&x) != Self::sign(&y);
+        let negative = x.is_negative() != y.is_negative();
         match (x, y) {
             (Unpacked::Infinity { .. }, Unpacked::Zero { .. })
             | (Unpacked::Zero { .. }, Unpacked::Infinity { .. }) => {
@@ -335,7 +325,7 @@ where
         if let Some((value, special)) = nan::special(&x, &y, env) {
             return Self::exact(value, flags | special);
         }
-        let negative = Self::sign(&x) != Self::sign(&y);
+        let negative = x.is_negative() != y.is_negative();
         let (lowest, _) = Self::exponent_range();
         match (x, y) {
             (Unpacked::Infinity { .. }, Unpacked::Infinity { .. })
@@ -438,7 +428,7 @@ where
         if let Some((value, special)) = nan::fused_special(&x, &y, &z, env) {
             return Self::exact(value, flags | special);
         }
-        let product_negative = Self::sign(&x) != Self::sign(&y);
+        let product_negative = x.is_negative() != y.is_negative();
         let product_infinite =
             matches!(x, Unpacked::Infinity { .. }) || matches!(y, Unpacked::Infinity { .. });
         match z {

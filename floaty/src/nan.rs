@@ -8,46 +8,6 @@ use crate::limbs::Limbs;
 use crate::unpacked::Unpacked;
 
 impl<L: Limbs> Unpacked<L> {
-    /// Returns `true` for a NaN.
-    pub fn is_nan(&self) -> bool {
-        matches!(self, Self::Nan { .. })
-    }
-
-    /// Returns `true` for a signaling NaN.
-    pub fn is_signaling(&self) -> bool {
-        matches!(
-            self,
-            Self::Nan {
-                signaling: true,
-                ..
-            }
-        )
-    }
-
-    /// Returns the value with the other sign. A NaN keeps its sign.
-    #[must_use]
-    pub fn negate(self) -> Self {
-        match self {
-            Self::Zero { negative, exponent } => Self::Zero {
-                negative: !negative,
-                exponent,
-            },
-            Self::Finite {
-                negative,
-                exponent,
-                significand,
-            } => Self::Finite {
-                negative: !negative,
-                exponent,
-                significand,
-            },
-            Self::Infinity { negative } => Self::Infinity {
-                negative: !negative,
-            },
-            Self::Nan { .. } | Self::Unsupported => self,
-        }
-    }
-
     /// Returns the value made quiet, when it is a NaN.
     #[must_use]
     fn quiet(self) -> Self {

@@ -150,7 +150,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     /// number, `-0`, a negative infinity, or a NaN with a negative sign.
     #[must_use]
     pub fn is_sign_negative(self) -> bool {
-        is_negative(&self.exact())
+        has_negative_sign(&self.exact())
     }
 
     /// Returns `true` when the exact value has a positive sign.
@@ -311,8 +311,8 @@ fn lowest_bit(magnitude: &Magnitude) -> (u32, i32) {
     (zeros, weight)
 }
 
-/// Returns `true` when an exact value has a negative sign.
-fn is_negative(value: &Unpacked<Magnitude>) -> bool {
+/// Returns `true` when an exact value has a negative sign, a NaN included.
+fn has_negative_sign(value: &Unpacked<Magnitude>) -> bool {
     match *value {
         Unpacked::Zero { negative, .. }
         | Unpacked::Finite { negative, .. }
@@ -325,7 +325,7 @@ fn is_negative(value: &Unpacked<Magnitude>) -> bool {
 /// Orders two exact values as IEEE 754 `totalOrder` orders values of one
 /// format.
 fn order_values(first: &Unpacked<Magnitude>, second: &Unpacked<Magnitude>) -> Ordering {
-    let (first_negative, second_negative) = (is_negative(first), is_negative(second));
+    let (first_negative, second_negative) = (has_negative_sign(first), has_negative_sign(second));
     if first_negative != second_negative {
         return if first_negative {
             Ordering::Less
