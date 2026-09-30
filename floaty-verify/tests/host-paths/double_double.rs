@@ -12,7 +12,7 @@ fn double_double_operators_match<Alg: floaty::Algorithm>(pairs: &[(F64, F64)]) {
     let bits = |value: DoubleDouble<Alg>| (value.hi().to_bits(), value.lo().to_bits());
     for (first, second) in pairs.iter().zip(pairs.iter().rev()) {
         let (x, y) = (value(first), value(second));
-        let env = floaty::Env::IEEE;
+        let env = DoubleDouble::<Alg>::ENV;
         let context = format!("{x:?} {y:?}");
         assert_eq!(bits(x + y), bits(x.add_with(y, env).0), "{context} +");
         assert_eq!(bits(x - y), bits(x.sub_with(y, env).0), "{context} -");

@@ -7,7 +7,9 @@
 //! rounding directions. floaty runs `Gcc` under the behavior of PowerPC,
 //! `ibm_ldouble::behavior`, and `Qd` under `Env::X86_SSE`. `Qd` also runs
 //! with flush-to-zero and denormals-are-zero, and QD with the FTZ and DAZ
-//! bits of MXCSR. The test counts the cases with a malformed operand, a finite
+//! bits of MXCSR. In the direction to nearest, the operations of the default
+//! mode, the reference mode of each algorithm, give the results of the
+//! reference. The test counts the cases with a malformed operand, a finite
 //! high half and a NaN low half, whose NaN the fused NaN order decides.
 //!
 //! Each case runs again with saturation, and must give the result of the
@@ -22,7 +24,7 @@
 use std::collections::BTreeMap;
 
 use floaty::env::Tininess;
-use floaty::{DoubleDouble, Env, F64, Flags, Gcc, Qd};
+use floaty::{Binary, DoubleDouble, Env, F64, Flags, Float, Gcc, Qd};
 use floaty_verify::encodings::Layout;
 use floaty_verify::ibm_ldouble::{
     self, Case, Flags as ReferenceFlags, Operation, Outcome, Pair, Rounding,
@@ -221,7 +223,11 @@ impl Tally {
 }
 
 /// Returns floaty's outcome of a pair of halves and its flags.
-fn outcome(hi: F64, lo: F64, flags: Flags) -> Outcome {
+fn outcome<M: floaty::env::Mode>(
+    hi: Float<Binary<11>, 64, M>,
+    lo: Float<Binary<11>, 64, M>,
+    flags: Flags,
+) -> Outcome {
     Outcome {
         result: Pair::new(hi.to_bits(), lo.to_bits()),
         flags: ReferenceFlags::from_floaty(flags),
@@ -276,7 +282,7 @@ fn gcc_matches_libgcc_under_qemu() {
         }
     }
     let outcomes = ibm_ldouble::run(&cases);
-    let (mut tininess, mut overflow) = (0, 0);
+    let (mut tininess, mut overflow, mut operator_checks) = (0, 0, 0);
     for (case, theirs) in cases.iter().zip(outcomes) {
         let (x, y) = (value::<Gcc>(case.a), value::<Gcc>(case.b));
         let run = |env: Env| {
@@ -300,6 +306,23 @@ fn gcc_matches_libgcc_under_qemu() {
         tally.check(|| format!("{case:?}"), ours, theirs);
         let saturated = run(behavior.with_saturate(true));
         tally.check(|| format!("{case:?} with saturation"), saturated, theirs);
+        // The operators of the default mode, the reference mode of `Gcc`,
+        // return no flags and take the host paths of binary64 where the build
+        // has them.
+        if case.rounding == Rounding::TiesToEven {
+            let result = match case.operation {
+                Operation::Add => x + y,
+                Operation::Sub => x - y,
+                Operation::Mul => x * y,
+                Operation::Div => x / y,
+            };
+            assert_eq!(
+                (result.hi().to_bits(), result.lo().to_bits()),
+                (theirs.result.hi, theirs.result.lo),
+                "{case:?}: the operator of the default mode"
+            );
+            operator_checks += 1;
+        }
     }
     tally.report("Gcc against libgcc");
     println!("  noted   {malformed_cases:7}: {MALFORMED}");
@@ -313,6 +336,16 @@ fn gcc_matches_libgcc_under_qemu() {
         (tally.passed, malformed_cases, tininess, overflow),
         (2 * 384_080, 14_880, 333, 21_999)
     );
+    assert_eq!(operator_checks, 384_080 / 4);
+}
+
+#[test]
+fn the_reference_modes_are_the_behaviors_of_the_references() {
+    assert_eq!(
+        DoubleDouble::<Gcc>::ENV,
+        ibm_ldouble::behavior(Rounding::TiesToEven)
+    );
+    assert_eq!(DoubleDouble::<Qd>::ENV, Env::X86_SSE);
 }
 
 #[test]
@@ -361,20 +394,13 @@ fn qd_matches_the_qd_library() {
                         x.div_with(y, Mode::default()),
                         x.sqrt_with(Mode::default()),
                     ]
-                    .map(|(result, flags)| {
-                        let (hi, lo) = (result.hi().with_mode(), result.lo().with_mode());
-                        outcome(hi, lo, flags)
-                    })
+                    .map(|(result, flags)| outcome(result.hi(), result.lo(), flags))
                 }
             );
-            // The operators and `sqrt` of the SSE mode, which rounds to
-            // nearest even, return no flags and take the host paths of
+            // The operators and `sqrt` of the default mode, the reference
+            // mode of `Qd`, return no flags and take the host paths of
             // binary64 where the build has them.
             let operators = (rounding == Rounding::TiesToEven).then(|| {
-                let (x, y) = (
-                    value_in::<Qd, floaty::mode::X86Sse>(a),
-                    value_in::<Qd, floaty::mode::X86Sse>(b),
-                );
                 [x + y, x - y, x * y, x / y, x.sqrt()]
                     .map(|result| (result.hi().to_bits(), result.lo().to_bits()))
             });
@@ -394,7 +420,7 @@ fn qd_matches_the_qd_library() {
                     assert_eq!(
                         operators[index],
                         (theirs.result.hi, theirs.result.lo),
-                        "{name} {a:?} {b:?}: the operator of the SSE mode"
+                        "{name} {a:?} {b:?}: the operator of the default mode"
                     );
                     operator_checks += 1;
                 }

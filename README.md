@@ -295,7 +295,8 @@ instruction from a comparison, or from the `ToInt` result.
 ### Modes
 
 A mode is a behavior fixed at compile time. Each type carries a default
-mode, `mode::Ieee` unless the type names another. The engine compiles the
+mode, unless the type names another: `mode::Ieee` for a `Float`, and the
+reference mode of the algorithm for a `DoubleDouble`. The engine compiles the
 common path of each operation once for each mode, with every field as a
 constant. A combinator changes one field of a mode: `Rounded`,
 `FlushToZero`, `DenormalsAreZero`, `Precision`, `FullPrecision`,
@@ -387,6 +388,12 @@ assert_eq!(dpd.decode::<1>(), expected);
 `DoubleDouble<Qd>` matches `dd_real` of QD 2.3.24 on x86-64. Each follows
 the machine code of its reference, so the low halves, the NaN payloads, and
 the flags match too.
+
+Each algorithm takes the behavior of its reference as its default mode:
+`mode::Libgcc` for `Gcc`, and `mode::X86Sse` for `Qd`. So the operators
+match the reference without a behavior argument. Under another behavior,
+each step is a binary64 operation under that behavior, and a `_with` method
+returns the flags of every step.
 
 | Operations | `Gcc` | `Qd` |
 | --- | --- | --- |
@@ -579,7 +586,8 @@ The minimum supported Rust version is 1.85. The crate uses edition 2024.
 - Presets for x86 SSE and x87 only.
 - No decimal formats wider than 128 bits. No hardware or major library
   uses them.
-- QEMU stands in for POWER hardware in the `Gcc` tests.
+- QEMU stands in for POWER hardware in the `Gcc` tests and for
+  `mode::Libgcc`.
 
 ## Development
 

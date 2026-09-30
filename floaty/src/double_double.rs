@@ -8,8 +8,10 @@
 //! algorithm follows the machine code that a pinned compiler makes of its
 //! references, because the operand order of each step decides which NaN the
 //! step returns. Under the behavior of the platform of the reference, the
-//! results match it bit for bit, NaN halves included. The operations without
-//! a reference follow the exact value by the rule of [`DoubleDouble`].
+//! results match it bit for bit, NaN halves included. That behavior is the
+//! default mode of the algorithm, [`Algorithm::Reference`]. The operations
+//! without a reference follow the exact value by the rule of
+//! [`DoubleDouble`].
 //!
 //! Each step of an algorithm is a binary64 operation that runs under the
 //! behavior of the call, and the result has the flags of every step, as a
@@ -50,6 +52,10 @@ type TwoOperands<B> = fn(&mut Steps<B>, Pair, Pair) -> Pair;
 /// The algorithm of a double-double type: [`Gcc`] or [`Qd`]. The trait is
 /// sealed.
 pub trait Algorithm: Sealed + 'static {
+    /// The mode under which the algorithm matches its reference. It is the
+    /// default mode of the double-double type of the algorithm.
+    type Reference: Mode;
+
     /// Which reference the algorithm follows.
     #[doc(hidden)]
     const KIND: AlgorithmKind;
@@ -71,27 +77,18 @@ pub enum AlgorithmKind {
 /// `nextdownl` of the libm of glibc 2.43, as its powerpc64le build compiles
 /// them.
 ///
-/// With the behavior of PowerPC, the results and the five IEEE flags match
-/// libgcc, NaN halves included. That behavior has the `FirstOperand` NaN rule,
-/// a positive default NaN, the `AddendSecond` fused NaN order, the
-/// `SignalsAndYieldsToNan` invalid product rule, and tininess before rounding.
-/// The default mode has other NaN rules and detects tininess after rounding.
-/// So pass the behavior of PowerPC to match the NaNs and the underflow flag of
-/// libgcc.
+/// Its reference mode is [`mode::Libgcc`], the behavior of PowerPC under
+/// QEMU. In that mode, the default mode of `DoubleDouble<Gcc>`, the results
+/// and the five IEEE flags match libgcc, NaN halves included.
 ///
 /// ```
-/// use floaty::env::{FusedNanOrder, InvalidProduct, NanPropagation, NanRule, Tininess};
-/// use floaty::{DoubleDouble, Env, F64, Gcc};
+/// use floaty::{DoubleDouble, F64, Gcc};
 ///
-/// let powerpc = Env::IEEE
-///     .with_nan(
-///         NanRule::new(NanPropagation::FirstOperand)
-///             .with_fused_order(FusedNanOrder::AddendSecond)
-///             .with_invalid_product(InvalidProduct::SignalsAndYieldsToNan),
-///     )
-///     .with_tininess(Tininess::BeforeRounding);
 /// let one = DoubleDouble::<Gcc>::from_f64(F64::from_bits(0x3FF0_0000_0000_0000));
-/// let (two, flags) = one.add_with(one, powerpc);
+/// let nan = DoubleDouble::<Gcc>::from_f64(F64::from_bits(0x7FF8_0000_0000_0001));
+/// // PowerPC returns the first NaN operand, with its payload.
+/// assert_eq!((nan + one).hi().to_bits(), 0x7FF8_0000_0000_0001);
+/// let (two, flags) = one.add_with(one, DoubleDouble::<Gcc>::ENV);
 /// assert_eq!(two.hi().to_bits(), 0x4000_0000_0000_0000);
 /// assert!(flags.is_empty());
 /// ```
@@ -101,24 +98,30 @@ pub enum Gcc {}
 /// The `dd_real` of QD 2.3.24, configured with IEEE-style addition, accurate
 /// division, and a fused multiply-subtract in `two_prod`.
 ///
-/// With [`Env::X86_SSE`] the results and the five IEEE flags match QD on
-/// x86-64, NaN halves included. The algorithm follows the machine code that g++ 15.2.0
-/// makes of QD with `-O2 -ffp-contract=off`.
+/// Its reference mode is [`mode::X86Sse`], the behavior of [`Env::X86_SSE`].
+/// In that mode, the default mode of `DoubleDouble<Qd>`, the results and the
+/// five IEEE flags match QD on x86-64, NaN halves included. The results
+/// also match QD with flush-to-zero and denormals-are-zero, which MXCSR
+/// sets. The algorithm follows the machine code that g++ 15.2.0 makes of QD
+/// with `-O2 -ffp-contract=off`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Qd {}
 
 impl Sealed for Gcc {}
 impl Algorithm for Gcc {
+    type Reference = mode::Libgcc;
     const KIND: AlgorithmKind = AlgorithmKind::Gcc;
 }
 
 impl Sealed for Qd {}
 impl Algorithm for Qd {
+    type Reference = mode::X86Sse;
     const KIND: AlgorithmKind = AlgorithmKind::Qd;
 }
 
 /// A double-double value: the sum of two binary64 values, with the arithmetic
-/// of the algorithm `Alg` and the default mode `M`.
+/// of the algorithm `Alg` and the default mode `M`. `M` is the reference mode
+/// of the algorithm unless the type names another mode.
 ///
 /// The arithmetic ignores [`Env::saturate`], because neither reference
 /// saturates. [`convert_with`](Self::convert_with) applies saturation to a
@@ -178,21 +181,21 @@ impl Algorithm for Qd {
 /// assert_eq!(third.hi().to_bits(), 0x3FD5_5555_5555_5555);
 /// assert_eq!(third.lo().to_bits(), 0x3C75_5555_5555_5555);
 /// ```
-pub struct DoubleDouble<Alg, M: Mode = mode::Ieee> {
+pub struct DoubleDouble<Alg: Algorithm, M: Mode = <Alg as Algorithm>::Reference> {
     hi: F64,
     lo: F64,
     marker: PhantomData<(Alg, M)>,
 }
 
-impl<Alg, M: Mode> Clone for DoubleDouble<Alg, M> {
+impl<Alg: Algorithm, M: Mode> Clone for DoubleDouble<Alg, M> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Alg, M: Mode> Copy for DoubleDouble<Alg, M> {}
+impl<Alg: Algorithm, M: Mode> Copy for DoubleDouble<Alg, M> {}
 
-impl<Alg, M: Mode> fmt::Debug for DoubleDouble<Alg, M> {
+impl<Alg: Algorithm, M: Mode> fmt::Debug for DoubleDouble<Alg, M> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("DoubleDouble")

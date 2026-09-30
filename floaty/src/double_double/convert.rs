@@ -291,7 +291,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     }
 }
 
-impl<Alg, M: Mode> Sealed for DoubleDouble<Alg, M> {}
+impl<Alg: Algorithm, M: Mode> Sealed for DoubleDouble<Alg, M> {}
 
 /// A double-double is a conversion destination, so
 /// [`Float::convert`](crate::Float::convert) and

@@ -15,6 +15,11 @@
 //! assert_eq!((infinity - infinity).to_bits(), 0xFFFF_C000_0000_0000_0000);
 //! ```
 //!
+//! A reference mode gives a double-double algorithm the behavior under which
+//! it matches its reference, and each algorithm takes its reference mode by
+//! default: [`Libgcc`] for [`Gcc`](crate::Gcc), and [`X86Sse`] for
+//! [`Qd`](crate::Qd).
+//!
 //! A combinator makes a mode from another mode and one changed field, at
 //! compile time. The fields that processors change at run time each have a
 //! combinator: [`Rounded`], [`FlushToZero`], [`DenormalsAreZero`],
@@ -42,7 +47,9 @@
 use core::marker::PhantomData;
 use core::num::NonZeroU32;
 
-use super::{Env, Mode, NanPropagation, Rounding, Tininess};
+use super::{
+    Env, FusedNanOrder, InvalidProduct, Mode, NanPropagation, NanRule, Rounding, Tininess,
+};
 use crate::sealed::Sealed;
 
 /// The IEEE 754 default behavior, [`Env::IEEE`]. It is the default mode of
@@ -71,6 +78,30 @@ pub struct X87;
 impl Sealed for X87 {}
 impl Mode for X87 {
     const ENV: Env = Env::X87;
+}
+
+/// The behavior under which [`Gcc`](crate::Gcc) matches its references:
+/// libgcc and the libm of glibc 2.43 for powerpc64le, as `qemu-ppc64le`
+/// 10.2.1 runs them. It is the default mode of `DoubleDouble<Gcc>`.
+///
+/// The behavior is [`Env::IEEE`] with tininess before rounding and the NaN
+/// rule of the PowerPC target of QEMU: the
+/// [`FirstOperand`](NanPropagation::FirstOperand) propagation rule with a
+/// positive default NaN, the [`AddendSecond`](FusedNanOrder::AddendSecond)
+/// fused NaN order, and the
+/// [`SignalsAndYieldsToNan`](InvalidProduct::SignalsAndYieldsToNan) invalid
+/// product rule. The mode is not a preset of a processor: `floaty-verify`
+/// confirms it against libgcc and glibc under QEMU, not on POWER hardware.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Libgcc;
+
+impl Sealed for Libgcc {}
+impl Mode for Libgcc {
+    const ENV: Env = Env::IEEE.with_tininess(Tininess::BeforeRounding).with_nan(
+        NanRule::new(NanPropagation::FirstOperand)
+            .with_fused_order(FusedNanOrder::AddendSecond)
+            .with_invalid_product(InvalidProduct::SignalsAndYieldsToNan),
+    );
 }
 
 /// The mode `M` with the rounding direction `R`.

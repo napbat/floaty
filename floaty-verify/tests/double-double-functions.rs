@@ -8,7 +8,9 @@
 //! rounding directions. floaty runs `Gcc` under the behavior of PowerPC,
 //! `ibm_ldouble::behavior`, and `Qd` under `Env::X86_SSE`. `Qd` also runs
 //! with flush-to-zero and denormals-are-zero, and QD with the FTZ and DAZ
-//! bits of MXCSR.
+//! bits of MXCSR. In the direction to nearest, the operations of the default
+//! mode, the reference mode of each algorithm, give the results of the
+//! reference.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -125,6 +127,27 @@ fn compare(cases: &[FunctionCase]) -> usize {
                 "{case:?}: floaty {:?} {:?}, glibc {:?} {:?}",
                 ours.result, ours.flags, theirs.result, theirs.flags
             ));
+        }
+        // The functions of the default mode, the reference mode of `Gcc`,
+        // return no flags.
+        let default = match case.function {
+            _ if case.rounding != Rounding::TiesToEven => None,
+            Function::Sqrt => Some(a.sqrt()),
+            Function::NextUp => Some(a.next_up()),
+            Function::NextDown => Some(a.next_down()),
+            Function::Fmod => Some(a % b),
+            Function::Remainder => Some(a.remainder(b)),
+            Function::MulAdd => Some(a.mul_add(b, value(case.operands[2]))),
+            Function::IsCanonical => None,
+        };
+        if let Some(result) = default {
+            let ours = Pair::new(result.hi().to_bits(), result.lo().to_bits());
+            if ours != theirs.result && failures.len() < 40 {
+                failures.push(format!(
+                    "{case:?} in the default mode: floaty {ours:?}, glibc {:?}",
+                    theirs.result
+                ));
+            }
         }
     }
     for failure in &failures {
@@ -439,6 +462,23 @@ fn qd_remainders_match_qd() {
                     qd::fmod(a, b, rounding),
                 ),
             ];
+            // The remainders of the default mode, the reference mode of
+            // `Qd`, return no flags.
+            if rounding == Rounding::TiesToEven {
+                for (name, result, (_, _, theirs)) in [("drem", x.remainder(y)), ("%", x % y)]
+                    .into_iter()
+                    .zip(&checks)
+                    .map(|((name, result), check)| (name, result, check))
+                {
+                    let ours = Pair::new(result.hi().to_bits(), result.lo().to_bits());
+                    if ours != theirs.result && failures.len() < 40 {
+                        failures.push(format!(
+                            "{name} {a:?} {b:?} in the default mode: floaty {ours:?}, QD {:?}",
+                            theirs.result
+                        ));
+                    }
+                }
+            }
             for (name, result, theirs) in checks {
                 let ours = qd_outcome(result);
                 count += 1;
