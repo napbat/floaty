@@ -2,13 +2,14 @@
 
 use core::cmp::Ordering;
 
-use super::{Layout, Unpacked};
+use super::Layout;
 use crate::env::{Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::internal::Quotient;
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
 use crate::nan::{self, default_nan};
+use crate::unpacked::Unpacked;
 
 impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
 where

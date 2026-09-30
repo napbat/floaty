@@ -2,10 +2,10 @@
 
 use core::cmp::Ordering;
 
-use crate::binary::Unpacked;
 use crate::env::{Behavior, Env, Flags, Rounding, Tininess};
 use crate::format::internal::Quotient;
 use crate::limbs::Limbs;
+use crate::unpacked::Unpacked;
 
 /// An exact value to round: `significand * RADIX^exponent`, plus a sticky
 /// bit. `RADIX` is the radix of the format that rounds the value.

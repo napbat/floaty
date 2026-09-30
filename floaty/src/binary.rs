@@ -5,37 +5,20 @@ use core::marker::PhantomData;
 
 mod arithmetic;
 mod compare;
+mod convert;
 mod from_decimal;
 mod integral;
 mod remainder;
 mod scale;
 
-use crate::env::{Behavior, Env, Flags, NanPropagation, TotalOrder};
+use crate::env::{Behavior, Env, Flags, TotalOrder};
 use crate::exact::{self, RoundingTarget, Target, Unrounded};
 use crate::float::Class;
 use crate::format::internal::{Host, LimbConversion, MinMax, Quotient, Source, Step};
-use crate::format::{Binary, Encoding, Standard, Storage, Width};
+use crate::format::{Binary, Encoding, EncodingKind, Standard, Storage, Width};
 use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
-use crate::nan;
-
-/// The encoding rules of a binary format.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum EncodingKind {
-    /// IEEE 754 infinities and NaNs.
-    Ieee,
-    /// No infinity; the NaN has exponent and fraction all ones.
-    NoInf,
-    /// No infinity and no negative zero; the NaN is the sign bit alone.
-    Fnuz,
-    /// x87 extended precision, with an explicit integer bit.
-    X87,
-    /// No infinity and no NaN; every encoding is a number.
-    Finite,
-}
-
-pub(crate) use crate::unpacked::Number;
-pub use crate::unpacked::Unpacked;
+use crate::unpacked::{Number, Unpacked};
 
 /// The layout constants and codec of `Binary<E, Enc>` at width `W`.
 pub struct Layout<const E: u32, Enc, const W: usize> {
@@ -464,115 +447,6 @@ where
     ) -> (Out, Flags) {
         let (rounded, flags) = exact::round::<In, Out, Self, B>(value, behavior);
         (Self::encode(rounded), flags)
-    }
-
-    /// Converts a decoded value of another format, binary or decimal.
-    ///
-    /// A NaN payload keeps its high-order bits. The payload of a decimal
-    /// source is the value of its trailing significand field, as the Intel
-    /// decimal library converts it.
-    #[inline]
-    pub fn convert_from<In: Limbs, Out: Limbs, B: Behavior>(
-        value: Unpacked<In>,
-        source: Source,
-        behavior: B,
-    ) -> (Out, Flags) {
-        let env = &behavior.env();
-        match value {
-            Unpacked::Zero { negative, .. } => {
-                (Self::encode(Unpacked::zero(negative)), Flags::NONE)
-            }
-            Unpacked::Finite {
-                negative,
-                exponent,
-                significand,
-            } => {
-                let value = Unrounded {
-                    negative,
-                    exponent,
-                    significand,
-                    sticky: false,
-                };
-                if source.radix == 10 {
-                    Self::from_decimal(&value, env)
-                } else {
-                    Self::round(&value, behavior)
-                }
-            }
-            Unpacked::Infinity { negative } => Self::convert_infinity(negative, env),
-            Unpacked::Nan {
-                negative,
-                signaling,
-                payload,
-            } => Self::convert_nan(negative, signaling, payload, source, env),
-            Unpacked::Unsupported => (Self::default_nan(env), Flags::INVALID),
-        }
-    }
-
-    /// Converts a NaN. The payload keeps its high-order bits. A format without
-    /// a NaN gives positive zero and signals invalid. The function stays out
-    /// of line, so that the number path of
-    /// [`convert_from`](Self::convert_from) inlines into its caller.
-    #[inline(never)]
-    fn convert_nan<In: Limbs, Out: Limbs>(
-        negative: bool,
-        signaling: bool,
-        payload: In,
-        source: Source,
-        env: &Env,
-    ) -> (Out, Flags) {
-        if !Self::TARGET.has_nan {
-            return (Self::encode(Unpacked::zero(false)), Flags::INVALID);
-        }
-        let flags = if signaling {
-            Flags::INVALID
-        } else {
-            Flags::NONE
-        };
-        let nan = match env.nan.propagation {
-            NanPropagation::DefaultNan => Self::default_nan(env),
-            NanPropagation::SignalingFirst
-            | NanPropagation::FirstOperand
-            | NanPropagation::LargerSignificand => Self::encode(Unpacked::Nan {
-                negative,
-                signaling: false,
-                payload: nan::align_payload(payload, source.payload_bits, Self::PAYLOAD_DIGITS),
-            }),
-        };
-        (nan, flags)
-    }
-
-    /// Converts an infinity. A format without an infinity gives a NaN, or the
-    /// largest finite value when `saturate` is set or the format has no NaN,
-    /// and signals invalid.
-    #[inline(never)]
-    fn convert_infinity<Out: Limbs>(negative: bool, env: &Env) -> (Out, Flags) {
-        if Self::TARGET.has_infinity {
-            return (Self::encode(Unpacked::Infinity { negative }), Flags::NONE);
-        }
-        let value = if env.saturate || !Self::TARGET.has_nan {
-            exact::largest(
-                negative,
-                env.precision_within(Self::TARGET.precision),
-                &Self::TARGET,
-            )
-        } else {
-            Unpacked::Nan {
-                negative,
-                signaling: false,
-                payload: Out::ZERO,
-            }
-        };
-        (Self::encode(value), Flags::INVALID)
-    }
-
-    /// Returns the default NaN of the NaN rule.
-    fn default_nan<Out: Limbs>(env: &Env) -> Out {
-        Self::encode(Unpacked::Nan {
-            negative: env.nan.default_negative,
-            signaling: false,
-            payload: Out::ZERO,
-        })
     }
 
     /// Places the sign, the exponent field, and the fraction in an encoding.

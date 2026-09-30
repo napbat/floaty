@@ -6,12 +6,14 @@
 
 use core::cmp::Ordering;
 
-use super::{EncodingKind, Layout, Unpacked};
+use super::Layout;
 use crate::env::{Env, Flags, TotalOrder};
+use crate::format::EncodingKind;
 use crate::format::internal::MinMax;
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::Limbs;
 use crate::nan::{self, default_nan};
+use crate::unpacked::Unpacked;
 
 /// Orders the magnitudes of two numbers: zeros, finite values, or
 /// infinities.

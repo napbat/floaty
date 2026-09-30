@@ -3,7 +3,6 @@
 use core::fmt::{self, Debug, Formatter};
 use core::marker::PhantomData;
 
-use crate::binary::Unpacked;
 use crate::env::{Behavior, Env, Flags, Mode, Override, mode};
 use crate::exact::{Exact, Unrounded};
 use crate::format::internal::{Host, LimbConversion, Source};
@@ -11,6 +10,7 @@ use crate::format::{B11Fnuz, Bid, Binary, Decimal, Dpd, Finite, Fnuz, NoInf, Sta
 use crate::host;
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
+use crate::unpacked::Unpacked;
 
 mod arithmetic;
 mod compare;

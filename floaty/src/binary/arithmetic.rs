@@ -9,12 +9,13 @@
 
 use core::cmp::Ordering;
 
-use super::{Layout, Number, Unpacked};
+use super::Layout;
 use crate::env::{Behavior, Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
 use crate::nan::{self, default_nan};
+use crate::unpacked::{Number, Unpacked};
 
 /// A nonzero finite value: `significand * 2^exponent`.
 #[derive(Clone, Copy)]

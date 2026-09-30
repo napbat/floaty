@@ -6,13 +6,13 @@ use core::fmt::Debug;
 use core::hash::Hash;
 use core::marker::PhantomData;
 
-use crate::binary::{EncodingKind, Unpacked};
 use crate::env::{Behavior, Env, Flags, TotalOrder};
 use crate::exact::Unrounded;
 use crate::float::Class;
 use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
+use crate::unpacked::Unpacked;
 
 use self::internal::{FixedLayout, Host, LimbConversion, MinMax, Quotient, Source, Step};
 
@@ -479,6 +479,22 @@ pub struct Binary<const E: u32, Enc: Encoding = Ieee> {
 }
 
 impl<const E: u32, Enc: Encoding> Sealed for Binary<E, Enc> {}
+
+/// The encoding rules of a binary format.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EncodingKind {
+    /// IEEE 754 infinities and NaNs.
+    Ieee,
+    /// No infinity; the NaN has exponent and fraction all ones.
+    NoInf,
+    /// No infinity and no negative zero; the NaN is the sign bit alone.
+    Fnuz,
+    /// x87 extended precision, with an explicit integer bit.
+    X87,
+    /// No infinity and no NaN; every encoding is a number.
+    Finite,
+}
 
 /// The special values, bias, and integer bit of a binary format.
 ///

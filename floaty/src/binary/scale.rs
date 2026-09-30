@@ -1,7 +1,7 @@
 //! Scaling by a power of two, and the next value up or down, for the binary
 //! formats.
 
-use super::{Layout, Unpacked};
+use super::Layout;
 use crate::env::{Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::internal::Step;
@@ -9,6 +9,7 @@ use crate::format::{Encoding, Storage, Width};
 use crate::limbs::Limbs;
 use crate::nan;
 use crate::unpacked::SCALE_LIMIT;
+use crate::unpacked::Unpacked;
 
 impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
 where

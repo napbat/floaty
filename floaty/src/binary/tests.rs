@@ -1,10 +1,12 @@
-use super::{EncodingKind, Layout, Unpacked};
+use super::Layout;
 use crate::env::{Env, Flags};
 use crate::float::Class;
 use crate::float::{F4E2M1Fn, F6E3M2Fn, F32};
+use crate::format::EncodingKind;
 use crate::format::internal::LimbConversion;
 use crate::format::{B11Fnuz, Encoding, Finite, Fnuz, Ieee, NoInf, Storage, Width, X87};
 use crate::limbs::Limbs;
+use crate::unpacked::Unpacked;
 
 type X87Layout = Layout<15, X87, 80>;
 

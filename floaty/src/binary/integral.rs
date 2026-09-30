@@ -6,13 +6,14 @@
 //! operations that do not signal inexact, such as `roundToIntegralTiesToEven`,
 //! are these operations with `INEXACT` ignored.
 
-use super::{Layout, Unpacked};
+use super::Layout;
 use crate::env::{Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::{Encoding, Storage, Width};
 use crate::integer::{Integer, Parts, ToInt, fit};
 use crate::limbs::Limbs;
 use crate::nan;
+use crate::unpacked::Unpacked;
 
 impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
 where
