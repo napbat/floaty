@@ -5,13 +5,14 @@
 //! steps give `1 / sqrt(x)` to about 35 bits. The product with `x` gives a
 //! root below the true root, and one step with the remainder brings it within
 //! one of the true root. A wider value takes Newton's steps on the root, one
-//! long division each, from the root of its top 128 bits. Every path ends with
+//! long division each, from the root of its top 128 bits. Each step but the
+//! last divides only the top bits that its precision needs. Every path ends with
 //! a correction by squaring, so the root is exact for every estimate, and a
 //! poor estimate only costs time.
 
 use core::cmp::Ordering;
 
-use super::{Limbs, divide, from_u128, high_u64, low_u64, multiply_fit, to_u128};
+use super::{Limbs, Widen, divide, from_u128, high_u64, low_u64, multiply_fit, to_u128};
 
 /// The first approximation of `1 / sqrt(A)` for `A` from 1/4 to 1, in units of
 /// 2^-14, for each value `top` of the top 9 bits of `A * 2^64`, from 128 to
@@ -86,6 +87,23 @@ fn square_root_u128(value: u128) -> u64 {
 /// Returns the integer square root of `value`, rounded down, and `true` when
 /// the root is not exact.
 pub fn square_root<L: Limbs>(value: L) -> (L, bool) {
+    square_root_with(value, |root| multiply_fit(root, root))
+}
+
+/// Returns the integer square root of a value of the double width of `L`,
+/// rounded down, and `true` when the root is not exact. The root fits `L`, so
+/// the check of the root squares it with the widening product of `L`, which
+/// is shorter than a product at the double width.
+pub fn square_root_of_double<L: Widen>(value: L::Double) -> (L::Double, bool) {
+    square_root_with(value, |root: L::Double| {
+        let half = root.resize::<L>();
+        half.widening_mul(half)
+    })
+}
+
+/// Returns the integer square root of `value` and whether it is inexact.
+/// `square` returns the square of a root of at most half the width of `L`.
+fn square_root_with<L: Limbs>(value: L, square: impl Fn(L) -> L) -> (L, bool) {
     let length = value.bit_length();
     if length <= 16 {
         // The square root of `core` takes a short path for a value of at most
@@ -106,14 +124,20 @@ pub fn square_root<L: Limbs>(value: L) -> (L, bool) {
     let shift = (length - 127) & !1;
     let top = to_u128(&value.shr(shift));
     let mut root = from_u128::<L>(u128::from(square_root_u128(top)) + 1).shl(shift / 2);
-    // Each step from above at least doubles the correct bits and stays at or
-    // above the root. Two bits more than the root has leave the root at most
-    // one above the true root.
+    // Each Newton step at least doubles the correct bits. Two bits more than
+    // the root has leave the root at most one above the true root.
     let needed = length.div_ceil(2) + 2;
     let mut correct = 62;
     while correct < needed {
-        let (quotient, _) = divide(value, root);
-        root = root.add(quotient).shr(1);
+        // A step to `2 * correct` bits reads only the top `4 * correct + 16`
+        // bits of the value and the root at half that shift, so its division
+        // is short. The 16 extra bits keep the cut far below the error of the
+        // step. The last step reads the whole value, and from any positive
+        // estimate a whole step gives a root at or above the true root.
+        let shift = length.saturating_sub(4 * correct + 16) / 2;
+        let estimate = root.shr(shift);
+        let (quotient, _) = divide(value.shr(2 * shift), estimate);
+        root = estimate.add(quotient).shr(1).shl(shift);
         correct *= 2;
     }
     // The true root fits half the width. A root one above it can reach 2 to
@@ -125,16 +149,16 @@ pub fn square_root<L: Limbs>(value: L) -> (L, bool) {
     }
     let one = L::ZERO.with_bit(0);
     let start = root;
-    let mut square = multiply_fit(root, root);
-    while square.compare(&value) == Ordering::Greater {
+    let mut squared = square(root);
+    while squared.compare(&value) == Ordering::Greater {
         root = root.sub(one);
-        square = multiply_fit(root, root);
+        squared = square(root);
         debug_assert!(
             start.sub(root).compare(&one).is_le(),
             "the root is at most one above the true root"
         );
     }
-    (root, square != value)
+    (root, squared != value)
 }
 
 #[cfg(test)]

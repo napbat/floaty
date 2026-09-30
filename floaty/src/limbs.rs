@@ -9,7 +9,7 @@ use core::hash::Hash;
 
 mod root;
 
-pub use self::root::square_root;
+pub use self::root::{square_root, square_root_of_double};
 
 /// An unsigned integer of `64 * N` bits, stored as little-endian limbs.
 ///

@@ -188,7 +188,7 @@ where
             shift += 1;
         }
         let radicand = number.significand.resize::<L::Double>().shl(shift);
-        let (root, inexact) = limbs::square_root(radicand);
+        let (root, inexact) = limbs::square_root_of_double::<L>(radicand);
         let shift = i32::try_from(shift).expect("a shift fits an i32");
         let value = Unrounded {
             negative: false,
