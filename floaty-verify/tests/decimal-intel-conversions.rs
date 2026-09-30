@@ -30,13 +30,11 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
-use std::collections::BTreeMap;
-
 use floaty::format::{Bid, Binary, Decimal, Dpd, Standard, X87};
 use floaty::{Env, Flags, Float};
 use floaty_verify::encodings::{IntegerBit, Layout as BinaryLayout};
 use floaty_verify::intel_decimal::{
-    self, Bid32, Bid64, Bid128, Flags as IntelFlags, Format, Layout, Outcome,
+    self, Bid32, Bid64, Bid128, Flags as IntelFlags, Format, Group, Layout, Outcome, Report,
     Rounding as IntelRounding, narrow,
 };
 use floaty_verify::random::SplitMix64;
@@ -593,118 +591,24 @@ impl Conversion {
     }
 }
 
-/// The failures of one group: their count and the first few.
-#[derive(Default)]
-struct Failures {
-    count: usize,
-    examples: Vec<String>,
-}
-
-/// The counts of a run.
-#[derive(Default)]
-struct Report {
-    passed: BTreeMap<String, usize>,
-    failures: BTreeMap<String, Failures>,
-    /// How many expected outcomes raise each library flag, by bit.
-    flags: [usize; 6],
-}
-
-impl Report {
-    /// The number of failures that the report prints for each group.
-    const EXAMPLES: usize = 6;
-
-    /// Runs one conversion of `x` with floaty, and compares it with the
-    /// library outcome `library`.
-    fn check(
-        &mut self,
-        conversion: &Conversion,
-        x: u128,
-        rounding: IntelRounding,
-        library: Outcome<u128>,
-        context: &dyn Fn() -> String,
-    ) {
-        let (value, flags) = (conversion.floaty)(x, intel_decimal::env(rounding));
-        let actual = Outcome {
-            value,
-            flags: conversion.map_flags(flags),
-        };
-        let (expected, rule) = conversion.expected(x, library);
-        count_flags(&mut self.flags, expected.flags);
-        let group = match rule {
-            Some(rule) => format!("{} by the rule: {rule}", conversion.name),
-            None => conversion.name.clone(),
-        };
-        if actual == expected {
-            *self.passed.entry(group).or_default() += 1;
-            return;
-        }
-        let failures = self.failures.entry(group).or_default();
-        failures.count += 1;
-        if failures.examples.len() < Self::EXAMPLES {
-            failures.examples.push(format!(
-                "{} {x:#x} {rounding:?} {}: floaty {:#x} {:#04x}, expected {:#x} {:#04x}",
-                conversion.name,
-                context(),
-                actual.value,
-                actual.flags.bits(),
-                expected.value,
-                expected.flags.bits(),
-            ));
-        }
-    }
-
-    /// Prints the counts and the failures. Returns the number of passes and
-    /// of failures.
-    fn print(&self, title: &str) -> (usize, usize) {
-        let passed: usize = self.passed.values().sum();
-        let failed: usize = self.failures.values().map(|failures| failures.count).sum();
-        println!("{title}: {passed} passed, {failed} failed");
-        print_flags(&self.flags);
-        for (group, count) in &self.passed {
-            println!("  passed {count:7}: {group}");
-        }
-        for (group, failures) in &self.failures {
-            println!("  FAILED {:7}: {group}", failures.count);
-            for example in &failures.examples {
-                println!("    {example}");
-            }
-        }
-        (passed, failed)
-    }
-
-    /// Asserts the number of passes, and the cases that each rule decides,
-    /// as `(conversion, rule, count)`.
-    fn assert_counts(&self, passed: usize, rules: &[(&str, &str, usize)]) {
-        assert_eq!(self.passed.values().sum::<usize>(), passed, "the passes");
-        let decided: BTreeMap<String, usize> = self
-            .passed
-            .iter()
-            .filter(|(group, _)| group.contains(" by the rule: "))
-            .map(|(group, &count)| (group.clone(), count))
-            .collect();
-        let expected: BTreeMap<String, usize> = rules
-            .iter()
-            .map(|&(conversion, rule, count)| (format!("{conversion} by the rule: {rule}"), count))
-            .collect();
-        assert_eq!(decided, expected, "the cases that each rule decides");
-    }
-}
-
-/// Counts the flags of an expected outcome.
-fn count_flags(counts: &mut [usize; 6], flags: IntelFlags) {
-    for (bit, count) in counts.iter_mut().enumerate() {
-        *count += usize::from(flags.bits() >> bit & 1 == 1);
-    }
-}
-
-/// Prints how many expected outcomes raise each flag.
-fn print_flags(counts: &[usize; 6]) {
-    let counts: Vec<String> = IntelFlags::NAMES
-        .iter()
-        .zip(counts)
-        .map(|(name, count)| format!("{name} {count}"))
-        .collect();
-    println!("  expected flags: {}", counts.join(", "));
+/// Runs one conversion of `x` with floaty, and compares it with the library
+/// outcome `library` in `report`. `context` tells where the case comes from.
+fn check(
+    report: &mut Report,
+    conversion: &Conversion,
+    (x, rounding): (u128, IntelRounding),
+    library: Outcome<u128>,
+    context: &dyn Fn() -> String,
+) {
+    let (value, flags) = (conversion.floaty)(x, intel_decimal::env(rounding));
+    let actual = Outcome {
+        value,
+        flags: conversion.map_flags(flags),
+    };
+    let (expected, rule) = conversion.expected(x, library);
+    let operands = || format!("{x:#x} {rounding:?} {}", context());
+    let group = Group::new(conversion.name.clone(), rule);
+    report.check(group, &operands, actual, expected);
 }
 
 #[test]
@@ -742,9 +646,15 @@ fn readtest_conversions() {
             flags: line.flags,
         };
         let context = || format!("readtest.in:{}", line.number);
-        report.check(conversion, x, line.rounding, library, &context);
+        check(
+            &mut report,
+            conversion,
+            (x, line.rounding),
+            library,
+            &context,
+        );
     }
-    let (_, failed) = report.print("readtest.in conversions, floaty");
+    let failed = report.print("readtest.in conversions, floaty");
     assert!(unreadable.is_empty(), "unreadable lines: {unreadable:#?}");
     assert_eq!(failed, 0, "floaty differs from readtest.in");
     report.assert_counts(
@@ -760,6 +670,7 @@ fn readtest_conversions() {
             ("binary80_to_bid64", UNSUPPORTED_X87, 10),
             ("binary80_to_bid128", UNSUPPORTED_X87, 11),
         ],
+        &[],
     );
 }
 
@@ -807,11 +718,16 @@ fn random_conversions(
             let index = usize::try_from(rng.below(5)).expect("an index fits a usize");
             let rounding = IntelRounding::ALL[index];
             let library = (conversion.library)(x, rounding);
-            report.check(conversion, x, rounding, library, &String::new);
+            check(
+                &mut report,
+                conversion,
+                (x, rounding),
+                library,
+                &String::new,
+            );
         }
     }
-    let (_, failed) = report.print(title);
-    assert_eq!(failed, 0, "{title}: floaty differs from the library");
+    report.finish(title);
     report
 }
 
@@ -836,6 +752,7 @@ fn conversions_between_decimals_match_the_library() {
             ("bid_dpd_to_bid64", REENCODED_NAN, 11_370),
             ("bid_dpd_to_bid128", REENCODED_NAN, 8_229),
         ],
+        &[],
     );
 }
 
@@ -854,6 +771,7 @@ fn binary_to_decimal_matches_the_library() {
             ("binary80_to_bid64", UNSUPPORTED_X87, 15_822),
             ("binary80_to_bid128", UNSUPPORTED_X87, 15_841),
         ],
+        &[],
     );
 }
 
@@ -865,5 +783,5 @@ fn decimal_to_binary_matches_the_library() {
         120_000,
         |conversion| matches!(conversion.target, Side::Binary(_)),
     );
-    report.assert_counts(1_440_000, &[]);
+    report.assert_counts(1_440_000, &[], &[]);
 }

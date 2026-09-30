@@ -34,13 +34,12 @@
 #![cfg(target_arch = "x86_64")]
 
 use core::cmp::Ordering;
-use std::collections::BTreeMap;
 
 use floaty::format::{Bid, Decimal, Standard, Storage, Width};
 use floaty::{Flags, Float};
 use floaty_verify::intel_decimal::{
     self, Bid32, Bid64, Bid128, Class as IntelClass, EQUAL_OPERANDS, Extremum, Flags as IntelFlags,
-    Format, Inexact, Integer as IntelInteger, Layout, Outcome, Predicate,
+    Format, Group, Inexact, Integer as IntelInteger, Layout, Outcome, Predicate, Report,
     Rounding as IntelRounding, Signals, Value, encoding, narrow, to_integer,
 };
 use floaty_verify::random::SplitMix64;
@@ -50,108 +49,6 @@ type Bits<const W: usize> = <Width<W> as Storage>::Bits;
 
 /// The BID format of width `W`.
 type BidFloat<const W: usize> = Float<Decimal<Bid>, W>;
-
-/// The failures of one operation: their count and the first few.
-#[derive(Default)]
-struct Failures {
-    count: usize,
-    examples: Vec<String>,
-}
-
-/// The counts of a run.
-#[derive(Default)]
-struct Report {
-    cases: BTreeMap<String, usize>,
-    failures: BTreeMap<String, Failures>,
-    skipped: BTreeMap<&'static str, usize>,
-    /// How many outcomes of the library raise each flag, by bit.
-    flags: [usize; 6],
-}
-
-impl Report {
-    /// The number of failures that the report prints for each operation.
-    const EXAMPLES: usize = 4;
-
-    /// Compares a floaty outcome with the outcome of the library.
-    fn check(
-        &mut self,
-        operation: &str,
-        operands: &dyn Fn() -> String,
-        ours: Outcome<Value>,
-        theirs: Outcome<Value>,
-    ) {
-        *self.cases.entry(operation.to_owned()).or_default() += 1;
-        for (bit, count) in self.flags.iter_mut().enumerate() {
-            *count += usize::from(theirs.flags.bits() >> bit & 1 == 1);
-        }
-        if ours == theirs {
-            return;
-        }
-        let failures = self.failures.entry(operation.to_owned()).or_default();
-        failures.count += 1;
-        if failures.examples.len() < Self::EXAMPLES {
-            failures.examples.push(format!(
-                "{operation} {}: floaty {:x?} {:#04x}, library {:x?} {:#04x}",
-                operands(),
-                ours.value,
-                ours.flags.bits(),
-                theirs.value,
-                theirs.flags.bits(),
-            ));
-        }
-    }
-
-    /// Prints the counts and the failures, and fails on a failure.
-    fn finish(&self, title: &str) {
-        let cases: usize = self.cases.values().sum();
-        let failed: usize = self.failures.values().map(|failures| failures.count).sum();
-        println!("{title}: {cases} cases, {failed} failed");
-        let flags: Vec<String> = IntelFlags::NAMES
-            .iter()
-            .zip(self.flags)
-            .map(|(name, count)| format!("{name} {count}"))
-            .collect();
-        println!("  library flags: {}", flags.join(", "));
-        for (operation, count) in &self.cases {
-            println!("  cases   {count:7}: {operation}");
-        }
-        for (reason, count) in &self.skipped {
-            println!("  skipped {count:7}: {reason}");
-        }
-        for (operation, failures) in &self.failures {
-            println!("  FAILED  {:7}: {operation}", failures.count);
-            for example in &failures.examples {
-                println!("    {example}");
-            }
-        }
-        assert_eq!(failed, 0, "{title}: floaty differs from the library");
-    }
-
-    /// Asserts the number of cases, the cases that each rule decides, as
-    /// `(operation, rule, count)`, and the skipped cases. The generators are
-    /// seeded, so the counts are exact.
-    fn assert_counts(
-        &self,
-        cases: usize,
-        rules: &[(&str, &str, usize)],
-        skipped: &[(&'static str, usize)],
-    ) {
-        assert_eq!(self.cases.values().sum::<usize>(), cases, "the cases");
-        let decided: BTreeMap<String, usize> = self
-            .cases
-            .iter()
-            .filter(|(operation, _)| operation.contains(" by "))
-            .map(|(operation, &count)| (operation.clone(), count))
-            .collect();
-        let expected: BTreeMap<String, usize> = rules
-            .iter()
-            .map(|&(operation, rule, count)| (format!("{operation} by {rule}"), count))
-            .collect();
-        assert_eq!(decided, expected, "the cases that each rule decides");
-        let skipped = BTreeMap::from_iter(skipped.iter().copied());
-        assert_eq!(self.skipped, skipped, "the skipped cases");
-    }
-}
 
 /// Returns a random rounding direction of the library.
 fn rounding(rng: &mut SplitMix64) -> IntelRounding {
@@ -233,25 +130,25 @@ where
         let operands = || format!("{x:#x} {y:#x} {z:#x} {rounding:?}");
         let ieee = Signals::Ieee;
         report.check(
-            &name("add"),
+            name("add"),
             &operands,
             ours(xf.add_with(yf, env), ieee),
             theirs(F::add(xb, yb, rounding)),
         );
         report.check(
-            &name("sub"),
+            name("sub"),
             &operands,
             ours(xf.sub_with(yf, env), ieee),
             theirs(F::sub(xb, yb, rounding)),
         );
         report.check(
-            &name("mul"),
+            name("mul"),
             &operands,
             ours(xf.mul_with(yf, env), ieee),
             theirs(F::mul(xb, yb, rounding)),
         );
         report.check(
-            &name("div"),
+            name("div"),
             &operands,
             ours(xf.div_with(yf, env), ieee),
             theirs(F::div(xb, yb, rounding)),
@@ -259,15 +156,12 @@ where
         // The library takes the NaN of `y`, then `z`, then `x`, so floaty
         // runs `y * x + z`. The orders differ only for NaN `x` and `z`.
         if is_nan::<F>(xb) && !is_nan::<F>(yb) && is_nan::<F>(zb) {
-            *report.skipped.entry(FMA_NAN_ORDER).or_default() += 1;
+            report.skip(FMA_NAN_ORDER);
         } else {
             let (library, rule) = fused::<F>(x, y, z, rounding);
-            let operation = match rule {
-                Some(rule) => format!("{} by {rule}", name("fma")),
-                None => name("fma"),
-            };
+            let operation = Group::new(name("fma"), rule);
             report.check(
-                &operation,
+                operation,
                 &operands,
                 ours(yf.mul_add_with(xf, zf, env), ieee),
                 library,
@@ -276,7 +170,7 @@ where
         let root = layout.square(rng);
         let rootb = encoding::<F>(root);
         report.check(
-            &name("sqrt"),
+            name("sqrt"),
             &|| format!("{root:#x} {rounding:?}"),
             ours(BidFloat::<W>::from_bits(rootb).sqrt_with(env), ieee),
             theirs(F::sqrt(rootb, rounding)),
@@ -435,15 +329,12 @@ where
             ("logb", ours(xf.log_b_with(env), ieee), theirs(F::logb(xb))),
         ];
         for (operation, floaty, library) in checks {
-            report.check(&name(operation), &operands, floaty, library);
+            report.check(name(operation), &operands, floaty, library);
         }
         let (quantum, rule) = quantum::<F>(x);
-        let operation = match rule {
-            Some(rule) => format!("{} by {rule}", name("quantum")),
-            None => name("quantum"),
-        };
+        let operation = Group::new(name("quantum"), rule);
         report.check(
-            &operation,
+            operation,
             &operands,
             ours(xf.quantum_with(env), ieee),
             quantum,
@@ -478,6 +369,14 @@ fn quantum<F: Format>(x: u128) -> (Outcome<Value>, Option<&'static str>) {
         flags: IntelFlags::NONE,
     };
     let (definition, rule) = match layout.fields(x) {
+        // `bid128_quantumd.c` of release 2.0 Update 2, lines 58 to 60, sets
+        // only `res.w[1]` for a NaN, so the low half of its result is
+        // uninitialized stack memory. The library result is then undefined,
+        // and the definition decides every case. A comparison with that
+        // result made the count of the rule depend on the stack contents.
+        None if is_nan::<F>(xb) && layout.width == 128 => {
+            return (theirs(F::nextup(xb)), Some(QUANTUM_NAN));
+        }
         None if is_nan::<F>(xb) => (theirs(F::nextup(xb)), QUANTUM_NAN),
         None => (number(layout.infinity(false)), QUANTUM_INFINITY),
         Some((field, _)) if layout.width == 32 && (x >> 29) & 0b11 == 0b11 => {
@@ -534,23 +433,23 @@ where
             };
             let floaty = plain(i128::from(predicate.holds(order)), flags, Signals::Ieee);
             let theirs = F::compare(xb, yb, predicate).map(|holds| Value::Integer(holds.into()));
-            report.check(&name(predicate.name()), &operands, floaty, theirs);
+            report.check(name(predicate.name()), &operands, floaty, theirs);
         }
         let total = |a: BidFloat<W>, b: BidFloat<W>| a.total_cmp(b) != Ordering::Greater;
         report.check(
-            &name("totalOrder"),
+            name("totalOrder"),
             &operands,
             flag(total(xf, yf)),
             library(F::total_order(xb, yb)),
         );
         report.check(
-            &name("totalOrderMag"),
+            name("totalOrderMag"),
             &operands,
             flag(total(xf.abs(), yf.abs())),
             library(F::total_order_mag(xb, yb)),
         );
         report.check(
-            &name("sameQuantum"),
+            name("sameQuantum"),
             &operands,
             flag(xf.same_quantum(yf)),
             library(F::same_quantum(xb, yb)),
@@ -561,11 +460,8 @@ where
         ];
         for (operation, extremum, floaty) in extrema {
             let (expected, rule) = min_max::<F>(xb, yb, extremum);
-            let operation = match rule {
-                Some(rule) => format!("{} by {rule}", name(operation)),
-                None => name(operation),
-            };
-            report.check(&operation, &operands, ours(floaty, Signals::Ieee), expected);
+            let operation = Group::new(name(operation), rule);
+            report.check(operation, &operands, ours(floaty, Signals::Ieee), expected);
         }
         let class = IntelClass::from_floaty(xf.classify(), xf.is_sign_negative())
             .expect("a decimal value has a class of the library");
@@ -579,7 +475,7 @@ where
         ];
         for (operation, floaty, library) in properties {
             report.check(
-                &name(operation),
+                name(operation),
                 &operands,
                 plain(i128::from(floaty), Flags::NONE, Signals::Ieee),
                 plain(i128::from(library), Flags::NONE, Signals::Ieee),
@@ -592,7 +488,7 @@ where
         ];
         for (operation, floaty, library) in sign_operations {
             report.check(
-                &name(operation),
+                name(operation),
                 &operands,
                 ours((floaty, Flags::NONE), Signals::Ieee),
                 theirs(Outcome {
@@ -678,7 +574,7 @@ where
                     integer.name()
                 );
                 report.check(
-                    &operation,
+                    operation,
                     &|| format!("{x:#x}"),
                     plain(value, flags, signals),
                     library,
@@ -751,7 +647,7 @@ where
         ),
     ];
     for (operation, floaty, library) in checks {
-        report.check(&name(operation), &operands, floaty, library);
+        report.check(name(operation), &operands, floaty, library);
     }
 }
 

@@ -46,58 +46,95 @@ const SAMPLES: usize = 11;
 /// The time that one sample runs at least.
 const SAMPLE_TIME: Duration = Duration::from_millis(4);
 
+/// A table of times: its columns, in order. A row holds one cell for each
+/// column, so a row with another number of cells does not compile.
+struct Table<const N: usize> {
+    columns: [&'static str; N],
+}
+
+impl<const N: usize> Table<N> {
+    /// Prints the header of the table, with `first` above the row names.
+    fn header(&self, first: &str) {
+        println!("| {first} | {} |", self.columns.join(" | "));
+        println!("|---{}|", "|---".repeat(N));
+    }
+
+    /// Prints one row of the table: its name, and the time of each column
+    /// in nanoseconds, or `-` for an operation that the row does not have.
+    // The table is the receiver so that a row takes the column count of its
+    // table. The row does not print the column names.
+    #[allow(clippy::unused_self)]
+    fn row(&self, name: &str, times: [Option<f64>; N]) {
+        let cells: Vec<String> = times
+            .iter()
+            .map(|time| time.map_or_else(|| "-".to_owned(), |time| format!("{time:.1}")))
+            .collect();
+        println!("| {name} | {} |", cells.join(" | "));
+    }
+}
+
 /// The operations that each row measures, in column order.
-const COLUMNS: [&str; 16] = [
-    "add",
-    "add_with",
-    "mul",
-    "div",
-    "div_with",
-    "sqrt",
-    "mul_add",
-    "to_f64",
-    "to_i64",
-    "round_int",
-    "decode",
-    "add_mode",
-    "mul_with",
-    "mul_mode",
-    "div_mode",
-    "mul_add_with",
-];
+const COLUMNS: Table<16> = Table {
+    columns: [
+        "add",
+        "add_with",
+        "mul",
+        "div",
+        "div_with",
+        "sqrt",
+        "mul_add",
+        "to_f64",
+        "to_i64",
+        "round_int",
+        "decode",
+        "add_mode",
+        "mul_with",
+        "mul_mode",
+        "div_mode",
+        "mul_add_with",
+    ],
+};
 
 /// The operations of the second table, in column order.
-const OTHER_COLUMNS: [&str; 11] = [
-    "rem", "rem_far", "to_f32", "to_f16", "to_f80", "to_d64", "from_i64", "add_tiny", "add_zero",
-    "cmp", "min",
-];
+const OTHER_COLUMNS: Table<11> = Table {
+    columns: [
+        "rem", "rem_far", "to_f32", "to_f16", "to_f80", "to_d64", "from_i64", "add_tiny",
+        "add_zero", "cmp", "min",
+    ],
+};
 
 /// The operations of the double-double table, in column order.
-const DOUBLE_DOUBLE_COLUMNS: [&str; 5] = ["add", "mul", "div", "sqrt", "add_zero"];
+const DOUBLE_DOUBLE_COLUMNS: Table<5> = Table {
+    columns: ["add", "mul", "div", "sqrt", "add_zero"],
+};
 
 /// The operations of the `Lanes` table, in column order. `cmp` is
 /// `compare_quiet`, and `min` is `minimum`. `to_int` converts to `i32`.
 /// `scalar_add` and `scalar_to_int` run the operation of the type on the
 /// lanes one at a time, for comparison.
-const LANES_COLUMNS: [&str; 13] = [
-    "add",
-    "mul",
-    "div",
-    "sqrt",
-    "mul_add",
-    "round_int",
-    "convert",
-    "cmp",
-    "min",
-    "add_with",
-    "scalar_add",
-    "to_int",
-    "scalar_to_int",
-];
+const LANES_COLUMNS: Table<13> = Table {
+    columns: [
+        "add",
+        "mul",
+        "div",
+        "sqrt",
+        "mul_add",
+        "round_int",
+        "convert",
+        "cmp",
+        "min",
+        "add_with",
+        "scalar_add",
+        "to_int",
+        "scalar_to_int",
+    ],
+};
 
 /// The operations of the decimal reference table, in column order.
 #[cfg(target_arch = "x86_64")]
-const DECIMAL_COLUMNS: [&str; 5] = ["add", "mul", "div", "sqrt", "mul_add"];
+const DECIMAL_COLUMNS: Table<5> = Table {
+    columns: ["add", "mul", "div", "sqrt", "mul_add"],
+};
 
 /// Returns the median time of one operation of `batch`, which runs `COUNT`
 /// operations, in nanoseconds.
@@ -149,15 +186,6 @@ fn operands<S: Standard<W>, const W: usize>(random: &mut SplitMix64) -> Vec<Floa
 /// Returns `COUNT` positive values of a format, for the square root.
 fn positive<S: Standard<W>, const W: usize>(values: &[Float<S, W>]) -> Vec<Float<S, W>> {
     values.iter().map(|value| value.abs()).collect()
-}
-
-/// Prints one row of the table.
-fn row(name: &str, times: &[Option<f64>]) {
-    let cells: Vec<String> = times
-        .iter()
-        .map(|time| time.map_or_else(|| "-".to_owned(), |time| format!("{time:.1}")))
-        .collect();
-    println!("| {name} | {} |", cells.join(" | "));
 }
 
 /// Measures every column for one floaty format.
@@ -222,7 +250,7 @@ fn floaty_row<S: Standard<W>, const W: usize>(name: &str, seed: u64) {
             }
         })),
     ];
-    row(name, &times);
+    COLUMNS.row(name, times);
 }
 
 /// Returns the zero of a format.
@@ -319,11 +347,9 @@ fn other_row<S: Standard<W>, const W: usize>(name: &str, seed: u64) {
         })),
         Some(pairs(&a, &b, Float::minimum)),
     ];
-    row(name, &times);
+    OTHER_COLUMNS.row(name, times);
 }
 
-/// Measures the double-double table for one algorithm. Only `Qd` has a
-/// square root.
 /// Measures `operation` on each pair of `left` and `right`.
 fn each_pair<T: Copy, R>(left: &[T], right: &[T], operation: impl Fn(T, T) -> R) -> f64 {
     measure(|| {
@@ -375,9 +401,11 @@ fn lanes_row<S: Standard<W>, const W: usize, const N: usize, T: Copy>(
         Some(each_pair(&left, &left, |x, _| x.to_int::<i32>())),
         Some(each_pair(&first, &first, |x, _| x.to_int::<i32>())),
     ];
-    row(name, &times);
+    LANES_COLUMNS.row(name, times);
 }
 
+/// Measures the double-double table for one algorithm. Only `Qd` has a
+/// square root.
 fn double_double_row<Alg: floaty::Algorithm>(
     name: &str,
     seed: u64,
@@ -424,7 +452,7 @@ fn double_double_row<Alg: floaty::Algorithm>(
             }
         })),
     ];
-    row(name, &times);
+    DOUBLE_DOUBLE_COLUMNS.row(name, times);
 }
 
 /// Measures the host type `$host` for comparison, on the operands of the
@@ -486,7 +514,7 @@ macro_rules! host_row {
             None,
             None,
         ];
-        row($name, &times);
+        COLUMNS.row($name, times);
     }};
 }
 
@@ -496,19 +524,11 @@ macro_rules! apfloat_row {
     ($name:literal, $apfloat:ty, $floaty:ty, $seed:literal) => {{
         let mut random = SplitMix64::new($seed);
         let values = |random: &mut SplitMix64| -> Vec<$apfloat> {
-            let mut values = Vec::with_capacity(COUNT);
-            for _ in 0..COUNT {
-                let exact = Exact {
-                    negative: random.below(2) == 0,
-                    exponent: -63
-                        + i32::try_from(random.below(8)).expect("a shift below 8 fits an i32"),
-                    significand: [random.next_u64() | 1 << 63],
-                    sticky: false,
-                };
-                let (value, _): ($floaty, _) = <$floaty>::round(exact, Env::IEEE);
-                values.push(<$apfloat>::from_bits(u128::from(value.to_bits())));
-            }
-            values
+            let floats: Vec<$floaty> = operands(random);
+            floats
+                .into_iter()
+                .map(|value| <$apfloat>::from_bits(u128::from(value.to_bits())))
+                .collect()
         };
         let (a, b, c) = (
             values(&mut random),
@@ -578,7 +598,7 @@ macro_rules! apfloat_row {
             None,
             None,
         ];
-        row($name, &times);
+        COLUMNS.row($name, times);
     }};
 }
 
@@ -614,7 +634,7 @@ macro_rules! decimal_row {
                 }
             })),
         ];
-        row($name, &times);
+        DECIMAL_COLUMNS.row($name, times);
     }};
 }
 
@@ -627,8 +647,7 @@ fn decimal_table() {
     println!();
     println!("Decimal against the references, nanoseconds per operation.");
     println!();
-    println!("| Format | {} |", DECIMAL_COLUMNS.join(" | "));
-    println!("|---{}|", "|---".repeat(DECIMAL_COLUMNS.len()));
+    DECIMAL_COLUMNS.header("Format");
     bid_rows();
     dpd_rows();
 }
@@ -746,8 +765,7 @@ fn dpd_rows() {
 fn main() {
     println!("Nanoseconds per operation, median of {SAMPLES} samples.");
     println!();
-    println!("| Format | {} |", COLUMNS.join(" | "));
-    println!("|---{}|", "|---".repeat(COLUMNS.len()));
+    COLUMNS.header("Format");
     floaty_row::<Binary<4, NoInf>, 8>("floaty F8E4M3Fn", 1);
     floaty_row::<Binary<5, Fnuz>, 8>("floaty F8E5M2Fnuz", 10);
     floaty_row::<Binary<5>, 16>("floaty F16", 2);
@@ -774,8 +792,7 @@ fn main() {
     println!();
     println!("Other operations in the engine, nanoseconds per operation.");
     println!();
-    println!("| Format | {} |", OTHER_COLUMNS.join(" | "));
-    println!("|---{}|", "|---".repeat(OTHER_COLUMNS.len()));
+    OTHER_COLUMNS.header("Format");
     other_row::<Binary<4, NoInf>, 8>("floaty F8E4M3Fn", 21);
     other_row::<Binary<5, Fnuz>, 8>("floaty F8E5M2Fnuz", 22);
     other_row::<Binary<5>, 16>("floaty F16", 23);
@@ -794,15 +811,13 @@ fn main() {
     println!();
     println!("Double-double, nanoseconds per operation.");
     println!();
-    println!("| Algorithm | {} |", DOUBLE_DOUBLE_COLUMNS.join(" | "));
-    println!("|---{}|", "|---".repeat(DOUBLE_DOUBLE_COLUMNS.len()));
+    DOUBLE_DOUBLE_COLUMNS.header("Algorithm");
     double_double_row::<Qd>("floaty Qd", 41, Some(DoubleDouble::sqrt));
     double_double_row::<Gcc>("floaty Gcc", 42, None);
     println!();
     println!("Lanes, nanoseconds per lane.");
     println!();
-    println!("| Lanes | {} |", LANES_COLUMNS.join(" | "));
-    println!("|---{}|", "|---".repeat(LANES_COLUMNS.len()));
+    LANES_COLUMNS.header("Lanes");
     lanes_row::<Binary<8>, 32, 4, _>("F32 x 4", 51, Lanes::convert::<F64>);
     lanes_row::<Binary<8>, 32, 8, _>("F32 x 8", 52, Lanes::convert::<F64>);
     lanes_row::<Binary<11>, 64, 2, _>("F64 x 2", 53, Lanes::convert::<F32>);

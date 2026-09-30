@@ -46,9 +46,9 @@ use std::panic;
 use floaty::format::{Bid, Decimal, Standard, Storage, Width};
 use floaty::{Decoded, Env, Flags, Float, Integer};
 use floaty_verify::intel_decimal::{
-    self, Bid32, Bid64, Bid128, Class as IntelClass, EQUAL_OPERANDS, Extremum, Format, Inexact,
-    Integer as IntelInteger, Outcome, Predicate, Rounding as IntelRounding, Signals, Value,
-    encoding, to_integer,
+    self, Bid32, Bid64, Bid128, Class as IntelClass, EQUAL_OPERANDS, Extremum, Format, Group,
+    Inexact, Integer as IntelInteger, Outcome, Predicate, Rounding as IntelRounding, Signals,
+    Value, encoding, to_integer,
 };
 use floaty_verify::readtest::{self, Line};
 
@@ -92,7 +92,7 @@ type Checked = Result<Verdict, String>;
 /// Counts of the lines of one run.
 #[derive(Default)]
 struct Tally {
-    passed: BTreeMap<String, usize>,
+    passed: BTreeMap<Group, usize>,
     failures: Vec<String>,
     skipped: BTreeMap<Skip, usize>,
 }
@@ -734,10 +734,7 @@ fn readtest_lines() {
         };
         match checked {
             Ok(verdict) if verdict.passed => {
-                let group = match verdict.rule {
-                    Some(rule) => format!("{} by {rule}", group(&line.function)),
-                    None => group(&line.function),
-                };
+                let group = Group::new(group(&line.function), verdict.rule);
                 *tally.passed.entry(group).or_default() += 1;
             }
             Ok(verdict) => tally.failures.push(describe(format!(
@@ -774,7 +771,7 @@ fn readtest_lines() {
     let decided = |group: &str| {
         tally
             .passed
-            .get(&format!("{group} by {EQUAL_OPERANDS}"))
+            .get(&Group::new(group, Some(EQUAL_OPERANDS)))
             .copied()
     };
     assert_eq!(decided("bidN_minnum"), Some(15));

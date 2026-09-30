@@ -16,6 +16,7 @@
 mod ffi;
 mod mapping;
 mod operands;
+mod report;
 
 use core::cmp::Ordering;
 use core::fmt;
@@ -29,6 +30,7 @@ pub use mapping::{
     EQUAL_OPERANDS, Extremum, Signals, Value, encoding, env, equal_operand_choice, narrow,
     to_integer,
 };
+pub use report::{Group, Report};
 
 /// A rounding direction of the library, with its `BID_ROUNDING_*` value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
