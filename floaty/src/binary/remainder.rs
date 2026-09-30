@@ -157,11 +157,7 @@ where
         env: &Env,
         flags: Flags,
     ) -> (L, Flags) {
-        let exact_behavior = Env {
-            precision: None,
-            flush_to_zero: false,
-            ..*env
-        };
+        let exact_behavior = env.for_exact_result();
         let (rounded, round_flags) =
             exact::round::<L::Double, L, Self, Env>(&value, exact_behavior);
         debug_assert!(

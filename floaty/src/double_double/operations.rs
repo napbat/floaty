@@ -138,11 +138,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     #[must_use]
     pub fn round_to_integral_with(self, behavior: impl Override) -> (Self, Flags) {
         let env = behavior.apply::<M>().env();
-        let exact_env = Env {
-            precision: None,
-            flush_to_zero: false,
-            ..env
-        };
+        let exact_env = env.for_exact_result();
         let (value, flags) = match self.exact() {
             Unpacked::Finite {
                 negative,

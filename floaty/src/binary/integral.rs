@@ -65,11 +65,10 @@ where
             significand: integral.magnitude,
             sticky: false,
         };
-        let full_precision = Env {
-            precision: None,
-            ..*env
-        };
-        let (rounded, overflow_flags) = exact::round::<L, L, Self, Env>(&integer, full_precision);
+        // An integer of magnitude 1 or more is never tiny, so flush-to-zero,
+        // which the exact behavior also clears, changes nothing here.
+        let (rounded, overflow_flags) =
+            exact::round::<L, L, Self, Env>(&integer, env.for_exact_result());
         // An overflow gives an infinity, which is above the value, or the NaN
         // or the largest finite value, which are not. So the overflow decides
         // `ROUNDED_UP`.

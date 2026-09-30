@@ -439,6 +439,30 @@ impl Env {
     pub(crate) fn zero_sum_is_negative(&self) -> bool {
         self.rounding == Rounding::TowardNegative
     }
+
+    /// Returns the sign of an exact zero sum of operands of the signs
+    /// `first` and `second`: their sign when they agree, and otherwise the
+    /// sign of [`zero_sum_is_negative`](Self::zero_sum_is_negative).
+    #[inline]
+    pub(crate) fn zero_sum_sign(&self, first: bool, second: bool) -> bool {
+        if first == second {
+            first
+        } else {
+            self.zero_sum_is_negative()
+        }
+    }
+
+    /// Returns the behavior for a result that the format holds exactly: the
+    /// precision limit and flush-to-zero do not apply, and the rounding
+    /// routine still gives the canonical form and reports `TINY`.
+    #[inline]
+    pub(crate) fn for_exact_result(&self) -> Self {
+        Self {
+            precision: None,
+            flush_to_zero: false,
+            ..*self
+        }
+    }
 }
 
 /// The exception flags and the extra status that an operation reports.

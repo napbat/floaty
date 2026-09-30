@@ -244,11 +244,7 @@ where
             (Unpacked::Infinity { .. }, _) => Self::exact(x, flags),
             (_, Unpacked::Infinity { .. }) => Self::exact(y, flags),
             (Unpacked::Zero { negative: a, .. }, Unpacked::Zero { negative: b, .. }) => {
-                let negative = if a == b {
-                    a
-                } else {
-                    env.zero_sum_is_negative()
-                };
+                let negative = env.zero_sum_sign(a, b);
                 Self::exact(Unpacked::zero(negative), flags)
             }
             (
@@ -562,11 +558,7 @@ where
         };
         match (product, z) {
             (None, Unpacked::Zero { negative, .. }) => {
-                let negative = if negative == product_negative {
-                    negative
-                } else {
-                    env.zero_sum_is_negative()
-                };
+                let negative = env.zero_sum_sign(negative, product_negative);
                 Self::exact(Unpacked::zero(negative), flags)
             }
             (

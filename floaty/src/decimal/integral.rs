@@ -293,11 +293,7 @@ where
         env: &Env,
         flags: Flags,
     ) -> (L, Flags) {
-        let exact_behavior = Env {
-            precision: None,
-            flush_to_zero: false,
-            ..*env
-        };
+        let exact_behavior = env.for_exact_result();
         let (result, round_flags) = Self::finish(value, preferred, exact_behavior, flags);
         debug_assert!(!round_flags.contains(Flags::INEXACT), "the result is exact");
         (result, round_flags)

@@ -280,11 +280,7 @@ where
                 let (a, b) = (Self::term::<L, L>(&x), Self::term::<L, L>(&y));
                 // An exact zero sum keeps the sign that the signs share, or
                 // takes the sign of the rounding direction.
-                let zero_sign = if a.negative == b.negative {
-                    a.negative
-                } else {
-                    env.zero_sum_is_negative()
-                };
+                let zero_sign = env.zero_sum_sign(a.negative, b.negative);
                 // The sum stays in the limbs of the operands.
                 const { assert!(holds_sums::<L>(Self::PRECISION), "the limbs hold every sum") };
                 let sum = sum(a, b, Self::PRECISION);
@@ -470,11 +466,7 @@ where
                 };
                 let addend = Self::term::<L, Wide<L>>(&z);
                 let preferred = product_exponent.min(addend.exponent);
-                let zero_sign = if product.negative == addend.negative {
-                    product.negative
-                } else {
-                    env.zero_sum_is_negative()
-                };
+                let zero_sign = env.zero_sum_sign(product.negative, addend.negative);
                 Self::finish_sum(
                     &sum(product, addend, Self::PRECISION),
                     zero_sign,

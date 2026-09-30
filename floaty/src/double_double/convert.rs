@@ -249,10 +249,10 @@ fn sum(left: &Signed, right: &Signed) -> Signed {
 /// 2^918`, because GCC counts 106 bits in the IBM `long double`.
 fn overflow(negative: bool, env: &Env) -> (Pair, Flags) {
     let flags = Flags::OVERFLOW | Flags::INEXACT;
-    if exact::overflows_to_infinity(env.rounding, negative) && !env.saturate {
+    if exact::overflow_is_infinite(env, negative) {
         return ((infinity(negative), zero(false)), flags | Flags::ROUNDED_UP);
     }
-    let precision = env.precision.map_or(53, |limit| limit.get().min(53));
+    let precision = env.precision_within(<Binary<11> as Standard<64>>::PRECISION);
     let ones = [(1_u64 << precision) - 1];
     let bits = i32::try_from(precision).expect("a precision fits an i32");
     let part = |exponent: i32| {
