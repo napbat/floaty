@@ -250,7 +250,8 @@ pub struct Env {
     /// sign, in every rounding direction, instead of an infinity or a NaN.
     /// OCP FP8 conversions call this saturation. An infinite operand and an
     /// exact infinite result, such as `1 / 0`, stay infinite in a format that
-    /// has an infinity. The field applies to the binary formats.
+    /// has an infinity. The field applies to the binary formats. Double-double
+    /// arithmetic ignores the field, because its references do not saturate.
     pub saturate: bool,
     /// How `total_cmp` orders two encodings of one datum.
     pub total_order: TotalOrder,
@@ -549,6 +550,11 @@ pub trait Behavior: Sealed + Copy {
     /// Returns the fields of the behavior.
     #[doc(hidden)]
     fn env(self) -> Env;
+
+    /// Returns the behavior with `saturate` false.
+    #[doc(hidden)]
+    #[must_use]
+    fn without_saturation(self) -> Self;
 }
 
 impl Sealed for Env {}
@@ -557,12 +563,24 @@ impl Behavior for Env {
     fn env(self) -> Env {
         self
     }
+
+    #[inline]
+    fn without_saturation(self) -> Self {
+        self.with_saturate(false)
+    }
 }
 
 impl<M: Mode> Behavior for M {
     #[inline]
     fn env(self) -> Env {
         M::ENV
+    }
+
+    /// Returns the mode. No mode saturates.
+    #[inline]
+    fn without_saturation(self) -> Self {
+        const { assert!(!M::ENV.saturate, "no mode saturates") };
+        self
     }
 }
 

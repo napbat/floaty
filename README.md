@@ -173,7 +173,7 @@ assert_eq!(one.to_bits(), 0x3F80_0000);
 | `tininess` | Tininess detection before or after rounding. |
 | `nan` | The NaN that an operation returns: the propagation rule, the sign of the default NaN, and the fused multiply-add rules. |
 | `precision` | A precision limit below the format precision, as x87 precision control gives it. |
-| `saturate` | A finite result that overflows gives the largest finite value instead of an infinity or a NaN, as OCP FP8 saturation does. |
+| `saturate` | A finite result that overflows gives the largest finite value instead of an infinity or a NaN, as OCP FP8 saturation does. Double-double arithmetic ignores it, because libgcc and QD do not saturate. |
 | `total_order` | How `total_cmp` orders two encodings of one value. |
 
 `Env::IEEE` is the IEEE 754 default. `Env::X86_SSE` and `Env::X87` give the

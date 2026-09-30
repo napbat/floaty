@@ -54,6 +54,42 @@ fn a_zero_result_keeps_the_sign_of_the_high_part() {
 }
 
 #[test]
+fn saturation_leaves_the_arithmetic_unchanged() {
+    // Each operation overflows in a step. `Gcc` gives an infinity, and `Qd`
+    // gives a NaN in both halves.
+    let (max, min) = (0x7FEF_FFFF_FFFF_FFFF, 0x0010_0000_0000_0000);
+    let saturating = Env::IEEE.with_saturate(true);
+    let outcome = |(value, flags): (DoubleDouble<Gcc>, Flags)| (bits(value), flags);
+    let (x, y) = (gcc(max, 0), gcc(min, 0));
+    let overflow = Flags::OVERFLOW | Flags::INEXACT | Flags::ROUNDED_UP;
+    for result in [
+        x.add_with(x, saturating),
+        x.sub_with(-x, saturating),
+        x.mul_with(x, saturating),
+        x.div_with(y, saturating),
+    ] {
+        assert_eq!(outcome(result), ((0x7FF0_0000_0000_0000, 0), overflow));
+    }
+    let outcome = |(value, flags): (DoubleDouble<Qd>, Flags)| (bits(value), flags);
+    let (x, y) = (qd(max, 0), qd(min, 0));
+    let nan = 0x7FF8_0000_0000_0000;
+    for result in [
+        x.add_with(x, saturating),
+        x.sub_with(-x, saturating),
+        x.mul_with(x, saturating),
+        x.div_with(y, saturating),
+    ] {
+        assert_eq!(outcome(result), ((nan, nan), overflow | Flags::INVALID));
+    }
+    // A conversion saturates as its destination format does.
+    let (value, flags) = x.convert_with::<F32>(saturating);
+    assert_eq!(
+        (value.to_bits(), flags),
+        (0x7F7F_FFFF, Flags::OVERFLOW | Flags::INEXACT)
+    );
+}
+
+#[test]
 fn the_exact_value_decodes_converts_and_compares() {
     let value = gcc(ONE, 0x3C30_0000_0000_0000);
     assert_eq!(

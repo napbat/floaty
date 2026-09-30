@@ -256,8 +256,9 @@ fn pair(random: &mut SplitMix64) -> (u64, u64) {
     }
 }
 
-/// The behaviors of the conversions.
-fn behaviors() -> [Env; 7] {
+/// The behaviors of the conversions. Saturation applies to the rounding into
+/// a binary destination format.
+fn behaviors() -> [Env; 8] {
     [
         Env::IEEE,
         Env::IEEE.with_rounding(Rounding::TowardZero),
@@ -271,6 +272,7 @@ fn behaviors() -> [Env; 7] {
             .with_precision(NonZeroU32::new(5)),
         Env::IEEE.with_rounding(Rounding::TiesTowardZero),
         Env::IEEE.with_rounding(Rounding::AwayFromZero),
+        Env::IEEE.with_saturate(true),
     ]
 }
 
@@ -318,7 +320,7 @@ fn the_exact_value_decodes_and_converts() {
             "{hi:#x} {lo:#x}"
         );
         for env in behaviors() {
-            check_binary!(dd, &exact_value, env, F16, BF16, F32, F80, F128);
+            check_binary!(dd, &exact_value, env, F16, BF16, F32, F64, F80, F128);
             check_decimal!(dd, &exact_value, env, D64Bid, D128Dpd);
         }
     }

@@ -15,6 +15,10 @@
 //! processor that runs the reference sets them. `TINY`, `ROUNDED_UP`, and
 //! `DENORMAL_INPUT` then say that some step was tiny, rounded up, or read a
 //! subnormal operand.
+//!
+//! The steps ignore [`Env::saturate`], because neither reference saturates.
+//! An overflow gives what the reference gives: an infinity or a NaN. A
+//! conversion applies saturation to its binary destination format.
 
 mod gcc;
 mod qd;
@@ -116,6 +120,10 @@ impl Algorithm for Qd {
 
 /// A double-double value: the sum of two binary64 values, with the arithmetic
 /// of the algorithm `Alg` and the default mode `M`.
+///
+/// The arithmetic ignores [`Env::saturate`], because neither reference
+/// saturates. [`convert_with`](Self::convert_with) applies saturation to a
+/// binary destination format.
 ///
 /// ```
 /// use floaty::{DoubleDouble, F64, Qd};

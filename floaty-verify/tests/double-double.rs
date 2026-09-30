@@ -8,6 +8,12 @@
 //! `ibm_ldouble::behavior`, and `Qd` under `Env::X86_SSE`. The test counts
 //! the cases with a malformed operand, a finite high half and a NaN low half,
 //! whose NaN the fused NaN order decides.
+//!
+//! Each case runs again with saturation, and must give the result of the
+//! reference. Double-double arithmetic ignores saturation, because neither
+//! reference saturates. The tests count the cases in which a step overflows.
+//! In a direction that rounds an overflow to an infinity, a saturating step
+//! would change the result of such a case.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -239,6 +245,9 @@ const MALFORMED: &str = "an operand with a finite high half and a NaN low half";
 /// The note of a case whose flags depend on the tininess rule.
 const TININESS: &str = "flags that tininess after rounding changes";
 
+/// The note of a case in which a step overflows.
+const OVERFLOW: &str = "a step that overflows";
+
 #[test]
 fn gcc_matches_libgcc_under_qemu() {
     let mut operands = Operands {
@@ -268,33 +277,42 @@ fn gcc_matches_libgcc_under_qemu() {
         }
     }
     let outcomes = ibm_ldouble::run(&cases);
-    let mut tininess = 0;
+    let (mut tininess, mut overflow) = (0, 0);
     for (case, theirs) in cases.iter().zip(outcomes) {
         let (x, y) = (value::<Gcc>(case.a), value::<Gcc>(case.b));
-        let run = |env: Env| match case.operation {
-            Operation::Add => x.add_with(y, env),
-            Operation::Sub => x.sub_with(y, env),
-            Operation::Mul => x.mul_with(y, env),
-            Operation::Div => x.div_with(y, env),
+        let run = |env: Env| {
+            let (result, flags) = match case.operation {
+                Operation::Add => x.add_with(y, env),
+                Operation::Sub => x.sub_with(y, env),
+                Operation::Mul => x.mul_with(y, env),
+                Operation::Div => x.div_with(y, env),
+            };
+            outcome(result.hi(), result.lo(), flags)
         };
-        let (result, flags) = run(ibm_ldouble::behavior(case.rounding));
-        let (_, after) =
-            run(ibm_ldouble::behavior(case.rounding).with_tininess(Tininess::AfterRounding));
-        if ReferenceFlags::from_floaty(after) != ReferenceFlags::from_floaty(flags) {
+        let behavior = ibm_ldouble::behavior(case.rounding);
+        let ours = run(behavior);
+        let after = run(behavior.with_tininess(Tininess::AfterRounding));
+        if after.flags != ours.flags {
             tininess += 1;
         }
-        let ours = outcome(result.hi(), result.lo(), flags);
+        if theirs.flags.contains(ReferenceFlags::OVERFLOW) {
+            overflow += 1;
+        }
         tally.check(|| format!("{case:?}"), ours, theirs);
+        let saturated = run(behavior.with_saturate(true));
+        tally.check(|| format!("{case:?} with saturation"), saturated, theirs);
     }
     tally.report("Gcc against libgcc");
     println!("  noted   {malformed_cases:7}: {MALFORMED}");
     println!("  noted   {tininess:7}: {TININESS}");
+    println!("  noted   {overflow:7}: {OVERFLOW}");
     assert_eq!(tally.failed, 0, "floaty matches libgcc");
-    // The generator is seeded, so the counts are exact. The notes show that
-    // the tests reach the fused NaN order and the tininess rule of PowerPC.
+    // The generator is seeded, so the counts are exact. Each case runs with
+    // and without saturation. The notes show that the tests reach the fused
+    // NaN order, the tininess rule of PowerPC, and overflowing steps.
     assert_eq!(
-        (tally.passed, malformed_cases, tininess),
-        (384_080, 14_880, 333)
+        (tally.passed, malformed_cases, tininess, overflow),
+        (2 * 384_080, 14_880, 333, 21_999)
     );
 }
 
@@ -346,7 +364,7 @@ fn qd_matches_the_qd_library() {
         (a, operands.second(a))
     });
     let pairs: Vec<(Pair, Pair)> = FIXED.into_iter().chain(random).collect();
-    let mut operator_checks = 0_usize;
+    let (mut operator_checks, mut overflow) = (0_usize, 0_usize);
     for (a, b) in pairs {
         let (x, y) = (value::<Qd>(a), value::<Qd>(b));
         for rounding in Rounding::ALL {
@@ -358,6 +376,15 @@ fn qd_matches_the_qd_library() {
                 ("div", x.div_with(y, env), qd::div(a, b, rounding)),
                 ("sqrt", x.sqrt_with(env), qd::sqrt(a, rounding)),
             ];
+            let saturating = env.with_saturate(true);
+            let saturated = [
+                x.add_with(y, saturating),
+                x.sub_with(y, saturating),
+                x.mul_with(y, saturating),
+                x.div_with(y, saturating),
+                x.sqrt_with(saturating),
+            ]
+            .map(|(result, flags)| outcome(result.hi(), result.lo(), flags));
             // The same operations with the static mode of the direction.
             let fixed = floaty_verify::with_rounding_mode!(
                 floaty::Rounding::from(rounding),
@@ -395,6 +422,11 @@ fn qd_matches_the_qd_library() {
                 tally.check(|| format!("{name} {a:?} {b:?} {rounding:?}"), ours, theirs);
                 let context = || format!("{name} {a:?} {b:?} {rounding:?} static mode");
                 tally.check(context, fixed, theirs);
+                let context = || format!("{name} {a:?} {b:?} {rounding:?} with saturation");
+                tally.check(context, saturated[index], theirs);
+                if theirs.flags.contains(ReferenceFlags::OVERFLOW) {
+                    overflow += 1;
+                }
                 if let Some(operators) = operators {
                     assert_eq!(
                         operators[index],
@@ -407,10 +439,13 @@ fn qd_matches_the_qd_library() {
         }
     }
     tally.report("Qd against QD");
+    println!("  noted   {overflow:7}: {OVERFLOW}");
     assert_eq!(tally.failed, 0, "floaty matches QD");
-    // The generator is seeded, so the counts are exact: each case runs with an
-    // Env and with a static mode, and each case that rounds to nearest even
-    // also runs through the operators of the SSE mode.
-    assert_eq!(tally.passed, 960_200);
-    assert_eq!(operator_checks, 960_200 / 8);
+    // The generator is seeded, so the counts are exact: each of the 480,100
+    // cases runs with an Env, with that Env and saturation, and with a static
+    // mode. Each case that rounds to nearest even also runs through the
+    // operators of the SSE mode.
+    assert_eq!(tally.passed, 3 * 480_100);
+    assert_eq!(operator_checks, 480_100 / 4);
+    assert_eq!(overflow, 26_065);
 }

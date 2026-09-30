@@ -11,6 +11,10 @@ use crate::host::{self, Kind, Operation, Ready};
 /// Runs binary64 operations under one behavior and collects their flags, as
 /// the status register of a processor does.
 ///
+/// The steps ignore saturation, because neither reference saturates.
+/// Saturated steps also give wrong pairs: the sum of the largest binary64
+/// value and itself would have that value in both halves.
+///
 /// The steps of an entry point that returns no flags can take the host paths
 /// of binary64. A host step gives the bits of the engine, and a step that the
 /// host path declines runs in the engine.
@@ -24,7 +28,7 @@ impl<B: Behavior> Steps<B> {
     /// Starts with no flags.
     pub fn new(behavior: B) -> Self {
         Self {
-            behavior,
+            behavior: behavior.without_saturation(),
             flags: Flags::NONE,
             host: None,
         }
@@ -34,6 +38,7 @@ impl<B: Behavior> Steps<B> {
     /// take the host paths of binary64 when the build has them and the host
     /// allows them, which one check decides for every step.
     pub fn without_flags(behavior: B) -> Self {
+        let behavior = behavior.without_saturation();
         let host = if host::available(Host::Double, Kind::Arithmetic) {
             host::ready(&behavior.env())
         } else {
