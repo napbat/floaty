@@ -14,7 +14,7 @@
 
 use core::num::NonZeroU32;
 
-use floaty::env::{NanRule, Tininess};
+use floaty::env::{NanPropagation, NanRule, Tininess};
 use floaty::{Env, F16, F32, F64, F80, F128, Rounding, mode};
 use floaty_verify::testfloat::{
     self, ARM, ARM_DEFAULT_NAN, DEFAULT_NAN_RULE, ROUNDINGS, SSE, SSE_RULE, TININESS, X87,
@@ -110,11 +110,26 @@ fn check(
     }
 }
 
-/// Returns `true` when a run has the default mode with one rounding
-/// direction. The static mode `Rounded<Ieee, R>` then gives the same results,
-/// which the tests check against TestFloat too.
+/// Returns `true` when a run has the default mode with a rounding
+/// direction, a tininess rule, and the NaN propagation of the default mode or
+/// the default NaN, as an Arm FPCR state selects them. The static mode that
+/// `with_fpcr_mode!` selects then gives the same results, which the tests
+/// check against TestFloat too.
 fn has_static_mode(env: Env) -> bool {
-    env == Env::IEEE.with_rounding(env.rounding)
+    let propagation = if default_nan(env) {
+        NanPropagation::DefaultNan
+    } else {
+        NanPropagation::SignalingFirst
+    };
+    env == Env::IEEE
+        .with_rounding(env.rounding)
+        .with_tininess(env.tininess)
+        .with_nan(Env::IEEE.nan.with_propagation(propagation))
+}
+
+/// Returns `true` when a run gives the default NaN, as Arm FPCR.DN sets.
+fn default_nan(env: Env) -> bool {
+    env.nan.propagation == NanPropagation::DefaultNan
 }
 
 /// Returns `true` when two NaN rules give the same NaN for one or two
@@ -180,7 +195,7 @@ macro_rules! two_operands {
             );
             if has_static_mode(env) {
                 let (fixed, fixed_flags) =
-                    floaty_verify::with_rounding_mode!(env.rounding, mode::Ieee, Mode => {
+                    floaty_verify::with_fpcr_mode!(env.rounding, default_nan(env), env.tininess, Mode => {
                         let (a, b) = (a.with_mode::<Mode>(), b.with_mode::<Mode>());
                         let (value, flags) = a.$method(b, Mode::default());
                         (u128::from(value.to_bits()), flags)
@@ -276,9 +291,10 @@ macro_rules! format_tests {
                             "{context}: flags {ours_flags:?}"
                         );
                         if has_static_mode(env) {
-                            let (fixed, fixed_flags) = floaty_verify::with_rounding_mode!(
+                            let (fixed, fixed_flags) = floaty_verify::with_fpcr_mode!(
                                 env.rounding,
-                                mode::Ieee,
+                                default_nan(env),
+                                env.tininess,
                                 Mode => {
                                     let (root, flags) =
                                         value.with_mode::<Mode>().sqrt_with(Mode::default());
@@ -326,7 +342,7 @@ macro_rules! mul_add {
             );
             if has_static_mode(env) {
                 let (fixed, fixed_flags) =
-                    floaty_verify::with_rounding_mode!(env.rounding, mode::Ieee, Mode => {
+                    floaty_verify::with_fpcr_mode!(env.rounding, default_nan(env), env.tininess, Mode => {
                         let [a, b, c] = [a, b, c].map(|value| value.with_mode::<Mode>());
                         let (value, flags) = a.mul_add_with(b, c, Mode::default());
                         (u128::from(value.to_bits()), flags)

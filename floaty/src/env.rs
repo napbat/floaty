@@ -159,6 +159,16 @@ impl NanRule {
         }
     }
 
+    /// Returns a copy with another propagation rule.
+    #[must_use]
+    #[inline]
+    pub const fn with_propagation(self, propagation: NanPropagation) -> Self {
+        Self {
+            propagation,
+            ..self
+        }
+    }
+
     /// Returns a copy with another sign of the default NaN.
     #[must_use]
     #[inline]

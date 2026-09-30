@@ -192,7 +192,11 @@ instruction from a comparison, or from the `ToInt` result.
 A mode is a behavior fixed at compile time. Each type carries a default
 mode, `mode::Ieee` unless the type names another. The engine compiles the
 common path of each operation once for each mode, with every field as a
-constant.
+constant. A combinator changes one field of a mode: `Rounded`,
+`FlushToZero`, `DenormalsAreZero`, `Precision`, `FullPrecision`,
+`Propagation` for the NaN propagation rule, and `DetectTininess`. An
+emulator maps each state of a control register, such as MXCSR or the Arm
+FPCR, to one mode.
 
 ```rust
 use floaty::mode::direction::TowardZero;

@@ -18,9 +18,9 @@
 //! A combinator makes a mode from another mode and one changed field, at
 //! compile time. The fields that processors change at run time each have a
 //! combinator: [`Rounded`], [`FlushToZero`], [`DenormalsAreZero`],
-//! [`Precision`], and [`FullPrecision`]. An emulator can select one mode for
-//! each state of a control register, and run the operations of that mode
-//! with the fields as constants:
+//! [`Precision`], [`FullPrecision`], [`Propagation`], and [`DetectTininess`].
+//! An emulator can select one mode for each state of a control register, and
+//! run the operations of that mode with the fields as constants:
 //!
 //! ```
 //! use floaty::mode::direction::TowardZero;
@@ -42,7 +42,7 @@
 use core::marker::PhantomData;
 use core::num::NonZeroU32;
 
-use super::{Env, Mode, Rounding};
+use super::{Env, Mode, NanPropagation, Rounding, Tininess};
 use crate::sealed::Sealed;
 
 /// The IEEE 754 default behavior, [`Env::IEEE`]. It is the default mode of
@@ -131,6 +131,97 @@ impl<M: Mode> Mode for FullPrecision<M> {
     const ENV: Env = M::ENV.with_precision(None);
 }
 
+/// The mode `M` with the NaN propagation rule `P`, from [`propagation`]. The
+/// other fields of the NaN rule stay. Arm switches its propagation rule to the
+/// default NaN with FPCR.DN:
+///
+/// ```
+/// use floaty::env::{Mode, NanPropagation};
+/// use floaty::mode::{Ieee, Propagation, propagation};
+///
+/// type DefaultNan = Propagation<Ieee, propagation::DefaultNan>;
+/// assert_eq!(DefaultNan::ENV.nan.propagation, NanPropagation::DefaultNan);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Propagation<M, P>(PhantomData<(M, P)>);
+
+impl<M: Mode, P: PropagationRule> Sealed for Propagation<M, P> {}
+impl<M: Mode, P: PropagationRule> Mode for Propagation<M, P> {
+    const ENV: Env = M::ENV.with_nan(M::ENV.nan.with_propagation(P::PROPAGATION));
+}
+
+/// The mode `M` with the tininess rule `T`, from [`tininess`]. Arm selects
+/// tininess after rounding with FPCR.AH.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct DetectTininess<M, T>(PhantomData<(M, T)>);
+
+impl<M: Mode, T: TininessRule> Sealed for DetectTininess<M, T> {}
+impl<M: Mode, T: TininessRule> Mode for DetectTininess<M, T> {
+    const ENV: Env = M::ENV.with_tininess(T::TININESS);
+}
+
+/// A NaN propagation rule as a type, for [`Propagation`]. The trait is
+/// sealed. The rules are in [`propagation`].
+pub trait PropagationRule: Sealed + Copy + Default + 'static {
+    /// The rule.
+    const PROPAGATION: NanPropagation;
+}
+
+/// The NaN propagation rules as types, one for each [`NanPropagation`].
+pub mod propagation {
+    use super::PropagationRule;
+    use crate::env::NanPropagation;
+    use crate::sealed::Sealed;
+
+    macro_rules! propagation {
+        ($($name:ident),*) => {
+            $(
+                #[doc = concat!("[`NanPropagation::", stringify!($name), "`] as a type.")]
+                #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+                pub struct $name;
+
+                impl Sealed for $name {}
+                impl PropagationRule for $name {
+                    const PROPAGATION: NanPropagation = NanPropagation::$name;
+                }
+            )*
+        };
+    }
+
+    propagation!(SignalingFirst, FirstOperand, LargerSignificand, DefaultNan);
+}
+
+/// A tininess rule as a type, for [`DetectTininess`]. The trait is sealed.
+/// The rules are in [`tininess`].
+pub trait TininessRule: Sealed + Copy + Default + 'static {
+    /// The rule.
+    const TININESS: Tininess;
+}
+
+/// The tininess rules as types, one for each [`Tininess`].
+pub mod tininess {
+    use super::TininessRule;
+    use crate::env::Tininess;
+    use crate::sealed::Sealed;
+
+    macro_rules! tininess {
+        ($($name:ident),*) => {
+            $(
+                #[doc = concat!("[`Tininess::", stringify!($name), "`] as a type.")]
+                #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+                pub struct $name;
+
+                impl Sealed for $name {}
+                impl TininessRule for $name {
+                    const TININESS: Tininess = Tininess::$name;
+                }
+            )*
+        };
+    }
+
+    tininess!(BeforeRounding, AfterRounding);
+}
+
 /// A rounding direction as a type, for [`Rounded`]. The trait is sealed. The
 /// directions are in [`direction`].
 pub trait Direction: Sealed + Copy + Default + 'static {
@@ -209,9 +300,10 @@ mod tests {
     use super::direction::{TowardNegative, TowardZero};
     use super::switch::{Off, On};
     use super::{
-        DenormalsAreZero, FlushToZero, FullPrecision, Ieee, Precision, Rounded, X86Sse, X87,
+        DenormalsAreZero, DetectTininess, FlushToZero, FullPrecision, Ieee, Precision, Propagation,
+        Rounded, X86Sse, X87, propagation, tininess,
     };
-    use crate::env::{Env, Mode, Rounding};
+    use crate::env::{Env, Mode, NanPropagation, Rounding, Tininess};
 
     #[test]
     fn each_combinator_changes_one_field() {
@@ -234,6 +326,41 @@ mod tests {
             Env::X87.with_precision(NonZeroU32::new(24))
         );
         assert_eq!(<FullPrecision<X87>>::ENV, Env::X87.with_precision(None));
+        assert_eq!(
+            <Propagation<X86Sse, propagation::LargerSignificand>>::ENV,
+            Env::X86_SSE.with_nan(
+                Env::X86_SSE
+                    .nan
+                    .with_propagation(NanPropagation::LargerSignificand)
+            )
+        );
+        assert_eq!(
+            <DetectTininess<Ieee, tininess::BeforeRounding>>::ENV,
+            Env::IEEE.with_tininess(Tininess::BeforeRounding)
+        );
+    }
+
+    #[test]
+    fn each_propagation_type_names_its_rule() {
+        let rules = [
+            <Propagation<Ieee, propagation::SignalingFirst>>::ENV.nan,
+            <Propagation<Ieee, propagation::FirstOperand>>::ENV.nan,
+            <Propagation<Ieee, propagation::LargerSignificand>>::ENV.nan,
+            <Propagation<Ieee, propagation::DefaultNan>>::ENV.nan,
+        ];
+        let expected = [
+            NanPropagation::SignalingFirst,
+            NanPropagation::FirstOperand,
+            NanPropagation::LargerSignificand,
+            NanPropagation::DefaultNan,
+        ];
+        for (rule, propagation) in rules.into_iter().zip(expected) {
+            assert_eq!(rule, Env::IEEE.nan.with_propagation(propagation));
+        }
+        assert_eq!(
+            <DetectTininess<Ieee, tininess::AfterRounding>>::ENV,
+            Env::IEEE
+        );
     }
 
     #[test]
