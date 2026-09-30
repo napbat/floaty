@@ -27,19 +27,16 @@ mod glibc;
 mod operations;
 mod qd;
 mod steps;
+mod value;
 
-use core::cmp::Ordering;
 use core::fmt;
 use core::marker::PhantomData;
 
-use self::convert::BINARY;
 use self::steps::Steps;
 use crate::env::{Behavior, Env, Flags, Mode, Override, mode};
-use crate::float::{Decoded, F64, Float, FloatType};
+use crate::float::{F64, Float};
 use crate::format::Binary;
-use crate::limbs::Limbs;
 use crate::sealed::Sealed;
-use crate::unpacked::Unpacked;
 
 /// The high half and the low half of a value.
 type Pair = (F64, F64);
@@ -248,33 +245,32 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         }
     }
 
-    /// Runs the algorithm of an operation with one operand in `steps`.
-    fn run_one<B: Behavior>(
+    /// Runs the algorithm `algorithm` of an operation with one operand in
+    /// `steps`.
+    fn apply_one<B: Behavior>(
         self,
         mut steps: Steps<B>,
-        operation: [OneOperand<B>; 2],
+        algorithm: OneOperand<B>,
     ) -> (Self, Flags) {
-        let [gcc, qd] = operation;
-        let algorithm = match Alg::KIND {
-            AlgorithmKind::Gcc => gcc,
-            AlgorithmKind::Qd => qd,
-        };
         let (hi, lo) = algorithm(&mut steps, (self.hi, self.lo));
         (Self::new(hi, lo), steps.flags())
     }
 
-    /// Runs the algorithm of an operation with two operands in `steps`.
+    /// Runs the algorithm of `Alg` among the algorithms of an operation with
+    /// one operand in `steps`.
+    fn run_one<B: Behavior>(self, steps: Steps<B>, operation: [OneOperand<B>; 2]) -> (Self, Flags) {
+        self.apply_one(steps, of_algorithm::<Alg, _>(operation))
+    }
+
+    /// Runs the algorithm of `Alg` among the algorithms of an operation with
+    /// two operands in `steps`.
     fn run<B: Behavior>(
         self,
         other: Self,
         mut steps: Steps<B>,
         operation: [TwoOperands<B>; 2],
     ) -> (Self, Flags) {
-        let [gcc, qd] = operation;
-        let algorithm = match Alg::KIND {
-            AlgorithmKind::Gcc => gcc,
-            AlgorithmKind::Qd => qd,
-        };
+        let algorithm = of_algorithm::<Alg, _>(operation);
         let (hi, lo) = algorithm(&mut steps, (self.hi, self.lo), (other.hi, other.lo));
         (Self::new(hi, lo), steps.flags())
     }
@@ -317,133 +313,6 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
             Steps::new(behavior.apply::<M>()),
             [gcc::div, qd::div],
         )
-    }
-
-    /// Returns the value with both halves negated when the exact value has a
-    /// negative sign: a negative number, `-0`, a negative infinity, or a NaN
-    /// with a negative sign. The operation signals nothing.
-    #[must_use]
-    pub fn abs(self) -> Self {
-        let negative = match self.exact() {
-            Unpacked::Zero { negative, .. }
-            | Unpacked::Finite { negative, .. }
-            | Unpacked::Infinity { negative }
-            | Unpacked::Nan { negative, .. } => negative,
-            Unpacked::Unsupported => unreachable!("a binary64 half has no unsupported encoding"),
-        };
-        if negative { -self } else { self }
-    }
-
-    /// Returns the exact value `hi + lo`.
-    ///
-    /// A NaN or an infinite high half gives that value. With a finite high
-    /// half, a NaN or an infinite low half gives that value. Otherwise a
-    /// finite value has an odd significand, and a zero takes the sign of the
-    /// high half. 33 limbs hold every significand.
-    #[must_use]
-    pub fn decode(self) -> Decoded<33> {
-        match self.exact() {
-            Unpacked::Zero { negative, .. } => Decoded::Zero {
-                negative,
-                exponent: 0,
-            },
-            Unpacked::Finite {
-                negative,
-                significand,
-                ..
-            } => {
-                let (zeros, exponent) = lowest_bit(&significand);
-                Decoded::Finite {
-                    negative,
-                    exponent,
-                    significand: significand.shr(zeros),
-                }
-            }
-            Unpacked::Infinity { negative } => Decoded::Infinity { negative },
-            Unpacked::Nan {
-                negative,
-                signaling,
-                payload,
-            } => Decoded::Nan {
-                negative,
-                signaling,
-                payload,
-            },
-            Unpacked::Unsupported => unreachable!("a binary64 half has no unsupported encoding"),
-        }
-    }
-
-    /// Converts the exact value to another format with the default mode of
-    /// that format: once rounded to a [`Float`], or to a pair by the rule of
-    /// the type documentation.
-    #[must_use]
-    pub fn convert<T: FloatType>(self) -> T {
-        self.convert_with(T::Mode::default()).0
-    }
-
-    /// Converts the exact value to another format, with an override of the
-    /// destination behavior: once rounded to a [`Float`], or to a pair by the
-    /// rule of the type documentation. Returns the result and the flags. A
-    /// NaN keeps the high-order bits of its payload.
-    #[must_use]
-    pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (T, Flags) {
-        T::convert_from(self.exact(), BINARY, behavior.apply::<T::Mode>())
-    }
-
-    /// Compares the exact values as the IEEE 754 quiet predicates do. `None`
-    /// means unordered. A signaling NaN signals invalid.
-    #[must_use]
-    pub fn compare_quiet(self, other: Self) -> (Option<Ordering>, Flags) {
-        let (order, signaling) = self.compare(other);
-        let flags = if signaling {
-            Flags::INVALID
-        } else {
-            Flags::NONE
-        };
-        (order, flags)
-    }
-
-    /// Compares the exact values as the IEEE 754 signaling predicates do.
-    /// `None` means unordered. Every NaN signals invalid.
-    #[must_use]
-    pub fn compare_signaling(self, other: Self) -> (Option<Ordering>, Flags) {
-        let (order, _) = self.compare(other);
-        let flags = if order.is_none() {
-            Flags::INVALID
-        } else {
-            Flags::NONE
-        };
-        (order, flags)
-    }
-
-    /// Returns the order of the exact values, and `true` when a value is a
-    /// signaling NaN.
-    fn compare(self, other: Self) -> (Option<Ordering>, bool) {
-        let (first, second) = (self.exact(), other.exact());
-        if first.is_nan() || second.is_nan() {
-            return (None, first.is_signaling() || second.is_signaling());
-        }
-        let (first_sign, first_magnitude) = signed(&first);
-        let (second_sign, second_magnitude) = signed(&second);
-        let order = first_sign.cmp(&second_sign).then_with(|| match first_sign {
-            Ordering::Greater => first_magnitude.compare(&second_magnitude),
-            Ordering::Less => second_magnitude.compare(&first_magnitude),
-            Ordering::Equal => Ordering::Equal,
-        });
-        (Some(order), false)
-    }
-
-    /// Returns the exact value of the pair. A NaN or infinite high half makes
-    /// the value that half. With a finite high half, a NaN or infinite low half
-    /// makes the value that low half. Otherwise the value is the exact sum,
-    /// and a zero sum takes the sign of the high half.
-    fn exact(self) -> Unpacked<Magnitude> {
-        let (hi, lo) = (self.hi.decode::<1>(), self.lo.decode::<1>());
-        match (hi, lo) {
-            (Decoded::Nan { .. } | Decoded::Infinity { .. }, _) => special(hi),
-            (_, Decoded::Nan { .. } | Decoded::Infinity { .. }) => special(lo),
-            _ => sum(hi, lo),
-        }
     }
 }
 
@@ -566,10 +435,7 @@ impl<M: Mode> DoubleDouble<Gcc, M> {
     /// [`Qd`] has no `next_up`.
     #[must_use]
     pub fn next_up_with(self, behavior: impl Override) -> (Self, Flags) {
-        self.run_one(
-            Steps::new(behavior.apply::<M>()),
-            [glibc::next_up, glibc::next_up],
-        )
+        self.apply_one(Steps::new(behavior.apply::<M>()), glibc::next_up)
     }
 
     /// Returns the next pair down, with the default mode.
@@ -583,113 +449,17 @@ impl<M: Mode> DoubleDouble<Gcc, M> {
     /// pair.
     #[must_use]
     pub fn next_down_with(self, behavior: impl Override) -> (Self, Flags) {
-        self.run_one(
-            Steps::new(behavior.apply::<M>()),
-            [glibc::next_down, glibc::next_down],
-        )
+        self.apply_one(Steps::new(behavior.apply::<M>()), glibc::next_down)
     }
 }
 
-/// Returns the NaN or the infinity of a half as an exact value.
-fn special(half: Decoded<1>) -> Unpacked<Magnitude> {
-    match half {
-        Decoded::Nan {
-            negative,
-            signaling,
-            payload,
-        } => Unpacked::Nan {
-            negative,
-            signaling,
-            payload: payload.resize(),
-        },
-        Decoded::Infinity { negative } => Unpacked::Infinity { negative },
-        _ => unreachable!("the caller passes a NaN or an infinity"),
+/// Returns the algorithm of `Alg` among the algorithms `[gcc, qd]` of an
+/// operation.
+fn of_algorithm<Alg: Algorithm, T>([gcc, qd]: [T; 2]) -> T {
+    match Alg::KIND {
+        AlgorithmKind::Gcc => gcc,
+        AlgorithmKind::Qd => qd,
     }
-}
-
-/// Returns the sign and `|half| * 2^1074` of a zero or finite half.
-fn scaled(half: Decoded<1>) -> (bool, Magnitude) {
-    match half {
-        Decoded::Zero { negative, .. } => (negative, Magnitude::ZERO),
-        Decoded::Finite {
-            negative,
-            exponent,
-            significand,
-        } => {
-            let shift = u32::try_from(exponent - LOWEST)
-                .expect("a binary64 exponent is at or above the lowest weight");
-            (negative, significand.resize::<Magnitude>().shl(shift))
-        }
-        _ => unreachable!("the caller passes a zero or a finite half"),
-    }
-}
-
-/// Returns the exact sum of a zero or finite high half and a zero or finite
-/// low half. A zero sum takes the sign of the high half.
-fn sum(hi: Decoded<1>, lo: Decoded<1>) -> Unpacked<Magnitude> {
-    let ((hi_negative, hi_magnitude), (lo_negative, lo_magnitude)) = (scaled(hi), scaled(lo));
-    let (negative, magnitude) = if hi_negative == lo_negative {
-        (hi_negative, hi_magnitude.add(lo_magnitude))
-    } else {
-        match hi_magnitude.compare(&lo_magnitude) {
-            Ordering::Greater => (hi_negative, hi_magnitude.sub(lo_magnitude)),
-            Ordering::Less => (lo_negative, lo_magnitude.sub(hi_magnitude)),
-            Ordering::Equal => {
-                return Unpacked::Zero {
-                    negative: hi_negative,
-                    exponent: 0,
-                };
-            }
-        }
-    };
-    if magnitude.is_zero() {
-        return Unpacked::Zero {
-            negative: hi_negative,
-            exponent: 0,
-        };
-    }
-    Unpacked::Finite {
-        negative,
-        exponent: LOWEST,
-        significand: magnitude,
-    }
-}
-
-/// Returns the sign and the magnitude of a number that orders it: an infinity
-/// has a magnitude above every finite magnitude, and a zero has no sign.
-fn signed(value: &Unpacked<Magnitude>) -> (Ordering, Magnitude) {
-    let sign = |negative: bool| {
-        if negative {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        }
-    };
-    match *value {
-        Unpacked::Zero { .. } => (Ordering::Equal, Magnitude::ZERO),
-        Unpacked::Finite {
-            negative,
-            significand,
-            ..
-        } => (sign(negative), significand),
-        Unpacked::Infinity { negative } => (sign(negative), Magnitude::ones(Magnitude::BITS)),
-        Unpacked::Nan { .. } | Unpacked::Unsupported => {
-            unreachable!("the caller orders only numbers")
-        }
-    }
-}
-
-/// Returns the number of zero bits below the lowest set bit of a nonzero
-/// magnitude, and the weight of that bit.
-fn lowest_bit(magnitude: &Magnitude) -> (u32, i32) {
-    let (index, limb) = magnitude
-        .iter()
-        .enumerate()
-        .find(|(_, limb)| **limb != 0)
-        .expect("the magnitude is not zero");
-    let zeros = u32::try_from(index).expect("a limb index fits a u32") * 64 + limb.trailing_zeros();
-    let weight = LOWEST + i32::try_from(zeros).expect("a bit index of 33 limbs fits an i32");
-    (zeros, weight)
 }
 
 impl<Alg: Algorithm, M: Mode> core::ops::Neg for DoubleDouble<Alg, M> {
@@ -748,20 +518,6 @@ assign!(SubAssign, sub_assign, -);
 assign!(MulAssign, mul_assign, *);
 assign!(DivAssign, div_assign, /);
 assign!(RemAssign, rem_assign, %);
-
-impl<Alg: Algorithm, M: Mode> PartialEq for DoubleDouble<Alg, M> {
-    /// Compares the exact values as the quiet equality predicate does.
-    fn eq(&self, other: &Self) -> bool {
-        self.compare_quiet(*other).0 == Some(Ordering::Equal)
-    }
-}
-
-impl<Alg: Algorithm, M: Mode> PartialOrd for DoubleDouble<Alg, M> {
-    /// Orders the exact values as the quiet predicates do.
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.compare_quiet(*other).0
-    }
-}
 
 #[cfg(test)]
 mod tests;

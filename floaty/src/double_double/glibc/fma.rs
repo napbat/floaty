@@ -120,7 +120,7 @@ fn store<B: Behavior>(steps: &mut Steps<B>, value: F64) -> Scaled {
 fn multiply<B: Behavior>(steps: &mut Steps<B>, x: F64, y: F64) -> (Scaled, Scaled) {
     let (x, y) = (frexp(steps, x), frexp(steps, y));
     let hi = steps.mul(x.fraction, y.fraction);
-    let lo = steps.fused_sub(x.fraction, y.fraction, hi);
+    let lo = gcc::fmsub(steps, x.fraction, y.fraction, hi);
     let scale = x.exponent + y.exponent;
     let mut high = store(steps, hi);
     if !hi.is_zero() {

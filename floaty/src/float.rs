@@ -251,7 +251,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Returns `true` for a quiet or a signaling NaN.
     #[must_use]
     pub fn is_nan(self) -> bool {
-        matches!(self.classify(), Class::QuietNan | Class::SignalingNan)
+        self.classify().is_nan()
     }
 
     /// Returns `true` for a signaling NaN.
@@ -269,10 +269,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Returns `true` for a zero, a subnormal, or a normal value.
     #[must_use]
     pub fn is_finite(self) -> bool {
-        matches!(
-            self.classify(),
-            Class::Zero | Class::Subnormal | Class::Normal
-        )
+        self.classify().is_finite()
     }
 
     /// Returns `true` for a positive or a negative zero.
@@ -518,6 +515,18 @@ pub enum Class {
     /// unnormal, pseudo-NaN, or pseudo-infinity. Arithmetic treats it as an
     /// invalid operand.
     Unsupported,
+}
+
+impl Class {
+    /// Returns `true` for a quiet or a signaling NaN.
+    pub(crate) fn is_nan(self) -> bool {
+        matches!(self, Self::QuietNan | Self::SignalingNan)
+    }
+
+    /// Returns `true` for a zero, a subnormal, or a normal value.
+    pub(crate) fn is_finite(self) -> bool {
+        matches!(self, Self::Zero | Self::Subnormal | Self::Normal)
+    }
 }
 
 /// IEEE 754 binary16.

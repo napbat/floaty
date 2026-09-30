@@ -145,11 +145,9 @@ fn round_fixed(value: &Signed, env: &Env) -> (Pair, Flags) {
         saturate: false,
         ..*env
     };
-    let (high, _) = to_f64(value, nearest);
-    if high.is_infinite() {
+    let Some((high, rest)) = split(value, nearest) else {
         return overflow(negative, env);
-    }
-    let rest = sum(value, &negate(signed(high)));
+    };
     let (low, flags) = if rest.1.is_zero() {
         (zero(false), Flags::NONE)
     } else {
@@ -168,11 +166,9 @@ fn round_fixed(value: &Signed, env: &Env) -> (Pair, Flags) {
         // An exact zero takes the sign of the value.
         return ((zero(negative), zero(false)), flags);
     }
-    let (high, _) = to_f64(&total, nearest);
-    if high.is_infinite() {
+    let Some((high, rest)) = split(&total, nearest) else {
         return overflow(negative, env);
-    }
-    let rest = sum(&total, &negate(signed(high)));
+    };
     if rest.1.is_zero() {
         return ((high, zero(false)), flags);
     }
@@ -182,6 +178,16 @@ fn round_fixed(value: &Signed, env: &Env) -> (Pair, Flags) {
         "the rest of the canonical split is exact"
     );
     ((high, low), flags)
+}
+
+/// Splits a finite value into its high half, rounded to nearest even, and the
+/// exact rest. `None` means that the high half overflows.
+fn split(value: &Signed, nearest: Env) -> Option<(F64, Signed)> {
+    let (high, _) = to_f64(value, nearest);
+    if high.is_infinite() {
+        return None;
+    }
+    Some((high, sum(value, &negate(signed(high)))))
 }
 
 /// Rounds a signed [`Fixed`] to binary64.
@@ -276,6 +282,25 @@ fn infinity(negative: bool) -> F64 {
 /// finite value reads no payload.
 pub(super) const BINARY: Source = <Binary<11> as Standard<64>>::SOURCE;
 
+impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
+    /// Converts the exact value to another format with the default mode of
+    /// that format: once rounded to a [`Float`](crate::Float), or to a pair by the rule of
+    /// the type documentation.
+    #[must_use]
+    pub fn convert<T: FloatType>(self) -> T {
+        self.convert_with(T::Mode::default()).0
+    }
+
+    /// Converts the exact value to another format, with an override of the
+    /// destination behavior: once rounded to a [`Float`](crate::Float), or to a pair by the
+    /// rule of the type documentation. Returns the result and the flags. A
+    /// NaN keeps the high-order bits of its payload.
+    #[must_use]
+    pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (T, Flags) {
+        T::convert_from(self.exact(), BINARY, behavior.apply::<T::Mode>())
+    }
+}
+
 impl<Alg, M: Mode> Sealed for DoubleDouble<Alg, M> {}
 
 /// A double-double is a conversion destination, so
@@ -340,5 +365,60 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         };
         let ((hi, lo), flags) = round_value(value, BINARY, behavior.apply::<M>());
         (Self::new(hi, lo), flags)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::double_double::{DoubleDouble, Gcc, Qd};
+    use crate::env::{Env, Flags, Rounding};
+    use crate::float::F128;
+
+    fn bits<Alg: crate::double_double::Algorithm>(value: DoubleDouble<Alg>) -> (u64, u64) {
+        (value.hi().to_bits(), value.lo().to_bits())
+    }
+
+    #[test]
+    fn an_overflow_gives_an_infinity_or_the_largest_pair() {
+        // 2^1024 in binary128.
+        let huge = F128::from_bits(0x43FF_0000_0000_0000_0000_0000_0000_0000);
+        let (nearest, flags) = huge.convert_with::<DoubleDouble<Gcc>>(Env::IEEE);
+        assert_eq!(bits(nearest), (0x7FF0_0000_0000_0000, 0));
+        assert_eq!(flags, Flags::OVERFLOW | Flags::INEXACT | Flags::ROUNDED_UP);
+        let (toward_zero, flags) = huge.convert_with::<DoubleDouble<Gcc>>(Rounding::TowardZero);
+        // 2^1024 - 2^970 - 2^917, the largest canonical pair.
+        assert_eq!(
+            bits(toward_zero),
+            (0x7FEF_FFFF_FFFF_FFFF, 0x7C8F_FFFF_FFFF_FFFF)
+        );
+        assert_eq!(flags, Flags::OVERFLOW | Flags::INEXACT);
+    }
+
+    #[test]
+    fn a_low_half_that_rounds_to_a_tie_splits_again() {
+        // 1 + 2^-52 + 2^-53 - 2^-110: the high half rounds to 1 + 2^-52, and the
+        // rest rounds up to 2^-53. The sum is a tie, which the canonical split
+        // gives to the even high half 1 + 2^-51.
+        let value = F128::from_bits(0x3FFF_0000_0000_0000_17FF_FFFF_FFFF_FFFC);
+        let (pair, flags) = value.convert_with::<DoubleDouble<Qd>>(Env::IEEE);
+        assert_eq!(bits(pair), (0x3FF0_0000_0000_0002, 0xBCA0_0000_0000_0000));
+        assert_eq!(flags, Flags::INEXACT | Flags::ROUNDED_UP);
+        assert!(pair.is_canonical());
+    }
+
+    #[test]
+    fn an_exact_value_gives_its_canonical_pair_in_every_direction() {
+        // 2^53 + 3 is 2^53 + 4 - 1 in its canonical pair.
+        let value = (1_u64 << 53) + 3;
+        for rounding in [
+            Rounding::TiesToEven,
+            Rounding::TowardNegative,
+            Rounding::TowardPositive,
+            Rounding::ToOdd,
+        ] {
+            let (pair, flags) = DoubleDouble::<Gcc>::from_int_with(value, rounding);
+            assert_eq!(bits(pair), (0x4340_0000_0000_0002, 0xBFF0_0000_0000_0000));
+            assert_eq!(flags, Flags::NONE);
+        }
     }
 }

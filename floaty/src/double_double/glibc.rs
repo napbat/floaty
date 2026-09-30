@@ -74,6 +74,34 @@ fn absolute<B: Behavior>(steps: &mut Steps<B>, (hi, lo): Pair) -> Pair {
     }
 }
 
+/// `iscanonicall` of the IBM `long double` in glibc 2.43: `true` when a
+/// pair is canonical.
+pub fn is_canonical((hi, lo): Pair) -> bool {
+    // `sysdeps/ieee754/ldbl-128ibm/s_iscanonicall.c` of glibc 2.43, on the
+    // magnitudes of the halves.
+    let high = hi.to_bits() & !(1 << 63);
+    let low = lo.to_bits() & !(1 << 63);
+    if low == 0 {
+        return true;
+    }
+    let high_field = high >> 52;
+    if high_field == 0x7FF {
+        return high != 0x7FF0_0000_0000_0000;
+    }
+    // glibc compares the exponent fields: the high field must exceed the
+    // low field by more than 53, or by 53 when the low half is a power of
+    // two and the high half is even. A subnormal low half has the field
+    // of its leading bit, `leading - 51`, so the limit is `leading + 2`.
+    let (limit, low_power) = match low >> 52 {
+        0 => {
+            let leading = low.ilog2();
+            (u64::from(leading) + 2, low == 1 << leading)
+        }
+        field => (field + 53, low.trailing_zeros() >= 52),
+    };
+    high_field > limit || (high_field == limit && low_power && high & 1 == 0)
+}
+
 /// `sqrtl`: the wrapper `__sqrtl` compares `x` with 0 to set `errno`
 /// (0x1c), then calls `__ieee754_sqrtl` (0x2c).
 pub fn sqrt<B: Behavior>(steps: &mut Steps<B>, x: Pair) -> Pair {

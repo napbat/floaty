@@ -32,6 +32,18 @@ const TINY: u64 = 0x0360_0000_0000_0000;
 /// 2^106, the constant at `.toc+0x18`: the scale of a tiny dividend.
 const SCALE: u64 = 0x4690_0000_0000_0000;
 
+/// Returns `a * c - b`, rounded once, as the PowerPC `fmsub` instruction
+/// does: the instruction selects a NaN operand before it negates `b`, so a
+/// NaN `b` keeps its sign. A NaN `b` makes the result a NaN, so the step then
+/// selects from `b` itself.
+pub fn fmsub<B: Behavior>(steps: &mut Steps<B>, a: F64, c: F64, b: F64) -> F64 {
+    if b.is_nan() {
+        steps.fused_add(a, c, b)
+    } else {
+        steps.fused_add(a, c, -b)
+    }
+}
+
 /// Returns one binary64 result with a positive zero low half.
 fn single(value: F64) -> Pair {
     (value, F64::from_bits(0))
@@ -161,7 +173,7 @@ pub fn mul<B: Behavior>(steps: &mut Steps<B>, (a, b): Pair, (c, d): Pair) -> Pai
         return single(t);
     }
     let w = steps.mul(c, b); // 0x22c fmul f2,f3,f2
-    let tau = steps.fused_sub(a, c, t); // 0x230 fmsub f3,f1,f3,f0
+    let tau = fmsub(steps, a, c, t); // 0x230 fmsub f3,f1,f3,f0
     let cross = steps.fused_add(a, d, w); // 0x234 fmadd f4,f1,f4,f2
     let tau = steps.add(cross, tau); // 0x238 fadd f4,f4,f3
     let u = steps.add(t, tau); // 0x23c fadd f12,f0,f4
@@ -200,8 +212,8 @@ pub fn div<B: Behavior>(steps: &mut Steps<B>, (a, b): Pair, (c, d): Pair) -> Pai
         (a, b, c, d)
     };
     let s = steps.mul(c, t); // 0x2d4 fmul f12,f3,f0
-    let w = steps.fused_sub(d, t, b); // 0x2d8 fmsub f2,f4,f0,f2
-    let sigma = steps.fused_sub(c, t, s); // 0x2e0 fmsub f10,f3,f0,f12
+    let w = fmsub(steps, d, t, b); // 0x2d8 fmsub f2,f4,f0,f2
+    let sigma = fmsub(steps, c, t, s); // 0x2e0 fmsub f10,f3,f0,f12
     let v = steps.sub(a, s); // 0x2e4 fsub f1,f1,f12
     let v = steps.sub(v, sigma); // 0x2e8 fsub f1,f1,f10
     let v = steps.sub(v, w); // 0x2ec fsub f2,f1,f2
@@ -213,4 +225,45 @@ pub fn div<B: Behavior>(steps: &mut Steps<B>, (a, b): Pair, (c, d): Pair) -> Pai
     let low = steps.sub(t, u); // 0x304 fsub f0,f0,f12
     let low = steps.add(low, tau); // 0x30c fadd f0,f0,f3
     (u, low)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fmsub;
+    use crate::double_double::steps::Steps;
+    use crate::env::{Env, Flags, FusedNanOrder, NanPropagation, NanRule};
+    use crate::float::F64;
+
+    #[test]
+    fn a_fused_subtraction_keeps_the_sign_of_a_nan_addend() {
+        let env = Env::IEEE.with_nan(
+            NanRule::new(NanPropagation::FirstOperand)
+                .with_fused_order(FusedNanOrder::AddendSecond),
+        );
+        let mut steps = Steps::new(env);
+        let one = F64::from_bits(0x3FF0_0000_0000_0000);
+        let nan = F64::from_bits(0xFFF8_0000_0000_0001);
+        assert_eq!(fmsub(&mut steps, one, one, nan).to_bits(), nan.to_bits());
+        // A NaN first factor comes before the NaN addend, and the NaN addend
+        // comes before a NaN second factor, with its sign.
+        let factor = F64::from_bits(0x7FF8_0000_0000_0002);
+        assert_eq!(
+            fmsub(&mut steps, factor, one, nan).to_bits(),
+            factor.to_bits()
+        );
+        assert_eq!(fmsub(&mut steps, one, factor, nan).to_bits(), nan.to_bits());
+        assert_eq!(steps.flags(), Flags::NONE);
+        // A signaling addend signals invalid, and the quiet result keeps its
+        // sign.
+        let signaling = F64::from_bits(0xFFF0_0000_0000_0003);
+        assert_eq!(
+            fmsub(&mut steps, one, one, signaling).to_bits(),
+            0xFFF8_0000_0000_0003
+        );
+        assert_eq!(steps.flags(), Flags::INVALID);
+        let mut steps = Steps::new(env);
+        // A number addend is negated.
+        assert_eq!(fmsub(&mut steps, one, one, one).to_bits(), 0);
+        assert_eq!(steps.flags(), Flags::NONE);
+    }
 }
