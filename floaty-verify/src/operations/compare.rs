@@ -7,9 +7,8 @@ use floaty::{Decoded, Env, Flags, TotalOrder};
 use rug::Integer;
 use rug::integer::Order;
 
-use super::{Outcome, Read, Sample, default_nan, number, propagate, read};
-use crate::arithmetic::Operand;
-use crate::mpfr::Format;
+use super::{Outcome, Sample, default_nan, number, propagate};
+use crate::mpfr::{Format, Operand, Read};
 
 /// Returns the expected order and flags of `compare_quiet_with`.
 ///
@@ -24,7 +23,7 @@ pub fn compare_quiet<const N: usize>(
     env: &Env,
 ) -> (Option<Ordering>, Flags) {
     let mut flags = Flags::NONE;
-    let operands = [read(first, env, &mut flags), read(second, env, &mut flags)];
+    let operands = [first.read(env, &mut flags), second.read(env, &mut flags)];
     if operands
         .iter()
         .any(|operand| matches!(operand, Read::Unsupported) || operand.is_signaling())
@@ -116,8 +115,8 @@ pub fn total_order<const N: usize>(
         _ => {
             let mut flags = Flags::NONE;
             let operands = [
-                read(&first.operand, &Env::IEEE, &mut flags),
-                read(&second.operand, &Env::IEEE, &mut flags),
+                first.operand.read(&Env::IEEE, &mut flags),
+                second.operand.read(&Env::IEEE, &mut flags),
             ];
             let [Read::Number(a), Read::Number(b)] = &operands else {
                 unreachable!("the rank holds numbers");
@@ -209,7 +208,7 @@ pub fn min_max<const N: usize>(
     env: &Env,
 ) -> (Outcome, Flags) {
     let mut flags = Flags::NONE;
-    let operands = [read(first, env, &mut flags), read(second, env, &mut flags)];
+    let operands = [first.read(env, &mut flags), second.read(env, &mut flags)];
     if operands
         .iter()
         .any(|operand| matches!(operand, Read::Unsupported))

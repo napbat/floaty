@@ -6,9 +6,8 @@ use floaty::{Env, Flags, Int, Rounding, ToInt, UInt};
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
-use super::{Outcome, Read, number, read, special_operands, zero};
-use crate::arithmetic::Operand;
-use crate::mpfr::{self, Format, Input};
+use super::{Outcome, number, special_operands};
+use crate::mpfr::{self, Format, Input, Operand, Read, signed_zero};
 
 /// Rounds a nonzero finite value to an integral value in a rounding
 /// direction. A zero result has the sign of the value, as IEEE 754-2019
@@ -55,7 +54,7 @@ fn integral(value: &BigFloat, rounding: Rounding) -> BigFloat {
         _ => panic!("the oracle knows every rounding direction"),
     };
     if result.is_zero() {
-        zero(value.is_sign_negative())
+        signed_zero(value.is_sign_negative())
     } else {
         result
     }
@@ -92,7 +91,7 @@ pub fn round_to_integral<const N: usize>(
     env: &Env,
 ) -> (Outcome, Flags) {
     let mut flags = Flags::NONE;
-    let operands = [read(operand, env, &mut flags)];
+    let operands = [operand.read(env, &mut flags)];
     if let Some((nan, special)) = special_operands(&operands, format, env) {
         return (nan, flags | special);
     }
@@ -154,9 +153,9 @@ pub fn to_int<I: IntegerValue, const N: usize>(
     env: &Env,
 ) -> (ToInt<Integer>, Flags) {
     let mut flags = Flags::NONE;
-    let value = match read(operand, env, &mut flags) {
+    let value = match operand.read(env, &mut flags) {
         Read::Number(value) => value,
-        Read::Nan { .. } | Read::Unsupported => return (ToInt::Nan, flags | Flags::INVALID),
+        Read::Nan(_) | Read::Unsupported => return (ToInt::Nan, flags | Flags::INVALID),
     };
     let out_of_range = ToInt::OutOfRange {
         negative: value.is_sign_negative(),

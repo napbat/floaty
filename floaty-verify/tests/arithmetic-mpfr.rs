@@ -21,8 +21,7 @@ use floaty::{
 };
 use floaty_verify::arithmetic::{self, Operation};
 use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs};
-use floaty_verify::mpfr::{DIRECTIONS, Format, Specials, Value};
-use floaty_verify::operations::operand;
+use floaty_verify::mpfr::{DIRECTIONS, Format, Operand, Specials, Value};
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
 use rug::integer::Order;
@@ -101,7 +100,7 @@ macro_rules! compare {
             _ => [0; 8],
         };
         let ours = (Value::from_decoded(decoded), payload, flags);
-        let operands = [$(operand($operand)),+];
+        let operands = [$(Operand::of($operand)),+];
         let expected = arithmetic::compute($operation, &operands, &$format, &$env);
         assert_eq!(
             ours,

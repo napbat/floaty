@@ -15,13 +15,12 @@
 use core::cmp::Ordering;
 
 use floaty::env::{FusedNanOrder, InvalidProduct};
-use floaty::{Decoded, Env, Flags, Rounding};
+use floaty::{Env, Flags, Rounding};
 use rug::float::Round;
-use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
 use crate::encodings::to_limbs;
-use crate::mpfr::{self, Format, Input, Nan, Specials, Value, select_nan};
+use crate::mpfr::{self, Format, Input, Nan, Operand, Read, Specials, Value, select_nan};
 
 /// An arithmetic operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,15 +37,6 @@ pub enum Operation {
     Sqrt,
     /// `a * b + c`, rounded once.
     MulAdd,
-}
-
-/// An operand: its decoded value, and whether its encoding is subnormal.
-#[derive(Clone, Copy, Debug)]
-pub struct Operand<const N: usize> {
-    /// The decoded value.
-    pub decoded: Decoded<N>,
-    /// `true` when the encoding is subnormal.
-    pub subnormal: bool,
 }
 
 /// The expected result of an operation.
@@ -69,6 +59,17 @@ enum Number {
 }
 
 impl Number {
+    /// Returns an MPFR number as a zero, a finite value, or an infinity.
+    fn of(value: &BigFloat) -> Self {
+        if value.is_zero() {
+            Self::Zero(value.is_sign_negative())
+        } else if value.is_infinite() {
+            Self::Infinity(value.is_sign_negative())
+        } else {
+            Self::Finite(value.clone())
+        }
+    }
+
     fn negative(&self) -> bool {
         match self {
             Self::Zero(negative) | Self::Infinity(negative) => *negative,
@@ -92,48 +93,28 @@ pub fn compute<const N: usize>(
     env: &Env,
 ) -> Expected<N> {
     let mut flags = Flags::NONE;
-    let mut numbers = Vec::new();
-    let mut signaling = false;
-    let mut nan = false;
-    for operand in operands {
-        if operand.subnormal {
-            flags |= Flags::DENORMAL_INPUT;
-        }
-        match operand.decoded {
-            Decoded::Nan {
-                signaling: sign, ..
-            } => {
-                nan = true;
-                signaling |= sign;
-                numbers.push(Number::Zero(false));
-            }
-            Decoded::Zero { negative, .. } => numbers.push(Number::Zero(negative)),
-            Decoded::Finite { negative, .. } if operand.subnormal && env.denormals_are_zero => {
-                numbers.push(Number::Zero(negative));
-            }
-            Decoded::Finite {
-                negative,
-                exponent,
-                significand,
-            } => numbers.push(Number::Finite(mpfr::exact(
-                negative,
-                exponent,
-                &significand,
-            ))),
-            Decoded::Infinity { negative } => numbers.push(Number::Infinity(negative)),
-            Decoded::Unsupported => panic!("the oracle has no rule for an unsupported operand"),
-        }
-    }
-    if signaling {
+    let reads: Vec<Read> = operands
+        .iter()
+        .map(|operand| operand.read(env, &mut flags))
+        .collect();
+    let numbers: Vec<Number> = reads
+        .iter()
+        .map(|read| match read {
+            Read::Number(value) => Number::of(value),
+            Read::Nan(_) => Number::Zero(false),
+            Read::Unsupported => panic!("the oracle has no rule for an unsupported operand"),
+        })
+        .collect();
+    if reads.iter().any(Read::is_signaling) {
         flags |= Flags::INVALID;
     }
-    if nan {
+    if reads.iter().any(|read| matches!(read, Read::Nan(_))) {
         // The invalid product 0 * inf with a NaN addend signals invalid
         // unless the rule is `YieldsToNan`. A NaN factor makes the product a
         // NaN, not 0 * inf.
-        let product_nan = operands[..2.min(operands.len())]
+        let product_nan = reads[..2.min(reads.len())]
             .iter()
-            .any(|operand| matches!(operand.decoded, Decoded::Nan { .. }));
+            .any(|read| matches!(read, Read::Nan(_)));
         if operation == Operation::MulAdd
             && env.nan.invalid_product != InvalidProduct::YieldsToNan
             && !product_nan
@@ -141,7 +122,7 @@ pub fn compute<const N: usize>(
         {
             flags |= Flags::INVALID;
         }
-        let nan = propagate(operation, operands, &numbers, env);
+        let nan = propagate(operation, &reads, &numbers, env);
         return Expected {
             value: format.nan(nan.negative),
             payload: to_limbs(&nan.payload),
@@ -165,18 +146,10 @@ pub fn compute<const N: usize>(
 
 /// Returns an operand as a NaN that the propagation rule can select, or
 /// `None` for a number.
-fn candidate<const N: usize>(operand: &Operand<N>) -> Option<Nan> {
-    match operand.decoded {
-        Decoded::Nan {
-            negative,
-            signaling,
-            payload,
-        } => Some(Nan {
-            negative,
-            signaling,
-            payload: Integer::from_digits(&payload, Order::Lsf),
-        }),
-        _ => None,
+fn candidate(read: &Read) -> Option<Nan> {
+    match read {
+        Read::Nan(nan) => Some(nan.clone()),
+        Read::Number(_) | Read::Unsupported => None,
     }
 }
 
@@ -190,12 +163,7 @@ fn candidate<const N: usize>(operand: &Operand<N>) -> Option<Nan> {
 /// factors and makes that NaN quiet. It then selects between that NaN and the
 /// addend. `AddendFirst` offers the addend and the factors. `AddendSecond`
 /// offers the first factor, the addend, and the second factor.
-fn propagate<const N: usize>(
-    operation: Operation,
-    operands: &[Operand<N>],
-    numbers: &[Number],
-    env: &Env,
-) -> Nan {
+fn propagate(operation: Operation, operands: &[Read], numbers: &[Number], env: &Env) -> Nan {
     let offer = |indices: &[usize]| -> Vec<Nan> {
         indices
             .iter()

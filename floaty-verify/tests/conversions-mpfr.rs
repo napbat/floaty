@@ -14,12 +14,12 @@ use core::num::NonZeroU32;
 
 use floaty::env::{NanPropagation, NanRule, Tininess};
 use floaty::{
-    BF16, Class, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz,
-    F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F128, F160, F192, F224, F256, F288,
-    F320, F352, F384, F416, F448, F480, F512, Rounding, TF32,
+    BF16, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn,
+    F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F128, F160, F192, F224, F256, F288, F320, F352,
+    F384, F416, F448, F480, F512, Rounding, TF32,
 };
 use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs, to_u128};
-use floaty_verify::mpfr::{self, Format, Specials, Value};
+use floaty_verify::mpfr::{self, Format, Operand, Specials, Value};
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
 use rug::integer::Order;
@@ -86,15 +86,15 @@ macro_rules! check {
         for env in behaviors() {
             for &bits in &$values {
                 let source = <$source>::from_bits(bits);
-                let decoded = source.decode::<8>();
-                let subnormal = source.classify() == Class::Subnormal;
+                let operand = Operand::<8>::of(source);
+                let decoded = operand.decoded;
                 $(
                     let format = Format::of::<$destination>($specials);
                     let (ours, flags): ($destination, _) = source.convert_with(env);
                     assert!(ours.is_canonical(), "{ours:?} is canonical");
                     let result = ours.decode::<8>();
                     let ours = (Value::from_decoded(result), flags);
-                    let expected = mpfr::convert(&decoded, subnormal, &format, &env);
+                    let expected = mpfr::convert(&operand, &format, &env);
                     let context = format!(
                         "{} {bits:x?} to {} {env:?}",
                         stringify!($source),

@@ -18,7 +18,7 @@ use floaty::{
 use floaty_verify::double_double::{
     BINARY64, Exact, Rounded, behaviors, exact, pair, rational, round_pair,
 };
-use floaty_verify::mpfr::{self, Value};
+use floaty_verify::mpfr::{self, Operand, Value};
 use floaty_verify::random::SplitMix64;
 use rug::ops::Pow;
 use rug::{Integer, Rational};
@@ -72,12 +72,15 @@ fn expected<const N: usize>(decoded: &Decoded<N>, radix: u32, env: &Env) -> Roun
             signaling,
             ..
         } => {
-            let nan = Decoded::<1>::Nan {
-                negative,
-                signaling,
-                payload: [0],
+            let nan = Operand {
+                decoded: Decoded::<1>::Nan {
+                    negative,
+                    signaling,
+                    payload: [0],
+                },
+                subnormal: false,
             };
-            let (hi, flags) = mpfr::convert(&nan, false, &BINARY64, env);
+            let (hi, flags) = mpfr::convert(&nan, &BINARY64, env);
             Rounded {
                 hi,
                 lo: no_rest,

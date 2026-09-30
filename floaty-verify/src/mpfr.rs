@@ -9,11 +9,13 @@
 //!
 //! The module also holds the special-value rules that every oracle of the
 //! harness shares: the zero, the NaN, and the largest value of a [`Format`],
-//! and the NaN that a NaN rule selects, [`select_nan`].
+//! and the NaN that a NaN rule selects, [`select_nan`]. [`Operand::read`]
+//! gives the one rule by which every oracle reads an operand.
 
 use core::cmp::Ordering;
 
 pub mod decimal;
+mod operand;
 
 use floaty::env::{Mode, NanPropagation, Tininess};
 use floaty::format::Standard;
@@ -21,6 +23,9 @@ use floaty::{Decoded, Env, Flags, Float, Rounding};
 use rug::float::Round;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
+
+pub(crate) use operand::signed_zero;
+pub use operand::{Operand, Read};
 
 pub use crate::formats::Specials;
 
@@ -437,79 +442,59 @@ fn is_odd(value: &BigFloat, precision: u32, emin: Option<i32>) -> bool {
     }
 }
 
-/// Returns the expected result and flags of converting a decoded value to
-/// `format`, by floaty's conversion rules. MPFR rounds the finite
-/// values. `subnormal` says that the source encoding is subnormal.
+/// Returns the expected result and flags of converting an operand to
+/// `format`, by floaty's conversion rules. MPFR rounds the finite values.
 ///
-/// The caller decodes the source with floaty's own `decode` and `classify`,
-/// which `tests/classification.rs` checks. The special-value rules are
-/// floaty's own rules, not an independent reference.
+/// The special-value rules are floaty's own rules, not an independent
+/// reference.
 ///
 /// # Panics
 ///
 /// Panics for an unsupported source encoding, which the caller checks
 /// against the processor instead.
 #[must_use]
-pub fn convert<const N: usize>(
-    source: &Decoded<N>,
-    subnormal: bool,
-    format: &Format,
-    env: &Env,
-) -> (Value, Flags) {
-    let input = if subnormal {
-        Flags::DENORMAL_INPUT
-    } else {
-        Flags::NONE
-    };
-    match *source {
-        Decoded::Zero { negative, .. } => (format.zero(negative), Flags::NONE),
-        Decoded::Finite { negative, .. } if subnormal && env.denormals_are_zero => {
-            (format.zero(negative), input)
+pub fn convert<const N: usize>(source: &Operand<N>, format: &Format, env: &Env) -> (Value, Flags) {
+    let mut flags = Flags::NONE;
+    match source.read(env, &mut flags) {
+        Read::Number(value) if value.is_zero() => (format.zero(value.is_sign_negative()), flags),
+        Read::Number(value) if value.is_infinite() => {
+            let negative = value.is_sign_negative();
+            if format.specials == Specials::Ieee {
+                return (Value::Infinity { negative }, flags);
+            }
+            if env.saturate || format.specials == Specials::Finite {
+                let mut value = format.largest(format.precision_in(env));
+                if negative {
+                    value = -value;
+                }
+                return (Value::Finite(value), flags | Flags::INVALID);
+            }
+            (format.nan(negative), flags | Flags::INVALID)
         }
-        Decoded::Finite {
-            negative,
-            exponent,
-            significand,
-        } => {
+        Read::Number(value) => {
+            let (significand, exponent) = value.to_integer_exp().expect("the value is finite");
             let exact = Input {
-                negative,
+                negative: value.is_sign_negative(),
                 exponent,
-                significand: Integer::from_digits(&significand, Order::Lsf),
+                significand: significand.abs(),
                 sticky: false,
             };
-            let (value, flags) = round(&exact, format, env);
-            (value, flags | input)
+            let (value, round_flags) = round(&exact, format, env);
+            (value, flags | round_flags)
         }
-        Decoded::Infinity { negative } if format.specials == Specials::Ieee => {
-            (Value::Infinity { negative }, Flags::NONE)
-        }
-        Decoded::Infinity { negative } if env.saturate || format.specials == Specials::Finite => {
-            let mut value = format.largest(format.precision_in(env));
-            if negative {
-                value = -value;
-            }
-            (Value::Finite(value), Flags::INVALID)
-        }
-        Decoded::Infinity { negative } => (format.nan(negative), Flags::INVALID),
-        Decoded::Nan {
-            negative,
-            signaling,
-            ..
-        } => {
+        Read::Nan(nan) => {
             // A format without a NaN cannot hold the NaN.
-            let flags = if signaling || format.specials == Specials::Finite {
-                Flags::INVALID
-            } else {
-                Flags::NONE
-            };
+            if nan.signaling || format.specials == Specials::Finite {
+                flags |= Flags::INVALID;
+            }
             // `DefaultNan` gives the default NaN. The other rules keep the sign.
             let negative = if env.nan.propagation == NanPropagation::DefaultNan {
                 env.nan.default_negative
             } else {
-                negative
+                nan.negative
             };
             (format.nan(negative), flags)
         }
-        Decoded::Unsupported => panic!("the oracle has no rule for an unsupported encoding"),
+        Read::Unsupported => panic!("the oracle has no rule for an unsupported encoding"),
     }
 }

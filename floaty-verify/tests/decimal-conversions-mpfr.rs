@@ -30,7 +30,7 @@ use core::num::NonZeroU32;
 
 use floaty::env::Tininess;
 use floaty::{
-    BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F4E2M1Fn,
+    BF16, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F4E2M1Fn,
     F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz,
     F16, F256, F512, Flags, Rounding, TF32,
 };
@@ -38,7 +38,7 @@ use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs, to_u128};
 use floaty_verify::mpfr::decimal::{
     DecimalFormat, DecimalValue, align, decimal_payload, to_decimal,
 };
-use floaty_verify::mpfr::{self, Format, Input, Specials, Value};
+use floaty_verify::mpfr::{self, Format, Input, Operand, Read, Specials, Value};
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
 use rug::integer::Order;
@@ -62,82 +62,60 @@ fn binary_payload(source: &Decoded<2>, trailing: u32, format: &Format) -> Intege
     }
 }
 
-/// Returns the expected result of converting a decoded binary value to a
-/// decimal format, by floaty's conversion rules. A NaN payload of
-/// the source is a field of `payload_bits` bits.
+/// Returns the expected result of converting a binary operand to a decimal
+/// format, by floaty's conversion rules. A NaN payload of the source is a
+/// field of `payload_bits` bits.
 fn binary_to_decimal<const N: usize>(
-    source: &Decoded<N>,
-    subnormal: bool,
+    source: &Operand<N>,
     payload_bits: u32,
     format: DecimalFormat,
     env: &Env,
 ) -> (DecimalValue, Flags) {
-    let input = if subnormal {
-        Flags::DENORMAL_INPUT
-    } else {
-        Flags::NONE
-    };
-    match *source {
-        Decoded::Zero { negative, .. } => (
+    let mut flags = Flags::NONE;
+    match source.read(env, &mut flags) {
+        Read::Number(value) if value.is_zero() => (
             DecimalValue::Zero {
-                negative,
+                negative: value.is_sign_negative(),
                 exponent: 0,
             },
-            Flags::NONE,
+            flags,
         ),
-        Decoded::Finite { negative, .. } if subnormal && env.denormals_are_zero => (
-            DecimalValue::Zero {
-                negative,
-                exponent: 0,
+        Read::Number(value) if value.is_infinite() => (
+            DecimalValue::Infinity {
+                negative: value.is_sign_negative(),
             },
-            input,
+            flags,
         ),
-        Decoded::Finite {
-            negative,
-            exponent,
-            significand,
-        } => {
-            let exact = mpfr::exact(negative, exponent, &significand);
-            let (value, flags) = to_decimal(&exact, format, env);
-            (value, flags | input)
+        Read::Number(exact) => {
+            let (value, round_flags) = to_decimal(&exact, format, env);
+            (value, flags | round_flags)
         }
-        Decoded::Infinity { negative } => (DecimalValue::Infinity { negative }, Flags::NONE),
-        Decoded::Nan {
-            negative,
-            signaling,
-            payload,
-        } => {
-            let flags = if signaling {
-                Flags::INVALID
-            } else {
-                Flags::NONE
-            };
-            let payload = Integer::from_digits(&payload, Order::Lsf);
-            let payload = decimal_payload(payload, payload_bits, format);
+        Read::Nan(nan) => {
+            if nan.signaling {
+                flags |= Flags::INVALID;
+            }
+            let payload = decimal_payload(nan.payload, payload_bits, format);
+            let negative = nan.negative;
             (DecimalValue::Nan { negative, payload }, flags)
         }
-        Decoded::Unsupported => panic!("the sources have no unsupported encoding"),
+        Read::Unsupported => panic!("the sources have no unsupported encoding"),
     }
 }
 
-/// Returns the expected result of converting a decoded decimal value to a
-/// binary format.
-fn decimal_to_binary(
-    source: &Decoded<2>,
-    subnormal: bool,
-    format: &Format,
-    env: &Env,
-) -> (Value, Flags) {
+/// Returns the expected result of converting a decimal operand to a binary
+/// format.
+fn decimal_to_binary(source: &Operand<2>, format: &Format, env: &Env) -> (Value, Flags) {
     let Decoded::Finite {
         negative,
         exponent,
         significand,
-    } = *source
+    } = source.decoded
     else {
-        return mpfr::convert(source, subnormal, format, env);
+        return mpfr::convert(source, format, env);
     };
+    let subnormal = source.subnormal;
     if subnormal && env.denormals_are_zero {
-        return mpfr::convert(source, subnormal, format, env);
+        return mpfr::convert(source, format, env);
     }
     let coefficient = Integer::from_digits(&significand, Order::Lsf);
     let input = if exponent >= 0 {
@@ -231,15 +209,13 @@ macro_rules! check_to_decimal {
         for env in decimal_behaviors() {
             for &bits in &$values {
                 let source = <$source>::from_bits(bits);
-                let decoded = source.decode::<8>();
-                let subnormal = source.classify() == Class::Subnormal;
+                let operand = Operand::<8>::of(source);
                 $(
                     let format = DecimalFormat::of::<$destination>();
                     let (ours, flags): ($destination, _) = source.convert_with(env);
                     assert!(ours.is_canonical(), "{ours:?} is canonical");
                     let ours = (DecimalValue::from_decoded(ours.decode::<2>()), flags);
-                    let expected =
-                        binary_to_decimal(&decoded, subnormal, payload_bits, format, &env);
+                    let expected = binary_to_decimal(&operand, payload_bits, format, &env);
                     let context = format!(
                         "{} {bits:x?} to {} {env:?}",
                         stringify!($source),
@@ -261,15 +237,14 @@ macro_rules! check_to_binary {
         for env in binary_behaviors() {
             for source in &$values {
                 let source: $source = *source;
-                let decoded = source.decode::<2>();
-                let subnormal = source.classify() == Class::Subnormal;
+                let operand = Operand::<2>::of(source);
                 $(
                     let format = Format::of::<$destination>($specials);
                     let (ours, flags): ($destination, _) = source.convert_with(env);
                     assert!(ours.is_canonical(), "{ours:?} is canonical");
                     let result = ours.decode::<8>();
                     let ours = (Value::from_decoded(result), flags);
-                    let expected = decimal_to_binary(&decoded, subnormal, &format, &env);
+                    let expected = decimal_to_binary(&operand, &format, &env);
                     let context = format!(
                         "{} {:x?} to {} {env:?}",
                         stringify!($source),
@@ -281,7 +256,7 @@ macro_rules! check_to_binary {
                         assert!(!signaling, "{context}: a conversion quiets a NaN");
                         assert_eq!(
                             Integer::from_digits(&payload, Order::Lsf),
-                            binary_payload(&decoded, trailing, &format),
+                            binary_payload(&operand.decoded, trailing, &format),
                             "{context}: the NaN payload"
                         );
                     }

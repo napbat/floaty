@@ -8,21 +8,22 @@
 //! IEEE 754-2019 and the documented rules of floaty give the special values,
 //! the flags, and the NaN that each rule selects.
 //!
-//! The oracle reads its operands with floaty's own `decode` and `classify`,
-//! which `tests/classification.rs` checks, as [`crate::arithmetic`] does.
+//! The oracle reads its operands by [`Operand::read`], as
+//! [`crate::arithmetic`] does.
 
 use core::cmp::Ordering;
 use core::num::NonZeroU32;
 
 use floaty::env::{Mode, NanPropagation, NanRule, Tininess};
 use floaty::format::Standard;
-use floaty::{Class, Decoded, Env, Flags, Float, Rounding};
-use rug::float::{Round, Special};
+use floaty::{Decoded, Env, Flags, Float, Rounding};
+use rug::float::Round;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
-use crate::arithmetic::Operand;
-use crate::mpfr::{self, Format, Input, Nan, Specials, Value, exact, select_nan};
+use crate::mpfr::{
+    self, Format, Input, Nan, Operand, Read, Specials, Value, exact, select_nan, signed_zero,
+};
 
 pub mod check;
 pub mod compare;
@@ -145,15 +146,6 @@ pub fn outcome<S: Standard<W>, const W: usize, M: Mode>(value: Float<S, W, M>) -
     Outcome::from_decoded(value.decode::<8>())
 }
 
-/// Returns a floaty value as an operand of the oracle.
-#[must_use]
-pub fn operand<S: Standard<W>, const W: usize, M: Mode>(value: Float<S, W, M>) -> Operand<8> {
-    Operand {
-        decoded: value.decode::<8>(),
-        subnormal: value.classify() == Class::Subnormal,
-    }
-}
-
 /// An encoding with its decoded operand, for the operations that read the
 /// bits: the total order and the sign operations.
 #[derive(Clone, Debug)]
@@ -183,84 +175,9 @@ impl Sample<8> {
             bits,
             width: u32::try_from(W).expect("a width fits a u32"),
             canonical: value.is_canonical(),
-            operand: operand(value),
+            operand: Operand::of(value),
         }
     }
-}
-
-/// An operand as an operation reads it, after denormals-are-zero.
-#[derive(Clone, Debug)]
-enum Read {
-    /// A zero, a finite value, or an infinity, with its sign.
-    Number(BigFloat),
-    /// A NaN.
-    Nan {
-        negative: bool,
-        signaling: bool,
-        payload: Integer,
-    },
-    /// An unsupported x87 encoding.
-    Unsupported,
-}
-
-impl Read {
-    fn is_signaling(&self) -> bool {
-        matches!(
-            self,
-            Self::Nan {
-                signaling: true,
-                ..
-            }
-        )
-    }
-}
-
-/// Returns a zero or an infinity with a sign, as an MPFR value.
-fn special(value: Special) -> BigFloat {
-    BigFloat::with_val(2, value)
-}
-
-/// Reads an operand. A subnormal operand reports `DENORMAL_INPUT`, and reads
-/// as a zero with its sign when the behavior has denormals-are-zero set.
-fn read<const N: usize>(operand: &Operand<N>, env: &Env, flags: &mut Flags) -> Read {
-    if operand.subnormal {
-        *flags |= Flags::DENORMAL_INPUT;
-    }
-    match operand.decoded {
-        Decoded::Zero { negative, .. } => Read::Number(zero(negative)),
-        Decoded::Finite { negative, .. } if operand.subnormal && env.denormals_are_zero => {
-            Read::Number(zero(negative))
-        }
-        Decoded::Finite {
-            negative,
-            exponent,
-            significand,
-        } => Read::Number(exact(negative, exponent, &significand)),
-        Decoded::Infinity { negative } => Read::Number(special(if negative {
-            Special::NegInfinity
-        } else {
-            Special::Infinity
-        })),
-        Decoded::Nan {
-            negative,
-            signaling,
-            payload,
-        } => Read::Nan {
-            negative,
-            signaling,
-            payload: Integer::from_digits(&payload, Order::Lsf),
-        },
-        Decoded::Unsupported => Read::Unsupported,
-    }
-}
-
-/// Returns a zero with a sign.
-fn zero(negative: bool) -> BigFloat {
-    special(if negative {
-        Special::NegZero
-    } else {
-        Special::Zero
-    })
 }
 
 /// Returns the outcome of a number: a zero, a finite value, or an infinity.
@@ -290,16 +207,8 @@ fn propagate(operands: &[Read], format: &Format, env: &Env) -> (Outcome, Flags) 
     let nans: Vec<Nan> = operands
         .iter()
         .filter_map(|operand| match operand {
-            Read::Nan {
-                negative,
-                signaling,
-                payload,
-            } => Some(Nan {
-                negative: *negative,
-                signaling: *signaling,
-                payload: payload.clone(),
-            }),
-            _ => None,
+            Read::Nan(nan) => Some(nan.clone()),
+            Read::Number(_) | Read::Unsupported => None,
         })
         .collect();
     let flags = if nans.iter().any(|nan| nan.signaling) {
@@ -331,7 +240,7 @@ fn special_operands(operands: &[Read], format: &Format, env: &Env) -> Option<(Ou
     }
     if operands
         .iter()
-        .any(|operand| matches!(operand, Read::Nan { .. }))
+        .any(|operand| matches!(operand, Read::Nan(_)))
     {
         return Some(propagate(operands, format, env));
     }
@@ -404,7 +313,7 @@ fn exact_remainder<const N: usize>(
     compute: impl Fn(&BigFloat, &BigFloat) -> (BigFloat, Ordering),
 ) -> (Outcome, Flags) {
     let mut flags = Flags::NONE;
-    let operands = [read(first, env, &mut flags), read(second, env, &mut flags)];
+    let operands = [first.read(env, &mut flags), second.read(env, &mut flags)];
     if let Some((nan, special)) = special_operands(&operands, format, env) {
         return (nan, flags | special);
     }
@@ -420,7 +329,7 @@ fn exact_remainder<const N: usize>(
     let (result, ordering) = compute(x, y);
     assert_eq!(ordering, Ordering::Equal, "the remainder is exact");
     let result = if result.is_zero() {
-        zero(x.is_sign_negative())
+        signed_zero(x.is_sign_negative())
     } else {
         result
     };
@@ -452,7 +361,7 @@ pub fn scale_b<const N: usize>(
     env: &Env,
 ) -> (Outcome, Flags) {
     let mut flags = Flags::NONE;
-    let operands = [read(operand, env, &mut flags)];
+    let operands = [operand.read(env, &mut flags)];
     if let Some((nan, special)) = special_operands(&operands, format, env) {
         return (nan, flags | special);
     }
@@ -507,7 +416,7 @@ pub fn next<const N: usize>(
     env: &Env,
 ) -> (Outcome, Flags) {
     let mut flags = Flags::NONE;
-    let operands = [read(operand, env, &mut flags)];
+    let operands = [operand.read(env, &mut flags)];
     if let Some((nan, special)) = special_operands(&operands, format, env) {
         return (nan, flags | special);
     }

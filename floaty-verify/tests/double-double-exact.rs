@@ -18,7 +18,7 @@ use floaty::{
 };
 use floaty_verify::double_double::{Exact, behaviors, exact, pair};
 use floaty_verify::mpfr::decimal::{DecimalFormat, DecimalValue, decimal_payload, to_decimal};
-use floaty_verify::mpfr::{self, Format, Input, Specials, Value};
+use floaty_verify::mpfr::{self, Format, Input, Operand, Specials, Value};
 use floaty_verify::random::SplitMix64;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
@@ -85,21 +85,32 @@ fn to_binary(value: &Exact, format: &Format, env: &Env) -> (Value, Flags) {
             };
             mpfr::round(&input, format, env)
         }
-        Exact::Nan(bits) => mpfr::convert(&nan_half::<1>(*bits), false, format, env),
-        Exact::Infinity { negative } => mpfr::convert(
-            &Decoded::<1>::Infinity {
-                negative: *negative,
+        Exact::Nan(bits) => mpfr::convert(
+            &Operand {
+                decoded: nan_half::<1>(*bits),
+                subnormal: false,
             },
-            false,
+            format,
+            env,
+        ),
+        Exact::Infinity { negative } => mpfr::convert(
+            &Operand {
+                decoded: Decoded::<1>::Infinity {
+                    negative: *negative,
+                },
+                subnormal: false,
+            },
             format,
             env,
         ),
         Exact::Zero { negative } => mpfr::convert(
-            &Decoded::<1>::Zero {
-                negative: *negative,
-                exponent: 0,
+            &Operand {
+                decoded: Decoded::<1>::Zero {
+                    negative: *negative,
+                    exponent: 0,
+                },
+                subnormal: false,
             },
-            false,
             format,
             env,
         ),
