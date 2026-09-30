@@ -10,7 +10,7 @@ use super::Layout;
 use crate::env::{Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::{Encoding, Storage, Width};
-use crate::integer::{Integer, Parts, ToInt, fit};
+use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 use crate::nan;
 use crate::unpacked::Unpacked;
@@ -93,18 +93,10 @@ where
                 exponent,
                 significand,
             } => (negative, exponent, significand),
-            Unpacked::Zero { .. } => {
-                let zero = Parts {
-                    negative: false,
-                    magnitude: [0; 8],
-                };
-                return (ToInt::Value(I::from_parts(zero)), flags);
-            }
-            Unpacked::Infinity { negative } => {
-                return (ToInt::OutOfRange { negative }, flags | Flags::INVALID);
-            }
-            Unpacked::Nan { .. } | Unpacked::Unsupported => {
-                return (ToInt::Nan, flags | Flags::INVALID);
+            special => {
+                let (result, special_flags) =
+                    ToInt::special(&special).expect("a value that is not finite has a result");
+                return (result, flags | special_flags);
             }
         };
         let top = i64::from(exponent) + i64::from(significand.bit_length()) - 1;
@@ -133,15 +125,11 @@ where
     fn fit_integer<L: Limbs, M: Limbs, I: Integer>(
         value: &Unrounded<L>,
         env: &Env,
-        mut flags: Flags,
+        flags: Flags,
     ) -> (ToInt<I>, Flags) {
-        let negative = value.negative;
         let integral = exact::round_to_integer::<L, M>(value, env.rounding);
-        let Some(parts) = fit::<I, M>(negative, &integral.magnitude) else {
-            return (ToInt::OutOfRange { negative }, flags | Flags::INVALID);
-        };
-        flags |= integral.flags();
-        (ToInt::Value(I::from_parts(parts)), flags)
+        let (result, integer_flags) = ToInt::from_integral(value.negative, &integral);
+        (result, flags | integer_flags)
     }
 }
 

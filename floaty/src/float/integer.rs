@@ -5,7 +5,7 @@ use crate::env::{Flags, Mode, Override};
 use crate::exact::Unrounded;
 use crate::format::Standard;
 use crate::host::{self, Kind};
-use crate::integer::{Integer, Parts, ToInt, fit};
+use crate::integer::{Integer, Parts, ToInt};
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Converts an integer, rounding with the default mode.
@@ -94,11 +94,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
 /// decides it.
 #[inline]
 pub(crate) fn from_host_integer<I: Integer>(integer: i64) -> ToInt<I> {
-    let negative = integer < 0;
-    match fit::<I, _>(negative, &[integer.unsigned_abs()]) {
-        Some(parts) => ToInt::Value(I::from_parts(parts)),
-        None => ToInt::OutOfRange { negative },
-    }
+    ToInt::fitted(integer < 0, &[integer.unsigned_abs()])
 }
 
 /// Returns an integer as an `i64`, or `None` when it does not fit.

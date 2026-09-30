@@ -2,10 +2,13 @@
 //! the types that a float converts to and from. `ToInt` is the result of a
 //! conversion to an integer.
 
+use crate::env::Flags;
+use crate::exact::Integral;
 use crate::format::internal::LimbConversion;
 use crate::format::{Storage, Width};
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
+use crate::unpacked::Unpacked;
 
 /// An unsigned integer of `BITS` bits, for every `BITS` from 1 to 512.
 ///
@@ -329,6 +332,48 @@ pub enum ToInt<I> {
     },
     /// The float is a NaN or an unsupported encoding.
     Nan,
+}
+
+impl<I: Integer> ToInt<I> {
+    /// Returns the result of a value that is not a nonzero finite number,
+    /// and its flags: a zero gives the integer 0, an infinity gives
+    /// [`OutOfRange`](Self::OutOfRange), and a NaN or an unsupported value
+    /// gives [`Nan`](Self::Nan). Both of the last two signal invalid. A
+    /// nonzero finite value gives `None`.
+    #[inline]
+    pub(crate) fn special<L>(value: &Unpacked<L>) -> Option<(Self, Flags)> {
+        match *value {
+            Unpacked::Zero { .. } => Some((Self::fitted(false, &[0_u64]), Flags::NONE)),
+            Unpacked::Infinity { negative } => {
+                Some((Self::OutOfRange { negative }, Flags::INVALID))
+            }
+            Unpacked::Nan { .. } | Unpacked::Unsupported => Some((Self::Nan, Flags::INVALID)),
+            Unpacked::Finite { .. } => None,
+        }
+    }
+
+    /// Returns the integer that a value of the sign `negative` rounds to,
+    /// and the flags of the rounding. An integer outside the range of `I`
+    /// gives [`OutOfRange`](Self::OutOfRange) and signals invalid, and not
+    /// inexact.
+    #[inline]
+    pub(crate) fn from_integral<M: Limbs>(negative: bool, integral: &Integral<M>) -> (Self, Flags) {
+        match Self::fitted(negative, &integral.magnitude) {
+            value @ Self::Value(_) => (value, integral.flags()),
+            out_of_range => (out_of_range, Flags::INVALID),
+        }
+    }
+
+    /// Returns the integer of the sign `negative` and the magnitude
+    /// `magnitude`, or [`OutOfRange`](Self::OutOfRange) when it does not fit
+    /// `I`.
+    #[inline]
+    pub(crate) fn fitted<M: Limbs>(negative: bool, magnitude: &M) -> Self {
+        match fit::<I, M>(negative, magnitude) {
+            Some(parts) => Self::Value(I::from_parts(parts)),
+            None => Self::OutOfRange { negative },
+        }
+    }
 }
 
 #[cfg(test)]

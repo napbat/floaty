@@ -10,7 +10,7 @@ use crate::env::{Env, Flags};
 use crate::exact::{Integral, Unrounded};
 use crate::format::internal::Quotient;
 use crate::format::{DecimalEncoding, Storage, Width};
-use crate::integer::{Integer, Parts, ToInt, fit};
+use crate::integer::{Integer, ToInt};
 use crate::limbs::{self, Limbs, Widen};
 use crate::nan::{self, default_nan};
 use crate::unpacked::Unpacked;
@@ -105,24 +105,15 @@ where
                 exponent,
                 significand,
             } => (negative, exponent, significand),
-            Unpacked::Zero { .. } => {
-                let zero = Parts {
-                    negative: false,
-                    magnitude: [0; 8],
-                };
-                return (ToInt::Value(I::from_parts(zero)), flags);
-            }
-            Unpacked::Infinity { negative } => {
-                return (ToInt::OutOfRange { negative }, flags | Flags::INVALID);
-            }
-            Unpacked::Nan { .. } | Unpacked::Unsupported => {
-                return (ToInt::Nan, flags | Flags::INVALID);
+            special => {
+                let (result, special_flags) =
+                    ToInt::special(&special).expect("a value that is not finite has a result");
+                return (result, flags | special_flags);
             }
         };
-        let out_of_range = (ToInt::OutOfRange { negative }, flags | Flags::INVALID);
         let top = i64::from(exponent) + i64::from(digit_count(&significand)) - 1;
         if top > LARGEST_TOP {
-            return out_of_range;
+            return (ToInt::OutOfRange { negative }, flags | Flags::INVALID);
         }
         let integral: Integral<[u64; 9]> = if exponent >= 0 {
             // The integer has at most 155 digits, which fit 9 limbs.
@@ -143,11 +134,8 @@ where
             };
             round::round_to_integer(&value, env.rounding)
         };
-        let Some(parts) = fit::<I, _>(negative, &integral.magnitude) else {
-            return out_of_range;
-        };
-        flags |= integral.flags();
-        (ToInt::Value(I::from_parts(parts)), flags)
+        let (result, integer_flags) = ToInt::from_integral(negative, &integral);
+        (result, flags | integer_flags)
     }
 
     /// Returns the remainder `left - n * right`, where `n` is `left / right`

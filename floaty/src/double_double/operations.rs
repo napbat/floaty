@@ -16,7 +16,7 @@ use crate::exact::{self, Integral, Unrounded};
 use crate::float::F64;
 use crate::format::internal::MinMax;
 use crate::format::{Binary, Standard};
-use crate::integer::{Integer, Parts, ToInt, fit};
+use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 use crate::unpacked::{SCALE_LIMIT, Unpacked};
 
@@ -91,29 +91,19 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     #[must_use]
     pub fn to_int_with<I: Integer>(self, behavior: impl Override) -> (ToInt<I>, Flags) {
         let env = behavior.apply::<M>().env();
-        match self.exact() {
-            Unpacked::Zero { .. } => {
-                let zero = Parts {
-                    negative: false,
-                    magnitude: [0; 8],
-                };
-                (ToInt::Value(I::from_parts(zero)), Flags::NONE)
-            }
-            Unpacked::Finite {
-                negative,
-                significand,
-                ..
-            } => {
-                let integral = integral(negative, &significand, &env);
-                match fit::<I, _>(negative, &integral.magnitude) {
-                    Some(parts) => (ToInt::Value(I::from_parts(parts)), integral.flags()),
-                    None => (ToInt::OutOfRange { negative }, Flags::INVALID),
-                }
-            }
-            Unpacked::Infinity { negative } => (ToInt::OutOfRange { negative }, Flags::INVALID),
-            Unpacked::Nan { .. } => (ToInt::Nan, Flags::INVALID),
-            Unpacked::Unsupported => unreachable!("a binary64 half has no unsupported encoding"),
+        let value = self.exact();
+        if let Some(special) = ToInt::special(&value) {
+            return special;
         }
+        let Unpacked::Finite {
+            negative,
+            significand,
+            ..
+        } = value
+        else {
+            unreachable!("ToInt::special takes every value that is not finite");
+        };
+        ToInt::from_integral(negative, &integral(negative, &significand, &env))
     }
 
     /// Rounds to an integral value, with the default mode.
