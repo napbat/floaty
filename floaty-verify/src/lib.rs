@@ -25,7 +25,6 @@ pub mod dectest;
 pub mod double_double;
 pub mod encodings;
 pub mod entry_points;
-#[cfg(target_arch = "x86_64")]
 pub mod formats;
 #[cfg(target_arch = "x86_64")]
 pub mod ibm_ldouble;

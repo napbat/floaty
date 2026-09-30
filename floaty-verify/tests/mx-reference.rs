@@ -12,32 +12,51 @@
 //! that is a NaN in binary32, an invalid operation or a NaN operand, is
 //! checked by floaty's rule.
 
-use floaty::{Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F16, Flags};
+use floaty::{Class, Decoded, Env, F16, Flags};
 use floaty_verify::ml_dtypes::{Row, check, rows};
 
 const TABLE: &str = include_str!("../data/mx-reference.txt");
 const FROM_F16: &[u8] = include_bytes!("../data/mx-from-f16.bin");
 const ARITHMETIC: &[u8] = include_bytes!("../data/mx-arithmetic.bin");
 
-macro_rules! dispatch {
-    ($alias:expr, $bits:expr, $($name:ident),*) => {
-        match $alias {
-            $(stringify!($name) => {
-                let value = $name::from_bits($bits);
-                (value.classify(), value.decode::<1>())
-            })*
-            other => panic!("unknown format {other}"),
-        }
-    };
+/// Returns the class and the decoded value of the encoding `bits` of the MX
+/// format `alias`.
+///
+/// # Panics
+///
+/// Panics for a format that is not in the MX list.
+fn decode(alias: &str, bits: u8) -> (Class, Decoded<1>) {
+    macro_rules! decode_listed {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
+            if alias == stringify!($alias) {
+                let value = floaty::$alias::from_bits(bits);
+                return (value.classify(), value.decode::<1>());
+            }
+        };
+    }
+    floaty_verify::for_each_mx_format!(decode_listed);
+    panic!("unknown format {alias}")
 }
 
-macro_rules! parameters {
-    ($alias:expr, $($name:ident),*) => {
-        match $alias {
-            $(stringify!($name) => ($name::PRECISION, $name::EMAX, $name::EMIN),)*
-            other => panic!("unknown format {other}"),
-        }
-    };
+/// Returns the precision, `emax`, and `emin` of the MX format `alias`.
+///
+/// # Panics
+///
+/// Panics for a format that is not in the MX list.
+fn parameters(alias: &str) -> (u32, i32, i32) {
+    macro_rules! parameters_listed {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
+            if alias == stringify!($alias) {
+                return (
+                    floaty::$alias::PRECISION,
+                    floaty::$alias::EMAX,
+                    floaty::$alias::EMIN,
+                );
+            }
+        };
+    }
+    floaty_verify::for_each_mx_format!(parameters_listed);
+    panic!("unknown format {alias}")
 }
 
 #[test]
@@ -51,7 +70,7 @@ fn every_mx_encoding_matches_ml_dtypes() {
                 emax,
                 emin,
             } => {
-                let ours = parameters!(alias, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn);
+                let ours = parameters(alias);
                 assert_eq!(ours, (precision, emax, emin), "{alias} parameters");
                 formats += 1;
             }
@@ -62,7 +81,7 @@ fn every_mx_encoding_matches_ml_dtypes() {
                 sign,
                 value,
             } => {
-                let (ours, decoded) = dispatch!(alias, bits, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn);
+                let (ours, decoded) = decode(alias, bits);
                 let context = format!("{alias} {bits:#04x}");
                 check(&context, ours, decoded, (class, sign, value));
                 encodings += 1;
@@ -72,13 +91,14 @@ fn every_mx_encoding_matches_ml_dtypes() {
     assert_eq!((formats, encodings), (3, 16 + 64 + 64));
 }
 
-/// Checks the conversion of every binary16 encoding to one format.
+/// Checks the conversion of every binary16 encoding to one format of the MX
+/// list.
 macro_rules! check_from_f16 {
-    ($alias:ty, $index:literal) => {{
-        let block = &FROM_F16[$index * 65536..($index + 1) * 65536];
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+        let block = &FROM_F16[$block * 65536..($block + 1) * 65536];
         for bits in 0..=u16::MAX {
             let half = F16::from_bits(bits);
-            let (ours, flags) = half.convert_with::<$alias>(Env::IEEE);
+            let (ours, flags) = half.convert_with::<floaty::$alias>(Env::IEEE);
             let context = format!(
                 "{} from {bits:#06x}: {ours:?} {flags:?}",
                 stringify!($alias)
@@ -94,9 +114,7 @@ macro_rules! check_from_f16 {
 
 #[test]
 fn every_binary16_encoding_converts_as_ml_dtypes_does() {
-    check_from_f16!(F4E2M1Fn, 0);
-    check_from_f16!(F6E2M3Fn, 1);
-    check_from_f16!(F6E3M2Fn, 2);
+    floaty_verify::for_each_mx_format!(check_from_f16);
 }
 
 /// Checks one result against the table. `invalid` says that the operation
@@ -116,7 +134,7 @@ fn compare(context: &str, (ours, flags): (u8, Flags), expected: u8, invalid: boo
 /// Checks every operand pair and every operand of one format of `$count`
 /// encodings, whose block starts at byte `$start` of the table.
 macro_rules! check_arithmetic {
-    ($alias:ty, $count:literal, $start:expr) => {{
+    ($alias:ty, $count:expr, $start:expr) => {{
         let pairs = $count * $count;
         let block = &ARITHMETIC[$start..$start + 4 * pairs + $count];
         let encodings = || (0..$count).map(|bits| u8::try_from(bits).expect("8 bits"));
@@ -169,8 +187,21 @@ macro_rules! check_arithmetic {
 
 #[test]
 fn every_mx_operand_pair_computes_as_ml_dtypes_does() {
-    let start = check_arithmetic!(F4E2M1Fn, 16, 0);
-    let start = check_arithmetic!(F6E2M3Fn, 64, start);
-    let end = check_arithmetic!(F6E3M2Fn, 64, start);
-    assert_eq!(end, ARITHMETIC.len(), "the table holds every format");
+    // The blocks have different sizes, so each block starts where the block
+    // before it ends. The list gives the formats in the order of the blocks.
+    let (mut start, mut blocks) = (0, 0);
+    macro_rules! check_listed {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+            use floaty::$alias;
+            assert_eq!($block, blocks, "the list gives the blocks in order");
+            start = check_arithmetic!($alias, 1_usize << $width, start);
+            blocks += 1;
+        }};
+    }
+    floaty_verify::for_each_mx_format!(check_listed);
+    assert_eq!(
+        (start, blocks),
+        (ARITHMETIC.len(), 3),
+        "the table holds the three formats"
+    );
 }

@@ -500,7 +500,7 @@ fn from_ints<S: Standard<W>, const W: usize>(specials: Specials, envs: &[Env], s
 
 /// Converts the integers to one format of the small format lists.
 macro_rules! small_from_ints {
-    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal) => {
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
         from_ints::<$standard, $width>($specials, &BEHAVIORS, $seed)
     };
 }

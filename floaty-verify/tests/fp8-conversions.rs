@@ -5,13 +5,15 @@
 //! only has to be a NaN with the same sign. `conversions-mpfr.rs` checks the
 //! payload rule of floaty, binary16 to E5M2 included.
 
-use floaty::{Env, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16};
+use floaty::{Env, F16};
 
 const TABLE: &[u8] = include_bytes!("../data/fp8-from-f16.bin");
 
-/// Checks every binary16 encoding against the table block of one format.
+/// Checks every binary16 encoding against the table block of one format of
+/// the FP8 list.
 macro_rules! check_format {
-    ($alias:ty, $block:literal) => {{
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+        use floaty::$alias;
         let block = &TABLE[$block * 65536..($block + 1) * 65536];
         for (bits, &expected) in (0..=u16::MAX).zip(block) {
             let (ours, _): ($alias, _) = F16::from_bits(bits).convert_with(Env::IEEE);
@@ -38,11 +40,5 @@ fn every_binary16_encoding_converts_like_ml_dtypes() {
         7 * 65536,
         "the table has one block for each format"
     );
-    check_format!(F8E4M3Fn, 0);
-    check_format!(F8E5M2, 1);
-    check_format!(F8E4M3Fnuz, 2);
-    check_format!(F8E5M2Fnuz, 3);
-    check_format!(F8E4M3, 4);
-    check_format!(F8E3M4, 5);
-    check_format!(F8E4M3B11Fnuz, 6);
+    floaty_verify::for_each_fp8_format!(check_format);
 }

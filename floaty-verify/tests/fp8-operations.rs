@@ -20,7 +20,8 @@
 //!   bit, so floaty keeps the one zero encoding.
 
 use floaty::format::Standard;
-use floaty::{B11Fnuz, Binary, Env, Float, Fnuz, NoInf};
+use floaty::{Env, Float};
+use floaty_verify::formats::Specials;
 
 const TABLE: &[u8] = include_bytes!("../data/fp8-operations.bin");
 
@@ -55,6 +56,23 @@ fn check_next<S: Standard<8, Bits = u8>>(
             assert_eq!(saturated.to_bits(), largest, "{context}: saturated");
         }
         _ => assert_eq!(result.to_bits(), expected, "{context}"),
+    }
+}
+
+/// Returns the encoding of the largest positive finite value of an FP8
+/// format without an infinity, or `None` for a format with one.
+///
+/// # Panics
+///
+/// Panics for `Finite`, which no FP8 format has.
+fn largest(specials: Specials) -> Option<u8> {
+    match specials {
+        Specials::Ieee => None,
+        // The all-ones significand at `emax` is the NaN.
+        Specials::NoInf => Some(0x7E),
+        // The one NaN is 0x80, so every positive encoding is a number.
+        Specials::Fnuz => Some(0x7F),
+        Specials::Finite => panic!("no FP8 format is Finite"),
     }
 }
 
@@ -106,11 +124,10 @@ fn every_fp8_operand_steps_and_copies_signs_like_ml_dtypes() {
         7 * FORMAT_BYTES,
         "the table has one block for each format"
     );
-    check_format::<Binary<4, NoInf>>(0, Some(0x7E));
-    check_format::<Binary<5>>(1, None);
-    check_format::<Binary<4, Fnuz>>(2, Some(0x7F));
-    check_format::<Binary<5, Fnuz>>(3, Some(0x7F));
-    check_format::<Binary<4>>(4, None);
-    check_format::<Binary<3>>(5, None);
-    check_format::<Binary<4, B11Fnuz>>(6, Some(0x7F));
+    macro_rules! check_listed {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
+            check_format::<$standard>($block, largest($specials))
+        };
+    }
+    floaty_verify::for_each_fp8_format!(check_listed);
 }

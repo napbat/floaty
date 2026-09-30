@@ -160,7 +160,7 @@ macro_rules! small {
 
 /// Checks one format of the small format lists with `small!`.
 macro_rules! small_format {
-    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal) => {
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
         small!(floaty::$alias, $width, $specials, $seed)
     };
 }

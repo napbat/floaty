@@ -22,19 +22,7 @@ use rug::float::Round;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
-/// How a format encodes its special values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Specials {
-    /// IEEE 754 infinities and NaNs.
-    Ieee,
-    /// No infinity; the all-ones significand at `emax` is the NaN.
-    NoInf,
-    /// No infinity and no negative zero; the one NaN is negative.
-    Fnuz,
-    /// No infinity and no NaN. Every overflow saturates, and a NaN result is
-    /// positive zero.
-    Finite,
-}
+pub use crate::formats::Specials;
 
 /// The parameters of a format, as the oracle uses them.
 #[derive(Clone, Copy, Debug)]

@@ -9,7 +9,7 @@
 //! operand only has to be a NaN.
 
 use floaty::env::{NanPropagation, NanRule};
-use floaty::{Env, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, Flags};
+use floaty::{Env, Flags};
 
 /// The behavior of the table: round to nearest even with the SSE NaN rule.
 const SSE: Env =
@@ -41,10 +41,12 @@ macro_rules! check {
     }};
 }
 
-/// Checks every operand pair and every operand of one format.
+/// Checks every operand pair and every operand of one format of the FP8
+/// list, in its block of the table.
 macro_rules! check_format {
-    ($alias:ty, $index:literal) => {{
-        let block = &TABLE[$index * FORMAT_BYTES..($index + 1) * FORMAT_BYTES];
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+        use floaty::$alias;
+        let block = &TABLE[$block * FORMAT_BYTES..($block + 1) * FORMAT_BYTES];
         for a in 0..=u8::MAX {
             let x = <$alias>::from_bits(a);
             for b in 0..=u8::MAX {
@@ -91,11 +93,5 @@ fn every_fp8_operand_pair_matches_ml_dtypes() {
         7 * FORMAT_BYTES,
         "the table has one block for each format"
     );
-    check_format!(F8E4M3Fn, 0);
-    check_format!(F8E5M2, 1);
-    check_format!(F8E4M3Fnuz, 2);
-    check_format!(F8E5M2Fnuz, 3);
-    check_format!(F8E4M3, 4);
-    check_format!(F8E3M4, 5);
-    check_format!(F8E4M3B11Fnuz, 6);
+    floaty_verify::for_each_fp8_format!(check_format);
 }

@@ -147,9 +147,12 @@ fn ieee_formats_up_to_binary128() {
 }
 
 /// Returns the precision limits and the seed of a small format, by its alias.
-/// A format without an entry runs without a precision limit, with the seed of
-/// its format list.
-fn small_plan(alias: &str, seed: u64) -> (&'static [u32], u64) {
+///
+/// # Panics
+///
+/// Panics for a format without an entry. A new format of the lists must get
+/// an entry.
+fn small_plan(alias: &str) -> (&'static [u32], u64) {
     match alias {
         "F8E4M3Fn" => (&[2], 43),
         "F8E5M2" => (&[], 52),
@@ -161,15 +164,15 @@ fn small_plan(alias: &str, seed: u64) -> (&'static [u32], u64) {
         "F4E2M1Fn" => (&[1], 44),
         "F6E2M3Fn" => (&[2], 62),
         "F6E3M2Fn" => (&[2], 63),
-        _ => (&[], seed),
+        other => panic!("{other} has no entry in small_plan"),
     }
 }
 
 /// Checks one format of the small format lists with the plan of
 /// [`small_plan`].
 macro_rules! small_format {
-    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal) => {{
-        let (precisions, seed) = small_plan(stringify!($alias), $seed);
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+        let (precisions, seed) = small_plan(stringify!($alias));
         check_format!(floaty::$alias, $specials, precisions, seed);
     }};
 }
@@ -263,7 +266,7 @@ fn every_small_input_to_the_fp8_formats() {
         }};
     }
     macro_rules! sweep_format {
-        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal) => {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
             sweep!(floaty::$alias, $specials)
         };
     }

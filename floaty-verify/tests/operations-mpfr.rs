@@ -37,7 +37,7 @@ fn make<S: Standard<W, Bits = u8>, const W: usize>(bits: &Integer) -> Float<S, W
 
 /// Runs the check `$check` on one format of the small format lists.
 macro_rules! run_check {
-    ($check:ident, $alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal) => {
+    ($check:ident, $alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {
         $check::<$standard, $width>($specials)
     };
 }
