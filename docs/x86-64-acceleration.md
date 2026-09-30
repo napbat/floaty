@@ -11,7 +11,9 @@ The README lists the host paths that exist. This record lists the host
 paths that could exist, and what blocks each one.
 
 The record describes the branch `x86-64-gaps` on 2026-09-29, which closed
-the first seven gaps of the first version of this record. The figures come
+the first seven gaps of the first version of this record, and the work of
+2026-09-30, which closed five more. A row that the later work changed has
+figures from that work. The figures come
 from `cargo bench -p floaty-verify --bench operations` on a Core i9-9900K,
 which has x86-64-v3 and no AVX-512. Each figure is the lower of two runs. A
 `Lanes` figure is in nanoseconds per lane, and a `Float` figure in
@@ -68,8 +70,9 @@ element for each lane.
 | Operation | `Lanes` | Path of `Lanes` without flags |
 | --- | --- | --- |
 | `+`, `-`, `*`, `/`, `sqrt`, `mul_add`, `round_to_integral`, `convert` | Yes | Packed where the build has instructions, otherwise the scalar path of each lane |
-| `compare_quiet`, and the minimum and maximum families | Yes | Packed for binary32 and binary64, otherwise the scalar path of each lane |
-| `to_int`, `from_int`, `remainder`, `scale_b` | Yes | The scalar path of each lane |
+| `compare_quiet`, and the minimum and maximum families | Yes | Packed for binary32, binary64, and bfloat16, and for binary16 with F16C, otherwise the scalar path of each lane |
+| `to_int` | Yes | Packed for binary32 and binary64, otherwise the scalar path of each lane |
+| `from_int`, `remainder`, `scale_b` | Yes | The scalar path of each lane |
 | `abs`, `copy_sign`, negation, `classify`, the `is_` methods, `total_cmp`, `next_up`, `next_down` | Yes | Integer code for each lane: no floating-point instruction is needed |
 | `log_b` | Decimal formats only | `VGETEXPPS` computes the binary operation |
 | `quantize`, `quantum`, `same_quantum` | Decimal formats only | No x86-64 instruction |
@@ -89,8 +92,8 @@ binary32 x 8 and binary64 x 4 in the x86-64-v3 build.
 | `convert` between binary32 and binary64 | Packed: 0.9, 1.4 | Packed: 0.5, 0.8 | `CVTPS2PD`, `CVTPD2PS`, and their AVX forms | None |
 | Comparison | Packed `compare_quiet`: 1.4, 1.8. Scalar `UCOMISS`: 2.4, 2.5 | Packed: 1.7, 1.8. Scalar: 4.1, 1.8 | `CMPLTPS` and `CMPUNORDPS`, and their other forms. `UCOMISS`, `UCOMISD`. | None |
 | Minimum and maximum | Packed `minimum`: 0.7, 2.1. A NaN or two zeros in any pair of lanes sends every lane to its scalar path. Scalar `MINSS`: 2.3, 2.4 | Packed: 0.5, 1.1. Scalar: 2.7, 2.2 | `MINPS`, `MAXPS`, and their other forms. `VRANGEPS` gives `min_num` and `max_num` without the fallback (AVX-512DQ). `VMINMAXPS` gives the IEEE 754-2019 operations (AVX10.2). | None below AVX-512DQ |
-| `to_int` | Scalar `CVTSS2SI` for each lane: 2.5, 2.1 | Scalar: 2.2, 2.1 | `CVTPS2DQ`, `CVTPD2DQ` to a 32-bit integer (SSE2). `VCVTPS2QQ`, `VCVTPD2QQ` to a 64-bit integer (AVX-512DQ). The integer indefinite goes to the engine. | Packed paths to 32 bits at SSE2 |
-| `from_int` | Scalar `CVTSI2SS` for each lane: 2.2, 2.2 | Scalar: 2.2, 2.2 | `CVTDQ2PS` rounds, and `CVTDQ2PD` is exact (SSE2). `VCVTQQ2PS`, `VCVTQQ2PD` (AVX-512DQ). | Packed paths from 32 bits at SSE2 |
+| `to_int` | Packed `CVTPS2DQ`: 1.5, 2.0. A lane with the integer indefinite takes the scalar path. Scalar `CVTSS2SI` for each lane: 3.2, 3.9 | Packed: 1.7, 1.8. Scalar: 2.8, 3.2 | `CVTPS2DQ`, `CVTPD2DQ` to a 32-bit integer (SSE2). `VCVTPS2QQ`, `VCVTPD2QQ` to a 64-bit integer (AVX-512DQ). | Packed paths to 64 bits at AVX-512DQ |
+| `from_int` | Scalar `CVTSI2SS` for each lane: 1.7, 1.5 | Scalar: 1.7, 1.5 | `CVTDQ2PS` rounds, and `CVTDQ2PD` is exact (SSE2). A packed path with them measured no faster than the scalar path, because the lanes of the integer type cost more than the instruction. `VCVTQQ2PS`, `VCVTQQ2PD` (AVX-512DQ). | None at SSE2 |
 | `remainder` | Scalar `FPREM1` for each lane: 12.2, 12.7; distant operands 21.4, 131.4 | Scalar: 12.3, 12.5; 21.0, 131.2 | The x87 `FPREM1`, one lane at a time. No SSE or AVX instruction. | None |
 | `scale_b` | Engine for each lane | Engine | `VSCALEFPS`, `VSCALEFSS` (AVX-512F). At SSE2, a product by an exact power of two is a host algorithm that needs a proof. | A path at AVX-512F |
 | `log_b` | No binary method | No binary method | `VGETEXPPS` gives IEEE `logB` as a value of the format (AVX-512F) | An API decision first |
@@ -99,16 +102,18 @@ binary32 x 8 and binary64 x 4 in the x86-64-v3 build.
 ## binary16
 
 The packed paths widen binary16 lanes to binary32 with F16C and compute in
-packed binary32, as the scalar binary16 path computes one value.
+packed binary32, as the scalar binary16 path computes one value. Without
+F16C, the scalar path widens binary16 and rounds binary32 results in integer
+instructions, in `host/narrow.rs`.
 
 | Operation | Default build | x86-64-v3 build | x86-64 instructions | Gap |
 | --- | --- | --- | --- | --- |
-| `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral` | Engine: 7.3 to 28.1 | Packed F16C: 0.3 | `VCVTPH2PS`, packed binary32, and `VCVTPS2PH` with immediate 0 (F16C). `VADDPH` and the others (AVX512-FP16). | None at F16C |
+| `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral` | Scalar through binary32, with integer widening and rounding: 6.0 to 6.8, and 3.0 for `sqrt`. For each lane: 4.1 to 6.4. `round_to_integral`: engine, 8.9 | Packed F16C: 0.3 | `VCVTPH2PS`, packed binary32, and `VCVTPS2PH` with immediate 0 (F16C). `VADDPH` and the others (AVX512-FP16). | None at F16C. At SSE2, a packed form of the integer widening and rounding. |
 | `mul_add` | Engine: 22.7 | Engine: 21.0 | `VFMADD213PH` rounds once (AVX512-FP16). Through binary32, the two roundings of a fused multiply-add can differ from one. | AVX512-FP16 only |
-| `convert` to binary32 and binary64, and from binary32 | Engine: 9.3 | Packed F16C: 0.4 | `VCVTPH2PS`, `VCVTPS2PH` (F16C) | None at F16C |
+| `convert` to binary32 and binary64, and from binary32 | Scalar integer widening: 2.4 to binary32, 2.0 to binary64. Integer rounding from binary32: 2.1. For each lane: 2.1 | Packed F16C: 0.4 | `VCVTPH2PS`, `VCVTPS2PH` (F16C) | None at F16C |
 | `convert` from binary64 | Engine. Scalar: 12.3 | Engine. Scalar: 12.4 | `VCVTPD2PH` and `VCVTSD2SH` round once (AVX512-FP16). F16C rounds twice, through binary32. | AVX512-FP16 only. The AArch64 build has this path, with `FCVT`. |
-| Comparison, minimum, and maximum | Engine for each lane | Scalar F16C for each lane: 2.9 and 3.0 | Packed `VCVTPH2PS`, then `CMPLTPS` or `MINPS`, as for binary32. `VCMPPH`, `VMINPH` (AVX512-FP16). | Packed paths at F16C |
-| `to_int`, `from_int`, `remainder` | Engine for each lane | Scalar through binary32 for `to_int` and `from_int`: 2.3, 2.6. Engine for `remainder`: 30.2 | `to_int` and `from_int` through binary32 with F16C. A binary16 remainder is a binary16 value, so the x87 `FPREM1` of the widened values gives it exactly. | Packed conversions at F16C. A scalar remainder through `FPREM1`. |
+| Comparison, minimum, and maximum | Engine for each lane: 2.9 and 3.2. The engine compares faster than the integer widening. | Packed F16C: 1.8 and 2.4 | Packed `VCVTPH2PS`, then `CMPLTPS`, as for binary32. The minimum and maximum take the operand that the comparison selects. `VCMPPH`, `VMINPH` (AVX512-FP16). | None at F16C |
+| `to_int`, `from_int`, `remainder` | Scalar through binary32 for `to_int` and `from_int`: 3.0, 3.1. `remainder` through binary32 by `FPREM1`: 15.4, and 18.0 for distant operands | Scalar: 2.3, 2.6. `remainder`: 13.8, and 16.6 | `to_int` and `from_int` through binary32. A binary16 remainder is a binary16 value, so the x87 `FPREM1` of the widened values gives it exactly. | Packed conversions at F16C |
 
 The AVX512-FP16 specification, chapter 4, says that the instructions never
 flush a binary16 operand or result and never read one as zero, whatever
@@ -119,31 +124,34 @@ Manual Conflicts.
 
 A shift widens bfloat16 to binary32 exactly. x86-64 has no instruction that
 rounds binary32 to bfloat16 at every value: `VCVTNEPS2BF16` reads a
-subnormal binary32 input as zero, whatever MXCSR holds.
+subnormal binary32 input as zero, whatever MXCSR holds. So integer
+instructions round binary32 results to bfloat16 to nearest even, in
+`host/narrow.rs`.
 
 | Operation | Default build | x86-64-v3 build | x86-64 instructions | Gap |
 | --- | --- | --- | --- | --- |
-| `+`, `-`, `*`, `/`, `sqrt` | Engine: 8.6 to 26.2 | Engine: 8.3 to 25.4 | A shift widens the operands, and packed binary32 arithmetic computes. `VCVTNEPS2BF16` rounds to nearest even (AVX512_BF16, AVX-NE-CONVERT). A lane whose binary32 result is subnormal or a NaN goes to the engine: exact with fallback. AVX10.2 `VADDBF16` and the others always read a subnormal input as zero and flush a subnormal result. | A path at AVX512_BF16 with VL, or at AVX-NE-CONVERT, with the subnormal fallback. The AArch64 build has this path, with `BFCVT`. |
+| `+`, `-`, `*`, `/`, `sqrt` | Packed, with integer rounding: 1.8 to 2.1. Scalar: 1.7 to 2.5 | Packed: 1.6 to 1.8. Scalar: 1.7 to 2.4 | A shift widens the operands, packed binary32 arithmetic computes, and integer instructions round each lane. `VCVTNEPS2BF16` rounds to nearest even (AVX512_BF16, AVX-NE-CONVERT), but reads a subnormal input as zero. AVX10.2 `VADDBF16` and the others always read a subnormal input as zero and flush a subnormal result. | None |
 | `mul_add` | Engine: 21.0 | Engine: 21.1 | Through binary32, the two roundings can differ from one. AVX10.2 `VFMADD213BF16` rounds once, and flushes as `VADDBF16` does. A flushed result reads as zero, so the path also needs a rule that finds results that flush. | AVX10.2, after the rule for flushed results |
 | `round_to_integral` | Engine: 6.8 | Packed: 0.4 | A shift, `ROUNDPS` in the direction of the mode, and a shift back (SSE4.1) | None at SSE4.1 |
 | `convert` to binary32 and binary64 | Packed shift: 0.4 | Packed shift: 0.4 | A shift, then `CVTPS2PD` | None |
-| `convert` from binary32 | Engine | Engine | `VCVTNEPS2BF16`, with the subnormal fallback | AVX512_BF16 or AVX-NE-CONVERT |
-| Comparison, minimum, and maximum | Scalar through binary32 for each lane: 2.0 and 3.2 | Scalar: 2.7 and 2.8 | A packed shift, then `CMPLTPS` or `MINPS` | Packed paths at SSE2 |
-| `to_int` | Scalar through binary32 for each lane: 2.2 | Scalar: 2.2 | A shift, then `CVTPS2DQ` | A packed path at SSE2 |
+| `convert` from binary32 | Integer rounding, scalar and packed. Not measured. | As the default build | Integer instructions, as for the arithmetic | None |
+| Comparison, minimum, and maximum | Packed: 1.3 and 2.0 | Packed: 1.7 and 2.2 | A packed shift, then `CMPLTPS`. The minimum and maximum take the operand that the comparison selects. | None |
+| `to_int` | Scalar through binary32 for each lane: 2.4 | Scalar: 2.3 | A shift, then `CVTPS2DQ` | A packed path at SSE2 |
+| `remainder` | Scalar through binary32 by `FPREM1`: 13.3, and 23.1 for distant operands | 13.1, and 23.0 | A shift, then the x87 `FPREM1`. The remainder is a bfloat16 value, so it narrows exactly. | None |
 | `from_int` | Engine. Scalar: 13.8 | Engine. Scalar: 13.8 | None. Two roundings through binary32 can differ from one. | None |
 
 ## x87 Extended
 
-The x87 unit has no packed instructions. `Lanes<F80, N>` takes the scalar
-x87 path of each lane: 5.6 and 5.5 per lane for `+`. A loop of the scalar
-operator takes 4.0 and 3.8, so `Lanes` adds about 1.6 per lane. `mul_add`
-runs in the engine, 37.2 and 36.0 per lane, because the x87 unit has no
-fused multiply-add. The remainder of close operands takes `FPREM1`: 15.0
-and 14.8 per operation.
+The x87 unit has no packed instructions. The operators and `sqrt` of
+`Lanes<F80, N>` check the control word once, and then run the x87
+instruction of each lane: 4.2 and 4.0 per lane for `+`, against 3.8 and 4.0
+for a loop of the scalar operator. `mul_add` runs in the engine, 36.5 and
+35.6 per lane, because the x87 unit has no fused multiply-add. The
+remainder of close operands takes `FPREM1`: 14.7 and 14.8 per operation.
 
 | Operation | Gap |
 | --- | --- |
-| `Lanes` of x87 extended | The per-lane cost above the scalar operator. `convert` to binary64 takes 4.7 and 4.1 per lane, against 1.8 for the scalar conversion. |
+| `convert` of `Lanes` to binary64 | 4.6 and 4.2 per lane, against 1.8 for the scalar conversion. A check of the control word for all lanes, as for the operators. |
 | Comparison, minimum, and maximum | No path. `FUCOMIP` compares two x87 values. |
 
 ## FP8 and the Other Formats
@@ -203,37 +211,48 @@ beside the test that checks it, before a host path depends on it.
 
 ## Existing Paths
 
-- `Lanes` of x87 extended adds about 1.6 nanoseconds per lane above a loop
-  of the scalar operator, as the x87 section shows.
 - A scalar comparison sends an unordered pair to the engine, although the
   host order is exact for it: the path returns no result for a NaN, so
   `PartialOrd` cannot tell the unordered pair from a path that declines.
 - The packed comparison gains little over the scalar path of each lane:
   1.4 nanoseconds per lane against 2.4 for binary32 x 8. The path makes the
   `Option<Ordering>` of each lane from three masks, lane by lane.
-- The AArch64 build with `FEAT_BF16` has `BFCVTN`, which rounds packed
-  binary32 lanes to bfloat16. No packed path of bfloat16 arithmetic uses it
-  yet. This record lists only the gaps of x86-64.
+- The packed `to_int` of binary32 lanes takes 1.5 to 1.8 nanoseconds per
+  lane, and `CVTPS2DQ` takes a fraction of that. The conversion of each lane
+  to the integer type takes the rest.
+- The packed bfloat16 paths round in integer instructions on AArch64 too.
+  The AArch64 build with `FEAT_BF16` has `BFCVTN`, which rounds packed
+  binary32 lanes to bfloat16, and which they do not use. This record lists
+  only the gaps of x86-64.
 
 ## Gaps by Priority
 
-The order puts first the gaps that the current gates can test, and then the
-gaps with the largest cost today. The first version of this record listed
-seven more gaps, which the branch `x86-64-gaps` closed: packed binary16,
-packed bfloat16 widening and rounding, the conversion of binary64 x 4, the
-other operations of `Lanes`, the scalar comparison and minimum and maximum,
-the scalar remainder, and `round_to_integral` in the directed modes.
+The table lists the gaps that need a processor that the gates do not have.
+The sections above also list smaller gaps that the gates can test, such as
+the packed forms of the integer widening of binary16. The first version of
+this record listed seven more gaps, which the branch
+`x86-64-gaps` closed: packed binary16, packed bfloat16 widening and
+rounding, the conversion of binary64 x 4, the other operations of `Lanes`,
+the scalar comparison and minimum and maximum, the scalar remainder, and
+`round_to_integral` in the directed modes. The work of 2026-09-30 closed
+five more:
+
+- bfloat16 arithmetic and `convert` from binary32, by integer rounding and
+  without AVX512_BF16,
+- the packed comparison and minimum and maximum of binary16 and bfloat16
+  lanes,
+- the packed `to_int` of binary32 and binary64 lanes,
+- the remainder of binary16 and bfloat16, by `FPREM1`, and
+- the per-lane cost of `Lanes` of x87 extended.
+
+A packed `from_int` from 32-bit integers measured no faster than the scalar
+path, so the record lists no gap for it.
 
 | Priority | Gap | Instructions | Feature | Cost today | Blocker |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Packed comparison and minimum and maximum of binary16 and bfloat16 lanes | `VCVTPH2PS` or a shift, then `CMPLTPS`, `MINPS` | F16C, SSE2 | 2.0 to 3.2 per lane | None |
-| 2 | Packed `to_int` and `from_int` of binary32 and binary64 lanes with 32-bit integers | `CVTPS2DQ`, `CVTDQ2PS`, `CVTDQ2PD` | SSE2 | 2.1 to 2.5 per lane | None |
-| 3 | Scalar remainder of binary16 and bfloat16 | `FPREM1` on the widened values | x87, and F16C for binary16 | 30 per operation | None |
-| 4 | The per-lane cost of `Lanes` of x87 extended | No new instruction | x87 | 1.6 per lane | None |
-| 5 | bfloat16 arithmetic, and `convert` from binary32 | `VCVTNEPS2BF16`, with the subnormal fallback | AVX512_BF16 with VL, or AVX-NE-CONVERT | 8.3 to 26.2 per lane | No hardware in the gates. Rust 1.89. |
-| 6 | 512-bit chunks, masked tails, directed rounding of the other operations, `scale_b`, conversions of 64-bit integers, `min_num` and `max_num` without the fallback | 512-bit forms, masks, embedded rounding, `VSCALEFPS`, `VCVTPS2QQ`, `VRANGEPS` | AVX-512F, DQ, VL | Engine, or 256-bit paths | No hardware in the gates. Rust 1.89. |
-| 7 | binary16 `mul_add`, and `convert` from binary64 with one rounding | `VFMADD213PH`, `VCVTPD2PH`, `VCVTSD2SH` | AVX512-FP16 | 21.0 to 22.7 per lane, and 12.3 to 12.4 | No hardware in the gates. Rust 1.89. Conflict 1. |
-| 8 | The IEEE 754-2019 minimum and maximum without the fallback, bfloat16 `mul_add`, FP8 conversions, and saturating integer conversions | `VMINMAXPS`, `VFMADD213BF16`, `VCVTHF82PH`, `VCVTPH2HF8`, `VCVTTPS2DQS` | AVX10.2 | Engine | No hardware in the gates. `avx10.2` is unstable in Rust. Conflict 2. |
+| 1 | 512-bit chunks, masked tails, directed rounding of the other operations, `scale_b`, conversions of 64-bit integers, `min_num` and `max_num` without the fallback | 512-bit forms, masks, embedded rounding, `VSCALEFPS`, `VCVTPS2QQ`, `VRANGEPS` | AVX-512F, DQ, VL | Engine, or 256-bit paths | No hardware in the gates. Rust 1.89. |
+| 2 | binary16 `mul_add`, and `convert` from binary64 with one rounding | `VFMADD213PH`, `VCVTPD2PH`, `VCVTSD2SH` | AVX512-FP16 | 21.0 to 22.7 per lane, and 12.3 to 12.4 | No hardware in the gates. Rust 1.89. Conflict 1. |
+| 3 | The IEEE 754-2019 minimum and maximum without the fallback, bfloat16 `mul_add`, FP8 conversions, and saturating integer conversions | `VMINMAXPS`, `VFMADD213BF16`, `VCVTHF82PH`, `VCVTPH2HF8`, `VCVTTPS2DQS` | AVX10.2 | Engine | No hardware in the gates. `avx10.2` is unstable in Rust. Conflict 2. |
 
 ## No x86-64 Instruction
 

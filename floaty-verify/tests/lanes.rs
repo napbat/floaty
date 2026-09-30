@@ -428,6 +428,11 @@ macro_rules! methods_match {
                 integers.map(|integer| Value::from_int(integer).to_bits()),
                 "{context}: from_int"
             );
+            assert_eq!(
+                a.to_int::<i32>(),
+                x.map(Value::to_int::<i32>),
+                "{context}: to_int i32"
+            );
             let mut flags = Flags::NONE;
             let expected = integers.map(|integer| {
                 let (value, lane_flags) = Value::from_int_with(integer, behavior);

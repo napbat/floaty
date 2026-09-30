@@ -17,6 +17,8 @@ mod compare;
 mod decimal;
 mod integer;
 
+pub(crate) use self::integer::from_host_integer;
+
 /// A floating-point value of standard `S` at width `W`, with default mode `M`.
 ///
 /// A value is a format and its bits. `S` and `W` select the storage type and

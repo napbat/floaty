@@ -443,6 +443,20 @@ macro_rules! operators_under {
     };
 }
 
+/// Checks the remainder of one type under one MXCSR value against the engine
+/// result of the default mode. The binary16 path widens and rounds in F16C,
+/// which reads MXCSR, before `FPREM1`.
+macro_rules! remainders_under {
+    ($alias:ty, $control:expr, $pairs:expr) => {
+        for &(a, b) in $pairs {
+            let (x, y) = (<$alias>::from_bits(a), <$alias>::from_bits(b));
+            let expected = x.remainder_with(y, <$alias>::ENV).0.to_bits();
+            let ours = x86::with_mxcsr($control, || black_box(x).remainder(black_box(y)).to_bits());
+            assert_eq!(ours, expected, "{a:#x} {b:#x} under MXCSR {:#x}", $control);
+        }
+    };
+}
+
 /// Checks `round_to_integral`, `to_int`, `from_int`, and the conversions to
 /// binary16, binary32, and binary64 of one type under one control value
 /// against the engine results of the default mode.
@@ -517,13 +531,24 @@ fn operators_read_mxcsr_before_the_host_unit() {
         (0..4_000)
             .map(|_| u16::try_from(random.next_u64() >> 48).expect("the shift keeps 16 bits")),
     );
-    let half_pairs: Vec<(u16, u16)> = halves
+    let mut half_pairs: Vec<(u16, u16)> = halves
         .iter()
         .zip(halves.iter().rev())
         .map(|(&a, &b)| (a, b))
         .collect();
+    // A signaling NaN raises invalid when it widens, and a subnormal
+    // remainder raises underflow when it rounds to binary16.
+    half_pairs.extend([(0x7D00, 0x3C00), (0x0401, 0x0400)]);
+    let bfloat_pairs: Vec<(u16, u16)> = bfloats
+        .iter()
+        .zip(bfloats.iter().rev())
+        .map(|(&a, &b)| (a, b))
+        .collect();
     for control in controls {
         operators_under!(F16, control, &half_pairs);
+        operators_under!(BF16, control, &bfloat_pairs);
+        remainders_under!(F16, control, &half_pairs);
+        remainders_under!(BF16, control, &bfloat_pairs);
         operators_under!(F32, control, &single_pairs);
         operators_under!(F64, control, &double_pairs);
         conversions_under!(F16, control, &halves);

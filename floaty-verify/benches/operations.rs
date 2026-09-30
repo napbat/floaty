@@ -76,9 +76,10 @@ const OTHER_COLUMNS: [&str; 11] = [
 const DOUBLE_DOUBLE_COLUMNS: [&str; 5] = ["add", "mul", "div", "sqrt", "add_zero"];
 
 /// The operations of the `Lanes` table, in column order. `cmp` is
-/// `compare_quiet`, and `min` is `minimum`. `scalar_add` adds the lanes one at
-/// a time with the operator of the type, for comparison.
-const LANES_COLUMNS: [&str; 11] = [
+/// `compare_quiet`, and `min` is `minimum`. `to_int` converts to `i32`.
+/// `scalar_add` and `scalar_to_int` run the operation of the type on the
+/// lanes one at a time, for comparison.
+const LANES_COLUMNS: [&str; 13] = [
     "add",
     "mul",
     "div",
@@ -90,6 +91,8 @@ const LANES_COLUMNS: [&str; 11] = [
     "min",
     "add_with",
     "scalar_add",
+    "to_int",
+    "scalar_to_int",
 ];
 
 /// The operations of the decimal reference table, in column order.
@@ -369,6 +372,8 @@ fn lanes_row<S: Standard<W>, const W: usize, const N: usize, T: Copy>(
         Some(each_pair(&left, &right, Lanes::minimum)),
         Some(each_pair(&left, &right, |x, y| x.add_with(y, Env::IEEE).0)),
         Some(each_pair(&first, &second, |x, y| x + y)),
+        Some(each_pair(&left, &left, |x, _| x.to_int::<i32>())),
+        Some(each_pair(&first, &first, |x, _| x.to_int::<i32>())),
     ];
     row(name, &times);
 }

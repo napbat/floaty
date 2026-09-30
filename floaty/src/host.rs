@@ -37,6 +37,13 @@ pub use self::paths::{
     all(target_arch = "x86_64", target_feature = "sse2"),
     target_arch = "aarch64"
 ))]
+mod narrow;
+
+#[cfg(not(floaty_engine_only))]
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "sse2"),
+    target_arch = "aarch64"
+))]
 pub mod packed;
 
 #[cfg(all(
@@ -115,35 +122,37 @@ pub const fn available(host: Host, kind: Kind) -> bool {
     ));
     // Every x86-64 processor has the x87 unit.
     let x87 = cfg!(target_arch = "x86_64");
-    // `FEAT_FP16` computes binary16 in its own precision, and `FEAT_BF16`
-    // rounds binary32 to bfloat16.
+    // `FEAT_FP16` computes binary16 in its own precision.
     let fp16 = cfg!(all(target_arch = "aarch64", target_feature = "fp16"));
-    let bf16 = cfg!(all(target_arch = "aarch64", target_feature = "bf16"));
     match (host, kind) {
         // The x87 unit has no fused multiply-add. Two roundings of a bfloat16
         // fused multiply-add, or of an integer, through binary32 can differ
         // from one. Only the x87 unit has a remainder instruction, and it
-        // loads binary32, binary64, and x87 extended values.
-        (Host::None | Host::Half | Host::BFloat, Kind::Remainder)
-        | (Host::None, _)
+        // loads binary32, binary64, and x87 extended values. binary16 and
+        // bfloat16 values widen to binary32 exactly for it.
+        (Host::None, _)
         | (Host::Extended, Kind::FusedMultiplyAdd | Kind::Comparison)
         | (Host::BFloat, Kind::FusedMultiplyAdd | Kind::FromInt) => false,
         (Host::Half, Kind::FusedMultiplyAdd) => unit && fp16,
-        (Host::BFloat, Kind::Arithmetic | Kind::SquareRoot) => unit && bf16,
-        // A bfloat16 value widens to binary32 by a shift, so its conversion to
-        // an integer and its rounding need no bfloat16 instruction.
+        // A bfloat16 value widens to binary32 by a shift, and a binary32
+        // result rounds to bfloat16 in integer instructions, so the bfloat16
+        // paths need no bfloat16 instruction.
         (
             Host::Single | Host::Double,
             Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt | Kind::Comparison,
         )
-        | (Host::BFloat, Kind::ToInt | Kind::Comparison) => unit,
+        | (Host::BFloat, Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::Comparison) => {
+            unit
+        }
         (Host::Single | Host::Double, Kind::FusedMultiplyAdd) => unit && fused,
         (Host::Single | Host::Double | Host::BFloat, Kind::RoundToIntegral) => unit && rounding,
-        (
-            Host::Half,
-            Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt | Kind::Comparison,
-        ) => unit && half,
         (Host::Half, Kind::RoundToIntegral) => unit && half && rounding,
+        // binary16 widens to binary32 and rounds back in F16C or `FCVT`, or
+        // else in integer instructions. The engine compares binary16 values
+        // faster than the integer widening does, so a comparison takes the
+        // path only with a widening instruction.
+        (Host::Half, Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt) => unit,
+        (Host::Half, Kind::Comparison) => unit && half,
         (
             Host::Extended,
             Kind::Arithmetic
@@ -153,7 +162,7 @@ pub const fn available(host: Host, kind: Kind) -> bool {
             | Kind::FromInt
             | Kind::Remainder,
         )
-        | (Host::Single | Host::Double, Kind::Remainder) => unit && x87,
+        | (Host::Single | Host::Double | Host::Half | Host::BFloat, Kind::Remainder) => unit && x87,
     }
 }
 
@@ -167,23 +176,18 @@ pub const fn convertible(from: Host, to: Host) -> bool {
             all(target_arch = "x86_64", target_feature = "sse2"),
             target_arch = "aarch64"
         ));
-    let half = cfg!(any(
-        all(target_arch = "x86_64", target_feature = "f16c"),
-        target_arch = "aarch64"
-    ));
     let x87 = cfg!(target_arch = "x86_64");
-    let bf16 = cfg!(all(target_arch = "aarch64", target_feature = "bf16"));
     match (from, to) {
-        // A shift widens bfloat16 to binary32 exactly.
-        (Host::Single, Host::Double)
+        // A shift widens bfloat16 to binary32 exactly, and integer
+        // instructions round binary32 to bfloat16. binary16 widens and rounds
+        // in F16C or `FCVT`, or else in integer instructions.
+        (Host::Single, Host::Double | Host::BFloat | Host::Half)
         | (Host::Double, Host::Single)
-        | (Host::BFloat, Host::Single | Host::Double) => unit,
-        (Host::Half, Host::Single | Host::Double) | (Host::Single, Host::Half) => unit && half,
+        | (Host::BFloat | Host::Half, Host::Single | Host::Double) => unit,
         // Only AArch64 rounds binary64 to binary16 once.
         (Host::Double, Host::Half) => unit && cfg!(target_arch = "aarch64"),
         (Host::Single | Host::Double, Host::Extended)
         | (Host::Extended, Host::Single | Host::Double) => unit && x87,
-        (Host::Single, Host::BFloat) => unit && bf16,
         _ => false,
     }
 }
@@ -421,6 +425,15 @@ mod none {
             _to: Host,
             _env: &Env,
         ) -> Option<[u64; N]> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn to_int_i32<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+            _value: &[Float<S, W, M>; N],
+            _env: &Env,
+        ) -> Option<[i32; N]> {
             None
         }
     }

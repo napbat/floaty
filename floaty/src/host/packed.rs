@@ -16,13 +16,16 @@
 //! stores, which took more time than the arithmetic.
 
 mod bfloat;
+mod extended;
 mod half;
 mod order;
 
 use core::cmp::Ordering;
 
 use super::environment::{self, packed};
-use super::paths::{nan_16, nan_32, nan_64, precision_of, ready_for, ready_for_integral};
+use super::paths::{
+    nan_16, nan_32, nan_64, nan_bfloat, precision_of, ready_for, ready_for_integral,
+};
 use super::{Kind, Operation};
 use crate::env::{Env, Mode};
 use crate::float::Float;
@@ -31,9 +34,11 @@ use crate::format::internal::{Host, MinMax};
 
 /// Returns `true` when the packed paths compute the operations of `kind` on
 /// lanes of the host kind `host`. binary16 lanes compute in binary32 where
-/// the build widens and narrows them, except the fused multiply-add: two
-/// roundings of it through binary32 can differ from one. bfloat16 lanes
-/// round to integral values in binary32. The answer is a constant.
+/// the build widens and narrows them, and bfloat16 lanes compute in binary32
+/// in every build. Neither has the fused multiply-add: two roundings of it
+/// through binary32 can differ from one. x87 extended lanes run the scalar
+/// instructions after one check of the control word. The answer is a
+/// constant.
 #[must_use]
 pub const fn lanes_of(host: Host, kind: Kind) -> bool {
     match (host, kind) {
@@ -45,20 +50,28 @@ pub const fn lanes_of(host: Host, kind: Kind) -> bool {
             | Kind::RoundToIntegral
             | Kind::Comparison,
         )
-        | (Host::BFloat, Kind::RoundToIntegral) => true,
-        (Host::Half, Kind::Arithmetic | Kind::SquareRoot | Kind::RoundToIntegral) => packed::HALF,
+        | (
+            Host::BFloat,
+            Kind::Arithmetic | Kind::SquareRoot | Kind::RoundToIntegral | Kind::Comparison,
+        )
+        | (Host::Extended, Kind::Arithmetic | Kind::SquareRoot) => true,
+        (Host::Single | Host::Double, Kind::ToInt) => packed::INTEGERS,
+        (
+            Host::Half,
+            Kind::Arithmetic | Kind::SquareRoot | Kind::RoundToIntegral | Kind::Comparison,
+        ) => packed::HALF,
         _ => false,
     }
 }
 
 /// Returns `true` when the packed paths convert lanes from the host kind
 /// `from` to the host kind `to`. The answer is a constant. binary64 lanes do
-/// not round to binary16: two roundings through binary32 can differ from
-/// one.
+/// not round to binary16 or bfloat16: two roundings through binary32 can
+/// differ from one.
 #[must_use]
 pub const fn converts(from: Host, to: Host) -> bool {
     match (from, to) {
-        (Host::Single, Host::Double)
+        (Host::Single, Host::Double | Host::BFloat)
         | (Host::Double, Host::Single)
         | (Host::BFloat, Host::Single | Host::Double) => true,
         (Host::Half, Host::Single | Host::Double) | (Host::Single, Host::Half) => packed::HALF,
@@ -325,7 +338,9 @@ pub fn binary<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             })
         }
         Host::Half => half::binary(left, right, operation),
-        Host::None | Host::BFloat | Host::Extended => None,
+        Host::BFloat => bfloat::binary(left, right, operation),
+        Host::Extended => extended::binary(left, right, operation),
+        Host::None => None,
     }
 }
 
@@ -362,7 +377,9 @@ pub fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             })
         }
         Host::Half => half::sqrt(value),
-        Host::None | Host::BFloat | Host::Extended => None,
+        Host::BFloat => bfloat::sqrt(value),
+        Host::Extended => extended::sqrt(value),
+        Host::None => None,
     }
 }
 
@@ -457,7 +474,8 @@ pub fn mul_add<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
 
 /// Returns the encoding of each lane converted to the host kind `to` by the
 /// host unit. The packed paths convert between binary32 and binary64, from
-/// binary16 and bfloat16 to both, and from binary32 to binary16. A
+/// binary16 and bfloat16 to both, and from binary32 to binary16 and to
+/// bfloat16. A
 /// conversion gives a NaN only for a NaN lane, so the result is `None` for
 /// a NaN lane.
 #[inline]
@@ -521,8 +539,60 @@ pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             let nan = lanes.iter().fold(false, |nan, &bits| nan | nan_64(bits));
             (!nan).then_some(lanes)
         }
+        (Host::Single, Host::BFloat) => {
+            let bits = bfloat::from_singles(value)?;
+            let nan = bits.iter().fold(false, |nan, &bits| nan | nan_bfloat(bits));
+            (!nan).then_some(bits.map(u64::from))
+        }
         _ => None,
     }
+}
+
+/// Returns the 32-bit integer of a scalar conversion to a 64-bit integer, or
+/// the integer indefinite `i32::MIN` when the scalar conversion must decide
+/// the lane.
+#[inline]
+fn indefinite_unless_i32(integer: Option<i64>) -> i32 {
+    integer
+        .and_then(|integer| i32::try_from(integer).ok())
+        .unwrap_or(i32::MIN)
+}
+
+/// Returns each lane rounded to a 32-bit integer to nearest even by the host
+/// unit, or `None` when the path does not apply. A lane that the scalar
+/// conversion must decide holds the integer indefinite `i32::MIN`: a NaN, a
+/// value outside the range of `i32`, and `-2^31` itself.
+#[inline]
+pub fn to_int_i32<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    value: &[Float<S, W, M>; N],
+    env: &Env,
+) -> Option<[i32; N]> {
+    if !ready_for(S::HOST, env, S::PRECISION) {
+        return None;
+    }
+    let mut lanes = [0; N];
+    match S::HOST {
+        Host::Single => {
+            let x = singles(value)?;
+            in_chunks::<i32, N, 8, 4>(
+                &mut lanes,
+                |start| packed::to_int_f32x8(*chunk(x, start)),
+                |start| Some(packed::to_int_f32x4(*chunk(x, start))),
+                |index| Some(indefinite_unless_i32(environment::to_int_f32(x[index]))),
+            )?;
+        }
+        Host::Double => {
+            let x = doubles(value)?;
+            in_chunks::<i32, N, 4, 2>(
+                &mut lanes,
+                |start| packed::to_int_f64x4(*chunk(x, start)),
+                |start| Some(packed::to_int_f64x2(*chunk(x, start))),
+                |index| Some(indefinite_unless_i32(environment::to_int_f64(x[index]))),
+            )?;
+        }
+        Host::None | Host::Half | Host::BFloat | Host::Extended => return None,
+    }
+    Some(lanes)
 }
 
 /// Returns the order of each pair of lanes from the host unit, as the quiet

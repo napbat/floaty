@@ -104,8 +104,8 @@ fn every_binary16_chunk_gives_the_lanes_of_the_scalar_instructions() {
         0x7F80_0001,
     ]
     .map(f32::from_bits);
-    let widen = |bits: u16| widen_half(bits).expect("the build has F16C").to_bits();
-    let narrow = |value: f32| narrow_half(value).expect("the build has F16C");
+    let widen = |bits: u16| widen_half(bits).to_bits();
+    let narrow = |value: f32| narrow_half(value);
     let first: [u16; 4] = halves[..4].try_into().expect("eight lanes");
     let four: [f32; 4] = singles[..4].try_into().expect("eight lanes");
     if let Some(lanes) = super::widen_halves_x4(first) {

@@ -385,15 +385,16 @@ path.
 | SSE | x86-64 with SSE2 | binary32 and binary64: `+`, `-`, `*`, `/`, `sqrt`, `convert` between them, `to_int`, `from_int`, comparisons, and the minimum and maximum operations | The integer indefinite; an unordered comparison; a minimum or maximum of a NaN or of two zeros |
 | SSE4.1 rounding | x86-64 with SSE4.1 | `round_to_integral` of binary32 and binary64, and through binary32 of bfloat16 and of binary16 with F16C, in `TiesToEven`, `TowardPositive`, `TowardNegative`, and `TowardZero` | |
 | FMA | x86-64 with FMA | `mul_add` of binary32 and binary64 | |
-| F16C | x86-64 with F16C | binary16 through binary32: `+`, `-`, `*`, `/`, `sqrt`, `to_int`, `from_int`, comparisons, and the minimum and maximum operations. `convert` from binary16 to binary32 and binary64, and from binary32 to binary16. | `mul_add`, and `convert` from binary64, which two roundings can get wrong |
-| bfloat16 | x86-64 with SSE2, or AArch64 | bfloat16 widened by a shift: `convert` to binary32 and binary64, `to_int`, `round_to_integral` with SSE4.1 on x86-64, comparisons, and the minimum and maximum operations | `from_int`, and the arithmetic without `FEAT_BF16` |
+| binary16 | x86-64 with SSE2, or AArch64 | binary16 through binary32: `+`, `-`, `*`, `/`, `sqrt`, `to_int`, `from_int`, `remainder` by `FPREM1` on x86-64, `convert` from binary16 to binary32 and binary64, and from binary32 to binary16. Without F16C, integer instructions widen binary16 and round binary32 results to binary16. | `mul_add`, and `convert` from binary64, which two roundings can get wrong |
+| F16C | x86-64 with F16C | The binary16 paths in `VCVTPH2PS` and `VCVTPS2PH`, and also comparisons, the minimum and maximum operations, and `round_to_integral` with SSE4.1 | |
+| bfloat16 | x86-64 with SSE2, or AArch64 | bfloat16 through binary32: `+`, `-`, `*`, `/`, `sqrt`, `to_int`, `remainder` by `FPREM1` on x86-64, `round_to_integral` with SSE4.1 on x86-64, comparisons, the minimum and maximum operations, and `convert` to binary32 and binary64 and from binary32. A shift widens bfloat16, and integer instructions round binary32 results to bfloat16. | `mul_add` and `from_int`, which two roundings can get wrong |
 | x87 | x86-64 | x87 extended: `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral` to nearest even, `to_int`, `from_int`, and `convert` to and from binary32 and binary64 | A control word other than round to nearest at 64-bit precision; the integer indefinite |
-| x87 remainder | x86-64 | `remainder` of binary32, binary64, and x87 extended, by `FPREM1` | A dividend exponent more than 630 above the divisor exponent; a subnormal dividend, or a divisor small enough to give a subnormal result |
-| Packed SSE and AVX | x86-64 with SSE2, and AVX for 256 bits | `Lanes` of binary32 and binary64: the operators, `sqrt`, `mul_add` with FMA, `round_to_integral` with SSE4.1, `convert` between them, `compare_quiet`, and the minimum and maximum operations. binary16 lanes with F16C, and bfloat16 `round_to_integral` and `convert`. | A NaN in any lane, or for the minimum and maximum a NaN or two zeros in any pair of lanes, sends each lane to its scalar path |
+| x87 remainder | x86-64 | `remainder` of binary32, binary64, and x87 extended, by `FPREM1`, and of binary16 and bfloat16 widened to binary32 | A dividend exponent more than 630 above the divisor exponent; a dividend that is subnormal in the format that `FPREM1` loads, or a divisor small enough to give a subnormal result |
+| Packed SSE and AVX | x86-64 with SSE2, and AVX for 256 bits | `Lanes` of binary32 and binary64: the operators, `sqrt`, `mul_add` with FMA, `round_to_integral` with SSE4.1, `convert` between them, `compare_quiet`, the minimum and maximum operations, and `to_int`. bfloat16 lanes, and binary16 lanes with F16C: the operators, `sqrt`, `round_to_integral` with SSE4.1, `convert`, `compare_quiet`, and the minimum and maximum operations. x87 extended lanes: the operators and `sqrt`, with one check of the control word. | A NaN in any lane, or for the minimum and maximum a NaN or two zeros in any pair of lanes, sends each lane to its scalar path. For `to_int`, the integer indefinite sends its lane to the scalar conversion. |
 | AArch64 | AArch64 | binary32, binary64, and binary16: `+`, `-`, `*`, `/`, `sqrt`, `convert`, `to_int`, `from_int`, `round_to_integral` in the five IEEE 754 directions, comparisons, and the minimum and maximum operations. `mul_add` of binary32 and binary64. | FPCR with a nonzero `RMode`, FZ, FZ16, FIZ, AH, AHP, or a trap enable; a saturated integer |
 | `FEAT_FP16` | AArch64 with `+fp16` | `mul_add` of binary16 | |
-| `FEAT_BF16` | AArch64 with `+bf16` | bfloat16 through binary32: `+`, `-`, `*`, `/`, `sqrt`, and `convert` from binary32 | `mul_add` |
-| Packed AArch64 | AArch64 | As the packed SSE paths, at 128 bits | As the packed SSE paths |
+| `FEAT_BF16` | AArch64 with `+bf16` | The scalar bfloat16 paths round in `BFCVT` | |
+| Packed AArch64 | AArch64 | As the packed SSE paths, at 128 bits, but without `to_int` and x87 extended lanes | As the packed SSE paths |
 | Double-double | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`, with one check of the environment for all steps | |
 
 [docs/x86-64-acceleration.md](docs/x86-64-acceleration.md) lists the x86-64
@@ -406,8 +407,9 @@ Nanoseconds per operation on an Intel Core i9-9900K, from
 of 1,024 operations on random normal operands. Figures change from run to
 run and from host to host.
 
-The engine, through the `_with` methods with an `Env` chosen at run time.
-Each cell gives floaty, then `rustc_apfloat` 0.2.3 where it has the format.
+The first table measures the engine, through the `_with` methods with an
+`Env` chosen at run time. Each cell gives floaty, then `rustc_apfloat` 0.2.3
+where it has the format.
 
 | Format | add | mul | div | mul_add |
 | --- | --- | --- | --- | --- |
@@ -424,18 +426,20 @@ Each cell gives floaty, then `rustc_apfloat` 0.2.3 where it has the format.
 | decimal64, DPD | 105.5 | 77.8 | 111.5 | 111.6 |
 | decimal128, DPD | 119.3 | 114.5 | 163.3 | 175.6 |
 
-The entry points without flags, which take a host path where the build has
-one. A `Lanes` figure is per lane.
+The second table measures the entry points without flags, which take a
+host path where the build has one. A `Lanes` figure is per lane.
 
 | Operation | Engine | Default build | x86-64-v3 build | Host `f32` or `f64`, x86-64-v3 |
 | --- | --- | --- | --- | --- |
 | binary32 `+` | 20.2 | 1.9 | 1.9 | 0.8 |
 | binary64 `/` | 35.8 | 1.9 | 2.0 | 0.9 |
 | binary32 `mul_add` | 26.9 | 24.3 | 1.7 | 1.0 |
-| binary16 `+` | 19.8 | 16.1 | 2.3 | |
+| binary16 `+` | 19.8 | 6.7 | 2.3 | |
+| bfloat16 `+` | 19.9 | 2.3 | 2.4 | |
 | x87 extended `/` | 56.1 | 4.5 | 4.0 | |
 | `Lanes<F32, 8>` `+` | 17.1 | 0.4 | 0.3 | |
-| `Lanes<F16, 8>` `+` | 15.8 | 11.5 | 0.3 | |
+| `Lanes<F16, 8>` `+` | 15.8 | 6.4 | 0.3 | |
+| `Lanes<BF16, 8>` `+` | 16.5 | 1.9 | 1.6 | |
 
 The decimal formats against the Intel Decimal Floating-Point Math Library
 for BID, and against the `decDouble` and `decQuad` functions of decNumber

@@ -3,9 +3,7 @@
 //! take `RUSTFLAGS`, then still compiles the 256-bit register class. Each
 //! function inlines into a caller with the features.
 
-#[cfg(target_feature = "f16c")]
-use core::arch::x86_64::__m128i;
-use core::arch::x86_64::{__m128, __m256, __m256d};
+use core::arch::x86_64::{__m128, __m128i, __m256, __m256d, __m256i};
 use core::mem::transmute;
 
 use super::super::super::packed::Masks;
@@ -331,4 +329,51 @@ pub unsafe fn min_max_f64x4(left: [f64; 4], right: [f64; 4], operation: MinMax) 
         packed!(ymm_reg, "vmaxpd {a}, {a}, {b}", a, b);
     }
     double_lanes(a)
+}
+
+/// # Safety
+///
+/// The processor must have AVX.
+#[target_feature(enable = "avx")]
+#[inline]
+pub unsafe fn to_int_f32x8(value: [f32; 8]) -> [i32; 8] {
+    let a = singles(value);
+    let result: __m256i;
+    // SAFETY: VCVTPS2DQ reads and writes AVX registers. The caller
+    // guarantees AVX, and the conversion changes only the status flags of
+    // MXCSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "vcvtps2dq {result}, {a}",
+            a = in(ymm_reg) a,
+            result = lateout(ymm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    // SAFETY: both types hold 32 bytes, and every bit pattern is a value of
+    // each.
+    unsafe { transmute::<__m256i, [i32; 8]>(result) }
+}
+
+/// # Safety
+///
+/// The processor must have AVX.
+#[target_feature(enable = "avx")]
+#[inline]
+pub unsafe fn to_int_f64x4(value: [f64; 4]) -> [i32; 4] {
+    let a = doubles(value);
+    let result: __m128i;
+    // SAFETY: as in `to_int_f32x8`, with `VCVTPD2DQ`, which writes an SSE
+    // register.
+    unsafe {
+        core::arch::asm!(
+            "vcvtpd2dq {result}, {a}",
+            a = in(ymm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    unsafe { transmute::<__m128i, [i32; 4]>(result) }
 }

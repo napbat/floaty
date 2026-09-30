@@ -59,15 +59,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
             return self.to_int_with(M::default()).0;
         }
         match host::to_int::<S, W>(self.bits, &M::ENV) {
-            // The host rounds to a 64-bit integer, and the range of `I`
-            // decides the result, as the engine decides it.
-            Some(integer) => {
-                let negative = integer < 0;
-                match fit::<I, _>(negative, &[integer.unsigned_abs()]) {
-                    Some(parts) => ToInt::Value(I::from_parts(parts)),
-                    None => ToInt::OutOfRange { negative },
-                }
-            }
+            Some(integer) => from_host_integer(integer),
             None => to_int_in_engine(self),
         }
     }
@@ -94,6 +86,18 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     pub fn to_int_with<I: Integer>(self, behavior: impl Override) -> (ToInt<I>, Flags) {
         S::to_int(self.bits, behavior.apply::<M>())
+    }
+}
+
+/// Returns the result of a conversion to `I` of the integer that the host
+/// rounds a value to. The range of `I` decides the result, as the engine
+/// decides it.
+#[inline]
+pub(crate) fn from_host_integer<I: Integer>(integer: i64) -> ToInt<I> {
+    let negative = integer < 0;
+    match fit::<I, _>(negative, &[integer.unsigned_abs()]) {
+        Some(parts) => ToInt::Value(I::from_parts(parts)),
+        None => ToInt::OutOfRange { negative },
     }
 }
 

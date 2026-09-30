@@ -259,8 +259,7 @@ pub fn mul_add_f64(_left: f64, _right: f64, _addend: f64) -> Option<f64> {
 /// Returns a binary16 value widened exactly to binary32, by `VCVTPH2PS`.
 #[cfg(target_feature = "f16c")]
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // A build without F16C returns `None` from the same signature.
-pub fn widen_half(bits: u16) -> Option<f32> {
+pub fn widen_half(bits: u16) -> f32 {
     let value: f32;
     // SAFETY: VMOVD and VCVTPH2PS read a general register and write one SSE
     // register. The build enables F16C, and the widening is exact, so it
@@ -274,15 +273,14 @@ pub fn widen_half(bits: u16) -> Option<f32> {
             options(pure, nomem, nostack, preserves_flags),
         );
     }
-    Some(value)
+    value
 }
 
 /// Returns a binary32 value rounded to binary16 to nearest even, by
 /// `VCVTPS2PH` with the rounding control 0 in its immediate.
 #[cfg(target_feature = "f16c")]
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // A build without F16C returns `None` from the same signature.
-pub fn narrow_half(value: f32) -> Option<u16> {
+pub fn narrow_half(value: f32) -> u16 {
     let bits: u32;
     // SAFETY: VCVTPS2PH and VMOVD read and write one SSE register and write a
     // general register. The build enables F16C, and the rounding changes only
@@ -296,28 +294,31 @@ pub fn narrow_half(value: f32) -> Option<u16> {
             options(pure, nomem, nostack, preserves_flags),
         );
     }
-    Some(u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits"))
+    u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits")
 }
 
-/// Returns `None`: a build without F16C has no binary16 path.
+/// Returns a binary16 value widened exactly to binary32, by the integer
+/// widening of the host paths, in a build without F16C.
 #[cfg(not(target_feature = "f16c"))]
 #[inline]
-pub fn widen_half(_bits: u16) -> Option<f32> {
-    None
+pub fn widen_half(bits: u16) -> f32 {
+    f32::from_bits(super::narrow::widen_half_bits(bits))
 }
 
-/// Returns `None`: a build without F16C has no binary16 path.
+/// Returns a binary32 value rounded to binary16 to nearest even, by the
+/// integer rounding of the host paths, in a build without F16C.
 #[cfg(not(target_feature = "f16c"))]
 #[inline]
-pub fn narrow_half(_value: f32) -> Option<u16> {
-    None
+pub fn narrow_half(value: f32) -> u16 {
+    super::narrow::round_to_half(value.to_bits())
 }
 
-/// Returns `None`: the bfloat16 conversions of x86-64 flush subnormal
-/// values, so no bfloat16 path exists.
+/// Returns a binary32 value rounded to bfloat16 to nearest even, by the
+/// integer rounding of the host paths. The bfloat16 conversions of x86-64
+/// read a subnormal input as zero.
 #[inline]
-pub fn narrow_bfloat(_value: f32) -> Option<u16> {
-    None
+pub fn narrow_bfloat(value: f32) -> u16 {
+    super::narrow::round_to_bfloat(value.to_bits())
 }
 
 /// Returns `None`: x86-64 has no binary16 fused multiply-add below

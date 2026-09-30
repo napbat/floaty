@@ -8,7 +8,7 @@
 //! entry points take the engine.
 
 use floaty::{
-    BF16, DoubleDouble, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F64, F80, Gcc, Qd, TF32,
+    BF16, DoubleDouble, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F64, F80, Gcc, Qd, TF32,
 };
 use floaty_verify::encodings::{IntegerBit, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
@@ -882,6 +882,63 @@ fn remainders_give_the_default_mode_results() {
             "{a:#x} {b:#x}"
         );
     }
+    // binary16 and bfloat16 take the binary32 path on their widened values.
+    let mut halves = close_pairs(&mut random, 5, 10, false, 40);
+    halves.extend(random_pairs::<u128>(&mut random, 16, 5, 4_000));
+    let mut bfloats = close_pairs(&mut random, 8, 7, false, 300);
+    bfloats.extend(random_pairs::<u128>(&mut random, 16, 8, 4_000));
+    let bits = |value: u128| u16::try_from(value).expect("a 16-bit encoding");
+    for (a, b) in halves {
+        let (x, y) = (F16::from_bits(bits(a)), F16::from_bits(bits(b)));
+        let expected = x.remainder_with(y, F16::ENV).0;
+        assert_eq!(
+            x.remainder(y).to_bits(),
+            expected.to_bits(),
+            "{a:#x} {b:#x}"
+        );
+    }
+    for (a, b) in bfloats {
+        let (x, y) = (BF16::from_bits(bits(a)), BF16::from_bits(bits(b)));
+        let expected = x.remainder_with(y, BF16::ENV).0;
+        assert_eq!(
+            x.remainder(y).to_bits(),
+            expected.to_bits(),
+            "{a:#x} {b:#x}"
+        );
+    }
+}
+
+/// Every remainder of binary16 and of bfloat16 operands, in 16 threads. The
+/// remainder of the widened binary32 values must narrow exactly for each
+/// pair, ties and exact multiples included. Run time in a release build:
+/// about 70 seconds on x86-64.
+#[test]
+#[ignore = "exhaustive sweep; run with --ignored"]
+fn every_16_bit_remainder_gives_the_default_mode_result() {
+    std::thread::scope(|scope| {
+        for part in 0..16_u16 {
+            scope.spawn(move || {
+                for high in part * 0x1000..(part + 1) * 0x1000 {
+                    for low in 0..=u16::MAX {
+                        let (x, y) = (F16::from_bits(high), F16::from_bits(low));
+                        let engine = x.remainder_with(y, F16::ENV).0;
+                        assert_eq!(
+                            x.remainder(y).to_bits(),
+                            engine.to_bits(),
+                            "F16 {high:#06x} {low:#06x}"
+                        );
+                        let (x, y) = (BF16::from_bits(high), BF16::from_bits(low));
+                        let engine = x.remainder_with(y, BF16::ENV).0;
+                        assert_eq!(
+                            x.remainder(y).to_bits(),
+                            engine.to_bits(),
+                            "BF16 {high:#06x} {low:#06x}"
+                        );
+                    }
+                }
+            });
+        }
+    });
 }
 
 /// Checks the remainder of the format `$alias` on dividends whose quotient

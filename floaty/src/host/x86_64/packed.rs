@@ -9,9 +9,7 @@
 //! from keeping values in registers across it. A function for a feature that
 //! the build does not have returns `None`.
 
-#[cfg(target_feature = "f16c")]
-use core::arch::x86_64::__m128i;
-use core::arch::x86_64::{__m128, __m128d};
+use core::arch::x86_64::{__m128, __m128d, __m128i};
 use core::mem::transmute;
 
 use super::super::Operation;
@@ -23,6 +21,9 @@ use crate::format::internal::MinMax;
 /// `true` when the build has 256-bit registers, which hold eight binary32 or
 /// four binary64 lanes.
 pub const WIDE: bool = cfg!(target_feature = "avx");
+
+/// `true`: SSE2 converts binary32 and binary64 lanes to 32-bit integers.
+pub const INTEGERS: bool = true;
 
 /// `true` when the build has F16C, which widens binary16 lanes to binary32
 /// and rounds binary32 lanes to binary16.
@@ -312,6 +313,52 @@ pub fn narrow_x2(value: [f64; 2]) -> [f32; 2] {
         );
     }
     let [low, high, _, _] = single_lanes(result);
+    [low, high]
+}
+
+/// Returns four binary32 lanes rounded to 32-bit integers in the rounding
+/// direction of MXCSR, which the path requires to be to nearest even, by
+/// `CVTPS2DQ`. A NaN lane, or a lane outside the range of `i32`, gives the
+/// integer indefinite `i32::MIN`.
+#[inline]
+pub fn to_int_f32x4(value: [f32; 4]) -> [i32; 4] {
+    let a = singles(value);
+    let result: __m128i;
+    // SAFETY: CVTPS2DQ reads and writes SSE registers. SSE2 is part of every
+    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // The conversion changes only the status flags of MXCSR, which floaty
+    // does not read.
+    unsafe {
+        core::arch::asm!(
+            sse!("cvtps2dq {result}, {a}", "vcvtps2dq {result}, {a}"),
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    unsafe { transmute::<__m128i, [i32; 4]>(result) }
+}
+
+/// Returns two binary64 lanes rounded to 32-bit integers as `to_int_f32x4`
+/// rounds, by `CVTPD2DQ`.
+#[inline]
+pub fn to_int_f64x2(value: [f64; 2]) -> [i32; 2] {
+    let a = doubles(value);
+    let result: __m128i;
+    // SAFETY: as in `to_int_f32x4`, with `CVTPD2DQ`, which writes the two
+    // integers to the low half of its destination.
+    unsafe {
+        core::arch::asm!(
+            sse!("cvtpd2dq {result}, {a}", "vcvtpd2dq {result}, {a}"),
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    // SAFETY: as in `to_int_f32x4`.
+    let [low, high, _, _] = unsafe { transmute::<__m128i, [i32; 4]>(result) };
     [low, high]
 }
 
@@ -606,6 +653,17 @@ wide!(
     /// Returns the smaller or the larger of each pair of four binary64
     /// lanes, by `VMINPD` or `VMAXPD`.
     min_max_f64x4, target_feature = "avx", (left: [f64; 4], right: [f64; 4], operation: MinMax) -> [f64; 4]
+);
+
+wide!(
+    /// Returns eight binary32 lanes rounded to 32-bit integers as
+    /// `to_int_f32x4` rounds, by `VCVTPS2DQ`.
+    to_int_f32x8, target_feature = "avx", (value: [f32; 8]) -> [i32; 8]
+);
+wide!(
+    /// Returns four binary64 lanes rounded to 32-bit integers as
+    /// `to_int_f32x4` rounds, by `VCVTPD2DQ`.
+    to_int_f64x4, target_feature = "avx", (value: [f64; 4]) -> [i32; 4]
 );
 
 #[cfg(target_feature = "avx")]

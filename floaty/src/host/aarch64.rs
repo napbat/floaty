@@ -175,8 +175,7 @@ pub fn mul_add_f64(left: f64, right: f64, addend: f64) -> Option<f64> {
 
 /// Returns a binary16 value widened exactly to binary32, by `FCVT`.
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack F16C.
-pub fn widen_half(bits: u16) -> Option<f32> {
+pub fn widen_half(bits: u16) -> f32 {
     let value: f32;
     // SAFETY: FMOV moves the bits into the low half of a SIMD and
     // floating-point register, and FCVT widens them. Every AArch64 target has
@@ -190,14 +189,13 @@ pub fn widen_half(bits: u16) -> Option<f32> {
             options(pure, nomem, nostack, preserves_flags),
         );
     }
-    Some(value)
+    value
 }
 
 /// Returns a binary32 value rounded to binary16 in the rounding direction of
 /// FPCR, which the path requires to be to nearest even, by `FCVT`.
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack F16C.
-pub fn narrow_half(value: f32) -> Option<u16> {
+pub fn narrow_half(value: f32) -> u16 {
     let bits: u32;
     // SAFETY: FCVT rounds in a SIMD and floating-point register and clears
     // its other bits, and FMOV moves the low 32 bits to a general register.
@@ -212,7 +210,7 @@ pub fn narrow_half(value: f32) -> Option<u16> {
             options(pure, nomem, nostack, preserves_flags),
         );
     }
-    Some(u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits"))
+    u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits")
 }
 
 /// Returns a binary32 value rounded to bfloat16 in the rounding direction of
@@ -221,11 +219,10 @@ pub fn narrow_half(value: f32) -> Option<u16> {
 /// FPCR that applies to single-precision arithmetic.
 #[cfg(target_feature = "bf16")]
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // A build without `FEAT_BF16` returns `None` from the same signature.
-pub fn narrow_bfloat(value: f32) -> Option<u16> {
+pub fn narrow_bfloat(value: f32) -> u16 {
     // SAFETY: the build enables `FEAT_BF16`, so the processor that runs it
     // has the feature.
-    Some(unsafe { bfcvt(value) })
+    unsafe { bfcvt(value) }
 }
 
 /// Rounds a binary32 value to bfloat16 by `BFCVT`.
@@ -259,11 +256,12 @@ unsafe fn bfcvt(value: f32) -> u16 {
     u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits")
 }
 
-/// Returns `None`: a build without `FEAT_BF16` has no bfloat16 path.
+/// Returns a binary32 value rounded to bfloat16 to nearest even, by the
+/// integer rounding of the host paths, in a build without `FEAT_BF16`.
 #[cfg(not(target_feature = "bf16"))]
 #[inline]
-pub fn narrow_bfloat(_value: f32) -> Option<u16> {
-    None
+pub fn narrow_bfloat(value: f32) -> u16 {
+    super::narrow::round_to_bfloat(value.to_bits())
 }
 
 /// Returns `left * right + addend` of binary16 encodings, rounded once, by

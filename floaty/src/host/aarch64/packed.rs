@@ -25,6 +25,9 @@ pub const WIDE: bool = false;
 /// rounds binary32 lanes to binary16.
 pub const HALF: bool = true;
 
+/// `false`: no packed path converts lanes to integers on AArch64.
+pub const INTEGERS: bool = false;
+
 /// Returns four binary32 lanes as the value of a vector register.
 #[inline]
 fn singles(lanes: [f32; 4]) -> float32x4_t {
@@ -460,3 +463,21 @@ no_wide!(compare_f32x8, ([f32; 8], [f32; 8]) -> Masks<u32, 8>);
 no_wide!(compare_f64x4, ([f64; 4], [f64; 4]) -> Masks<u64, 4>);
 no_wide!(min_max_f32x8, ([f32; 8], [f32; 8], MinMax) -> [f32; 8]);
 no_wide!(min_max_f64x4, ([f64; 4], [f64; 4], MinMax) -> [f64; 4]);
+no_wide!(to_int_f32x8, ([f32; 8]) -> [i32; 8]);
+no_wide!(to_int_f64x4, ([f64; 4]) -> [i32; 4]);
+
+/// Returns the integer indefinite in every lane, which sends each lane to
+/// the scalar conversion. AArch64 `FCVTNS` saturates a lane outside the
+/// range of `i32` and gives zero for a NaN, so no lane shows that the scalar
+/// conversion must decide it. `INTEGERS` keeps the packed path from calling
+/// this function.
+#[inline]
+pub fn to_int_f32x4(_value: [f32; 4]) -> [i32; 4] {
+    [i32::MIN; 4]
+}
+
+/// Returns the integer indefinite in every lane, as `to_int_f32x4` does.
+#[inline]
+pub fn to_int_f64x2(_value: [f64; 2]) -> [i32; 2] {
+    [i32::MIN; 2]
+}

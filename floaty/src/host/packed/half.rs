@@ -40,9 +40,11 @@ pub(super) fn binary<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 packed::narrow_halves_x4(packed::binary_f32x4(a, b, operation))
             },
             |index| {
-                let a = environment::widen_half(x[index])?;
-                let b = environment::widen_half(y[index])?;
-                environment::narrow_half(environment::binary_f32(a, b, operation))
+                let a = environment::widen_half(x[index]);
+                let b = environment::widen_half(y[index]);
+                Some(environment::narrow_half(environment::binary_f32(
+                    a, b, operation,
+                )))
             },
         )
     })
@@ -67,8 +69,8 @@ pub(super) fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 packed::narrow_halves_x4(packed::sqrt_f32x4(a))
             },
             |index| {
-                let a = environment::widen_half(x[index])?;
-                environment::narrow_half(environment::sqrt_f32(a))
+                let a = environment::widen_half(x[index]);
+                Some(environment::narrow_half(environment::sqrt_f32(a)))
             },
         )
     })
@@ -96,8 +98,10 @@ pub(super) fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N
                 packed::narrow_halves_x4(packed::round_f32x4(a, rounding)?)
             },
             |index| {
-                let a = environment::widen_half(x[index])?;
-                environment::narrow_half(environment::round_f32(a, rounding)?)
+                let a = environment::widen_half(x[index]);
+                Some(environment::narrow_half(environment::round_f32(
+                    a, rounding,
+                )?))
             },
         )
     })
@@ -115,7 +119,7 @@ pub(super) fn to_singles<S: Standard<W>, const W: usize, M: Mode, const N: usize
         &mut lanes,
         |start| packed::widen_halves_x8(*chunk(x, start)),
         |start| packed::widen_halves_x4(*chunk(x, start)),
-        |index| environment::widen_half(x[index]),
+        |index| Some(environment::widen_half(x[index])),
     )?;
     Some(lanes)
 }
@@ -136,11 +140,7 @@ pub(super) fn to_doubles<S: Standard<W>, const W: usize, M: Mode, const N: usize
             let [b0, b1, _, _] = packed::widen_halves_x4([a0, a1, 0, 0])?;
             Some(packed::widen_x2([b0, b1]))
         },
-        |index| {
-            Some(environment::widen_single(environment::widen_half(
-                x[index],
-            )?))
-        },
+        |index| Some(environment::widen_single(environment::widen_half(x[index]))),
     )?;
     Some(lanes)
 }
@@ -157,7 +157,7 @@ pub(super) fn from_singles<S: Standard<W>, const W: usize, M: Mode, const N: usi
         &mut lanes,
         |start| packed::narrow_halves_x8(*chunk(x, start)),
         |start| packed::narrow_halves_x4(*chunk(x, start)),
-        |index| environment::narrow_half(x[index]),
+        |index| Some(environment::narrow_half(x[index])),
     )?;
     Some(lanes)
 }

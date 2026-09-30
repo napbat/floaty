@@ -5,7 +5,7 @@ mod order;
 use core::ops;
 
 use crate::env::{Flags, Mode, Override};
-use crate::float::{Class, Float, FloatType};
+use crate::float::{Class, Float, FloatType, from_host_integer};
 use crate::format::Standard;
 use crate::host::{self, Kind, Operation};
 use crate::integer::{Integer, ToInt};
@@ -399,10 +399,27 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     }
 
     /// Converts each lane to the integer type `I`, rounding with the default
-    /// mode. Each lane takes the scalar conversion.
+    /// mode. binary32 and binary64 lanes take a packed path where the build
+    /// has one, and each lane that the packed conversion does not decide takes
+    /// the scalar conversion.
     #[must_use]
+    #[inline]
     pub fn to_int<I: Integer>(self) -> [ToInt<I>; N] {
-        self.lanes.map(Float::to_int::<I>)
+        if !host::available(S::HOST, Kind::ToInt) || !host::packed::lanes_of(S::HOST, Kind::ToInt) {
+            return self.lanes.map(Float::to_int::<I>);
+        }
+        let Some(integers) = host::packed::to_int_i32(&self.lanes, &M::ENV) else {
+            return self.lanes.map(Float::to_int::<I>);
+        };
+        let mut results = [ToInt::Nan; N];
+        for ((result, lane), integer) in results.iter_mut().zip(self.lanes).zip(integers) {
+            *result = if integer == i32::MIN {
+                lane.to_int()
+            } else {
+                from_host_integer(i64::from(integer))
+            };
+        }
+        results
     }
 
     /// Converts each lane to the integer type `I` with the behavior, and
@@ -420,7 +437,8 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     }
 
     /// Makes lanes from integers, each rounded with the default mode, lane 0
-    /// first. Each lane takes the scalar conversion.
+    /// first. Each lane takes the scalar conversion: a packed conversion of
+    /// 32-bit integers measured no faster.
     #[must_use]
     pub fn from_int<I: Integer>(values: [I; N]) -> Self {
         Self::new(values.map(Float::from_int))
