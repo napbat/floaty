@@ -14,7 +14,7 @@ use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 
-use self::internal::{Host, LimbConversion, MinMax, Quotient, Source, Step};
+use self::internal::{FixedLayout, Host, LimbConversion, MinMax, Quotient, Source, Step};
 
 /// A floating-point format family at a width of `W` bits.
 ///
@@ -214,6 +214,15 @@ pub(crate) mod internal {
         pub fn is_minimum(self) -> bool {
             matches!(self, Self::Minimum | Self::MinimumNumber | Self::MinNum)
         }
+    }
+
+    /// The one layout at which an encoding exists.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct FixedLayout {
+        /// The exponent bits.
+        pub exponent_bits: u32,
+        /// The width in bits.
+        pub width: u32,
     }
 
     /// The format of the value that a conversion reads.
@@ -483,6 +492,11 @@ pub trait Encoding: Sealed + 'static {
     /// The exponent bias, or `None` for the bias of the encoding rules.
     #[doc(hidden)]
     const BIAS: Option<i32> = None;
+
+    /// The one layout at which the encoding exists, or `None` for an
+    /// encoding of any layout.
+    #[doc(hidden)]
+    const FIXED_LAYOUT: Option<FixedLayout> = None;
 }
 
 /// The IEEE 754 encoding.
@@ -542,6 +556,10 @@ impl Sealed for B11Fnuz {}
 impl Encoding for B11Fnuz {
     const KIND: EncodingKind = EncodingKind::Fnuz;
     const BIAS: Option<i32> = Some(11);
+    const FIXED_LAYOUT: Option<FixedLayout> = Some(FixedLayout {
+        exponent_bits: 4,
+        width: 8,
+    });
 }
 
 /// An encoding without infinities and without NaNs, for the OCP
@@ -574,6 +592,10 @@ pub enum X87 {}
 impl Sealed for X87 {}
 impl Encoding for X87 {
     const KIND: EncodingKind = EncodingKind::X87;
+    const FIXED_LAYOUT: Option<FixedLayout> = Some(FixedLayout {
+        exponent_bits: 15,
+        width: 80,
+    });
 }
 
 /// The decimal floating-point family: IEEE 754 decimal32, decimal64, and

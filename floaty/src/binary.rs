@@ -60,13 +60,11 @@ where
             "a binary format has at least one fraction bit"
         );
         assert!(
-            !matches!(Enc::KIND, EncodingKind::X87) || (E == 15 && Self::WIDTH == 80),
-            "the X87 encoding exists only as Binary<15, X87> at width 80"
-        );
-        // B11Fnuz is the only encoding with its own bias.
-        assert!(
-            Enc::BIAS.is_none() || (E == 4 && Self::WIDTH == 8),
-            "the B11Fnuz encoding exists only as Binary<4, B11Fnuz> at width 8"
+            match Enc::FIXED_LAYOUT {
+                Some(layout) => E == layout.exponent_bits && Self::WIDTH == layout.width,
+                None => true,
+            },
+            "an encoding with a fixed layout exists only at its exponent bits and width"
         );
     };
 

@@ -94,8 +94,7 @@ where
                 value / power_of_ten_u128(from - to)
             }
         } else {
-            let field: [u64; 2] =
-                nan::align_payload(payload, source.payload_bits, Self::TRAILING);
+            let field: [u64; 2] = nan::align_payload(payload, source.payload_bits, Self::TRAILING);
             limbs::to_u128(&field)
         };
         if payload > Self::LARGEST_PAYLOAD {
