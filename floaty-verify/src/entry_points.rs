@@ -23,6 +23,9 @@ use floaty::mode::direction::TowardPositive;
 use floaty::mode::{Ieee, Rounded};
 use floaty::{BF16, Binary, F16, F32, F64, F80, Float, Lanes, ToInt};
 
+use crate::encodings::{Layout, boundary_encodings_u128};
+use crate::random::SplitMix64;
+
 /// The results of the arithmetic entry points on three operands `x`, `y`,
 /// and `z`, as encodings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -542,4 +545,84 @@ pub fn assert_directed_rounding_under<const N: usize>(
             .to_bits()
     });
     assert_eq!(ours, (engine, engine), "{bits:x?} under {setting}");
+}
+
+/// Checks that [`lane_arithmetic`] of `[x, y, z]`, run by `run`, gives the
+/// results of [`lane_arithmetic_with`].
+///
+/// # Panics
+///
+/// Panics when a result differs.
+pub fn assert_lane_arithmetic_under<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    [x, y, z]: [Lanes<Float<S, W, M>, N>; 3],
+    setting: &str,
+    run: impl FnOnce(&dyn Fn() -> LaneArithmetic<S::Bits, N>) -> LaneArithmetic<S::Bits, N>,
+) {
+    let ours = run(&|| lane_arithmetic(black_box(x), black_box(y), black_box(z)));
+    assert_eq!(
+        ours,
+        lane_arithmetic_with(x, y, z),
+        "{:x?} {:x?} {:x?} under {setting}",
+        x.to_bits(),
+        y.to_bits(),
+        z.to_bits()
+    );
+}
+
+/// Checks that [`lane_conversions`] of `x`, run by `run`, gives the results
+/// of [`lane_conversions_with`].
+///
+/// # Panics
+///
+/// Panics when a result differs.
+pub fn assert_lane_conversions_under<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    x: Lanes<Float<S, W, M>, N>,
+    setting: &str,
+    run: impl FnOnce(&dyn Fn() -> LaneConversions<N>) -> LaneConversions<N>,
+) {
+    let ours = run(&|| lane_conversions(black_box(x)));
+    assert_eq!(
+        ours,
+        lane_conversions_with(x),
+        "{:x?} under {setting}",
+        x.to_bits()
+    );
+}
+
+/// Returns the lane sets of the lane checks of a format of `W` bits: the
+/// boundary encodings of `layout` and `count` random encodings, in sets of
+/// `N` lanes. Consecutive sets shift by one encoding, so each boundary
+/// encoding reaches every lane.
+///
+/// # Panics
+///
+/// Panics when the layout does not have `W` bits.
+#[must_use]
+pub fn lane_sets<S: Standard<W>, const W: usize, const N: usize>(
+    layout: Layout,
+    random: &mut SplitMix64,
+    count: usize,
+) -> Vec<Lanes<Float<S, W>, N>>
+where
+    S::Bits: TryFrom<u128>,
+{
+    assert_eq!(
+        usize::try_from(layout.width).ok(),
+        Some(W),
+        "the layout has the width of the format"
+    );
+    let mut encodings = boundary_encodings_u128(layout);
+    encodings.extend((0..count).map(|_| random.next_u128() >> (128 - layout.width)));
+    let bits = |encoding: u128| {
+        S::Bits::try_from(encoding)
+            .ok()
+            .expect("an encoding of the layout fits the storage of the format")
+    };
+    (0..encodings.len())
+        .map(|start| {
+            Lanes::from_bits(core::array::from_fn(|lane| {
+                bits(encodings[(start + lane) % encodings.len()])
+            }))
+        })
+        .collect()
 }

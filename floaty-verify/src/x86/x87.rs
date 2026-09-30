@@ -72,6 +72,13 @@ pub fn with_control_word<T>(control: u16, body: impl FnOnce() -> T) -> T {
     result
 }
 
+/// Returns a runner that runs a body with the x87 control word set to
+/// `control`, by [`with_control_word`], for the `assert_*_under` functions of
+/// [`crate::entry_points`].
+pub fn under_control_word<T>(control: u16) -> impl FnOnce(&dyn Fn() -> T) -> T {
+    move |body| with_control_word(control, body)
+}
+
 /// Runs `FNINIT` and returns the control word that it sets. `FNINIT` also
 /// clears the status word and empties the x87 stack. The previous control
 /// word is restored afterward.

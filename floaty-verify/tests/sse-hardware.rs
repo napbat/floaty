@@ -16,9 +16,7 @@ use floaty_verify::entry_points::{
     assert_remainder_under,
 };
 use floaty_verify::random::SplitMix64;
-use floaty_verify::x86::{
-    self, MXCSR_COMPARISON_CONTROLS, MXCSR_MASKED, MXCSR_OPERATOR_CONTROLS, mxcsr_flags,
-};
+use floaty_verify::x86::{self, MXCSR_HOST_PATH_CONTROLS, MXCSR_MASKED, mxcsr_flags};
 
 /// Returns binary64 encodings near every binary32 boundary, and random ones.
 fn binary64_to_binary32_inputs() -> Vec<u64> {
@@ -447,7 +445,7 @@ macro_rules! conversions_under {
 
 #[test]
 fn operators_read_mxcsr_before_the_host_unit() {
-    // Under each control of `MXCSR_OPERATOR_CONTROLS`, the operators still
+    // Under each control of `MXCSR_HOST_PATH_CONTROLS`, the operators still
     // give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00C5_0000);
     let single = single_operands(&mut random, 4_000);
@@ -485,7 +483,7 @@ fn operators_read_mxcsr_before_the_host_unit() {
         .zip(bfloats.iter().rev())
         .map(|(&a, &b)| (a, b))
         .collect();
-    for control in MXCSR_OPERATOR_CONTROLS {
+    for control in MXCSR_HOST_PATH_CONTROLS {
         // The first operand is also the addend.
         arithmetic_under!(F16, control, &half_pairs);
         arithmetic_under!(BF16, control, &bfloat_pairs);
@@ -506,7 +504,7 @@ fn operators_read_mxcsr_before_the_host_unit() {
 fn comparisons_read_mxcsr_before_the_host_unit() {
     // DAZ changes the order of a subnormal operand, and an unmasked invalid
     // or denormal exception traps. Under each control of
-    // `MXCSR_COMPARISON_CONTROLS`, the comparison and the minimum and maximum
+    // `MXCSR_HOST_PATH_CONTROLS`, the comparison and the minimum and maximum
     // operations give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00C5_C0AA);
     let single = single_operands(&mut random, 2_000);
@@ -525,7 +523,7 @@ fn comparisons_read_mxcsr_before_the_host_unit() {
     };
     let half_pairs = sixteen(Layout::BINARY16, &mut random);
     let bfloat_pairs = sixteen(Layout::BFLOAT16, &mut random);
-    for control in MXCSR_COMPARISON_CONTROLS {
+    for control in MXCSR_HOST_PATH_CONTROLS {
         comparisons_under!(F16, control, &half_pairs);
         comparisons_under!(BF16, control, &bfloat_pairs);
         comparisons_under!(F32, control, &single_pairs);

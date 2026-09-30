@@ -50,44 +50,11 @@ pub const MXCSR_ROUNDINGS: [(Rounding, u32); 4] = [
 /// exception whose mask is clear traps.
 pub const MXCSR_EXCEPTION_MASKS: [u32; 6] = [1 << 7, 1 << 8, 1 << 9, 1 << 10, 1 << 11, 1 << 12];
 
-/// The MXCSR values under which the scalar operators and conversions must
-/// give the engine results: FTZ, DAZ, each directed rounding, and each
-/// unmasked exception. FTZ, DAZ, and each directed rounding change the host
-/// results, and an unmasked exception traps.
-pub const MXCSR_OPERATOR_CONTROLS: [u32; 11] = [
-    MXCSR_MASKED | MXCSR_FTZ,
-    MXCSR_MASKED | MXCSR_DAZ,
-    MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
-    MXCSR_MASKED | MXCSR_TOWARD_POSITIVE,
-    MXCSR_MASKED | MXCSR_TOWARD_ZERO,
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[0],
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[1],
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[2],
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[3],
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[4],
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[5],
-];
-
-/// The MXCSR values under which the scalar comparisons and the minimum and
-/// maximum operations must give the engine results: the default, FTZ, DAZ,
-/// rounding toward negative infinity, and each unmasked exception.
-pub const MXCSR_COMPARISON_CONTROLS: [u32; 10] = [
-    MXCSR_MASKED,
-    MXCSR_MASKED | MXCSR_FTZ,
-    MXCSR_MASKED | MXCSR_DAZ,
-    MXCSR_MASKED | MXCSR_TOWARD_NEGATIVE,
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[0],
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[1],
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[2],
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[3],
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[4],
-    MXCSR_MASKED & !MXCSR_EXCEPTION_MASKS[5],
-];
-
-/// The MXCSR values under which the paths of `Lanes` must give the engine
+/// The MXCSR values under which every host path must give the engine
 /// results: the default, FTZ, DAZ, each directed rounding, and each unmasked
-/// exception.
-pub const MXCSR_LANE_CONTROLS: [u32; 12] = [
+/// exception. FTZ, DAZ, and each directed rounding change the host results,
+/// and an unmasked exception traps.
+pub const MXCSR_HOST_PATH_CONTROLS: [u32; 12] = [
     MXCSR_MASKED,
     MXCSR_MASKED | MXCSR_FTZ,
     MXCSR_MASKED | MXCSR_DAZ,

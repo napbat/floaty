@@ -8,15 +8,17 @@
 
 use std::hint::black_box;
 
-use floaty::{F16, F32, F64, Flags, Lanes};
+use floaty::format::Standard;
+use floaty::{Binary, F16, F32, F64, Flags, Lanes, X87};
 use floaty_verify::encodings::{Layout, boundary_encodings_u128};
 use floaty_verify::entry_points::{
     LaneArithmetic, assert_bfloat16_lanes_under, assert_directed_rounding_under,
-    assert_lane_comparisons_under, lane_arithmetic, lane_arithmetic_with,
+    assert_lane_arithmetic_under, assert_lane_comparisons_under, assert_lane_conversions_under,
+    lane_arithmetic, lane_arithmetic_with, lane_sets,
 };
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
-    self, MXCSR_LANE_CONTROLS, ROUND_USE_MXCSR, mxcsr_flags, mxcsr_round_flags,
+    self, MXCSR_HOST_PATH_CONTROLS, ROUND_USE_MXCSR, mxcsr_flags, mxcsr_round_flags,
 };
 
 /// Returns boundary and random encodings of a binary format in chunks of
@@ -290,12 +292,12 @@ fn engine_results(singles: [[u32; 8]; 2], doubles: [[u64; 5]; 2]) -> LaneResults
 
 #[test]
 fn lanes_read_mxcsr_before_the_packed_unit() {
-    // Under each control of `MXCSR_LANE_CONTROLS`, the operations of `Lanes`
+    // Under each control of `MXCSR_HOST_PATH_CONTROLS`, the operations of `Lanes`
     // without flags give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00C5_4EAD);
     let singles = single_chunks(&mut random);
     let doubles = chunks::<5>(&mut random, Layout::BINARY64);
-    for control in MXCSR_LANE_CONTROLS {
+    for control in MXCSR_HOST_PATH_CONTROLS {
         for (index, pair) in singles.windows(2).enumerate().step_by(5) {
             let lanes: [[u32; 8]; 2] = [0, 1]
                 .map(|first| core::array::from_fn(|lane| pair[(first + lane / 4) % 2][lane % 4]));
@@ -364,7 +366,7 @@ fn binary16_lanes_read_mxcsr_before_the_packed_unit() {
     let mut random = SplitMix64::new(0x00C5_4E16);
     let halves = chunks::<13>(&mut random, Layout::BINARY16);
     let singles = chunks::<13>(&mut random, Layout::BINARY32);
-    for control in MXCSR_LANE_CONTROLS {
+    for control in MXCSR_HOST_PATH_CONTROLS {
         for (index, pair) in halves.windows(2).enumerate().step_by(3) {
             let lanes: [[u16; 13]; 2] = [0, 1].map(|first| {
                 pair[first].map(|bits| u16::try_from(bits).expect("a binary16 encoding"))
@@ -389,7 +391,7 @@ fn bfloat16_lanes_read_mxcsr_before_the_packed_unit() {
     // give the engine results of the default mode.
     let mut random = SplitMix64::new(0x00C5_4EBF);
     let chunks = chunks::<13>(&mut random, Layout::BFLOAT16);
-    for control in MXCSR_LANE_CONTROLS {
+    for control in MXCSR_HOST_PATH_CONTROLS {
         let setting = format!("{control:#x}");
         for chunk in chunks.iter().step_by(3) {
             let bits = chunk.map(|bits| u16::try_from(bits).expect("a bfloat16 encoding"));
@@ -406,7 +408,7 @@ fn directed_rounding_reads_mxcsr_before_the_unit() {
     // the scalar values give the engine results of the mode.
     let mut random = SplitMix64::new(0x00C5_D1E0);
     let chunks = chunks::<5>(&mut random, Layout::BINARY32);
-    for control in MXCSR_LANE_CONTROLS {
+    for control in MXCSR_HOST_PATH_CONTROLS {
         let setting = format!("{control:#x}");
         for chunk in chunks.iter().step_by(7) {
             let bits = chunk.map(|bits| u32::try_from(bits).expect("a binary32 encoding"));
@@ -439,7 +441,7 @@ fn lane_orders_read_mxcsr_before_the_packed_unit() {
         .map(|chunk| chunk.map(|bits| u32::try_from(bits).expect("a binary32 encoding")))
         .collect();
     let doubles = chunks::<5>(&mut random, Layout::BINARY64);
-    for control in MXCSR_LANE_CONTROLS {
+    for control in MXCSR_HOST_PATH_CONTROLS {
         orders_under!(
             F32,
             control,
@@ -451,4 +453,37 @@ fn lane_orders_read_mxcsr_before_the_packed_unit() {
             doubles.iter().step_by(5).copied().collect::<Vec<_>>()
         );
     }
+}
+
+/// Checks the arithmetic, the comparisons, and the conversions of `Lanes`
+/// of one format and lane count under every MXCSR value of
+/// `MXCSR_HOST_PATH_CONTROLS`, on the lane sets of [`lane_sets`].
+fn every_lane_group<S: Standard<W>, const W: usize, const N: usize>(layout: Layout, seed: u64)
+where
+    S::Bits: TryFrom<u128>,
+{
+    let mut random = SplitMix64::new(seed);
+    let sets = lane_sets::<S, W, N>(layout, &mut random, 2_000);
+    for control in MXCSR_HOST_PATH_CONTROLS {
+        let setting = format!("MXCSR {control:#x}");
+        for window in sets.windows(3).step_by(5) {
+            let [x, y, z] = [window[0], window[1], window[2]];
+            assert_lane_arithmetic_under([x, y, z], &setting, x86::under_mxcsr(control));
+            assert_lane_comparisons_under([x, y], &setting, x86::under_mxcsr(control));
+            assert_lane_conversions_under(x, &setting, x86::under_mxcsr(control));
+        }
+    }
+}
+
+#[test]
+fn every_lane_type_reads_mxcsr_before_the_packed_unit() {
+    // The lane counts fill the wide chunks, then the narrow chunks, and leave
+    // single lanes. The binary32 lanes also convert to bfloat16, and every
+    // lane type converts to `i32`. x87 extended lanes read the x87 control
+    // word, which x87-hardware checks, and MXCSR must not change them.
+    every_lane_group::<Binary<8>, 32, 13>(Layout::BINARY32, 0x00C5_1A01);
+    every_lane_group::<Binary<11>, 64, 7>(Layout::BINARY64, 0x00C5_1A02);
+    every_lane_group::<Binary<5>, 16, 13>(Layout::BINARY16, 0x00C5_1A03);
+    every_lane_group::<Binary<8>, 16, 13>(Layout::BFLOAT16, 0x00C5_1A04);
+    every_lane_group::<Binary<15, X87>, 80, 3>(Layout::X87_EXTENDED, 0x00C5_1A05);
 }

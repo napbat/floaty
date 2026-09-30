@@ -6,13 +6,15 @@
 
 use core::hint::black_box;
 
-use floaty::{BF16, F16, F32, F64, Lanes};
+use floaty::format::Standard;
+use floaty::{BF16, Binary, F16, F32, F64, Lanes, X87};
 use floaty_verify::aarch64::{FPCR_SETTINGS, under_fpcr, with_fpcr};
 use floaty_verify::encodings::{Layout, boundary_encodings_u128};
 use floaty_verify::entry_points::{
-    LaneArithmetic, LaneComparisons, assert_arithmetic_under, assert_bfloat16_lanes_under,
-    assert_comparisons_under, assert_conversions_under, assert_directed_rounding_under,
-    lane_arithmetic, lane_arithmetic_with, lane_comparisons, lane_comparisons_with,
+    LaneArithmetic, assert_arithmetic_under, assert_bfloat16_lanes_under, assert_comparisons_under,
+    assert_conversions_under, assert_directed_rounding_under, assert_lane_arithmetic_under,
+    assert_lane_comparisons_under, assert_lane_conversions_under, lane_arithmetic,
+    lane_arithmetic_with, lane_sets,
 };
 use floaty_verify::random::SplitMix64;
 
@@ -282,21 +284,40 @@ fn lane_orders_read_fpcr_before_the_vector_unit() {
             let lane = |offset: usize| singles[(start + offset) % singles.len()];
             let x = Lanes::<F32, 5>::from_bits(core::array::from_fn(lane));
             let y = Lanes::<F32, 5>::from_bits(core::array::from_fn(|offset| lane(offset + 3)));
-            let ours = with_fpcr(control, || lane_comparisons(black_box(x), black_box(y)));
-            let engine = lane_comparisons_with(x, y);
-            // The test checks the order, `minimum`, `maximumNumber`, and
-            // `minNum` of the shared list.
-            let checked = |results: LaneComparisons<u32, 5>| {
-                (
-                    results.order,
-                    [results.minimum, results.maximum_number, results.min_num],
-                )
-            };
-            assert_eq!(
-                checked(ours),
-                checked(engine),
-                "lanes at {start} under FPCR {control:#x}"
-            );
+            let setting = format!("FPCR {control:#x}, lanes at {start}");
+            assert_lane_comparisons_under([x, y], &setting, under_fpcr(control));
         }
     }
+}
+
+/// Checks the arithmetic, the comparisons, and the conversions of `Lanes`
+/// of one format and lane count under the default FPCR and every setting of
+/// `FPCR_SETTINGS`, on the lane sets of [`lane_sets`].
+fn every_lane_group<S: Standard<W>, const W: usize, const N: usize>(layout: Layout, seed: u64)
+where
+    S::Bits: TryFrom<u128>,
+{
+    let mut random = SplitMix64::new(seed);
+    let sets = lane_sets::<S, W, N>(layout, &mut random, 1_000);
+    for control in core::iter::once(0).chain(FPCR_SETTINGS) {
+        let setting = format!("FPCR {control:#x}");
+        for window in sets.windows(3).step_by(5) {
+            let [x, y, z] = [window[0], window[1], window[2]];
+            assert_lane_arithmetic_under([x, y, z], &setting, under_fpcr(control));
+            assert_lane_comparisons_under([x, y], &setting, under_fpcr(control));
+            assert_lane_conversions_under(x, &setting, under_fpcr(control));
+        }
+    }
+}
+
+#[test]
+fn every_lane_type_reads_fpcr_before_the_vector_unit() {
+    // The lane counts fill the 128-bit chunks and leave single lanes. The
+    // binary32 lanes also convert to bfloat16, and every lane type converts
+    // to `i32`. The x87 extended lanes have no host path on AArch64.
+    every_lane_group::<Binary<8>, 32, 5>(Layout::BINARY32, 0x00A6_1A01);
+    every_lane_group::<Binary<11>, 64, 3>(Layout::BINARY64, 0x00A6_1A02);
+    every_lane_group::<Binary<5>, 16, 9>(Layout::BINARY16, 0x00A6_1A03);
+    every_lane_group::<Binary<8>, 16, 9>(Layout::BFLOAT16, 0x00A6_1A04);
+    every_lane_group::<Binary<15, X87>, 80, 3>(Layout::X87_EXTENDED, 0x00A6_1A05);
 }

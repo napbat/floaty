@@ -5,11 +5,12 @@
 
 use core::num::NonZeroU32;
 
-use floaty::{Class, Env, F32, F64, F80, ToInt};
+use floaty::{Binary, Class, Env, F32, F64, F80, X87};
 use floaty_verify::encodings::{Layout, boundary_encodings, rounding_edges, to_u128};
 use floaty_verify::entry_points::{
-    Arithmetic, Conversions, arithmetic, arithmetic_with, conversions, conversions_with, remainder,
-    remainder_with,
+    Arithmetic, Conversions, arithmetic, arithmetic_with, assert_lane_arithmetic_under,
+    assert_lane_comparisons_under, assert_lane_conversions_under, conversions, conversions_with,
+    lane_sets, remainder, remainder_with,
 };
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
@@ -327,48 +328,16 @@ fn arithmetic_matches_at_every_rounding_and_precision() {
     }
 }
 
-/// The results of the x87 extended entry points for one pair of operands,
-/// which the x87 paths cover, from the shared lists of entry points.
+/// The results of the entry points for one pair of operands: the
+/// arithmetic and the conversions of the x87 extended operand, and the
+/// conversions of the binary64 and binary32 operands, whose conversions to
+/// x87 extended take the x87 unit.
 #[derive(Debug, PartialEq)]
 struct Results {
-    /// The operators, `sqrt`, `round_to_integral`, `from_int`, and the
-    /// conversions to and from binary32 and binary64, as encodings.
-    encodings: [u128; 11],
-    /// `to_int` to `i64`.
-    signed: ToInt<i64>,
-    /// `to_int` to `u32`.
-    unsigned: ToInt<u32>,
-}
-
-impl Results {
-    /// Selects the results of the x87 paths from the results of the lists:
-    /// the arithmetic of `x` without `mul_add`, the conversions of `x`
-    /// without those to binary16, bfloat16, and x87 extended, and the
-    /// conversions of the binary64 and binary32 operands to x87 extended.
-    fn select(
-        arithmetic: Arithmetic<u128>,
-        conversions: Conversions<u128>,
-        from_double: u128,
-        from_single: u128,
-    ) -> Self {
-        Self {
-            encodings: [
-                arithmetic.add,
-                arithmetic.sub,
-                arithmetic.mul,
-                arithmetic.div,
-                arithmetic.sqrt,
-                conversions.round_to_integral,
-                conversions.from_i64,
-                u128::from(conversions.to_binary64),
-                u128::from(conversions.to_binary32),
-                from_double,
-                from_single,
-            ],
-            signed: conversions.to_i64,
-            unsigned: conversions.to_u32,
-        }
-    }
+    arithmetic: Arithmetic<u128>,
+    conversions: Conversions<u128>,
+    double: Conversions<u64>,
+    single: Conversions<u32>,
 }
 
 /// Returns the other operands of the entry points for a pair: an `i64` from
@@ -394,12 +363,12 @@ fn other_operands(a: u128, b: u128) -> (i64, F64, F32) {
 fn entry_points(a: u128, b: u128) -> Results {
     let (x, y) = (F80::from_bits(a), F80::from_bits(b));
     let (integer, double, single) = other_operands(a, b);
-    Results::select(
-        arithmetic(x, y, x),
-        conversions(x, integer),
-        conversions(double, integer).to_x87,
-        conversions(single, integer).to_x87,
-    )
+    Results {
+        arithmetic: arithmetic(x, y, x),
+        conversions: conversions(x, integer),
+        double: conversions(double, integer),
+        single: conversions(single, integer),
+    }
 }
 
 /// Returns the results of the `_with` methods under the default modes, which
@@ -407,12 +376,12 @@ fn entry_points(a: u128, b: u128) -> Results {
 fn engine_results(a: u128, b: u128) -> Results {
     let (x, y) = (F80::from_bits(a), F80::from_bits(b));
     let (integer, double, single) = other_operands(a, b);
-    Results::select(
-        arithmetic_with(x, y, x),
-        conversions_with(x, integer),
-        conversions_with(double, integer).to_x87,
-        conversions_with(single, integer).to_x87,
-    )
+    Results {
+        arithmetic: arithmetic_with(x, y, x),
+        conversions: conversions_with(x, integer),
+        double: conversions_with(double, integer),
+        single: conversions_with(single, integer),
+    }
 }
 
 #[test]
@@ -487,4 +456,23 @@ fn remainders_read_the_control_word_before_the_x87_unit() {
 /// Returns the low 64 bits of `value`.
 fn narrow(value: u128) -> u64 {
     u64::try_from(value & u128::from(u64::MAX)).expect("the mask keeps 64 bits")
+}
+
+#[test]
+fn extended_lanes_read_the_control_word_before_the_x87_unit() {
+    // The x87 extended lanes check the control word once for all lanes, and
+    // then run the scalar instructions. Under each control word of
+    // `X87_HOST_PATH_CONTROLS`, the lanes give the engine results of the
+    // default mode.
+    let mut random = SplitMix64::new(0x0087_1A4E);
+    let sets = lane_sets::<Binary<15, X87>, 80, 3>(Layout::X87_EXTENDED, &mut random, 2_000);
+    for control in X87_HOST_PATH_CONTROLS {
+        let setting = format!("control word {control:#06x}");
+        for window in sets.windows(3).step_by(3) {
+            let [x, y, z] = [window[0], window[1], window[2]];
+            assert_lane_arithmetic_under([x, y, z], &setting, x86::under_control_word(control));
+            assert_lane_comparisons_under([x, y], &setting, x86::under_control_word(control));
+            assert_lane_conversions_under(x, &setting, x86::under_control_word(control));
+        }
+    }
 }
