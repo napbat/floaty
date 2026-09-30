@@ -413,8 +413,8 @@ fn scale(rng: &mut SplitMix64, layout: Layout) -> i32 {
 }
 
 /// Compares the rounding and quantum operations of one format: `quantize`,
-/// `rem`, rounding to an integral value, `scalbn`, `nextup`, `nextdown`,
-/// `logb`, and `quantum`.
+/// `rem`, `fmod`, rounding to an integral value, `scalbn`, `nextup`,
+/// `nextdown`, `logb`, and `quantum`.
 fn quantum_operations<F, const W: usize>(report: &mut Report, rng: &mut SplitMix64, cases: usize)
 where
     F: Format<Bits = Bits<W>>,
@@ -445,6 +445,11 @@ where
                 "rem",
                 ours(xf.remainder_with(yf, env), ieee),
                 theirs(F::rem(xb, yb)),
+            ),
+            (
+                "fmod",
+                ours(xf.truncated_remainder_with(yf, env), ieee),
+                theirs(F::fmod(xb, yb)),
             ),
             (
                 "round_integral_exact",
@@ -858,7 +863,7 @@ fn arithmetic_matches_the_library() {
 #[test]
 fn quantum_operations_match_the_library() {
     let report = each_format(
-        "quantize, rem, round_integral, scalbn, nextup, nextdown, logb, quantum",
+        "quantize, rem, fmod, round_integral, scalbn, nextup, nextdown, logb, quantum",
         0x7e57_0002,
         [100_000, 100_000, 50_000],
         [
@@ -868,7 +873,7 @@ fn quantum_operations_match_the_library() {
         ],
     );
     report.assert_counts(
-        2_500_000,
+        2_750_000,
         &[
             ("bid32_quantum", QUANTUM_NAN, 4_258),
             ("bid64_quantum", QUANTUM_NAN, 4_472),

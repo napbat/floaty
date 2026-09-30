@@ -30,7 +30,7 @@ use self::round::DecimalTarget;
 use crate::env::{Behavior, Flags, TotalOrder};
 use crate::exact::Unrounded;
 use crate::float::Class;
-use crate::format::internal::{Host, LimbConversion, MinMax, Source, Step};
+use crate::format::internal::{Host, LimbConversion, MinMax, Quotient, Source, Step};
 use crate::format::{Decimal, DecimalEncoding, DecimalKind, Standard, Storage, Width};
 use crate::integer::{Integer, ToInt};
 use crate::limbs::{self, Limbs, Widen};
@@ -533,11 +533,12 @@ where
     fn remainder<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,
+        quotient: Quotient,
         behavior: B,
     ) -> (Self::Bits, Flags) {
         let env = &behavior.env();
         let (bits, flags) =
-            DecimalLayout::<Enc, W>::remainder(left.to_limbs(), right.to_limbs(), env);
+            DecimalLayout::<Enc, W>::remainder(left.to_limbs(), right.to_limbs(), quotient, env);
         (Self::Bits::from_limbs(bits), flags)
     }
 

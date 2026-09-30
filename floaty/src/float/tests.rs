@@ -5,8 +5,8 @@ extern crate std;
 use std::format;
 
 use super::{
-    BF16, Class, Decoded, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F256,
-    F512, TF32,
+    BF16, Class, Decoded, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz,
+    F16, F32, F64, F80, F128, F256, F512, Float, TF32,
 };
 use crate::env::{Env, Flags, Mode, NanPropagation, NanRule, Rounding, mode};
 use crate::exact::Exact;
@@ -159,6 +159,16 @@ fn aliases_have_the_published_parameters() {
         (F8E5M2Fnuz::PRECISION, F8E5M2Fnuz::EMAX, F8E5M2Fnuz::EMIN),
         (3, 15, -15)
     );
+    assert_eq!((F8E4M3::PRECISION, F8E4M3::EMAX, F8E4M3::EMIN), (4, 7, -6));
+    assert_eq!((F8E3M4::PRECISION, F8E3M4::EMAX, F8E3M4::EMIN), (5, 3, -2));
+    assert_eq!(
+        (
+            F8E4M3B11Fnuz::PRECISION,
+            F8E4M3B11Fnuz::EMAX,
+            F8E4M3B11Fnuz::EMIN
+        ),
+        (4, 4, -10)
+    );
     assert_eq!((F80::PRECISION, F80::EMAX, F80::EMIN), (64, 16383, -16382));
 }
 
@@ -238,4 +248,68 @@ fn a_mode_value_and_its_env_give_the_same_results() {
     // The operator of a type with a mode uses the mode.
     let (x, y) = (a.with_mode::<Truncating>(), b.with_mode::<Truncating>());
     assert_eq!((x + y).to_bits(), truncated.0.to_bits());
+}
+
+#[test]
+fn host_floats_convert_by_their_bits() {
+    let singles = [
+        0x7F80_0001,
+        0xFFC0_1234,
+        0x8000_0000,
+        0x0000_0001,
+        0x3F80_0000,
+    ];
+    for bits in singles {
+        let host = f32::from_bits(bits);
+        assert_eq!(F32::from(host).to_bits(), bits, "{bits:#010x}");
+        assert_eq!(
+            f32::from(F32::from_bits(bits)).to_bits(),
+            bits,
+            "{bits:#010x}"
+        );
+    }
+    let doubles = [
+        0x7FF0_0000_0000_0001,
+        0xFFF8_0000_0000_1234,
+        0x8000_0000_0000_0000,
+        0x0000_0000_0000_0001,
+        0x3FF0_0000_0000_0000,
+    ];
+    for bits in doubles {
+        let host = f64::from_bits(bits);
+        assert_eq!(F64::from(host).to_bits(), bits, "{bits:#018x}");
+        assert_eq!(
+            f64::from(F64::from_bits(bits)).to_bits(),
+            bits,
+            "{bits:#018x}"
+        );
+    }
+    // Every mode takes the bits.
+    let with_mode: Float<crate::Binary<11>, 64, mode::X86Sse> = 1.5_f64.into();
+    assert_eq!(with_mode.to_bits(), 0x3FF8_0000_0000_0000);
+}
+
+#[test]
+fn the_operators_follow_their_methods() {
+    let (five, three) = (
+        F64::from_bits(0x4014_0000_0000_0000),
+        F64::from_bits(0xC008_0000_0000_0000),
+    );
+    // 5 % -3 truncates the quotient to -1, so the remainder is 2 with the
+    // sign of the dividend.
+    assert_eq!((five % three).to_bits(), 0x4000_0000_0000_0000);
+    assert_eq!(
+        (five % three).to_bits(),
+        five.truncated_remainder(three).to_bits()
+    );
+    let assigned = |operation: fn(&mut F64, F64)| {
+        let mut value = five;
+        operation(&mut value, three);
+        value.to_bits()
+    };
+    assert_eq!(assigned(|x, y| *x += y), (five + three).to_bits());
+    assert_eq!(assigned(|x, y| *x -= y), (five - three).to_bits());
+    assert_eq!(assigned(|x, y| *x *= y), (five * three).to_bits());
+    assert_eq!(assigned(|x, y| *x /= y), (five / three).to_bits());
+    assert_eq!(assigned(|x, y| *x %= y), (five % three).to_bits());
 }

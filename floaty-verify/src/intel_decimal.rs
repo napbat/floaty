@@ -562,6 +562,8 @@ pub trait Format: sealed::Sealed {
     fn round_integral(x: Self::Bits, rounding: Rounding) -> Outcome<Self::Bits>;
     /// `rem`: the IEEE 754 remainder.
     fn rem(x: Self::Bits, y: Self::Bits) -> Outcome<Self::Bits>;
+    /// `fmod`: the remainder of the quotient truncated toward zero.
+    fn fmod(x: Self::Bits, y: Self::Bits) -> Outcome<Self::Bits>;
     /// `logb`: the exponent of the most significant digit, as a value.
     fn logb(x: Self::Bits) -> Outcome<Self::Bits>;
     /// `ilogb`: the exponent of the most significant digit, as an integer.

@@ -21,6 +21,8 @@ pub mod arithmetic;
 pub mod decnumber;
 #[cfg(target_arch = "x86_64")]
 pub mod dectest;
+#[cfg(target_arch = "x86_64")]
+pub mod double_double;
 pub mod encodings;
 #[cfg(target_arch = "x86_64")]
 pub mod ibm_ldouble;

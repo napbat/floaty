@@ -1,10 +1,11 @@
-//! The IEEE 754 remainder of the binary formats.
+//! The IEEE 754 remainder and the truncated remainder of the binary formats.
 
 use core::cmp::Ordering;
 
 use super::{Layout, Unpacked};
 use crate::env::{Env, Flags};
 use crate::exact::{self, Unrounded};
+use crate::format::internal::Quotient;
 use crate::format::{Encoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
 use crate::nan::{self, default_nan};
@@ -13,14 +14,15 @@ impl<const E: u32, Enc: Encoding, const W: usize> Layout<E, Enc, W>
 where
     Width<W>: Storage,
 {
-    /// Returns the IEEE 754 remainder `left - n * right`. `n` is the integer
-    /// nearest `left / right`, and the even one at a tie.
+    /// Returns the remainder `left - n * right`. `n` is `left / right`
+    /// rounded to an integer as `quotient` says: the IEEE 754 remainder, or
+    /// the truncated remainder of C `fmod`.
     ///
     /// The remainder is exact, so the rounding direction, the precision
     /// limit, and flush-to-zero do not apply. A zero remainder has the sign
     /// of `left`. `inf % y` and `x % 0` are invalid. A subnormal remainder
     /// reports `TINY`, as a subnormal result of a rounded operation does.
-    pub fn remainder<L: Widen>(left: L, right: L, env: &Env) -> (L, Flags) {
+    pub fn remainder<L: Widen>(left: L, right: L, quotient: Quotient, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
@@ -63,6 +65,7 @@ where
             ) => Self::finite_remainder(
                 (negative, exponent, significand),
                 (divisor_exponent, divisor_significand),
+                quotient,
                 env,
                 flags,
             ),
@@ -76,6 +79,7 @@ where
     fn finite_remainder<L: Widen>(
         (negative, exponent, significand): (bool, i32, L),
         (divisor_exponent, divisor_significand): (i32, L),
+        quotient: Quotient,
         env: &Env,
         flags: Flags,
     ) -> (L, Flags) {
@@ -128,13 +132,15 @@ where
             let (quotient, rest) = limbs::divide(dividend, divisor);
             (rest, divisor, exponent, quotient.bit(0))
         };
-        // Round the quotient to nearest even: past half of the divisor, n
-        // grows by one and the remainder changes sign.
-        let above_half = match rest.shl(1).compare(&divisor) {
-            Ordering::Greater => true,
-            Ordering::Equal => odd,
-            Ordering::Less => false,
-        };
+        // `rest` is the remainder of the truncated quotient. To round the
+        // quotient to nearest even, n grows by one past half of the divisor,
+        // and the remainder changes sign.
+        let above_half = quotient == Quotient::Nearest
+            && match rest.shl(1).compare(&divisor) {
+                Ordering::Greater => true,
+                Ordering::Equal => odd,
+                Ordering::Less => false,
+            };
         let magnitude = if above_half { divisor.sub(rest) } else { rest };
         if magnitude.is_zero() {
             return Self::exact(Unpacked::zero(negative), flags);
@@ -294,6 +300,29 @@ mod tests {
             remainder(0xC010_0000_0000_0000, TWO),
             (0x8000_0000_0000_0000, Flags::NONE)
         );
+    }
+
+    #[test]
+    fn the_truncated_quotient_rounds_toward_zero() {
+        let truncated = |left: u64, right: u64| {
+            let (value, flags) =
+                F64::from_bits(left).truncated_remainder_with(F64::from_bits(right), Env::IEEE);
+            (value.to_bits(), flags)
+        };
+        // 5 / 3 truncates to 1, and 7 / 2 = 3.5 truncates to 3.
+        assert_eq!(truncated(FIVE, THREE), (TWO, Flags::NONE));
+        assert_eq!(truncated(SEVEN, TWO), (ONE, Flags::NONE));
+        // The remainder has the sign of the dividend, whatever the sign of
+        // the divisor.
+        assert_eq!(truncated(FIVE, THREE | (1 << 63)), (TWO, Flags::NONE));
+        assert_eq!(
+            truncated(FIVE | (1 << 63), THREE),
+            (TWO | (1 << 63), Flags::NONE)
+        );
+        // 2^100 = 1 (mod 3), and the quotient parity does not matter.
+        assert_eq!(truncated(0x4630_0000_0000_0000, THREE), (ONE, Flags::NONE));
+        // A dividend below the divisor is its own remainder.
+        assert_eq!(truncated(TWO, THREE), (TWO, Flags::NONE));
     }
 
     #[test]

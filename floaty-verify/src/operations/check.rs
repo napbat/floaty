@@ -10,7 +10,9 @@ use rug::Integer;
 
 use super::compare::{self, MinMax};
 use super::integral::{self, IntegerValue, to_int_value};
-use super::{Direction, Outcome, Sample, next, outcome, remainder, scale_b, with_sign};
+use super::{
+    Direction, Outcome, Sample, next, outcome, remainder, scale_b, truncated_remainder, with_sign,
+};
 use crate::mpfr::{Format, Specials};
 
 /// A floaty value, and its sample for the oracle.
@@ -166,7 +168,7 @@ pub fn check_min_max<S: Standard<W>, const W: usize>(
     }
 }
 
-/// Checks the remainder of a pair.
+/// Checks the IEEE 754 remainder and the truncated remainder of a pair.
 ///
 /// # Panics
 ///
@@ -181,6 +183,11 @@ pub fn check_remainder<S: Standard<W>, const W: usize>(
         x.value.remainder_with(y.value, *env),
         &remainder(&x.sample.operand, &y.sample.operand, format, env),
         &|| format!("remainder {:?} {:?} {env:?}", x.value, y.value),
+    );
+    check_float(
+        x.value.truncated_remainder_with(y.value, *env),
+        &truncated_remainder(&x.sample.operand, &y.sample.operand, format, env),
+        &|| format!("truncated_remainder {:?} {:?} {env:?}", x.value, y.value),
     );
 }
 

@@ -296,8 +296,8 @@ fn double_double_pairs(random: &mut SplitMix64) -> Vec<(F64, F64)> {
     halves
 }
 
-/// Checks that the operators of a double-double algorithm give the results of
-/// its `_with` methods under the default mode.
+/// Checks that the operators and `sqrt` of a double-double algorithm give the
+/// results of its `_with` methods under the default mode.
 fn double_double_operators_match<Alg: floaty::Algorithm>(pairs: &[(F64, F64)]) {
     let value = |&(hi, lo): &(F64, F64)| DoubleDouble::<Alg>::from_parts(hi, lo);
     let bits = |value: DoubleDouble<Alg>| (value.hi().to_bits(), value.lo().to_bits());
@@ -309,6 +309,7 @@ fn double_double_operators_match<Alg: floaty::Algorithm>(pairs: &[(F64, F64)]) {
         assert_eq!(bits(x - y), bits(x.sub_with(y, env).0), "{context} -");
         assert_eq!(bits(x * y), bits(x.mul_with(y, env).0), "{context} *");
         assert_eq!(bits(x / y), bits(x.div_with(y, env).0), "{context} /");
+        assert_eq!(bits(x.sqrt()), bits(x.sqrt_with(env).0), "{context} sqrt");
     }
 }
 
@@ -318,15 +319,6 @@ fn double_double_operators_give_the_default_mode_results() {
     let pairs = double_double_pairs(&mut random);
     double_double_operators_match::<Qd>(&pairs);
     double_double_operators_match::<Gcc>(&pairs);
-    for pair in &pairs {
-        let value = DoubleDouble::<Qd>::from_parts(pair.0, pair.1);
-        let (root, expected) = (value.sqrt(), value.sqrt_with(floaty::Env::IEEE).0);
-        assert_eq!(
-            (root.hi().to_bits(), root.lo().to_bits()),
-            (expected.hi().to_bits(), expected.lo().to_bits()),
-            "sqrt {value:?}"
-        );
-    }
 }
 
 /// Returns binary64 operands for the conversions: boundary and random

@@ -40,16 +40,16 @@
 //!
 //! The test counts each case that it skips, with the reason:
 //!
-//! - Some decNumber operations are not IEEE 754 operations of floaty: the
-//!   rounding `abs`, `minus`, and `plus`, `reduce`, the logical operations,
-//!   the truncating `divideint` and `remainder`, `maxmag`, `minmag`,
-//!   `nexttoward`, and the text conversions.
+//! - Some decNumber operations are not operations of floaty: the rounding
+//!   `abs`, `minus`, and `plus`, `reduce`, the logical operations, the
+//!   integer quotient `divideint`, `maxmag`, `minmag`, `nexttoward`, and the
+//!   text conversions.
 //! - decNumber gives `Division_impossible` when the integer quotient of
-//!   `remaindernear` has more than `p` digits, as `decBasic.c` of decNumber
-//!   3.68 does at lines 591 to 595. floaty follows IEEE 754 and gives the
-//!   exact remainder, as the Intel decimal library does: `1E+384`
-//!   remaindernear `1` is `0`. The test identifies these cases by the
-//!   condition of decNumber, not by floaty's result, and counts them.
+//!   `remainder` or `remaindernear` has more than `p` digits, as
+//!   `decBasic.c` of decNumber 3.68 does at lines 591 to 595. floaty follows
+//!   IEEE 754 and gives the exact remainder, as the Intel decimal library
+//!   does: `1E+384` remaindernear `1` is `0`. The test identifies these cases
+//!   by the condition of decNumber, not by floaty's result, and counts them.
 //! - floaty's `scale_b` takes an `i32`. decNumber takes a scale operand that
 //!   is an integer with exponent 0, up to `2 * (emax + p)`, and signals
 //!   invalid for every other operand.
@@ -172,7 +172,7 @@ impl Report {
             Operation::Binary(Binary::Quantize) | Operation::Unary(Unary::ToIntegralExact) => {
                 Self::Magnitude
             }
-            Operation::Binary(Binary::RemainderNear) => Self::Subnormal,
+            Operation::Binary(Binary::Remainder | Binary::RemainderNear) => Self::Subnormal,
             _ => Self::Neither,
         }
     }
@@ -254,8 +254,8 @@ fn unmapped(operation: &Operation) -> Option<&'static str> {
         | Operation::Binary(
             Binary::And | Binary::Or | Binary::Xor | Binary::Rotate | Binary::Shift,
         ) => Some(LOGICAL),
-        Operation::Binary(Binary::DivideInteger | Binary::Remainder) => {
-            Some("divideint, remainder: truncating division, not IEEE 754")
+        Operation::Binary(Binary::DivideInteger) => {
+            Some("divideint: an integer quotient, not IEEE 754")
         }
         Operation::Binary(Binary::MaxMag | Binary::MinMag | Binary::NextToward) => {
             Some("maxmag, minmag, nexttoward: floaty has no such operation")
@@ -276,10 +276,12 @@ fn excluded<F: Arithmetic>(
     conditions: Status,
 ) -> Option<&'static str> {
     match operation {
-        Operation::Binary(Binary::RemainderNear)
+        Operation::Binary(Binary::Remainder | Binary::RemainderNear)
             if conditions.contains(Status::DIVISION_IMPOSSIBLE) =>
         {
-            Some("remaindernear: decNumber's Division_impossible; floaty follows IEEE 754")
+            Some(
+                "remainder, remaindernear: decNumber's Division_impossible; floaty follows IEEE 754",
+            )
         }
         Operation::Binary(Binary::ScaleB) => scale::<F>(operands[1]).err(),
         Operation::Fma if signaling_pair::<F>(operands) => {
@@ -481,6 +483,7 @@ where
                 Binary::Max => rounded(x.max_num_with(y, env)),
                 Binary::Min => rounded(x.min_num_with(y, env)),
                 Binary::Quantize => rounded(x.quantize_with(y, env)),
+                Binary::Remainder => rounded(x.truncated_remainder_with(y, env)),
                 Binary::RemainderNear => rounded(x.remainder_with(y, env)),
                 Binary::ScaleB => {
                     let scale =

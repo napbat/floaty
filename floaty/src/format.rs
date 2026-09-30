@@ -14,7 +14,7 @@ use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 
-use self::internal::{Host, LimbConversion, MinMax, Source, Step};
+use self::internal::{Host, LimbConversion, MinMax, Quotient, Source, Step};
 
 /// A floating-point format family at a width of `W` bits.
 ///
@@ -151,11 +151,13 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     #[doc(hidden)]
     fn to_int<I: Integer, B: Behavior>(value: Self::Bits, behavior: B) -> (ToInt<I>, Flags);
 
-    /// Returns the IEEE 754 remainder.
+    /// Returns the remainder `left - n * right`, with the quotient `n`
+    /// rounded to an integer as `quotient` says.
     #[doc(hidden)]
     fn remainder<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,
+        quotient: Quotient,
         behavior: B,
     ) -> (Self::Bits, Flags);
 
@@ -250,6 +252,18 @@ pub(crate) mod internal {
         /// roundings of add, subtract, multiply, divide, and square root give
         /// the correctly rounded result.
         BFloat,
+    }
+
+    /// How a remainder `x - n * y` rounds the quotient `n = x / y` to an
+    /// integer.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Quotient {
+        /// To the nearest integer, and the even one at a tie: the IEEE 754
+        /// remainder.
+        Nearest,
+        /// Toward zero: the remainder of C `fmod` and of the Rust `%`
+        /// operator.
+        Truncated,
     }
 
     /// The direction of `next_up` and `next_down`.
@@ -433,7 +447,8 @@ storage!([u64; 8] =>
 /// `Enc` sets the special values, the exponent bias, and whether the integer
 /// bit is explicit. A format has 2 to 28 exponent bits and at least one
 /// fraction bit. The [`X87`] encoding exists only as `Binary<15, X87>` at
-/// width 80.
+/// width 80, and the [`B11Fnuz`] encoding only as `Binary<4, B11Fnuz>` at
+/// width 8.
 ///
 /// An unsupported width does not compile:
 ///
@@ -462,11 +477,15 @@ impl<const E: u32, Enc: Encoding> Sealed for Binary<E, Enc> {}
 /// The special values, bias, and integer bit of a binary format.
 ///
 /// The trait is sealed. The encodings are [`Ieee`], [`NoInf`], [`Fnuz`],
-/// [`Finite`], and [`X87`].
+/// [`B11Fnuz`], [`Finite`], and [`X87`].
 pub trait Encoding: Sealed + 'static {
     /// The encoding rules that the binary engine applies.
     #[doc(hidden)]
     const KIND: EncodingKind;
+
+    /// The exponent bias, or `None` for the bias of the encoding rules.
+    #[doc(hidden)]
+    const BIAS: Option<i32> = None;
 }
 
 /// The IEEE 754 encoding.
@@ -506,6 +525,26 @@ pub enum Fnuz {}
 impl Sealed for Fnuz {}
 impl Encoding for Fnuz {
     const KIND: EncodingKind = EncodingKind::Fnuz;
+}
+
+/// The [`Fnuz`] encoding with the exponent bias 11, for the FP8 format
+/// E4M3B11FNUZ of LLVM and `ml_dtypes`.
+///
+/// The encoding exists only as `Binary<4, B11Fnuz>` at width 8. The bias is
+/// 3 larger than in [`Fnuz`], so the largest value is 30 and the smallest
+/// normal value is 2^-10.
+///
+/// Another layout fails when the compiler generates code for it:
+///
+/// ```compile_fail,E0080
+/// let _ = floaty::Float::<floaty::Binary<5, floaty::B11Fnuz>, 8>::PRECISION;
+/// ```
+pub enum B11Fnuz {}
+
+impl Sealed for B11Fnuz {}
+impl Encoding for B11Fnuz {
+    const KIND: EncodingKind = EncodingKind::Fnuz;
+    const BIAS: Option<i32> = Some(11);
 }
 
 /// An encoding without infinities and without NaNs, for the OCP

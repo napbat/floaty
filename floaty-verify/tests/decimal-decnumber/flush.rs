@@ -258,7 +258,7 @@ fn skips(
 ) -> Vec<(&'static str, usize)> {
     vec![
         (
-            "remaindernear: decNumber's Division_impossible; floaty follows IEEE 754",
+            "remainder, remaindernear: decNumber's Division_impossible; floaty follows IEEE 754",
             impossible,
         ),
         ("scaleb: a NaN scale operand", nan),
@@ -278,17 +278,17 @@ fn decimal64_flush_to_zero_and_denormals_are_zero() {
     let tally = run::<Double, 64>(1_000, 0x6464_0F70);
     tally.report("decimal64 FTZ and DAZ");
     // The generator is seeded, so the counts are exact.
-    let mut skipped = skips(1280, 192, 1440, 2184);
+    let mut skipped = skips(2360, 192, 1440, 2184);
     skipped.push((SIGNALING_PAIR, 24));
-    tally.assert_counts(570_880, &skipped, &[(REPLACED, 35_576), (FLUSHED, 10_032)]);
+    tally.assert_counts(593_800, &skipped, &[(REPLACED, 39_000), (FLUSHED, 10_032)]);
 }
 
 #[test]
 fn decimal128_flush_to_zero_and_denormals_are_zero() {
     let tally = run::<Quad, 128>(1_000, 0x0128_0F70);
     tally.report("decimal128 FTZ and DAZ");
-    let skipped = skips(1424, 168, 1632, 2112);
-    tally.assert_counts(570_664, &skipped, &[(REPLACED, 34_584), (FLUSHED, 9_544)]);
+    let skipped = skips(2824, 168, 1632, 2112);
+    tally.assert_counts(593_264, &skipped, &[(REPLACED, 38_248), (FLUSHED, 9_544)]);
 }
 
 #[test]
@@ -303,7 +303,7 @@ fn decimal32_flush_to_zero_and_denormals_are_zero() {
         .collect();
     let tally = run_operations::<Single, 32>(&operations, 1_000, 0x0032_0F70);
     tally.report("decimal32 FTZ and DAZ");
-    let mut skipped = skips(1336, 96, 1128, 2352);
+    let mut skipped = skips(2896, 96, 1128, 2352);
     skipped.push((SIGNALING_PAIR, 24));
-    tally.assert_counts(475_064, &skipped, &[(REPLACED, 34_368), (FLUSHED, 9_968)]);
+    tally.assert_counts(497_504, &skipped, &[(REPLACED, 37_424), (FLUSHED, 9_968)]);
 }

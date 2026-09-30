@@ -316,45 +316,9 @@ fn gcc_matches_libgcc_under_qemu() {
     );
 }
 
-/// Stops the test when the C library `fma(x, y, z)` that QD calls is not
-/// `y.mul_add(x, z)` under `Env::X86_SSE`, which floaty's `Qd` follows. glibc
-/// selects its `fma` at run time. On a processor with FMA3 it is
-/// `vfmadd213sd`, which computes `y * x + z` and takes the first NaN in that
-/// order. Another `fma` makes many `Qd` cases differ for one reason.
-fn check_host_fma() {
-    // 0, 1, infinity, two quiet NaNs, and a signaling NaN.
-    let values = [
-        0_u64,
-        0x3FF0_0000_0000_0000,
-        0x7FF0_0000_0000_0000,
-        0x7FF8_0000_0000_0001,
-        0xFFF8_0000_0000_0002,
-        0x7FF0_0000_0000_0003,
-    ];
-    for x in values {
-        for y in values {
-            for z in values {
-                let (ours, _) = F64::from_bits(y).mul_add_with(
-                    F64::from_bits(x),
-                    F64::from_bits(z),
-                    Env::X86_SSE,
-                );
-                let theirs = qd::c_fma(x, y, z);
-                assert_eq!(
-                    theirs,
-                    ours.to_bits(),
-                    "the C library fma({x:#x}, {y:#x}, {z:#x}) of this host is not y * x + z under \
-                     Env::X86_SSE. The Qd tests need a processor on which glibc's fma is the FMA3 \
-                     instruction"
-                );
-            }
-        }
-    }
-}
-
 #[test]
 fn qd_matches_the_qd_library() {
-    check_host_fma();
+    qd::check_host_fma();
     let mut operands = Operands {
         random: SplitMix64::new(0x0D_0128),
     };

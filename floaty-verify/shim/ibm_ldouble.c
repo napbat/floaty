@@ -1,18 +1,24 @@
 /*
- * Runs the IBM long double arithmetic of libgcc on PowerPC, and the PowerPC
- * fused multiply-add instructions, as an oracle.
+ * Runs the IBM long double arithmetic of libgcc on PowerPC, the IBM long
+ * double functions of glibc's libm, and the PowerPC fused multiply-add
+ * instructions, as an oracle.
  *
  * The program is built for powerpc64le and runs under qemu-ppc64le. It reads
  * one case per line from standard input:
  *
  *     <operation> <rounding> <a_hi> <a_lo> <b_hi> <b_lo>
+ *     <function> <rounding> <a_hi> <a_lo> [<b_hi> <b_lo> [<c_hi> <c_lo>]]
  *     <instruction> <rounding> <a> <c> <b>
  *
- * The operation is `add`, `sub`, `mul`, or `div`. The instruction is
- * `fmadd` or `fmsub`, which compute `a * c + b` and `a * c - b` with the
- * operands in the order FRA, FRC, FRB. The rounding direction is `nearest`,
- * `zero`, `up`, or `down`. Each operand is a binary64 bit pattern in exactly
- * 16 hexadecimal digits. For each case the program writes one line:
+ * The operation is `add`, `sub`, `mul`, or `div`. The function is a libm
+ * function on one, two, or three IBM long double operands: `sqrtl`,
+ * `nextupl`, `nextdownl`, `iscanonicall`, `fmodl`, `remainderl`, or `fmal`.
+ * `iscanonicall` gives its integer result as the high half, and a zero low
+ * half. The instruction is `fmadd` or `fmsub`, which compute `a * c + b` and
+ * `a * c - b` with the operands in the order FRA, FRC, FRB. The rounding
+ * direction is `nearest`, `zero`, `up`, or `down`. Each operand is a
+ * binary64 bit pattern in exactly 16 hexadecimal digits. For each case the
+ * program writes one line:
  *
  *     <result_hi> <result_lo> <flags>
  *     <result> <flags>
@@ -21,9 +27,9 @@
  * digits: invalid 0x01, divide by zero 0x02, overflow 0x04, underflow 0x08,
  * and inexact 0x10. A malformed line stops the program with status 2.
  *
- * The compiler cannot fold or move the libgcc calls. The operands come from
- * standard input, and each call goes through a pointer to an external
- * libgcc symbol, so the compiler treats the callee as an unknown function.
+ * The compiler cannot fold or move the libgcc and libm calls. The operands
+ * come from standard input, and each call goes through a pointer to an
+ * external symbol, so the compiler treats the callee as an unknown function.
  * The instructions are volatile inline assembly. The build uses
  * `-frounding-math`.
  */
@@ -45,6 +51,47 @@ __ibm128 __gcc_qmul(double a, double aa, double c, double cc);
 __ibm128 __gcc_qdiv(double a, double aa, double c, double cc);
 
 typedef __ibm128 (*operation_function)(double, double, double, double);
+
+/*
+ * The IBM long double functions of glibc. The default `long double` of this
+ * compiler is binary128, whose functions have other names, so each assembler
+ * label names the IBM entry point of the static libm.
+ */
+__ibm128 glibc_sqrtl(__ibm128 x) __asm__("__sqrtl");
+__ibm128 glibc_nextupl(__ibm128 x) __asm__("__nextupl");
+__ibm128 glibc_nextdownl(__ibm128 x) __asm__("__nextdownl");
+int glibc_iscanonicall(__ibm128 x) __asm__("__iscanonicall");
+__ibm128 glibc_fmodl(__ibm128 x, __ibm128 y) __asm__("__fmodl");
+__ibm128 glibc_remainderl(__ibm128 x, __ibm128 y) __asm__("__remainderl");
+__ibm128 glibc_fmal(__ibm128 x, __ibm128 y, __ibm128 z) __asm__("__fmal");
+
+/* Returns `iscanonicall` as a long double, for the one-operand table. */
+static __ibm128 canonical(__ibm128 x) {
+  return __builtin_pack_ibm128((double)glibc_iscanonicall(x), 0.0);
+}
+
+typedef __ibm128 (*unary_function)(__ibm128);
+typedef __ibm128 (*binary_function)(__ibm128, __ibm128);
+typedef __ibm128 (*ternary_function)(__ibm128, __ibm128, __ibm128);
+
+/* A libm function, with its operand count. */
+struct library_function {
+  const char *name;
+  int operand_count;
+  unary_function unary;
+  binary_function binary;
+  ternary_function ternary;
+};
+
+static const struct library_function FUNCTIONS[] = {
+    {"sqrtl", 1, glibc_sqrtl, NULL, NULL},
+    {"nextupl", 1, glibc_nextupl, NULL, NULL},
+    {"nextdownl", 1, glibc_nextdownl, NULL, NULL},
+    {"iscanonicall", 1, canonical, NULL, NULL},
+    {"fmodl", 2, NULL, glibc_fmodl, NULL},
+    {"remainderl", 2, NULL, glibc_remainderl, NULL},
+    {"fmal", 3, NULL, NULL, glibc_fmal},
+};
 
 /*
  * Returns `a * c + b` by the `fmadd` instruction. The memory clobber keeps
@@ -169,6 +216,15 @@ static operation_function find_operation(const char *word, size_t length) {
   return NULL;
 }
 
+static const struct library_function *find_function(const char *word, size_t length) {
+  for (size_t index = 0; index < sizeof FUNCTIONS / sizeof FUNCTIONS[0]; index++) {
+    if (word_is(word, length, FUNCTIONS[index].name)) {
+      return &FUNCTIONS[index];
+    }
+  }
+  return NULL;
+}
+
 static instruction_function find_instruction(const char *word, size_t length) {
   if (word_is(word, length, "fmadd")) {
     return fused_multiply_add;
@@ -262,8 +318,9 @@ int main(void) {
     const char *word = "";
     size_t length = read_word(&cursor, &word);
     operation_function operation = find_operation(word, length);
+    const struct library_function *function = find_function(word, length);
     instruction_function instruction = find_instruction(word, length);
-    if (operation == NULL && instruction == NULL) {
+    if (operation == NULL && function == NULL && instruction == NULL) {
       fail(line_number, "unknown operation");
     }
     length = read_word(&cursor, &word);
@@ -271,8 +328,10 @@ int main(void) {
     if (!find_rounding(word, length, &mode)) {
       fail(line_number, "unknown rounding direction");
     }
-    int operand_count = operation != NULL ? 4 : 3;
-    uint64_t operands[4];
+    int operand_count = operation != NULL  ? 4
+                        : function != NULL ? 2 * function->operand_count
+                                           : 3;
+    uint64_t operands[6];
     for (int index = 0; index < operand_count; index++) {
       if (!read_bits(&cursor, &operands[index])) {
         fail(line_number, "an operand is not 16 hexadecimal digits");
@@ -292,6 +351,20 @@ int main(void) {
     if (operation != NULL) {
       __ibm128 result = operation(from_bits(operands[0]), from_bits(operands[1]),
                                   from_bits(operands[2]), from_bits(operands[3]));
+      raised = fetestexcept(FE_ALL_EXCEPT);
+      results[0] = to_bits(__builtin_unpack_ibm128(result, 0));
+      results[1] = to_bits(__builtin_unpack_ibm128(result, 1));
+      result_count = 2;
+    } else if (function != NULL) {
+      __ibm128 values[3];
+      for (int index = 0; index < function->operand_count; index++) {
+        values[index] = __builtin_pack_ibm128(from_bits(operands[2 * index]),
+                                              from_bits(operands[2 * index + 1]));
+      }
+      __ibm128 result = function->operand_count == 1   ? function->unary(values[0])
+                        : function->operand_count == 2 ? function->binary(values[0], values[1])
+                                                       : function->ternary(values[0], values[1],
+                                                                           values[2]);
       raised = fetestexcept(FE_ALL_EXCEPT);
       results[0] = to_bits(__builtin_unpack_ibm128(result, 0));
       results[1] = to_bits(__builtin_unpack_ibm128(result, 1));

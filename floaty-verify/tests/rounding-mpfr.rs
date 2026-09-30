@@ -9,9 +9,9 @@ use core::num::NonZeroU32;
 
 use floaty::env::Tininess;
 use floaty::{
-    BF16, Env, Exact, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16,
-    F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352, F384, F416, F448, F480, F512,
-    TF32,
+    BF16, Env, Exact, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn,
+    F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320,
+    F352, F384, F416, F448, F480, F512, TF32,
 };
 use floaty_verify::encodings::to_limbs;
 use floaty_verify::mpfr::{self, Format, Input, Specials, Value};
@@ -161,6 +161,9 @@ fn fp8_formats() {
     check_format!(F8E5M2, Specials::Ieee, &[], 52);
     check_format!(F8E4M3Fnuz, Specials::Fnuz, &[], 431);
     check_format!(F8E5M2Fnuz, Specials::Fnuz, &[], 521);
+    check_format!(F8E4M3, Specials::Ieee, &[2], 434);
+    check_format!(F8E3M4, Specials::Ieee, &[3], 345);
+    check_format!(F8E4M3B11Fnuz, Specials::Fnuz, &[], 4311);
 }
 
 #[test]
@@ -244,6 +247,9 @@ fn every_small_input_to_the_fp8_formats() {
     sweep!(F8E5M2, Specials::Ieee);
     sweep!(F8E4M3Fnuz, Specials::Fnuz);
     sweep!(F8E5M2Fnuz, Specials::Fnuz);
+    sweep!(F8E4M3, Specials::Ieee);
+    sweep!(F8E3M4, Specials::Ieee);
+    sweep!(F8E4M3B11Fnuz, Specials::Fnuz);
     sweep!(F4E2M1Fn, Specials::Finite);
     sweep!(F6E2M3Fn, Specials::Finite);
     sweep!(F6E3M2Fn, Specials::Finite);

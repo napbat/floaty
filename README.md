@@ -8,8 +8,9 @@ the same bits and the same flags on every host. floaty is a base layer for
 binary lifters, decompilers, constant folders, and FPU emulators.
 
 - **Formats.** Every IEEE 754 binary interchange format from 16 to 512
-  bits, bfloat16, TF32, OCP FP8 E4M3 and E5M2, the FNUZ FP8 variants, the
-  OCP MX formats FP4 and FP6, x87 80-bit extended precision, and custom
+  bits, bfloat16, TF32, OCP FP8 E4M3 and E5M2, the FP8 variants of LLVM
+  and `ml_dtypes`, the OCP MX formats FP4 and FP6, x87 80-bit extended
+  precision, and custom
   binary layouts up to 512 bits.
   decimal32, decimal64, and decimal128 in the BID and DPD encodings. Double-double values that match
   the IBM `long double` of libgcc or the `dd_real` of QD, bit for bit.
@@ -21,7 +22,8 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   and IEEE 754-2008 minimum and maximum operations, the remainder, rounding
   to an integral value, integer conversions up to 512 bits, `scale_b`,
   `next_up` and `next_down`, the sign operations, and the decimal quantum
-  operations.
+  operations. The operators include `%`, the truncated remainder of C
+  `fmod`, and the compound assignments such as `+=`.
 - **Hardware behavior as data.** Flush-to-zero, denormals-are-zero, tininess
   detection, NaN propagation rules, x87 precision control, and saturation
   of overflows. Presets give the x86 SSE and x87 behavior.
@@ -70,7 +72,9 @@ assert_eq!(flags, Flags::INEXACT | Flags::ROUNDED_UP);
 
 A value has the type `Float<S, W, M>`: a standard `S`, a width of `W` bits,
 and a default mode `M`. A value is only its bits, like a value in a
-register. Type aliases name the common formats.
+register. Type aliases name the common formats. `F32` and `F64` convert to
+and from the host `f32` and `f64` with `From`. The conversion is a bit cast,
+so it keeps a signaling NaN.
 
 | Alias | Format | Precision |
 | --- | --- | --- |
@@ -79,7 +83,9 @@ register. Type aliases name the common formats.
 | `BF16` | bfloat16 | 8 bits |
 | `TF32` | NVIDIA TensorFloat-32, 19 bits | 11 bits |
 | `F8E4M3Fn`, `F8E5M2` | OCP FP8. E4M3 has no infinity, so LLVM and `ml_dtypes` call it E4M3FN. | 4, 3 bits |
+| `F8E4M3`, `F8E3M4` | FP8 with IEEE 754 special values, as LLVM and `ml_dtypes` define them | 4, 5 bits |
 | `F8E4M3Fnuz`, `F8E5M2Fnuz` | FP8 with one NaN and no negative zero | 4, 3 bits |
+| `F8E4M3B11Fnuz` | FNUZ FP8 E4M3 with the exponent bias 11 | 4 bits |
 | `F4E2M1Fn`, `F6E2M3Fn`, `F6E3M2Fn` | OCP MX FP4 and FP6: no infinity and no NaN | 2, 4, 3 bits |
 | `F80` | x87 extended precision, with an explicit integer bit | 64 bits |
 | `D32Bid`, `D64Bid`, `D128Bid` | IEEE 754 decimal formats, BID encoding | 7, 16, 34 digits |
@@ -87,8 +93,8 @@ register. Type aliases name the common formats.
 
 `Binary<E, Enc>` describes other binary layouts: 2 to 28 exponent bits `E`,
 at least one fraction bit, a width up to 512 bits, and an encoding of the
-special values, `Ieee`, `NoInf`, `Fnuz`, `Finite`, or `X87`. An invalid
-layout fails to compile.
+special values and the bias, `Ieee`, `NoInf`, `Fnuz`, `B11Fnuz`, `Finite`,
+or `X87`. An invalid layout fails to compile.
 
 ```rust
 use floaty::{Binary, Decoded, Float};
@@ -160,6 +166,61 @@ assert_eq!(to_channel(F32::from_bits(0xBF80_0000)), 0); // -1.0 gives zero
 assert_eq!(to_channel(F32::from_bits(0x4E6E_6B28)), 0x7BF); // 1e9 gives 65024
 let one: F32 = Eleven::from_bits(0x3C0).convert();
 assert_eq!(one.to_bits(), 0x3F80_0000);
+```
+
+### The MX scale type E8M0
+
+E8M0FNU, the scale of the OCP microscaling formats, is an exponent field
+alone: code `c` holds 2^(c - 127), and code 255 is the NaN. It has no sign,
+no zero, and no fraction, so floaty builds it from binary64 and a precision
+limit of one bit. The example rounds as `ml_dtypes` does: to the nearest
+power of two with a tie up, to 2^-127 below that value, and to the NaN for
+an overflow, a zero, a negative value, or a NaN. `floaty-verify` checks it
+against `ml_dtypes` for every code and every rounding case of binary32.
+`ml_dtypes` 0.6.0 differs in one range: it rounds a binary32 subnormal above
+2^-127 and below 1.5 * 2^-127 to 2^-126, although 2^-127 is nearer. The
+example gives 2^-127 there.
+
+```rust
+use core::num::NonZeroU32;
+use floaty::{Env, Exact, F32, F64, Rounding};
+
+/// Returns the E8M0 code of a binary32 value.
+fn to_scale(value: F32) -> u8 {
+    let one_bit = Env::IEEE
+        .with_rounding(Rounding::TiesToAway)
+        .with_precision(NonZeroU32::new(1));
+    let (power, _) = value.convert_with::<F64>(one_bit);
+    if power.is_nan() || power.is_sign_negative() || power.is_zero() {
+        return 0xFF;
+    }
+    // The exponent field of a positive binary64 value is its bits above 52.
+    let exponent = i32::try_from(power.to_bits() >> 52).expect("11 bits") - 1023;
+    if exponent > 127 {
+        return 0xFF;
+    }
+    u8::try_from(exponent.max(-127) + 127).expect("the code is below 255")
+}
+
+/// Returns the binary32 value of an E8M0 code.
+fn from_scale(code: u8) -> F32 {
+    if code == 0xFF {
+        return F32::from_bits(0x7FC0_0000);
+    }
+    let power = Exact {
+        negative: false,
+        exponent: i32::from(code) - 127,
+        significand: [1],
+        sticky: false,
+    };
+    F32::round(power, Env::IEEE).0
+}
+
+assert_eq!(to_scale(F32::from_bits(0x3FC0_0000)), 128); // 1.5 gives 2.0
+assert_eq!(to_scale(F32::from_bits(0x3FBF_FFFF)), 127); // below 1.5 gives 1.0
+assert_eq!(to_scale(F32::from_bits(0x7F40_0000)), 0xFF); // 1.5 * 2^127 overflows
+assert_eq!(to_scale(F32::from_bits(0x0000_0001)), 0); // 2^-149 gives 2^-127
+assert_eq!(from_scale(0).to_bits(), 0x0040_0000); // 2^-127, subnormal in binary32
 ```
 
 ## Behavior
@@ -327,6 +388,20 @@ assert_eq!(dpd.decode::<1>(), expected);
 the machine code of its reference, so the low halves, the NaN payloads, and
 the flags match too.
 
+| Operations | `Gcc` | `Qd` |
+| --- | --- | --- |
+| `+`, `-`, `*`, `/` | libgcc `__gcc_qadd` and the others | `dd_real` operators |
+| `sqrt`, `remainder`, `%` | glibc 2.43 `sqrtl`, `remainderl`, `fmodl` | QD `sqrt`, `drem`, `fmod` |
+| `mul_add`, `next_up`, `next_down` | glibc 2.43 `fmal`, `nextupl`, `nextdownl` | none: QD has no such function |
+| Conversions, integer conversions, `scale_b`, `round_to_integral`, classification, total order, minimum and maximum | the exact value `hi + lo`, by floaty's rule | the same |
+
+The operations on the exact value have no reference implementation, so
+`floaty-verify` checks their rule with MPFR. An exact value rounds to a pair
+in two steps: the high half is the value rounded to nearest even, and the
+low half is the rest rounded in the direction of the behavior. The sum of
+the halves then splits into its canonical pair, so a value that a canonical
+pair holds gives that pair in every direction.
+
 ```rust
 use floaty::{DoubleDouble, F64, Gcc};
 
@@ -390,12 +465,12 @@ path.
 | bfloat16 | x86-64 with SSE2, or AArch64 | bfloat16 through binary32: `+`, `-`, `*`, `/`, `sqrt`, `to_int`, `remainder` by `FPREM1` on x86-64, `round_to_integral` with SSE4.1 on x86-64, comparisons, the minimum and maximum operations, and `convert` to binary32 and binary64 and from binary32. A shift widens bfloat16, and integer instructions round binary32 results to bfloat16. | `mul_add` and `from_int`, which two roundings can get wrong |
 | x87 | x86-64 | x87 extended: `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral` to nearest even, `to_int`, `from_int`, and `convert` to and from binary32 and binary64 | A control word other than round to nearest at 64-bit precision; the integer indefinite |
 | x87 remainder | x86-64 | `remainder` of binary32, binary64, and x87 extended, by `FPREM1`, and of binary16 and bfloat16 widened to binary32 | A dividend exponent more than 630 above the divisor exponent; a dividend that is subnormal in the format that `FPREM1` loads, or a divisor small enough to give a subnormal result |
-| Packed SSE and AVX | x86-64 with SSE2, and AVX for 256 bits | `Lanes` of binary32 and binary64: the operators, `sqrt`, `mul_add` with FMA, `round_to_integral` with SSE4.1, `convert` between them, `compare_quiet`, the minimum and maximum operations, and `to_int`. bfloat16 lanes, and binary16 lanes with F16C: the operators, `sqrt`, `round_to_integral` with SSE4.1, `convert`, `compare_quiet`, and the minimum and maximum operations. x87 extended lanes: the operators and `sqrt`, with one check of the control word. | A NaN in any lane, or for the minimum and maximum a NaN or two zeros in any pair of lanes, sends each lane to its scalar path. For `to_int`, the integer indefinite sends its lane to the scalar conversion. |
+| Packed SSE and AVX | x86-64 with SSE2, and AVX for 256 bits | `Lanes` of binary32 and binary64: `+`, `-`, `*`, `/`, `sqrt`, `mul_add` with FMA, `round_to_integral` with SSE4.1, `convert` between them, `compare_quiet`, the minimum and maximum operations, and `to_int`. bfloat16 lanes, and binary16 lanes with F16C: `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral` with SSE4.1, `convert`, `compare_quiet`, and the minimum and maximum operations. x87 extended lanes: `+`, `-`, `*`, `/`, and `sqrt`, with one check of the control word. | A NaN in any lane, or for the minimum and maximum a NaN or two zeros in any pair of lanes, sends each lane to its scalar path. For `to_int`, the integer indefinite sends its lane to the scalar conversion. |
 | AArch64 | AArch64 | binary32, binary64, and binary16: `+`, `-`, `*`, `/`, `sqrt`, `convert`, `to_int`, `from_int`, `round_to_integral` in the five IEEE 754 directions, comparisons, and the minimum and maximum operations. `mul_add` of binary32 and binary64. | FPCR with a nonzero `RMode`, FZ, FZ16, FIZ, AH, AHP, or a trap enable; a saturated integer |
 | `FEAT_FP16` | AArch64 with `+fp16` | `mul_add` of binary16 | |
 | `FEAT_BF16` | AArch64 with `+bf16` | The scalar bfloat16 paths round in `BFCVT` | |
 | Packed AArch64 | AArch64 | As the packed SSE paths, at 128 bits, but without `to_int` and x87 extended lanes | As the packed SSE paths |
-| Double-double | The binary64 paths of the build | The operators of `Gcc` and `Qd`, and `sqrt` of `Qd`, with one check of the environment for all steps | |
+| Double-double | The binary64 paths of the build | `+`, `-`, `*`, `/`, and `sqrt` of `Gcc` and `Qd`, with one check of the environment for all steps | |
 
 [docs/x86-64-acceleration.md](docs/x86-64-acceleration.md) lists the x86-64
 instructions that could give more paths, and what blocks each one.
@@ -463,13 +538,14 @@ IEEE 754 or a vendor manual with MPFR or decNumber.
 | Reference | What it checks |
 | --- | --- |
 | Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in the six directions of TestFloat, under four NaN rules |
-| MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, and between those formats and the decimal formats. |
+| MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, and between those formats and the decimal formats. The truncated remainder. The operations of `DoubleDouble` on its exact value, by their rules, with exact rationals. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, and `scale_b` |
-| `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, as generated tables |
+| `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
 | The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 tests run under QEMU 10.2.1. |
 | decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations, with FTZ, DAZ, and precision limits |
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
+| glibc 2.43 libm of the powerpc64le cross C library, under QEMU | `sqrt`, `remainder`, `%`, `mul_add`, `next_up`, `next_down`, and `is_canonical` of `DoubleDouble<Gcc>` |
 | QD 2.3.24 | `DoubleDouble<Qd>` |
 | Mesa 25.2.0, `format_r11g11b10f.h` | The R11G11B10 recipe: every rounding case of both channels, and every channel code |
 

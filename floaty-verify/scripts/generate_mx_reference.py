@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write the MX reference data from ml_dtypes.
 
-The script writes three files into the directory that its argument names:
+The script writes four files into the directory that its argument names:
 
 - mx-reference.txt lists every encoding of the MX formats FP4 E2M1, FP6
   E2M3, and FP6 E3M2 with the class, the sign, and the value that ml_dtypes
@@ -16,6 +16,12 @@ The script writes three files into the directory that its argument names:
   computes in binary32 and rounds to nearest even once more. Binary32 has
   more than twice the MX precision plus two bits, so the second rounding
   gives the correctly rounded result.
+
+- mx-e8m0.bin holds the scale type E8M0FNU of the MX formats. First comes
+  the binary32 encoding that ml_dtypes gives for every E8M0 encoding, 256
+  little-endian `u32` values. Then comes the E8M0 encoding that ml_dtypes
+  gives for each binary32 input of `e8m0_inputs`, one byte each, in the
+  order of that function.
 
 The MX formats have no infinity and no NaN. ml_dtypes gives the largest
 finite value of its sign for an overflow and for an infinity, and a zero for
@@ -98,11 +104,50 @@ def write_arithmetic(path: Path) -> None:
     path.write_bytes(b"".join(parts))
 
 
+# The binary32 fraction fields of `e8m0_inputs`: zero, the smallest, the
+# largest, and the values at and around the tie of a normal power of two,
+# 0x400000, and of the subnormal 2^-127, 0x600000.
+E8M0_FRACTIONS = [
+    0x000000,
+    0x000001,
+    0x3FFFFF,
+    0x400000,
+    0x400001,
+    0x5FFFFF,
+    0x600000,
+    0x600001,
+    0x7FFFFF,
+]
+
+
+def e8m0_inputs() -> np.ndarray:
+    """Return the binary32 inputs of the E8M0 table: every exponent field
+    with each fraction of E8M0_FRACTIONS, positive then negative."""
+    bits = [
+        sign << 31 | field << 23 | fraction
+        for field in range(256)
+        for fraction in E8M0_FRACTIONS
+        for sign in (0, 1)
+    ]
+    return np.array(bits, dtype=np.uint32).view(np.float32)
+
+
+def write_e8m0(path: Path) -> None:
+    codes = np.arange(256, dtype=np.uint8).view(ml_dtypes.float8_e8m0fnu)
+    values = codes.astype(np.float32).view(np.uint32).astype("<u4").tobytes()
+    with warnings.catch_warnings():
+        # Overflow and NaN inputs are part of the table.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        encoded = e8m0_inputs().astype(ml_dtypes.float8_e8m0fnu).view(np.uint8).tobytes()
+    path.write_bytes(values + encoded)
+
+
 def main() -> None:
     directory = Path(sys.argv[1])
     write_table(directory / "mx-reference.txt")
     write_conversions(directory / "mx-from-f16.bin")
     write_arithmetic(directory / "mx-arithmetic.bin")
+    write_e8m0(directory / "mx-e8m0.bin")
 
 
 if __name__ == "__main__":

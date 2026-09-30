@@ -4,7 +4,7 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
-use floaty::{F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz};
+use floaty::{F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz};
 use floaty_verify::ml_dtypes::{Row, check, rows};
 use floaty_verify::shape::{self, Payload, trailing_payload};
 use rug::Integer;
@@ -18,8 +18,9 @@ macro_rules! dispatch {
                 let value = $name::from_bits($bits);
                 let context = format!("{} {:#04x}", $alias, $bits);
                 assert_eq!(value.is_sign_negative(), $bits & 0x80 != 0, "{context} sign bit");
-                // Only E5M2 has IEEE NaNs, which carry a payload.
-                let payload = if $alias == "F8E5M2" {
+                // Only E5M2, E4M3, and E3M4 have IEEE NaNs, which carry a
+                // payload.
+                let payload = if matches!($alias, "F8E5M2" | "F8E4M3" | "F8E3M4") {
                     trailing_payload(&Integer::from($bits), $name::PRECISION)
                 } else {
                     Payload::None
@@ -54,7 +55,16 @@ fn every_fp8_encoding_matches_ml_dtypes() {
                 emax,
                 emin,
             } => {
-                let ours = parameters!(alias, F8E4M3Fn, F8E5M2, F8E4M3Fnuz, F8E5M2Fnuz);
+                let ours = parameters!(
+                    alias,
+                    F8E4M3Fn,
+                    F8E5M2,
+                    F8E4M3Fnuz,
+                    F8E5M2Fnuz,
+                    F8E4M3,
+                    F8E3M4,
+                    F8E4M3B11Fnuz
+                );
                 assert_eq!(ours, (precision, emax, emin), "{alias} parameters");
                 formats += 1;
             }
@@ -65,8 +75,17 @@ fn every_fp8_encoding_matches_ml_dtypes() {
                 sign,
                 value,
             } => {
-                let (ours, decoded) =
-                    dispatch!(alias, bits, F8E4M3Fn, F8E5M2, F8E4M3Fnuz, F8E5M2Fnuz);
+                let (ours, decoded) = dispatch!(
+                    alias,
+                    bits,
+                    F8E4M3Fn,
+                    F8E5M2,
+                    F8E4M3Fnuz,
+                    F8E5M2Fnuz,
+                    F8E4M3,
+                    F8E3M4,
+                    F8E4M3B11Fnuz
+                );
                 check(
                     &format!("{alias} {bits:#04x}"),
                     ours,
@@ -79,7 +98,7 @@ fn every_fp8_encoding_matches_ml_dtypes() {
     }
     assert_eq!(
         (formats, encodings),
-        (4, 4 * 256),
+        (7, 7 * 256),
         "the table covers every encoding"
     );
 }

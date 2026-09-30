@@ -314,6 +314,8 @@ macro_rules! bid_declarations {
                 pub(super) fn round_integral_positive(x: $c, flags: *mut u32) -> $c;
                 #[link_name = concat!("__bid", $w, "_rem")]
                 pub(super) fn rem(x: $c, y: $c, flags: *mut u32) -> $c;
+                #[link_name = concat!("__bid", $w, "_fmod")]
+                pub(super) fn fmod(x: $c, y: $c, flags: *mut u32) -> $c;
                 #[link_name = concat!("__bid", $w, "_logb")]
                 pub(super) fn logb(x: $c, flags: *mut u32) -> $c;
                 #[link_name = concat!("__bid", $w, "_ilogb")]
@@ -497,6 +499,10 @@ macro_rules! bid_format {
 
             fn rem(x: $bits, y: $bits) -> Outcome<$bits> {
                 call_2f($module::rem, x.to_c(), y.to_c()).map(<$bits>::from_c)
+            }
+
+            fn fmod(x: $bits, y: $bits) -> Outcome<$bits> {
+                call_2f($module::fmod, x.to_c(), y.to_c()).map(<$bits>::from_c)
             }
 
             fn logb(x: $bits) -> Outcome<$bits> {

@@ -397,6 +397,41 @@ pub fn remainder<const N: usize>(
     format: &Format,
     env: &Env,
 ) -> (Outcome, Flags) {
+    exact_remainder(first, second, format, env, |x, y| {
+        BigFloat::with_val_round(format.precision, x.remainder_ref(y), Round::Nearest)
+    })
+}
+
+/// Returns the expected result and flags of `truncated_remainder_with`.
+///
+/// The remainder is `x - n * y` with `n` the integer part of `x / y`, as C
+/// `fmod` and MPFR `mpfr_fmod` define it. The other rules are those of
+/// [`remainder`].
+///
+/// # Panics
+///
+/// Panics when MPFR does not give an exact remainder at the format precision.
+#[must_use]
+pub fn truncated_remainder<const N: usize>(
+    first: &Operand<N>,
+    second: &Operand<N>,
+    format: &Format,
+    env: &Env,
+) -> (Outcome, Flags) {
+    exact_remainder(first, second, format, env, |x, y| {
+        BigFloat::with_val_round(format.precision, x % y, Round::Nearest)
+    })
+}
+
+/// Returns the expected result and flags of a remainder of finite operands
+/// that `compute` gives exactly, with the special cases of IEEE 754.
+fn exact_remainder<const N: usize>(
+    first: &Operand<N>,
+    second: &Operand<N>,
+    format: &Format,
+    env: &Env,
+    compute: impl Fn(&BigFloat, &BigFloat) -> (BigFloat, Ordering),
+) -> (Outcome, Flags) {
     let mut flags = Flags::NONE;
     let operands = [read(first, env, &mut flags), read(second, env, &mut flags)];
     if let Some((nan, special)) = special_operands(&operands, format, env) {
@@ -411,8 +446,7 @@ pub fn remainder<const N: usize>(
     if x.is_zero() || y.is_infinite() {
         return (number(x, format), flags | tiny(x, format));
     }
-    let (result, ordering) =
-        BigFloat::with_val_round(format.precision, x.remainder_ref(y), Round::Nearest);
+    let (result, ordering) = compute(x, y);
     assert_eq!(ordering, Ordering::Equal, "the remainder is exact");
     let result = if result.is_zero() {
         zero(x.is_sign_negative())

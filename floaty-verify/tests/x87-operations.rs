@@ -485,6 +485,30 @@ fn fprem1_matches_the_ieee_remainder() {
     }
 }
 
+/// `FPREM` is the remainder of the quotient truncated toward zero, the
+/// remainder of C `fmod`; the harness repeats it until C2 is clear. The
+/// flags follow the rules of [`fprem1_matches_the_ieee_remainder`].
+#[test]
+fn fprem_matches_the_truncated_remainder() {
+    let mut random = SplitMix64::new(0x0087_2E30);
+    let pairs = remainder_pairs(&mut random);
+    for setting in settings() {
+        for &(a, b) in &pairs {
+            let (expected, status) = x86::fprem(a, b, setting.control);
+            let (x, y) = (F80::from_bits(a), F80::from_bits(b));
+            let (ours, flags) = x.truncated_remainder_with(y, setting.env());
+            let context = format!("fprem {a:#x} {b:#x} {setting:?} {flags:?} status {status:#06x}");
+            assert_eq!(status & C2, 0, "{context}: the reduction is complete");
+            assert_eq!(ours.to_bits(), expected & MASK, "{context}: result");
+            assert_eq!(
+                x87_arithmetic_status(flags, x.is_nan() || y.is_nan()),
+                status & CHECKED & !C1,
+                "{context}: flags"
+            );
+        }
+    }
+}
+
 /// Returns value and scale pairs for `FSCALE`: every special with small and
 /// large scales, and random values with a scale that lands near the subnormal
 /// range, near the overflow threshold, or anywhere.

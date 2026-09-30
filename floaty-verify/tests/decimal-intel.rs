@@ -513,6 +513,7 @@ where
         "div" => binary::<F, W>(line, Match::Bits, BidFloat::div_with),
         "quantize" => binary::<F, W>(line, Match::Bits, BidFloat::quantize_with),
         "rem" => binary::<F, W>(line, Match::Bits, BidFloat::remainder_with),
+        "fmod" => binary::<F, W>(line, Match::Bits, BidFloat::truncated_remainder_with),
         "minnum" => binary::<F, W>(
             line,
             Match::EqualOperands(Extremum::Minimum),
@@ -673,8 +674,8 @@ impl Skip {
             Self::Strings => "a string conversion, which floaty defers",
             Self::MagnitudeMinMax => "minnum_mag or maxnum_mag, which floaty does not have",
             Self::OtherFunction => {
-                "a C99 or TR 24732 function that floaty does not have: fdim, fmod, frexp, \
-                 ilogb, inf, modf, nextafter, nexttoward"
+                "a C99 or TR 24732 function that floaty does not have: fdim, frexp, ilogb, \
+                 inf, modf, nextafter, nexttoward"
             }
             Self::Environment => {
                 "a status flag, rounding mode, or conformance query function of the library"
@@ -841,13 +842,13 @@ fn readtest_lines() {
         tally.failures.len()
     );
     // The archive is pinned, so the counts are exact.
-    assert_eq!(tally.passed.values().sum::<usize>(), 65_300);
+    assert_eq!(tally.passed.values().sum::<usize>(), 65_528);
     let skipped = [
         (Skip::Transcendental, 7_563),
         (Skip::MixedFormats, 1_977),
         (Skip::Strings, 427),
         (Skip::MagnitudeMinMax, 498),
-        (Skip::OtherFunction, 2_214),
+        (Skip::OtherFunction, 1_986),
         (Skip::Environment, 217),
         (Skip::LongIntSize, 6_652),
         (Skip::FmaNanOrder, 64),

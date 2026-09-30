@@ -17,9 +17,9 @@ use core::num::NonZeroU32;
 
 use floaty::env::{FusedNanOrder, InvalidProduct, NanPropagation, NanRule, Tininess};
 use floaty::{
-    BF16, Binary, Class, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E4M3Fn, F8E4M3Fnuz, F8E5M2,
-    F8E5M2Fnuz, F16, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352, F384, F416,
-    F448, F480, F512, Float, Rounding, TF32,
+    BF16, Binary, Class, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz,
+    F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16, F32, F64, F80, F128, F160, F192, F224, F256,
+    F288, F320, F352, F384, F416, F448, F480, F512, Float, Rounding, TF32,
 };
 use floaty_verify::arithmetic::{self, Operand, Operation};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs};
@@ -187,6 +187,9 @@ fn every_fp8_operand_pair() {
     small!(F8E5M2, 8, Specials::Ieee, 2);
     small!(F8E4M3Fnuz, 8, Specials::Fnuz, 3);
     small!(F8E5M2Fnuz, 8, Specials::Fnuz, 4);
+    small!(F8E4M3, 8, Specials::Ieee, 8);
+    small!(F8E3M4, 8, Specials::Ieee, 9);
+    small!(F8E4M3B11Fnuz, 8, Specials::Fnuz, 10);
 }
 
 #[test]

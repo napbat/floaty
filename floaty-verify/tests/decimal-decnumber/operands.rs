@@ -330,7 +330,9 @@ impl<F: Arithmetic> Generator<F> {
             Operation::Binary(Binary::Divide) if self.chance(30) => self.halving(),
             Operation::Binary(Binary::Quantize) => vec![x, self.quantum(number)],
             Operation::Binary(Binary::ScaleB) => vec![x, self.scale()],
-            Operation::Binary(Binary::RemainderNear) => vec![x, self.divisor(number)],
+            Operation::Binary(Binary::Remainder | Binary::RemainderNear) => {
+                vec![x, self.divisor(number)]
+            }
             Operation::Fma => {
                 let y = if self.chance(25) {
                     self.unit()

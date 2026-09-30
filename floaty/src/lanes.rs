@@ -308,6 +308,39 @@ operator!(Sub, sub, sub_with, "the difference");
 operator!(Mul, mul, mul_with, "the product");
 operator!(Div, div, div_with, "the quotient");
 
+/// The truncated remainder of each pair of lanes, as
+/// [`Lanes::truncated_remainder`] computes it.
+impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> ops::Rem
+    for Lanes<Float<S, W, M>, N>
+{
+    type Output = Self;
+
+    fn rem(self, divisor: Self) -> Self {
+        self.truncated_remainder(divisor)
+    }
+}
+
+/// Implements a lane-wise compound assignment operator from its binary
+/// operator.
+macro_rules! assign {
+    ($trait:ident, $method:ident, $operator:tt) => {
+        impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> ops::$trait
+            for Lanes<Float<S, W, M>, N>
+        {
+            #[inline]
+            fn $method(&mut self, other: Self) {
+                *self = *self $operator other;
+            }
+        }
+    };
+}
+
+assign!(AddAssign, add_assign, +);
+assign!(SubAssign, sub_assign, -);
+assign!(MulAssign, mul_assign, *);
+assign!(DivAssign, div_assign, /);
+assign!(RemAssign, rem_assign, %);
+
 impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> ops::Neg
     for Lanes<Float<S, W, M>, N>
 {
@@ -526,6 +559,24 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         let behavior = behavior.apply::<M>();
         self.zip_with(divisor, |dividend, divisor| {
             dividend.remainder_with(divisor, behavior)
+        })
+    }
+
+    /// Returns the truncated remainder of each pair of lanes, with the
+    /// default mode. The `%` operator calls it.
+    #[must_use]
+    pub fn truncated_remainder(self, divisor: Self) -> Self {
+        self.zip(divisor, Float::truncated_remainder)
+    }
+
+    /// Returns the truncated remainder of each pair of lanes, as
+    /// [`Float::truncated_remainder_with`] computes it, and the union of the
+    /// flags.
+    #[must_use]
+    pub fn truncated_remainder_with(self, divisor: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(divisor, |dividend, divisor| {
+            dividend.truncated_remainder_with(divisor, behavior)
         })
     }
 }

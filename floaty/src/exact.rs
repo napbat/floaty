@@ -459,18 +459,9 @@ fn overflow<L: Limbs>(
     env: &Env,
 ) -> (Unpacked<L>, Flags) {
     let flags = Flags::OVERFLOW | Flags::INEXACT;
-    let to_infinity = match env.rounding {
-        Rounding::TiesToEven
-        | Rounding::TiesToAway
-        | Rounding::TiesTowardZero
-        | Rounding::AwayFromZero => true,
-        Rounding::TowardPositive => !negative,
-        Rounding::TowardNegative => negative,
-        Rounding::TowardZero | Rounding::ToOdd => false,
-    };
     // A saturating behavior, or a format with neither an infinity nor a NaN,
     // gives the largest finite value in every direction.
-    if to_infinity && !env.saturate {
+    if overflows_to_infinity(env.rounding, negative) && !env.saturate {
         if target.has_infinity {
             return (Unpacked::Infinity { negative }, flags | Flags::ROUNDED_UP);
         }
@@ -486,6 +477,21 @@ fn overflow<L: Limbs>(
         }
     }
     (largest(negative, precision, target), flags)
+}
+
+/// Returns `true` when an overflow of the sign `negative` gives an infinity
+/// in the direction `rounding`, and `false` when it gives the largest finite
+/// value.
+pub fn overflows_to_infinity(rounding: Rounding, negative: bool) -> bool {
+    match rounding {
+        Rounding::TiesToEven
+        | Rounding::TiesToAway
+        | Rounding::TiesTowardZero
+        | Rounding::AwayFromZero => true,
+        Rounding::TowardPositive => !negative,
+        Rounding::TowardNegative => negative,
+        Rounding::TowardZero | Rounding::ToOdd => false,
+    }
 }
 
 /// Returns the largest finite value at `precision` bits.

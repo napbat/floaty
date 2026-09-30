@@ -12,68 +12,16 @@
 #![cfg(target_arch = "x86_64")]
 
 use core::cmp::Ordering;
-use core::num::NonZeroU32;
 
-use floaty::env::Tininess;
 use floaty::{
     BF16, D64Bid, D128Dpd, Decoded, DoubleDouble, Env, F16, F32, F64, F80, F128, Flags, Gcc,
-    Rounding,
 };
+use floaty_verify::double_double::{Exact, behaviors, exact, pair};
 use floaty_verify::mpfr::decimal::{DecimalFormat, DecimalValue, decimal_payload, to_decimal};
 use floaty_verify::mpfr::{self, Format, Input, Specials, Value};
 use floaty_verify::random::SplitMix64;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
-
-/// The precision of the exact sum: every finite pair spans at most 2,099
-/// bits.
-const EXACT_BITS: u32 = 2_200;
-
-/// The exact value of a pair, computed from the bits of its halves.
-enum Exact {
-    /// The NaN of a half: its bits.
-    Nan(u64),
-    /// An infinity.
-    Infinity { negative: bool },
-    /// A zero, with the sign of the high half.
-    Zero { negative: bool },
-    /// A nonzero finite value.
-    Number(BigFloat),
-}
-
-fn is_nan(bits: u64) -> bool {
-    bits & 0x7FF0_0000_0000_0000 == 0x7FF0_0000_0000_0000 && bits & ((1 << 52) - 1) != 0
-}
-
-fn is_infinite(bits: u64) -> bool {
-    bits & 0x7FFF_FFFF_FFFF_FFFF == 0x7FF0_0000_0000_0000
-}
-
-fn exact(hi: u64, lo: u64) -> Exact {
-    let special = |bits: u64| {
-        if is_nan(bits) {
-            Some(Exact::Nan(bits))
-        } else if is_infinite(bits) {
-            Some(Exact::Infinity {
-                negative: bits >> 63 == 1,
-            })
-        } else {
-            None
-        }
-    };
-    if let Some(value) = special(hi).or_else(|| special(lo)) {
-        return value;
-    }
-    let half = |bits: u64| BigFloat::with_val(53, f64::from_bits(bits));
-    let sum = BigFloat::with_val(EXACT_BITS, &half(hi) + &half(lo));
-    if sum.is_zero() {
-        Exact::Zero {
-            negative: hi >> 63 == 1,
-        }
-    } else {
-        Exact::Number(sum)
-    }
-}
 
 /// Returns the integer and the exponent of a nonzero finite value, with an
 /// odd integer.
@@ -211,71 +159,6 @@ fn expected_order(first: &Exact, second: &Exact) -> (Option<Ordering>, bool) {
     (number(first).partial_cmp(&number(second)), false)
 }
 
-/// Returns a random pair: well-formed, with any finite halves, with special
-/// halves, or with random bits.
-fn pair(random: &mut SplitMix64) -> (u64, u64) {
-    const EDGES: [u64; 8] = [
-        0,
-        1,
-        0x0010_0000_0000_0000,
-        0x3FF0_0000_0000_0000,
-        0x7FEF_FFFF_FFFF_FFFF,
-        0x7FF0_0000_0000_0000,
-        0x7FF8_0000_0000_0005,
-        0x7FF0_0000_0000_0003,
-    ];
-    let edge = |random: &mut SplitMix64| {
-        let index = usize::try_from(random.next_u64() % 8).expect("an index fits a usize");
-        EDGES[index] | (random.next_u64() & (1 << 63))
-    };
-    let finite = |random: &mut SplitMix64| {
-        let bits = random.next_u64();
-        if is_nan(bits) || is_infinite(bits) {
-            bits & !(1 << 62)
-        } else {
-            bits
-        }
-    };
-    match random.next_u64() % 6 {
-        0 | 1 => {
-            let hi = finite(random);
-            let field = (hi >> 52) & 0x7FF;
-            if field < 60 {
-                return (hi, 0);
-            }
-            let low_field = field - 54 - random.next_u64() % 6;
-            (
-                hi,
-                (random.next_u64() & 0x800F_FFFF_FFFF_FFFF) | (low_field << 52),
-            )
-        }
-        2 => (finite(random), finite(random)),
-        3 => (edge(random), edge(random)),
-        4 => (finite(random), edge(random)),
-        _ => (random.next_u64(), random.next_u64()),
-    }
-}
-
-/// The behaviors of the conversions. Saturation applies to the rounding into
-/// a binary destination format.
-fn behaviors() -> [Env; 8] {
-    [
-        Env::IEEE,
-        Env::IEEE.with_rounding(Rounding::TowardZero),
-        Env::IEEE
-            .with_rounding(Rounding::TowardPositive)
-            .with_flush_to_zero(true)
-            .with_tininess(Tininess::BeforeRounding),
-        Env::IEEE.with_rounding(Rounding::ToOdd),
-        Env::IEEE
-            .with_rounding(Rounding::TiesToAway)
-            .with_precision(NonZeroU32::new(5)),
-        Env::IEEE.with_rounding(Rounding::TiesTowardZero),
-        Env::IEEE.with_rounding(Rounding::AwayFromZero),
-        Env::IEEE.with_saturate(true),
-    ]
-}
-
 /// Compares one conversion to a binary format.
 macro_rules! check_binary {
     ($value:expr, $exact:expr, $env:expr, $($target:ty),+) => {$(
@@ -356,15 +239,6 @@ fn the_exact_values_compare() {
     }
 }
 
-/// Returns the sign of an exact value.
-fn negative(value: &Exact) -> bool {
-    match value {
-        Exact::Nan(bits) => bits >> 63 == 1,
-        Exact::Infinity { negative } | Exact::Zero { negative } => *negative,
-        Exact::Number(number) => number.is_sign_negative(),
-    }
-}
-
 #[test]
 fn abs_clears_the_sign_of_the_exact_value() {
     let mut random = SplitMix64::new(0xDD_AB5);
@@ -372,7 +246,7 @@ fn abs_clears_the_sign_of_the_exact_value() {
     for _ in 0..50_000 {
         let (hi, lo) = pair(&mut random);
         let result = value(hi, lo).abs();
-        let expected = if negative(&exact(hi, lo)) {
+        let expected = if exact(hi, lo).negative() {
             (hi ^ sign, lo ^ sign)
         } else {
             (hi, lo)

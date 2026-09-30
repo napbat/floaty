@@ -142,7 +142,7 @@ instructions round binary32 results to bfloat16 to nearest even, in
 
 ## x87 Extended
 
-The x87 unit has no packed instructions. The operators and `sqrt` of
+The x87 unit has no packed instructions. `+`, `-`, `*`, `/`, and `sqrt` of
 `Lanes<F80, N>` check the control word once, and then run the x87
 instruction of each lane: 4.2 and 4.0 per lane for `+`, against 3.8 and 4.0
 for a loop of the scalar operator. `mul_add` runs in the engine, 36.5 and
@@ -159,7 +159,8 @@ remainder of close operands takes `FPREM1`: 14.7 and 14.8 per operation.
 | Formats | Today | x86-64 instructions | Gap |
 | --- | --- | --- | --- |
 | `F8E4M3Fn`, `F8E5M2` | Engine for every operation. `+` takes 14.4 and 12.8. | AVX10.2 has conversions only. `VCVTHF82PH` widens E4M3 to binary16 exactly. A shift widens E5M2 to binary16 exactly, at SSE2. `VCVTPH2HF8` and `VCVTPH2BF8` round binary16 to FP8 to nearest even and keep subnormals. An overflow gives a NaN for E4M3 and an infinity for E5M2, and the `S` forms saturate. AVX10.2 has no FP8 arithmetic. AMX-FP8 has only dot products. | Widening of E5M2 by a shift, now. The other conversions at AVX10.2. Arithmetic through binary32 needs a proof for the chain of roundings, and AVX10.2 to round to FP8. |
-| `F8E4M3Fnuz`, `F8E5M2Fnuz` | Engine | None. The FNUZ encodings differ from the E4M3 and E5M2 of AVX10.2. | None |
+| `F8E4M3Fnuz`, `F8E5M2Fnuz`, `F8E4M3B11Fnuz` | Engine | None. The FNUZ encodings differ from the E4M3 and E5M2 of AVX10.2. | None |
+| `F8E4M3`, `F8E3M4` | Engine | None | None |
 | `TF32` | Engine | None. AMX-TF32 left the instruction set reference in 319433-062. | None |
 | binary128 and wider, the decimal formats | Engine | None | None |
 

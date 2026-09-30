@@ -31,6 +31,9 @@ crate documentation records each rule of its behavior. The
   in `floaty`: no `f32` or `f64` operations and no math library calls. A host
   path is the only exception. The host path table of the README must list
   each one.
+- The `From` conversions between `F32` and `f32`, and between `F64` and
+  `f64`, are bit casts, not arithmetic. Use only `to_bits` and `from_bits`
+  in them.
 - Make a host path give the bits of the engine for every input it accepts.
   Send every other input, and every NaN result, to the engine.
 - Select a host path at compile time with `cfg(target_arch)` and
@@ -126,7 +129,8 @@ cargo +1.85 clippy -p floaty --all-targets --target s390x-unknown-linux-gnu -- -
   Linux x86-64 hosts only, and needs the submodules (`git submodule update
   --init`), `make`, `gcc`, `g++` 15.2.0, `objcopy`, `m4`, `curl`, `tar`,
   `sha256sum`, `python3`, `powerpc64le-linux-gnu-gcc` 15.2.0 with its
-  binutils (package gcc-powerpc64le-linux-gnu), and `qemu-ppc64le` 10.2.1
+  binutils (package gcc-powerpc64le-linux-gnu) and its glibc 2.43 (package
+  libc6-dev-ppc64el-cross 2.43-2ubuntu2cross1), and `qemu-ppc64le` 10.2.1
   (package qemu-user). The build compiles TestFloat, MPFR, decNumber, the Intel
   decimal library, and QD from source. The first build downloads the
   decimal and QD archives and two Mesa headers, so it needs network access
@@ -134,9 +138,9 @@ cargo +1.85 clippy -p floaty --all-targets --target s390x-unknown-linux-gnu -- -
   instruction. On another host, run the gates with `-p floaty` instead of
   `--workspace`.
 - Keep the submodules under `floaty-verify/reference/`, the pinned archives
-  in `floaty-verify/build.rs`, the pinned compilers, and the pinned QEMU at
-  their pinned releases. Make a change of release in its own commit, and
-  state the reason in the commit message.
+  in `floaty-verify/build.rs`, the pinned compilers, the pinned PowerPC C
+  library, and the pinned QEMU at their pinned releases. Make a change of
+  release in its own commit, and state the reason in the commit message.
 - Run the long exhaustive sweeps with
   `cargo test -p floaty-verify --release -- --ignored`.
 - Measure performance with `cargo bench -p floaty-verify --bench operations`
@@ -268,7 +272,7 @@ Never hand-edit a generated file. Change its generator and run it again.
 | Generated file | Command |
 | --- | --- |
 | `floaty-verify/data/fp8-reference.txt`, `fp8-from-f16.bin`, `fp8-arithmetic.bin`, and `fp8-operations.bin` | `floaty-verify/scripts/generate_fp8_reference.py floaty-verify/data`, as its docstring states |
-| `floaty-verify/data/mx-reference.txt`, `mx-from-f16.bin`, and `mx-arithmetic.bin` | `floaty-verify/scripts/generate_mx_reference.py floaty-verify/data`, as its docstring states |
+| `floaty-verify/data/mx-reference.txt`, `mx-from-f16.bin`, `mx-arithmetic.bin`, and `mx-e8m0.bin` | `floaty-verify/scripts/generate_mx_reference.py floaty-verify/data`, as its docstring states |
 
 ## Tests
 

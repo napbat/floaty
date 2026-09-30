@@ -3,12 +3,13 @@
 //!
 //! No standard defines the correct result of a double-double operation, and
 //! the published algorithms give different low halves. So each algorithm
-//! follows one reference: [`Gcc`] the IBM `long double` of libgcc on PowerPC,
-//! and [`Qd`] the `dd_real` of the QD library. Each algorithm follows the
-//! machine code that a pinned compiler makes of its reference, because the
-//! operand order of each step decides which NaN the step returns. Under the
-//! behavior of the platform of the reference, the results match it bit for
-//! bit, NaN halves included.
+//! follows its references: [`Gcc`] the IBM `long double` of libgcc and of the
+//! libm of glibc on PowerPC, and [`Qd`] the `dd_real` of the QD library. Each
+//! algorithm follows the machine code that a pinned compiler makes of its
+//! references, because the operand order of each step decides which NaN the
+//! step returns. Under the behavior of the platform of the reference, the
+//! results match it bit for bit, NaN halves included. The operations without
+//! a reference follow the exact value by the rule of [`DoubleDouble`].
 //!
 //! Each step of an algorithm is a binary64 operation that runs under the
 //! behavior of the call, and the result has the flags of every step, as a
@@ -20,7 +21,10 @@
 //! An overflow gives what the reference gives: an infinity or a NaN. A
 //! conversion applies saturation to its binary destination format.
 
+mod convert;
 mod gcc;
+mod glibc;
+mod operations;
 mod qd;
 mod steps;
 
@@ -39,6 +43,9 @@ use crate::unpacked::Unpacked;
 
 /// The high half and the low half of a value.
 type Pair = (F64, F64);
+
+/// An algorithm with one operand, on binary64 steps under the behavior `B`.
+type OneOperand<B> = fn(&mut Steps<B>, Pair) -> Pair;
 
 /// An algorithm with two operands, on binary64 steps under the behavior `B`.
 type TwoOperands<B> = fn(&mut Steps<B>, Pair, Pair) -> Pair;
@@ -70,7 +77,9 @@ pub enum AlgorithmKind {
 
 /// The IBM `long double` of PowerPC: `__gcc_qadd`, `__gcc_qsub`,
 /// `__gcc_qmul`, and `__gcc_qdiv` of libgcc, as GCC 15.2.0 compiles them for
-/// powerpc64le.
+/// powerpc64le, and `sqrtl`, `remainderl`, `fmodl`, `fmal`, `nextupl`, and
+/// `nextdownl` of the libm of glibc 2.43, as its powerpc64le build compiles
+/// them.
 ///
 /// With the behavior of PowerPC, the results and the five IEEE flags match
 /// libgcc, NaN halves included. That behavior has the `FirstOperand` NaN rule,
@@ -124,6 +133,50 @@ impl Algorithm for Qd {
 /// The arithmetic ignores [`Env::saturate`], because neither reference
 /// saturates. [`convert_with`](Self::convert_with) applies saturation to a
 /// binary destination format.
+///
+/// # Rounding to a pair
+///
+/// The operations without a reference follow the exact value `hi + lo`: the
+/// conversions, the integer conversions, `scale_b`, `round_to_integral`, the
+/// classification, the total order, and the minimum and maximum operations.
+/// They do not depend on the algorithm. They read the halves without
+/// denormals-are-zero, and report no [`Flags::DENORMAL_INPUT`] for them.
+///
+/// An exact value rounds to a pair in two steps. The high half is the value
+/// rounded to binary64 to nearest even. The low half is the rest rounded to
+/// binary64 in the direction of the behavior. The sum of the halves is the
+/// value of the result, and it splits into its canonical pair: the high half
+/// is the sum rounded to nearest even, and the low half is the exact rest.
+/// So a value that a canonical pair holds gives that pair in every direction.
+/// A zero result has the sign of the value and a `+0` low half.
+///
+/// The result is inexact when the low half rounds. The low half gives the
+/// other flags of the rounding: [`Flags::TINY`] when the low half is tiny,
+/// and [`Flags::UNDERFLOW`] when the low half is also inexact, as for a
+/// binary64 result. So a pair with an exact subnormal low half reports
+/// `TINY`, and a subnormal value with a zero low half reports no `TINY`. The
+/// result is rounded up when its magnitude is above that of the value.
+///
+/// An overflow gives an infinity with a `+0` low half, or the largest finite
+/// canonical pair, as the direction and saturation select for binary64. That
+/// pair is `(0x7FEF_FFFF_FFFF_FFFF, 0x7C8F_FFFF_FFFF_FFFF)`, `2^1024 - 2^970 -
+/// 2^917`, one unit of `2^917` above the `LDBL_MAX` of GCC, which counts 106
+/// bits. An infinity keeps its sign with a `+0` low half. A NaN converts to
+/// binary64 as a conversion does, and takes a `+0` low half, and so does an
+/// unsupported x87 encoding, which gives the default NaN and signals
+/// invalid.
+///
+/// ```
+/// use floaty::{DoubleDouble, F128, Flags, Qd};
+///
+/// // 1 + 2^-54 + 2^-112: the low half keeps 2^-54, and 2^-112 is below its
+/// // precision.
+/// let value = F128::from_bits(0x3FFF_0000_0000_0000_0400_0000_0000_0001);
+/// let (pair, flags) = value.convert_with::<DoubleDouble<Qd>>(F128::ENV);
+/// assert_eq!(pair.hi().to_bits(), 0x3FF0_0000_0000_0000);
+/// assert_eq!(pair.lo().to_bits(), 0x3C90_0000_0000_0000);
+/// assert_eq!(flags, Flags::INEXACT);
+/// ```
 ///
 /// ```
 /// use floaty::{DoubleDouble, F64, Qd};
@@ -193,6 +246,21 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
             lo,
             marker: PhantomData,
         }
+    }
+
+    /// Runs the algorithm of an operation with one operand in `steps`.
+    fn run_one<B: Behavior>(
+        self,
+        mut steps: Steps<B>,
+        operation: [OneOperand<B>; 2],
+    ) -> (Self, Flags) {
+        let [gcc, qd] = operation;
+        let algorithm = match Alg::KIND {
+            AlgorithmKind::Gcc => gcc,
+            AlgorithmKind::Qd => qd,
+        };
+        let (hi, lo) = algorithm(&mut steps, (self.hi, self.lo));
+        (Self::new(hi, lo), steps.flags())
     }
 
     /// Runs the algorithm of an operation with two operands in `steps`.
@@ -305,16 +373,18 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         }
     }
 
-    /// Converts the exact value to another format, rounded once with the
-    /// default mode of that format.
+    /// Converts the exact value to another format with the default mode of
+    /// that format: once rounded to a [`Float`], or to a pair by the rule of
+    /// the type documentation.
     #[must_use]
     pub fn convert<T: FloatType>(self) -> T {
         self.convert_with(T::Mode::default()).0
     }
 
-    /// Converts the exact value to another format, rounded once, with an
-    /// override of the destination behavior. Returns the result and the
-    /// flags. A NaN keeps the high-order bits of its payload.
+    /// Converts the exact value to another format, with an override of the
+    /// destination behavior: once rounded to a [`Float`], or to a pair by the
+    /// rule of the type documentation. Returns the result and the flags. A
+    /// NaN keeps the high-order bits of its payload.
     #[must_use]
     pub fn convert_with<T: FloatType>(self, behavior: impl Override) -> (T, Flags) {
         let source = Source {
@@ -381,24 +451,146 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     }
 }
 
-impl<M: Mode> DoubleDouble<Qd, M> {
+impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     /// Returns the square root with the default mode. The steps take the host
     /// paths of binary64 where the build has them.
     #[must_use]
     pub fn sqrt(self) -> Self {
-        let mut steps = Steps::without_flags(M::default());
-        let (hi, lo) = qd::sqrt(&mut steps, (self.hi, self.lo));
-        Self::new(hi, lo)
+        self.run_one(Steps::without_flags(M::default()), [glibc::sqrt, qd::sqrt])
+            .0
     }
 
-    /// Returns the square root by QD's `sqrt`, and the flags of every step.
-    /// A zero gives `+0`, and a negative value gives QD's NaN in both halves,
-    /// as QD does.
+    /// Returns the square root, and the flags of every step.
+    ///
+    /// [`Gcc`] follows `sqrtl` of the IBM `long double` in glibc 2.43, as
+    /// the libm of the pinned powerpc64le C library compiles it: Newton's
+    /// method from the binary64 square root. A negative value gives `0 / 0`,
+    /// and a zero gives itself. [`Qd`] follows QD's `sqrt`: a zero gives
+    /// `+0`, and a negative value gives QD's NaN in both halves.
     #[must_use]
     pub fn sqrt_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.run_one(Steps::new(behavior.apply::<M>()), [glibc::sqrt, qd::sqrt])
+    }
+}
+
+impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
+    /// Returns the remainder with the default mode.
+    #[must_use]
+    pub fn remainder(self, divisor: Self) -> Self {
+        self.remainder_with(divisor, M::default()).0
+    }
+
+    /// Returns the remainder of the reference, and the flags of every step.
+    ///
+    /// [`Gcc`] follows `remainderl` of the IBM `long double` in glibc 2.43:
+    /// the IEEE 754 remainder from `fmodl` by twice the divisor, as exact as
+    /// the 106 bits of `fmodl`. [`Qd`] follows QD's `drem`: `a - nint(a / b) *
+    /// b`, with the rounded quotient of the division, and a tie of the
+    /// quotient rounded up. So a large quotient gives an approximate
+    /// remainder.
+    #[must_use]
+    pub fn remainder_with(self, divisor: Self, behavior: impl Override) -> (Self, Flags) {
+        self.run(
+            divisor,
+            Steps::new(behavior.apply::<M>()),
+            [glibc::remainder, qd::drem],
+        )
+    }
+
+    /// Returns the truncated remainder with the default mode. The `%`
+    /// operator calls it.
+    #[must_use]
+    pub fn truncated_remainder(self, divisor: Self) -> Self {
+        self.truncated_remainder_with(divisor, M::default()).0
+    }
+
+    /// Returns the truncated remainder of the reference, and the flags of
+    /// every step.
+    ///
+    /// [`Gcc`] follows `fmodl` of the IBM `long double` in glibc 2.43: a long
+    /// division of the mantissas of the operands, as `ldbl_extract_mantissa`
+    /// reads 106 bits of each. [`Qd`] follows QD's `fmod`: `a - b * aint(a /
+    /// b)`, with the rounded quotient of the division.
+    #[must_use]
+    pub fn truncated_remainder_with(self, divisor: Self, behavior: impl Override) -> (Self, Flags) {
+        self.run(
+            divisor,
+            Steps::new(behavior.apply::<M>()),
+            [glibc::fmod, qd::fmod],
+        )
+    }
+}
+
+impl<M: Mode> DoubleDouble<Gcc, M> {
+    /// Returns `self * multiplier + addend`, with the default mode.
+    #[must_use]
+    pub fn mul_add(self, multiplier: Self, addend: Self) -> Self {
+        self.mul_add_with(multiplier, addend, M::default()).0
+    }
+
+    /// Returns `self * multiplier + addend` as `fmal` of the IBM `long
+    /// double` in glibc 2.43 computes it, and the flags of every step.
+    ///
+    /// A special high half, a zero addend, and a zero factor take
+    /// `__gcc_qmul` and `__gcc_qadd` in the rounding direction of the
+    /// behavior. Otherwise glibc sums the ten partial values of the halves and
+    /// their products in round to nearest, as accurate as the long double
+    /// arithmetic, not rounded once. Then only an overflow, an underflow, and
+    /// an exact zero read the rounding direction. QD has no such function, so
+    /// [`Qd`] has no `mul_add`.
+    #[must_use]
+    pub fn mul_add_with(
+        self,
+        multiplier: Self,
+        addend: Self,
+        behavior: impl Override,
+    ) -> (Self, Flags) {
         let mut steps = Steps::new(behavior.apply::<M>());
-        let (hi, lo) = qd::sqrt(&mut steps, (self.hi, self.lo));
+        let (hi, lo) = glibc::mul_add(
+            &mut steps,
+            (self.hi, self.lo),
+            (multiplier.hi, multiplier.lo),
+            (addend.hi, addend.lo),
+        );
         (Self::new(hi, lo), steps.flags())
+    }
+
+    /// Returns the next pair up, with the default mode.
+    #[must_use]
+    pub fn next_up(self) -> Self {
+        self.next_up_with(M::default()).0
+    }
+
+    /// Returns the next pair up, as `nextupl` of the IBM `long double` in
+    /// glibc 2.43 computes it, and the flags of every step.
+    ///
+    /// glibc counts 106 bits in a pair: the step is one unit in the 106th
+    /// bit of the high half, added with `__gcc_qadd`. The step above a zero
+    /// is `2^-1074`, and a NaN gives `x + x`. QD has no such function, so
+    /// [`Qd`] has no `next_up`.
+    #[must_use]
+    pub fn next_up_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.run_one(
+            Steps::new(behavior.apply::<M>()),
+            [glibc::next_up, glibc::next_up],
+        )
+    }
+
+    /// Returns the next pair down, with the default mode.
+    #[must_use]
+    pub fn next_down(self) -> Self {
+        self.next_down_with(M::default()).0
+    }
+
+    /// Returns the next pair down, as `nextdownl` of glibc 2.43 computes it:
+    /// the negation of [`next_up_with`](Self::next_up_with) of the negated
+    /// pair.
+    #[must_use]
+    pub fn next_down_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.run_one(
+            Steps::new(behavior.apply::<M>()),
+            [glibc::next_down, glibc::next_down],
+        )
     }
 }
 
@@ -533,6 +725,33 @@ operator!(Add, add, gcc::add, qd::add);
 operator!(Sub, sub, gcc::sub, qd::sub);
 operator!(Mul, mul, gcc::mul, qd::mul);
 operator!(Div, div, gcc::div, qd::div);
+
+/// Implements a compound assignment operator from its binary operator.
+macro_rules! assign {
+    ($trait:ident, $method:ident, $operator:tt) => {
+        impl<Alg: Algorithm, M: Mode> core::ops::$trait for DoubleDouble<Alg, M> {
+            fn $method(&mut self, other: Self) {
+                *self = *self $operator other;
+            }
+        }
+    };
+}
+
+/// The truncated remainder of the reference, as
+/// [`DoubleDouble::truncated_remainder`] computes it.
+impl<Alg: Algorithm, M: Mode> core::ops::Rem for DoubleDouble<Alg, M> {
+    type Output = Self;
+
+    fn rem(self, divisor: Self) -> Self {
+        self.truncated_remainder(divisor)
+    }
+}
+
+assign!(AddAssign, add_assign, +);
+assign!(SubAssign, sub_assign, -);
+assign!(MulAssign, mul_assign, *);
+assign!(DivAssign, div_assign, /);
+assign!(RemAssign, rem_assign, %);
 
 impl<Alg: Algorithm, M: Mode> PartialEq for DoubleDouble<Alg, M> {
     /// Compares the exact values as the quiet equality predicate does.

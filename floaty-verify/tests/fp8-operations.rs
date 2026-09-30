@@ -20,7 +20,7 @@
 //!   bit, so floaty keeps the one zero encoding.
 
 use floaty::format::Standard;
-use floaty::{Binary, Env, Float, Fnuz, NoInf};
+use floaty::{B11Fnuz, Binary, Env, Float, Fnuz, NoInf};
 
 const TABLE: &[u8] = include_bytes!("../data/fp8-operations.bin");
 
@@ -103,11 +103,14 @@ fn check_format<S: Standard<8, Bits = u8>>(index: usize, largest: Option<u8>) {
 fn every_fp8_operand_steps_and_copies_signs_like_ml_dtypes() {
     assert_eq!(
         TABLE.len(),
-        4 * FORMAT_BYTES,
+        7 * FORMAT_BYTES,
         "the table has one block for each format"
     );
     check_format::<Binary<4, NoInf>>(0, Some(0x7E));
     check_format::<Binary<5>>(1, None);
     check_format::<Binary<4, Fnuz>>(2, Some(0x7F));
     check_format::<Binary<5, Fnuz>>(3, Some(0x7F));
+    check_format::<Binary<4>>(4, None);
+    check_format::<Binary<3>>(5, None);
+    check_format::<Binary<4, B11Fnuz>>(6, Some(0x7F));
 }

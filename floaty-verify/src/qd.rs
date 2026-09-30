@@ -1,4 +1,5 @@
-//! Runs the double-double arithmetic of QD, `dd_real`, as an oracle.
+//! Runs the double-double arithmetic of QD, `dd_real`, and its remainders
+//! `drem` and `fmod`, as an oracle.
 //!
 //! `build.rs` builds QD 2.3.24 from its pinned archive, with the IEEE-style
 //! addition, the accurate division, and the C `fma` for the error of a
@@ -24,6 +25,8 @@
 
 use core::ffi::{c_int, c_uint};
 
+use floaty::{Env, F64};
+
 pub use crate::ibm_ldouble::{Flags, Outcome, Pair, Rounding};
 
 /// Returns `fma(x, y, z)` of the C library that QD calls, on binary64
@@ -36,6 +39,45 @@ pub fn c_fma(x: u64, y: u64, z: u64) -> u64 {
     result.to_bits()
 }
 
+/// Stops the test when the C library `fma(x, y, z)` that QD calls is not
+/// `y.mul_add(x, z)` under `Env::X86_SSE`, which floaty's `Qd` follows. glibc
+/// selects its `fma` at run time. On a processor with FMA3 it is
+/// `vfmadd213sd`, which computes `y * x + z` and takes the first NaN in that
+/// order. Another `fma` makes many `Qd` cases differ for one reason.
+///
+/// # Panics
+///
+/// Panics when the `fma` of this host differs.
+pub fn check_host_fma() {
+    // 0, 1, infinity, two quiet NaNs, and a signaling NaN.
+    let values = [
+        0_u64,
+        0x3FF0_0000_0000_0000,
+        0x7FF0_0000_0000_0000,
+        0x7FF8_0000_0000_0001,
+        0xFFF8_0000_0000_0002,
+        0x7FF0_0000_0000_0003,
+    ];
+    for x in values {
+        for y in values {
+            for z in values {
+                let (ours, _) = F64::from_bits(y).mul_add_with(
+                    F64::from_bits(x),
+                    F64::from_bits(z),
+                    Env::X86_SSE,
+                );
+                assert_eq!(
+                    c_fma(x, y, z),
+                    ours.to_bits(),
+                    "the C library fma({x:#x}, {y:#x}, {z:#x}) of this host is not y * x + z under \
+                     Env::X86_SSE. The Qd tests need a processor on which glibc's fma is the FMA3 \
+                     instruction"
+                );
+            }
+        }
+    }
+}
+
 /// The C shape of a binary operation of the shim: the halves of `a`, the
 /// halves of `b`, the rounding direction, and the halves of the result. It
 /// returns the raised flags.
@@ -46,6 +88,8 @@ unsafe extern "C" {
     fn floaty_qd_sub(a: *const u64, b: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     fn floaty_qd_mul(a: *const u64, b: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     fn floaty_qd_div(a: *const u64, b: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
+    fn floaty_qd_drem(a: *const u64, b: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
+    fn floaty_qd_fmod(a: *const u64, b: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     fn floaty_qd_sqrt(a: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     /// The C library `fma`, which QD calls for the error of a product.
     fn fma(x: f64, y: f64, z: f64) -> f64;
@@ -73,6 +117,18 @@ pub fn mul(a: Pair, b: Pair, rounding: Rounding) -> Outcome {
 #[must_use]
 pub fn div(a: Pair, b: Pair, rounding: Rounding) -> Outcome {
     binary(floaty_qd_div, a, b, rounding)
+}
+
+/// Returns `drem(a, b)` of `dd_real` in `rounding`: `a - nint(a / b) * b`.
+#[must_use]
+pub fn drem(a: Pair, b: Pair, rounding: Rounding) -> Outcome {
+    binary(floaty_qd_drem, a, b, rounding)
+}
+
+/// Returns `fmod(a, b)` of `dd_real` in `rounding`: `a - b * aint(a / b)`.
+#[must_use]
+pub fn fmod(a: Pair, b: Pair, rounding: Rounding) -> Outcome {
+    binary(floaty_qd_fmod, a, b, rounding)
 }
 
 /// Returns `sqrt(a)` of `dd_real` in `rounding`.

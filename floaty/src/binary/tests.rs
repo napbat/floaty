@@ -3,7 +3,7 @@ use crate::env::{Env, Flags};
 use crate::float::Class;
 use crate::float::{F4E2M1Fn, F6E3M2Fn, F32};
 use crate::format::internal::LimbConversion;
-use crate::format::{Encoding, Finite, Fnuz, Ieee, NoInf, Storage, Width, X87};
+use crate::format::{B11Fnuz, Encoding, Finite, Fnuz, Ieee, NoInf, Storage, Width, X87};
 use crate::limbs::Limbs;
 
 type X87Layout = Layout<15, X87, 80>;
@@ -210,6 +210,19 @@ fn fp8_formats_decode_their_largest_values() {
     );
     assert_eq!(Layout::<4, Fnuz, 8>::decode([0x7F]), finite(false, 4, [15]));
     assert_eq!(Layout::<5, Fnuz, 8>::decode([0x7F]), finite(false, 13, [7]));
+    // E4M3B11FNUZ: 30 = 15 * 2^1, and the smallest subnormal value is 2^-13.
+    assert_eq!(
+        Layout::<4, B11Fnuz, 8>::decode([0x7F]),
+        finite(false, 1, [15])
+    );
+    assert_eq!(
+        Layout::<4, B11Fnuz, 8>::decode([0x01]),
+        finite(false, -13, [1])
+    );
+    assert_eq!(
+        Layout::<4, B11Fnuz, 8>::decode([0x80]),
+        Layout::<4, Fnuz, 8>::decode([0x80])
+    );
     assert_eq!(
         Layout::<4, Fnuz, 8>::decode([0x80]),
         Unpacked::Nan {

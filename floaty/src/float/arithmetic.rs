@@ -1,10 +1,10 @@
-//! Arithmetic: the rounded operations, the remainder, and the neighbors of a
-//! value.
+//! Arithmetic: the rounded operations, the remainders, and the neighbors of
+//! a value, and the operators.
 
 use super::Float;
 use crate::env::{Flags, Mode, Override};
 use crate::format::Standard;
-use crate::format::internal::Step;
+use crate::format::internal::{Quotient, Step};
 use crate::host::{self, Kind, Operation};
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
@@ -159,10 +159,53 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// and flush-to-zero do not apply. A zero remainder has the sign of
     /// `self`. An infinite `self` or a zero `divisor` is invalid. A subnormal
     /// remainder reports [`Flags::TINY`]. This is not the Rust `%` operator,
-    /// which truncates the quotient.
+    /// which truncates the quotient:
+    /// [`truncated_remainder_with`](Self::truncated_remainder_with).
     #[must_use]
     pub fn remainder_with(self, divisor: Self, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) = S::remainder(self.bits, divisor.bits, behavior.apply::<M>());
+        let (bits, flags) = S::remainder(
+            self.bits,
+            divisor.bits,
+            Quotient::Nearest,
+            behavior.apply::<M>(),
+        );
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Returns the truncated remainder, with the default mode. The `%`
+    /// operator calls it.
+    #[must_use]
+    pub fn truncated_remainder(self, divisor: Self) -> Self {
+        self.truncated_remainder_with(divisor, M::default()).0
+    }
+
+    /// Returns the truncated remainder `self - n * divisor`, and the flags.
+    /// `n` is `self / divisor` rounded toward zero, as for the C `fmod`
+    /// function and the Rust `%` operator.
+    ///
+    /// The remainder has the sign of `self` and a magnitude below that of
+    /// `divisor`. The other rules are those of
+    /// [`remainder_with`](Self::remainder_with): the result is exact, a zero
+    /// has the sign of `self`, an infinite `self` or a zero `divisor` is
+    /// invalid, and an infinite `divisor` gives `self`. A decimal result has
+    /// the smaller exponent of the operands, as decNumber `remainder` gives.
+    ///
+    /// ```
+    /// use floaty::F64;
+    ///
+    /// let (five, three) = (F64::from_bits(0x4014_0000_0000_0000), F64::from_bits(0x4008_0000_0000_0000));
+    /// // 5 - 1 * 3 = 2, and the IEEE 754 remainder is 5 - 2 * 3 = -1.
+    /// assert_eq!((five % three).to_bits(), 0x4000_0000_0000_0000);
+    /// assert_eq!(five.remainder(three).to_bits(), 0xBFF0_0000_0000_0000);
+    /// ```
+    #[must_use]
+    pub fn truncated_remainder_with(self, divisor: Self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::remainder(
+            self.bits,
+            divisor.bits,
+            Quotient::Truncated,
+            behavior.apply::<M>(),
+        );
         (Self::from_masked(bits), flags)
     }
 
@@ -262,6 +305,34 @@ operator!(Add, add, add_with, add_in_engine);
 operator!(Sub, sub, sub_with, sub_in_engine);
 operator!(Mul, mul, mul_with, mul_in_engine);
 operator!(Div, div, div_with, div_in_engine);
+
+/// The truncated remainder with the default mode of the type, as
+/// [`Float::truncated_remainder`] computes it. The operator drops the flags.
+impl<S: Standard<W>, const W: usize, M: Mode> core::ops::Rem for Float<S, W, M> {
+    type Output = Self;
+
+    fn rem(self, divisor: Self) -> Self {
+        self.truncated_remainder(divisor)
+    }
+}
+
+/// Implements a compound assignment operator from its binary operator.
+macro_rules! assign {
+    ($trait:ident, $method:ident, $operator:tt) => {
+        impl<S: Standard<W>, const W: usize, M: Mode> core::ops::$trait for Float<S, W, M> {
+            #[inline]
+            fn $method(&mut self, other: Self) {
+                *self = *self $operator other;
+            }
+        }
+    };
+}
+
+assign!(AddAssign, add_assign, +);
+assign!(SubAssign, sub_assign, -);
+assign!(MulAssign, mul_assign, *);
+assign!(DivAssign, div_assign, /);
+assign!(RemAssign, rem_assign, %);
 
 /// Runs the square root in the engine, for a format whose host path does not
 /// apply.

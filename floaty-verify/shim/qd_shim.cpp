@@ -1,5 +1,6 @@
 /*
- * Runs the double-double arithmetic of QD, `dd_real`, as an oracle.
+ * Runs the double-double arithmetic of QD, `dd_real`, and its remainders,
+ * as an oracle.
  *
  * Each function takes the binary64 bit patterns of the operand halves and a
  * rounding direction. It sets the direction, clears the exception flags,
@@ -75,8 +76,12 @@ int fenv_mode(int rounding) {
   }
 }
 
-/* Returns the interface flag bits of the raised `FE_*` exceptions. */
-unsigned interface_flags(int raised) {
+/*
+ * Returns the interface flag bits of the raised `FE_*` exceptions. The
+ * function inlines into both callers, so `run` keeps its machine code and
+ * its offsets, which `floaty/src/double_double/qd.rs` cites.
+ */
+__attribute__((always_inline)) inline unsigned interface_flags(int raised) {
   unsigned flags = 0;
   if (raised & FE_INVALID) {
     flags |= FLAG_INVALID;
@@ -153,6 +158,36 @@ unsigned run(Operation operation, const std::uint64_t *a, const std::uint64_t *b
   return interface_flags(raised);
 }
 
+/*
+ * Runs QD's remainder `drem`, or its truncated remainder `fmod`, under
+ * `rounding`, as `run` runs an operator. `drem` is an inline function of
+ * the QD headers, and `fmod` is a function of `libqd.a`. A function apart
+ * from `run` leaves the machine code of `run` as it is.
+ */
+unsigned run_remainder(bool truncated, const std::uint64_t *a, const std::uint64_t *b,
+                       int rounding, std::uint64_t *result) {
+  int mode = fenv_mode(rounding);
+  if (mode < 0) {
+    return FLAG_BAD_ROUNDING;
+  }
+  std::fenv_t saved;
+  std::fegetenv(&saved);
+  std::fesetround(mode);
+  std::feclearexcept(FE_ALL_EXCEPT);
+
+  volatile double input[4] = {from_bits(a[0]), from_bits(a[1]), from_bits(b[0]),
+                              from_bits(b[1])};
+  dd_real x(input[0], input[1]);
+  dd_real y(input[2], input[3]);
+  dd_real z = truncated ? fmod(x, y) : drem(x, y);
+  volatile double output[2] = {z.x[0], z.x[1]};
+  int raised = std::fetestexcept(FE_ALL_EXCEPT);
+  std::fesetenv(&saved);
+  result[0] = to_bits(output[0]);
+  result[1] = to_bits(output[1]);
+  return interface_flags(raised);
+}
+
 } // namespace
 
 extern "C" {
@@ -175,6 +210,16 @@ unsigned floaty_qd_mul(const std::uint64_t *a, const std::uint64_t *b, int round
 unsigned floaty_qd_div(const std::uint64_t *a, const std::uint64_t *b, int rounding,
                        std::uint64_t *result) {
   return run(Operation::div, a, b, rounding, result);
+}
+
+unsigned floaty_qd_drem(const std::uint64_t *a, const std::uint64_t *b, int rounding,
+                        std::uint64_t *result) {
+  return run_remainder(false, a, b, rounding, result);
+}
+
+unsigned floaty_qd_fmod(const std::uint64_t *a, const std::uint64_t *b, int rounding,
+                        std::uint64_t *result) {
+  return run_remainder(true, a, b, rounding, result);
 }
 
 /* `sqrt` has one operand. It passes `a` again as the unused second one. */

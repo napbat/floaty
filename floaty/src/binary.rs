@@ -13,7 +13,7 @@ mod scale;
 use crate::env::{Behavior, Env, Flags, NanPropagation, TotalOrder};
 use crate::exact::{self, RoundingTarget, Target, Unrounded};
 use crate::float::Class;
-use crate::format::internal::{Host, LimbConversion, MinMax, Source, Step};
+use crate::format::internal::{Host, LimbConversion, MinMax, Quotient, Source, Step};
 use crate::format::{Binary, Encoding, Standard, Storage, Width};
 use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
@@ -63,6 +63,11 @@ where
             !matches!(Enc::KIND, EncodingKind::X87) || (E == 15 && Self::WIDTH == 80),
             "the X87 encoding exists only as Binary<15, X87> at width 80"
         );
+        // B11Fnuz is the only encoding with its own bias.
+        assert!(
+            Enc::BIAS.is_none() || (E == 4 && Self::WIDTH == 8),
+            "the B11Fnuz encoding exists only as Binary<4, B11Fnuz> at width 8"
+        );
     };
 
     const IS_X87: bool = matches!(Enc::KIND, EncodingKind::X87);
@@ -73,11 +78,13 @@ where
     /// The largest exponent field value.
     const FIELD_MAX: u64 = (1 << E) - 1;
 
-    const BIAS: i32 = match Enc::KIND {
-        EncodingKind::Fnuz => 1 << (E - 1),
-        EncodingKind::Ieee | EncodingKind::NoInf | EncodingKind::X87 | EncodingKind::Finite => {
-            (1 << (E - 1)) - 1
-        }
+    const BIAS: i32 = match (Enc::BIAS, Enc::KIND) {
+        (Some(bias), _) => bias,
+        (None, EncodingKind::Fnuz) => 1 << (E - 1),
+        (
+            None,
+            EncodingKind::Ieee | EncodingKind::NoInf | EncodingKind::X87 | EncodingKind::Finite,
+        ) => (1 << (E - 1)) - 1,
     };
 
     const PRECISION: u32 = {
@@ -721,10 +728,12 @@ where
     fn remainder<B: Behavior>(
         left: Self::Bits,
         right: Self::Bits,
+        quotient: Quotient,
         behavior: B,
     ) -> (Self::Bits, Flags) {
         let env = &behavior.env();
-        let (bits, flags) = Layout::<E, Enc, W>::remainder(left.to_limbs(), right.to_limbs(), env);
+        let (bits, flags) =
+            Layout::<E, Enc, W>::remainder(left.to_limbs(), right.to_limbs(), quotient, env);
         (Self::Bits::from_limbs(bits), flags)
     }
 

@@ -47,6 +47,7 @@ pub(super) fn others() -> Vec<Operation> {
     let binary = [
         Binary::Quantize,
         Binary::ScaleB,
+        Binary::Remainder,
         Binary::RemainderNear,
         Binary::Compare,
         Binary::CompareSignal,
@@ -160,7 +161,7 @@ fn other_skips(
 ) -> [(&'static str, usize); 4] {
     [
         (
-            "remaindernear: decNumber's Division_impossible; floaty follows IEEE 754",
+            "remainder, remaindernear: decNumber's Division_impossible; floaty follows IEEE 754",
             impossible,
         ),
         ("scaleb: a NaN scale operand", nan_scale),
@@ -191,7 +192,7 @@ fn random_decimal64_arithmetic() {
 fn random_decimal64_operations() {
     let tally = run_random::<Double, 64>(&others(), 10_000, 0x6464_0002);
     tally.report("random decimal64 operations");
-    tally.assert_counts(1_503_424, &other_skips(4888, 584, 3784, 7320), &[]);
+    tally.assert_counts(1_578_200, &other_skips(10_112, 584, 3784, 7320), &[]);
 }
 
 #[test]
@@ -209,7 +210,7 @@ fn random_decimal128_arithmetic() {
 fn random_decimal128_operations() {
     let tally = run_random::<Quad, 128>(&others(), 10_000, 0x0128_0002);
     tally.report("random decimal128 operations");
-    tally.assert_counts(1_503_464, &other_skips(4608, 664, 4080, 7184), &[]);
+    tally.assert_counts(1_578_576, &other_skips(9496, 664, 4080, 7184), &[]);
 }
 
 #[test]
@@ -231,5 +232,5 @@ fn random_decimal32_operations() {
         .collect();
     let tally = run_random::<Single, 32>(&operations, 10_000, 0x0032_0003);
     tally.report("random decimal32 operations");
-    tally.assert_counts(1_182_424, &other_skips(5608, 496, 4352, 7120), &[]);
+    tally.assert_counts(1_256_424, &other_skips(11_608, 496, 4352, 7120), &[]);
 }

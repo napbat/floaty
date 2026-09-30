@@ -334,9 +334,10 @@ fn lanes_convert_as_their_lanes_do() {
 
 /// Checks the other methods of `Lanes` of one type and lane count against
 /// the scalar methods of each lane: the sign operations, the predicates,
-/// the integer conversions, the steps, `scale_b`, the remainder, the
-/// comparisons, the total order, and the minimum and maximum operations. A
-/// `_with` method must return the union of the flags of the lanes.
+/// the integer conversions, the steps, `scale_b`, the remainders, the
+/// operators `%`, `+=`, `-=`, `*=`, `/=`, and `%=`, the comparisons, the
+/// total order, and the minimum and maximum operations. A `_with` method
+/// must return the union of the flags of the lanes.
 macro_rules! methods_match {
     ($alias:ty, $bits:ty, $lanes:literal, $encodings:expr, $behavior:expr) => {{
         type Value = $alias;
@@ -491,6 +492,46 @@ macro_rules! methods_match {
                 lanes(a.remainder_with(b, behavior)),
                 union(&|x, y| x.remainder_with(y, behavior)),
                 "{context}"
+            );
+            assert_eq!(
+                (a % b).to_bits(),
+                each(&|x, y| x.truncated_remainder(y)),
+                "{context}: %"
+            );
+            assert_eq!(
+                lanes(a.truncated_remainder_with(b, behavior)),
+                union(&|x, y| x.truncated_remainder_with(y, behavior)),
+                "{context}"
+            );
+            let assigned = |operation: &dyn Fn(&mut Lanes<Value, $lanes>)| {
+                let mut value = a;
+                operation(&mut value);
+                value.to_bits()
+            };
+            assert_eq!(
+                assigned(&|value| *value += b),
+                (a + b).to_bits(),
+                "{context}: +="
+            );
+            assert_eq!(
+                assigned(&|value| *value -= b),
+                (a - b).to_bits(),
+                "{context}: -="
+            );
+            assert_eq!(
+                assigned(&|value| *value *= b),
+                (a * b).to_bits(),
+                "{context}: *="
+            );
+            assert_eq!(
+                assigned(&|value| *value /= b),
+                (a / b).to_bits(),
+                "{context}: /="
+            );
+            assert_eq!(
+                assigned(&|value| *value %= b),
+                (a % b).to_bits(),
+                "{context}: %="
             );
             let orders: [Option<core::cmp::Ordering>; $lanes] =
                 core::array::from_fn(|lane| x[lane].partial_cmp(&y[lane]));

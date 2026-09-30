@@ -290,7 +290,7 @@ fn skips(
         ),
         (TEXT, text),
         (
-            "divideint, remainder: truncating division, not IEEE 754",
+            "divideint: an integer quotient, not IEEE 754",
             divide_integer,
         ),
         (
@@ -305,8 +305,8 @@ fn skips(
         ("null reference operand", 43),
         ("reduce: not an IEEE 754 operation", reduce),
         (
-            "remaindernear: decNumber's Division_impossible; floaty follows IEEE 754",
-            7,
+            "remainder, remaindernear: decNumber's Division_impossible; floaty follows IEEE 754",
+            14,
         ),
         ("scaleb: a NaN scale operand", 17),
         (
@@ -325,14 +325,14 @@ fn dectest_decimal64() {
     let tally = run_vectors::<Double, 64>("dd");
     tally.report("decTest dd, D64Dpd");
     // The archive is pinned, so the counts are exact.
-    tally.assert_counts(9901, &skips(1109, 1377, 874, 133, 8), &[]);
+    tally.assert_counts(10_397, &skips(1109, 1377, 371, 133, 8), &[]);
 }
 
 #[test]
 fn dectest_decimal128() {
     let tally = run_vectors::<Quad, 128>("dq");
     tally.report("decTest dq, D128Dpd");
-    tally.assert_counts(9941, &skips(1088, 1735, 871, 133, 4), &[]);
+    tally.assert_counts(10_433, &skips(1088, 1735, 372, 133, 4), &[]);
 }
 
 #[test]

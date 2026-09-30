@@ -5,7 +5,7 @@
 //! only has to be a NaN with the same sign. `conversions-mpfr.rs` checks the
 //! payload rule of floaty, binary16 to E5M2 included.
 
-use floaty::{Env, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16};
+use floaty::{Env, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F16};
 
 const TABLE: &[u8] = include_bytes!("../data/fp8-from-f16.bin");
 
@@ -35,11 +35,14 @@ macro_rules! check_format {
 fn every_binary16_encoding_converts_like_ml_dtypes() {
     assert_eq!(
         TABLE.len(),
-        4 * 65536,
+        7 * 65536,
         "the table has one block for each format"
     );
     check_format!(F8E4M3Fn, 0);
     check_format!(F8E5M2, 1);
     check_format!(F8E4M3Fnuz, 2);
     check_format!(F8E5M2Fnuz, 3);
+    check_format!(F8E4M3, 4);
+    check_format!(F8E3M4, 5);
+    check_format!(F8E4M3B11Fnuz, 6);
 }

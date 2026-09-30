@@ -1,5 +1,5 @@
 //! Rounding to an integral value, conversion to an integer, and the IEEE 754
-//! remainder, for the decimal formats.
+//! and truncated remainders, for the decimal formats.
 
 use core::cmp::Ordering;
 
@@ -8,6 +8,7 @@ use super::round;
 use super::{DecimalLayout, Wide};
 use crate::env::{Env, Flags};
 use crate::exact::{Integral, Unrounded};
+use crate::format::internal::Quotient;
 use crate::format::{DecimalEncoding, Storage, Width};
 use crate::integer::{Integer, Parts, ToInt, fit};
 use crate::limbs::{self, Limbs, Widen};
@@ -159,14 +160,15 @@ where
         (ToInt::Value(I::from_parts(parts)), flags)
     }
 
-    /// Returns the IEEE 754 remainder `left - n * right`, where `n` is the
-    /// integer nearest `left / right`, and the even one at a tie. The result
-    /// is exact. Its preferred exponent is the smaller exponent of the
+    /// Returns the remainder `left - n * right`, where `n` is `left / right`
+    /// rounded to an integer as `quotient` says: the IEEE 754 remainder, or
+    /// the truncated remainder of C `fmod` and decNumber `remainder`. The
+    /// result is exact. Its preferred exponent is the smaller exponent of the
     /// operands.
     ///
     /// IEEE 754 has no limit on `n`. decNumber signals invalid when `n` has
     /// more digits than the precision; this function follows IEEE 754.
-    pub fn remainder<L: Widen>(left: L, right: L, env: &Env) -> (L, Flags) {
+    pub fn remainder<L: Widen>(left: L, right: L, quotient: Quotient, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
@@ -176,6 +178,24 @@ where
         match (first, second) {
             (Unpacked::Infinity { .. }, _) | (_, Unpacked::Zero { .. }) => {
                 Self::exact(default_nan(env), flags | Flags::INVALID)
+            }
+            (
+                Unpacked::Finite {
+                    negative,
+                    exponent,
+                    significand,
+                },
+                Unpacked::Infinity { .. },
+            ) => {
+                // The result is the dividend. The rounding routine reports
+                // `TINY` for a subnormal dividend.
+                let value = Unrounded {
+                    negative,
+                    exponent,
+                    significand: significand.resize::<Wide<L>>(),
+                    sticky: false,
+                };
+                Self::exact_result(&value, i64::from(exponent), env, flags)
             }
             (_, Unpacked::Infinity { .. }) => Self::exact(first, flags),
             (
@@ -201,6 +221,7 @@ where
             ) => Self::finite_remainder(
                 (negative, exponent, significand.resize()),
                 (divisor_exponent, divisor_significand.resize()),
+                quotient,
                 env,
                 flags,
             ),
@@ -214,6 +235,7 @@ where
     fn finite_remainder<L: Widen>(
         (negative, exponent, coefficient): (bool, i32, Wide<L>),
         (divisor_exponent, divisor_coefficient): (i32, Wide<L>),
+        quotient: Quotient,
         env: &Env,
         flags: Flags,
     ) -> (L, Flags) {
@@ -256,11 +278,15 @@ where
             let (quotient, rest) = limbs::divide(coefficient, divisor);
             (rest, divisor, quotient.bit(0))
         };
-        let above_half = match limbs::multiply_small(rest, 2).compare(&divisor) {
-            Ordering::Greater => true,
-            Ordering::Equal => odd,
-            Ordering::Less => false,
-        };
+        // `rest` is the remainder of the truncated quotient. To round the
+        // quotient to nearest even, n grows by one past half of the divisor,
+        // and the remainder changes sign.
+        let above_half = quotient == Quotient::Nearest
+            && match limbs::multiply_small(rest, 2).compare(&divisor) {
+                Ordering::Greater => true,
+                Ordering::Equal => odd,
+                Ordering::Less => false,
+            };
         let magnitude = if above_half { divisor.sub(rest) } else { rest };
         if magnitude.is_zero() {
             return Self::exact(Self::zero(negative, i64::from(lowest)), flags);
@@ -291,5 +317,58 @@ where
         let (result, round_flags) = Self::finish(value, preferred, exact_behavior, flags);
         debug_assert!(!round_flags.contains(Flags::INEXACT), "the result is exact");
         (result, round_flags)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::env::{Env, Flags};
+    use crate::float::D64Bid;
+
+    /// Returns the truncated and the IEEE 754 remainder of two decimal64
+    /// encodings, with the flags.
+    fn remainders(left: u64, right: u64) -> [(u64, Flags); 2] {
+        let (x, y) = (D64Bid::from_bits(left), D64Bid::from_bits(right));
+        let (truncated, truncated_flags) = x.truncated_remainder_with(y, Env::IEEE);
+        let (nearest, nearest_flags) = x.remainder_with(y, Env::IEEE);
+        [
+            (truncated.to_bits(), truncated_flags),
+            (nearest.to_bits(), nearest_flags),
+        ]
+    }
+
+    const THREE: u64 = 0x31C0_0000_0000_0003;
+    const EIGHT: u64 = 0x31C0_0000_0000_0008;
+
+    #[test]
+    fn the_truncated_quotient_keeps_the_sign_of_the_dividend() {
+        // 8 = 2 * 3 + 2 and 8 = 3 * 3 - 1.
+        assert_eq!(
+            remainders(EIGHT, THREE),
+            [
+                (0x31C0_0000_0000_0002, Flags::NONE),
+                (0xB1C0_0000_0000_0001, Flags::NONE)
+            ]
+        );
+        assert_eq!(
+            remainders(EIGHT | (1 << 63), THREE)[0],
+            (0xB1C0_0000_0000_0002, Flags::NONE)
+        );
+        // 8.0 remainder 3 is 2.0, at the smaller exponent.
+        assert_eq!(
+            remainders(0x31A0_0000_0000_0050, THREE)[0],
+            (0x31A0_0000_0000_0014, Flags::NONE)
+        );
+    }
+
+    #[test]
+    fn a_subnormal_dividend_over_infinity_is_tiny() {
+        // 1E-398 is subnormal. Before the fix, the remainder by an infinity
+        // returned it without `TINY`, unlike the binary formats.
+        let expected = (0x0000_0000_0000_0001, Flags::TINY | Flags::DENORMAL_INPUT);
+        assert_eq!(
+            remainders(0x0000_0000_0000_0001, 0x7800_0000_0000_0000),
+            [expected, expected]
+        );
     }
 }

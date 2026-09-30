@@ -6,7 +6,9 @@
 //! Each function follows the machine code that g++ 15.2.0 makes of QD with
 //! `-O2 -ffp-contract=off` for x86-64: addition, subtraction, and
 //! multiplication as the `floaty-verify` shim inlines them in `run`, division
-//! in `dd_real::accurate_div`, and the square root in `sqrt(const dd_real&)` of
+//! in `dd_real::accurate_div`, the remainder `drem` as the shim inlines it in
+//! `run_remainder`, and the square root in `sqrt(const dd_real&)` and the
+//! truncated remainder in `fmod(const dd_real&, const dd_real&)` of
 //! `dd_real.o` in `libqd.a`. The comments give the instruction offsets.
 //!
 //! The compiler keeps the arithmetic of the source, but it swaps the operands
@@ -182,4 +184,165 @@ pub fn sqrt<B: Behavior>(steps: &mut Steps<B>, a: Pair) -> Pair {
     let right = steps.sub(correction, bb); // 0x803
     let left = steps.sub(ax, left); // 0x807
     (s, steps.add(left, right)) // 0x80b
+}
+
+/// `std::floor` as g++ inlines it for SSE2 in `drem` and `fmod`: a value of
+/// 2^52 or more, or a NaN, is its own floor (the `ucomisd` with 2^52), and a
+/// smaller one truncates by `cvttsd2si`, which signals inexact for a
+/// fraction. `cmpnlesd` then subtracts 1 from a truncation above the value,
+/// or +0 from another, and `orpd` sets the sign of the value. In a
+/// direction toward negative, +0 - +0 is -0, so a fraction below 1 has the
+/// floor -0.
+fn floor<B: Behavior>(steps: &mut Steps<B>, x: F64) -> F64 {
+    let two52 = F64::from_bits(0x4330_0000_0000_0000);
+    if steps.compare_quiet(two52, x.abs()) != Some(Ordering::Greater) {
+        return x;
+    }
+    let truncated = steps.truncate(x);
+    let step = if steps.compare_signaling(truncated, x) == Some(Ordering::Greater) {
+        F64::from_bits(ONE)
+    } else {
+        F64::from_bits(0)
+    };
+    with_sign_of(steps.sub(truncated, step), x)
+}
+
+/// `std::ceil` as g++ inlines it for SSE2 in `fmod`: as [`floor`], but
+/// `cmpnlesd` adds 1 to a truncation below the value. The operands of the
+/// addition are finite, so their order does not change the sum.
+fn ceil<B: Behavior>(steps: &mut Steps<B>, x: F64) -> F64 {
+    let two52 = F64::from_bits(0x4330_0000_0000_0000);
+    if steps.compare_quiet(two52, x.abs()) != Some(Ordering::Greater) {
+        return x;
+    }
+    let truncated = steps.truncate(x);
+    let step = if steps.compare_signaling(x, truncated) == Some(Ordering::Greater) {
+        F64::from_bits(ONE)
+    } else {
+        F64::from_bits(0)
+    };
+    with_sign_of(steps.add(step, truncated), x)
+}
+
+/// Returns `value` with the sign bit of `sign` set too, as `orpd` does.
+fn with_sign_of(value: F64, sign: F64) -> F64 {
+    F64::from_bits(value.to_bits() | (sign.to_bits() & (1 << 63)))
+}
+
+/// The encoding of 1.
+const ONE: u64 = 0x3FF0_0000_0000_0000;
+
+/// The encoding of 0.5.
+const HALF: u64 = 0x3FE0_0000_0000_0000;
+
+/// `quick_two_sum(hi, lo)`: the sum and its error.
+fn quick_two_sum<B: Behavior>(steps: &mut Steps<B>, hi: F64, lo: F64) -> Pair {
+    let s = steps.add(hi, lo);
+    let bb = steps.sub(s, hi);
+    (s, steps.sub(lo, bb))
+}
+
+/// `qd::nint(d)` of `inline.h`: `d` when it equals its floor, and
+/// `floor(d + 0.5)` otherwise. Returns the result and whether `d` equals its
+/// floor.
+fn nearest_integer<B: Behavior>(steps: &mut Steps<B>, d: F64) -> (F64, bool) {
+    let floor_d = floor(steps, d);
+    if steps.compare_quiet(d, floor_d) == Some(Ordering::Equal) {
+        return (d, true);
+    }
+    let sum = steps.add(d, F64::from_bits(HALF));
+    (floor(steps, sum), false)
+}
+
+/// `nint(const dd_real&)` of `dd_inline.h`, as the shim inlines it in
+/// `drem` (`run_remainder` from 0x4d7): QD rounds a tie up, and the low half
+/// breaks a tie of the high half.
+fn nint<B: Behavior>(steps: &mut Steps<B>, (q0, q1): Pair) -> Pair {
+    let (hi, integer) = nearest_integer(steps, q0); // 0x4ff to 0x578
+    // 0x541 jumps to the integer path at once for an integer q0, and 0x578
+    // compares hi with q0 otherwise.
+    if integer || steps.compare_quiet(q0, hi) == Some(Ordering::Equal) {
+        let (lo, _) = nearest_integer(steps, q1); // 0x670 to 0x6e1
+        return quick_two_sum(steps, hi, lo); // 0x6e6
+    }
+    let zero = F64::from_bits(0);
+    let difference = steps.sub(hi, q0).abs(); // 0x588
+    let tie = steps.compare_quiet(difference, F64::from_bits(HALF)) == Some(Ordering::Equal);
+    // 0x5a4: `comisd` of 0 and q1 signals invalid for every NaN.
+    if tie && steps.compare_signaling(zero, q1) == Some(Ordering::Greater) {
+        return (steps.sub(hi, F64::from_bits(ONE)), zero); // 0x8a0
+    }
+    (hi, zero)
+}
+
+/// `aint(const dd_real&)` of `dd_inline.h`, as `fmod` of `dd_real.o` inlines
+/// it (from 0x71e5): `floor` for a high half at or above 0, and `ceil`
+/// otherwise. The `comisd` of q0 and 0 signals invalid for every NaN, and a
+/// NaN takes `ceil`.
+fn aint<B: Behavior>(steps: &mut Steps<B>, (q0, q1): Pair) -> Pair {
+    let zero = F64::from_bits(0);
+    let round: fn(&mut Steps<B>, F64) -> F64 = if matches!(
+        steps.compare_signaling(q0, zero),
+        Some(Ordering::Less) | None
+    ) {
+        ceil
+    } else {
+        floor
+    };
+    let hi = round(steps, q0);
+    if steps.compare_quiet(q0, hi) != Some(Ordering::Equal) {
+        return (hi, zero); // 0x7260
+    }
+    let lo = round(steps, q1);
+    quick_two_sum(steps, hi, lo) // 0x723b
+}
+
+/// The product of the multiplier `n` and the divisor `b` in `drem`
+/// (`run_remainder` from 0x703): `n * b` with the factors of each product
+/// swapped.
+fn remainder_product<B: Behavior>(steps: &mut Steps<B>, (n0, n1): Pair, (b0, b1): Pair) -> Pair {
+    let p = steps.mul(b0, n0); // 0x716
+    let e = steps.fused_add(n0, b0, -p); // 0x741: fma(b0, n0, -p)
+    let first = steps.mul(b1, n0); // 0x763
+    let second = steps.mul(b0, n1); // 0x74c
+    let cross = steps.add(first, second); // 0x77e
+    let p2 = steps.add(cross, e); // 0x782, swapped: p2 += cross
+    let high = steps.add(p, p2); // 0x786
+    let bb = steps.sub(high, p); // 0x792
+    (high, steps.sub(p2, bb)) // 0x7a4
+}
+
+/// The product of the divisor `b` and the multiplier `n` in `fmod` of
+/// `dd_real.o` (from 0x7268): `b * n` with the factors of each product
+/// swapped.
+fn truncated_product<B: Behavior>(steps: &mut Steps<B>, (b0, b1): Pair, (n0, n1): Pair) -> Pair {
+    let p = steps.mul(n0, b0); // 0x727b
+    let e = steps.fused_add(b0, n0, -p); // 0x7297: fma(n0, b0, -p)
+    let first = steps.mul(n0, b1); // 0x72a8
+    let second = steps.mul(b0, n1); // 0x72b3
+    let cross = steps.add(first, second); // 0x72c0
+    let p2 = steps.add(cross, e); // 0x72c4, swapped: p2 += cross
+    let high = steps.add(p, p2); // 0x72c8
+    let bb = steps.sub(high, p); // 0x72d0
+    (high, steps.sub(p2, bb)) // 0x72dc
+}
+
+/// `drem(const dd_real&, const dd_real&)` of `dd_inline.h`, as the shim
+/// inlines it in `run_remainder`: `a - nint(a / b) * b`. The quotient rounds
+/// in the division, so a large quotient gives an approximate remainder, as
+/// QD does. The subtraction has the operand order of [`sub`].
+pub fn drem<B: Behavior>(steps: &mut Steps<B>, a: Pair, b: Pair) -> Pair {
+    let quotient = div(steps, a, b); // 0x4bc: accurate_div
+    let n = nint(steps, quotient);
+    let product = remainder_product(steps, n, b);
+    sub(steps, a, product) // 0x78a to 0x80e
+}
+
+/// `fmod(const dd_real&, const dd_real&)` of `dd_real.o`: `a - b *
+/// aint(a / b)`. The subtraction has the operand order of [`sub`].
+pub fn fmod<B: Behavior>(steps: &mut Steps<B>, a: Pair, b: Pair) -> Pair {
+    let quotient = div(steps, a, b); // 0x71e0: accurate_div
+    let n = aint(steps, quotient);
+    let product = truncated_product(steps, b, n);
+    sub(steps, a, product) // 0x72d4 to 0x735b
 }

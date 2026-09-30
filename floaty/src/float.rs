@@ -7,7 +7,7 @@ use crate::binary::Unpacked;
 use crate::env::{Behavior, Env, Flags, Mode, Override, mode};
 use crate::exact::{Exact, Unrounded};
 use crate::format::internal::{Host, LimbConversion, Source};
-use crate::format::{Bid, Binary, Decimal, Dpd, Finite, Fnuz, NoInf, Standard, X87};
+use crate::format::{B11Fnuz, Bid, Binary, Decimal, Dpd, Finite, Fnuz, NoInf, Standard, X87};
 use crate::host;
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
@@ -354,6 +354,43 @@ impl<S: Standard<W>, const W: usize, M: Mode> core::ops::Neg for Float<S, W, M> 
     }
 }
 
+/// Implements the bit casts between a host float type and the format with its
+/// encoding.
+macro_rules! host_bit_cast {
+    ($host:ty, $exponent:literal, $width:literal, $alias:literal) => {
+        impl<M: Mode> From<$host> for Float<Binary<$exponent>, $width, M> {
+            #[doc = concat!("Makes the ", $alias, " value with the bits of a host `", stringify!($host), "`.")]
+            ///
+            /// The conversion is a bit cast. It runs no floating-point
+            /// instruction and keeps every encoding, a signaling NaN and its
+            /// payload included. A target that moves an `f32` or `f64`
+            /// through the x87 stack, as i686 can, can make a signaling NaN
+            /// quiet when a call passes or returns the host value.
+            #[inline]
+            fn from(value: $host) -> Self {
+                Self::from_bits(value.to_bits())
+            }
+        }
+
+        impl<M: Mode> From<Float<Binary<$exponent>, $width, M>> for $host {
+            #[doc = concat!("Makes the host `", stringify!($host), "` with the bits of an ", $alias, " value.")]
+            ///
+            /// The conversion is a bit cast. It runs no floating-point
+            /// instruction and keeps every encoding, a signaling NaN and its
+            /// payload included. A target that moves an `f32` or `f64`
+            /// through the x87 stack, as i686 can, can make a signaling NaN
+            /// quiet when a call passes or returns the host value.
+            #[inline]
+            fn from(value: Float<Binary<$exponent>, $width, M>) -> Self {
+                <$host>::from_bits(value.to_bits())
+            }
+        }
+    };
+}
+
+host_bit_cast!(f32, 8, 32, "`F32`");
+host_bit_cast!(f64, 11, 64, "`F64`");
+
 impl<S: Standard<W>, const W: usize, M: Mode> Debug for Float<S, W, M> {
     /// Writes the encoding in hexadecimal, for example `Float(0x3f800000)`.
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
@@ -367,8 +404,9 @@ impl<S: Standard<W>, const W: usize, M: Mode> Debug for Float<S, W, M> {
     }
 }
 
-/// A [`Float`] type of any standard, width, and mode, as a conversion
-/// destination. The trait is sealed.
+/// A [`Float`] type of any standard, width, and mode, or a
+/// [`DoubleDouble`](crate::DoubleDouble) type, as a conversion destination.
+/// The trait is sealed.
 pub trait FloatType: Sealed + Copy {
     /// The default mode of the type.
     #[doc(hidden)]
@@ -542,10 +580,19 @@ pub type TF32 = Float<Binary<8>, 19>;
 pub type F8E4M3Fn = Float<Binary<4, NoInf>, 8>;
 /// OCP FP8 E5M2: IEEE 754 special values.
 pub type F8E5M2 = Float<Binary<5>, 8>;
+/// FP8 E4M3 with IEEE 754 special values, as LLVM and `ml_dtypes` define
+/// it. The largest finite value is 240.
+pub type F8E4M3 = Float<Binary<4>, 8>;
+/// FP8 E3M4 with IEEE 754 special values, as LLVM and `ml_dtypes` define
+/// it. The largest finite value is 15.5.
+pub type F8E3M4 = Float<Binary<3>, 8>;
 /// FNUZ FP8 E4M3: no infinities, no negative zero, one NaN.
 pub type F8E4M3Fnuz = Float<Binary<4, Fnuz>, 8>;
 /// FNUZ FP8 E5M2: no infinities, no negative zero, one NaN.
 pub type F8E5M2Fnuz = Float<Binary<5, Fnuz>, 8>;
+/// FNUZ FP8 E4M3 with the exponent bias 11: no infinities, no negative
+/// zero, one NaN. The largest finite value is 30.
+pub type F8E4M3B11Fnuz = Float<Binary<4, B11Fnuz>, 8>;
 /// OCP MX FP4 E2M1: no infinities and no NaNs. LLVM and `ml_dtypes` call it
 /// E2M1FN.
 pub type F4E2M1Fn = Float<Binary<2, Finite>, 4>;

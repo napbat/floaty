@@ -1,13 +1,15 @@
-//! Runs the IBM `long double` arithmetic of libgcc on PowerPC, and the
-//! PowerPC fused multiply-add instructions, as an oracle.
+//! Runs the IBM `long double` arithmetic of libgcc on PowerPC, the IBM
+//! `long double` functions of glibc's libm, and the PowerPC fused
+//! multiply-add instructions, as an oracle.
 //!
 //! `build.rs` builds the batch program `shim/ibm_ldouble.c` with the pinned
 //! powerpc64le GCC 15.2.0, and links it statically with the libgcc of that
-//! compiler. The program calls `__gcc_qadd`, `__gcc_qsub`, `__gcc_qmul`, and
-//! `__gcc_qdiv`, executes `fmadd` and `fmsub`, and runs under `qemu-ppc64le`.
-//! [`run`] and [`run_instructions`] send a batch of cases to one QEMU
-//! process. A process takes about 10 ms to start, and then runs about 500,000
-//! cases a second.
+//! compiler and the libm of its glibc 2.43. The program calls `__gcc_qadd`,
+//! `__gcc_qsub`, `__gcc_qmul`, and `__gcc_qdiv`, the libm functions of
+//! [`Function`], and executes `fmadd` and `fmsub`, under `qemu-ppc64le`.
+//! [`run`], [`run_functions`], and [`run_instructions`] send a batch of
+//! cases to one QEMU process. A process takes about 10 ms to start, and then
+//! runs about 500,000 cases a second.
 //!
 //! The module works on raw bits: a [`Pair`] holds the binary64 encodings of
 //! the high and the low half. The program sets the rounding direction with
@@ -82,6 +84,51 @@ impl Operation {
             Self::Sub => "sub",
             Self::Mul => "mul",
             Self::Div => "div",
+        }
+    }
+}
+
+/// An IBM `long double` function of glibc's libm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Function {
+    /// `sqrtl`.
+    Sqrt,
+    /// `nextupl`.
+    NextUp,
+    /// `nextdownl`.
+    NextDown,
+    /// `iscanonicall`. The program gives its result, 1 or 0, as the high
+    /// half of the result.
+    IsCanonical,
+    /// `fmodl`: the remainder of the truncated quotient.
+    Fmod,
+    /// `remainderl`: the IEEE 754 remainder.
+    Remainder,
+    /// `fmal`: `a * b + c`.
+    MulAdd,
+}
+
+impl Function {
+    /// Returns the name of the function in the input of [`PROGRAM`].
+    const fn word(self) -> &'static str {
+        match self {
+            Self::Sqrt => "sqrtl",
+            Self::NextUp => "nextupl",
+            Self::NextDown => "nextdownl",
+            Self::IsCanonical => "iscanonicall",
+            Self::Fmod => "fmodl",
+            Self::Remainder => "remainderl",
+            Self::MulAdd => "fmal",
+        }
+    }
+
+    /// Returns the number of operands of the function.
+    #[must_use]
+    pub const fn operand_count(self) -> usize {
+        match self {
+            Self::Sqrt | Self::NextUp | Self::NextDown | Self::IsCanonical => 1,
+            Self::Fmod | Self::Remainder => 2,
+            Self::MulAdd => 3,
         }
     }
 }
@@ -280,6 +327,18 @@ pub struct Case {
     pub b: Pair,
 }
 
+/// One libm function on its operands in one rounding direction. The function
+/// reads the first [`Function::operand_count`] operands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FunctionCase {
+    /// The function.
+    pub function: Function,
+    /// The rounding direction.
+    pub rounding: Rounding,
+    /// The operands.
+    pub operands: [Pair; 3],
+}
+
 /// The result of an operation and the flags that it raised.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Outcome {
@@ -339,6 +398,41 @@ pub fn run(cases: &[Case]) -> Vec<Outcome> {
         let (results, flags) = parse_outcome(line);
         let &[hi, lo] = results.as_slice() else {
             panic!("an operation gives two halves: {line}");
+        };
+        Outcome {
+            result: Pair::new(hi, lo),
+            flags,
+        }
+    })
+    .collect()
+}
+
+/// Runs every function case in one QEMU process, and returns the outcomes in
+/// the order of the cases.
+///
+/// # Panics
+///
+/// Panics when QEMU or the program cannot run, when the program fails, or
+/// when its output does not match the cases.
+#[must_use]
+pub fn run_functions(cases: &[FunctionCase]) -> Vec<Outcome> {
+    batch(cases, |case| {
+        let operands: Vec<String> = case.operands[..case.function.operand_count()]
+            .iter()
+            .map(|pair| format!("{:016x} {:016x}", pair.hi, pair.lo))
+            .collect();
+        format!(
+            "{} {} {}",
+            case.function.word(),
+            case.rounding.word(),
+            operands.join(" ")
+        )
+    })
+    .iter()
+    .map(|line| {
+        let (results, flags) = parse_outcome(line);
+        let &[hi, lo] = results.as_slice() else {
+            panic!("a function gives two halves: {line}");
         };
         Outcome {
             result: Pair::new(hi, lo),

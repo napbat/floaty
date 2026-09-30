@@ -8,8 +8,9 @@
 //!   holds the Intel tests. The build downloads each archive once into
 //!   `reference/downloads/` and checks its SHA-256 before it uses it.
 //! - The double-double references. The IBM `long double` routines of the
-//!   powerpc64le libgcc run in a batch program under `qemu-ppc64le`. QD
-//!   comes from a pinned release archive, as the decimal libraries do.
+//!   powerpc64le libgcc, and the IBM `long double` functions of the libm of
+//!   its glibc 2.43, run in a batch program under `qemu-ppc64le`. QD comes
+//!   from a pinned release archive, as the decimal libraries do.
 //!
 //! The build needs `make`, `gcc`, `g++` 15.2.0, `ar`, `objcopy`, `curl`,
 //! `tar`, `python3`, `sha256sum`, `powerpc64le-linux-gnu-gcc` 15.2.0, and
@@ -146,6 +147,79 @@ const POWERPC_GCC_VERSION: &str = "15.2.0";
 /// differently is another reference.
 const IBM_LDOUBLE_SHA256: &str = "c484948ee6c0e1a9b7b4a54f31820707afbbb90ce33564aee121e0f1082d154c";
 
+/// The glibc 2.43 release of the pinned cross C library, package
+/// `libc6-dev-ppc64el-cross` 2.43-2ubuntu2cross1.
+const POWERPC_GLIBC_VERSION: &str = "2.43";
+
+/// The members of the libm of the pinned cross C library that floaty's `Gcc`
+/// algorithm follows, with the SHA-256 of each: the IBM `long double`
+/// functions and their wrappers, and the binary64 square root that `sqrtl`
+/// calls. A libm that compiles them differently is another reference.
+const LIBM_OBJECTS: [(&str, &str); 11] = [
+    (
+        "s_fmal.o",
+        "86f2b7a97b10d189a036cbc16aed4ac2b1326c79441d5deb1c7ee65d027790bb",
+    ),
+    (
+        "e_sqrt.o",
+        "3df6f82e52adb28b0292a161dbf49dd70ea11fb2786bf058cca3be324ba0a1ff",
+    ),
+    (
+        "e_sqrtl.o",
+        "93e65984ea765c0d070f8c8fb925f474109ed451741973ef5134be6188ae9a06",
+    ),
+    (
+        "w_sqrtl.o",
+        "08bfb93344686fbe21dd823e2f27a4f534ee65ab0cee91067e0008ac0bbc140b",
+    ),
+    (
+        "s_nextupl.o",
+        "e4ab4853d982442b4c7d94e5dbe790a47248a6c3099b5d2336a91789dfd04c6f",
+    ),
+    (
+        "s_nextdownl.o",
+        "1c2dcae944237f7fd0457fabbe9d1a5b02b8a841a331f74330dcb7e2160dd9c7",
+    ),
+    (
+        "e_fmodl.o",
+        "6614b7e1677d7a9993cf9aed3ddbda50e798c102ba07c88b88b9d45e47945a82",
+    ),
+    (
+        "w_fmodl.o",
+        "07ea01960cfef47de1fc7487b0fa688016f72ea2a6d42a99f6900341ef63a271",
+    ),
+    (
+        "e_remainderl.o",
+        "ad495d9d171dd5afee6d701855c12cf227bb771c2c03f5755a29ec7d69841857",
+    ),
+    (
+        "w_remainderl.o",
+        "97d5572ffc7b1aa156e7a8f66c51fa43ac815d0c253ee45e67ba514b3f106b2d",
+    ),
+    (
+        "s_iscanonicall.o",
+        "6999e392e8489a1266bfb704537b7270b56dfeded4fbca11626f6d71586f1c41",
+    ),
+];
+
+/// The members of the static C library of the pinned cross C library that
+/// `fmal` calls, with the SHA-256 of each: `__frexp`, `__scalbn`, and
+/// `qsort`, whose merge sort decides the order of the partial products.
+const LIBC_OBJECTS: [(&str, &str); 3] = [
+    (
+        "s_frexp.o",
+        "70e35774763ee598004b6519a81f13d23d3b488df034e68c6d5704c9e0389ae2",
+    ),
+    (
+        "s_scalbn.o",
+        "89b76328c96755555e6bf0403435ef0398302cb0777d15fd2efca2a6253fdd92",
+    ),
+    (
+        "qsort.o",
+        "db6193fca885d8dd3cc8165f61cab7c13aea384825b632ee32978f53b74258f7",
+    ),
+];
+
 /// The pinned QEMU release, which executes the libgcc reference and gives
 /// its flags.
 const QEMU_VERSION: &str = "10.2.1";
@@ -232,7 +306,8 @@ const QD_CONFIG_LINES: [&str; 4] = [
 
 /// The sections of the shim object that floaty's `Qd` algorithm follows: the
 /// code of `run`, which inlines the addition, subtraction, and multiplication
-/// of QD, the code of `dd_real::accurate_div`, and their constants.
+/// of QD, the code of `run_remainder`, which inlines `drem`, the code of
+/// `dd_real::accurate_div`, and their constants.
 const QD_SHIM_SECTIONS: [&str; 3] = [
     ".text",
     ".text._ZN7dd_real12accurate_divERKS_S1_",
@@ -241,10 +316,10 @@ const QD_SHIM_SECTIONS: [&str; 3] = [
 
 /// The SHA-256 of [`QD_SHIM_SECTIONS`] in the shim object, one section after
 /// the other.
-const QD_SHIM_SHA256: &str = "8014d42e4610cf75870b2aed54270a083f5a5ed6f35efc0ad4528907983a26bd";
+const QD_SHIM_SHA256: &str = "d6346bd1dc44447732adb1db9c5776b23e206fbb52f512177e8e865b6356c583";
 
 /// The sections of `dd_real.o` in `libqd.a` that floaty's `Qd` algorithm
-/// follows: the code of the square root and its constants.
+/// follows: the code of the square root and of `fmod`, and their constants.
 const QD_LIBRARY_SECTIONS: [&str; 3] = [".text", ".rodata.cst8", ".rodata.cst16"];
 
 /// The SHA-256 of [`QD_LIBRARY_SECTIONS`] in `dd_real.o`, one section after
@@ -388,6 +463,14 @@ fn build_ibm_ldouble(manifest: &Path, out: &Path) {
     let libgcc = PathBuf::from(libgcc.trim());
     println!("cargo:rerun-if-changed={}", libgcc.display());
     check_ibm_ldouble(&libgcc, out, cross_advice);
+    let math_library = tool_output(POWERPC_GCC, &["-print-file-name=libm.a"], cross_advice);
+    let math_library = PathBuf::from(math_library.trim());
+    println!("cargo:rerun-if-changed={}", math_library.display());
+    check_glibc_members(&math_library, &LIBM_OBJECTS, out, cross_advice);
+    let c_library = tool_output(POWERPC_GCC, &["-print-file-name=libc.a"], cross_advice);
+    let c_library = PathBuf::from(c_library.trim());
+    println!("cargo:rerun-if-changed={}", c_library.display());
+    check_glibc_members(&c_library, &LIBC_OBJECTS, out, cross_advice);
     let emulator = tool_output(
         QEMU_POWERPC,
         &["--version"],
@@ -406,8 +489,10 @@ fn build_ibm_ldouble(manifest: &Path, out: &Path) {
     let program = out.join("ibm_ldouble");
     let content = fs::read_to_string(&source).expect("the libgcc batch program can be read");
     let key = format!(
-        "{compiler}\n{} {}\n{content}",
+        "{compiler}\n{} {} {} {}\n{content}",
         sha256(&libgcc),
+        sha256(&math_library),
+        sha256(&c_library),
         IBM_LDOUBLE_FLAGS.join(" ")
     );
     run_once(&out.with_extension("stamp"), &key, || {
@@ -442,6 +527,23 @@ fn check_ibm_ldouble(libgcc: &Path, out: &Path, advice: &str) {
          Gcc algorithm follows the pinned object",
         libgcc.display()
     );
+}
+
+/// Stops the build when a member of a glibc archive that floaty's `Gcc`
+/// algorithm follows differs from the pinned object.
+fn check_glibc_members(archive: &Path, members: &[(&str, &str)], out: &Path, advice: &str) {
+    fs::create_dir_all(out).expect("the program directory can be created");
+    for &(member, pinned) in members {
+        let object = out.join(member);
+        extract_member("powerpc64le-linux-gnu-ar", archive, &object, advice);
+        let digest = sha256(&object);
+        assert!(
+            digest == pinned,
+            "{member} in {} has SHA-256 {digest}, not the pinned {pinned} of glibc \
+             {POWERPC_GLIBC_VERSION}. floaty's Gcc algorithm follows the pinned object",
+            archive.display()
+        );
+    }
 }
 
 /// Fetches and builds QD, compiles its shim, and links both. Stops the build

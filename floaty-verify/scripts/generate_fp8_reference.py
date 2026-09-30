@@ -3,7 +3,7 @@
 
 The script writes four files into the directory that its argument names:
 
-- fp8-reference.txt lists every encoding of the four FP8 formats with the
+- fp8-reference.txt lists every encoding of the seven FP8 formats with the
   class, the sign, and the value that ml_dtypes gives.
 - fp8-from-f16.bin holds the FP8 encoding that ml_dtypes gives for every
   binary16 encoding, rounded to nearest even: 65536 bytes for each format, in
@@ -41,6 +41,9 @@ FORMATS = [
     ("F8E5M2", ml_dtypes.float8_e5m2),
     ("F8E4M3Fnuz", ml_dtypes.float8_e4m3fnuz),
     ("F8E5M2Fnuz", ml_dtypes.float8_e5m2fnuz),
+    ("F8E4M3", ml_dtypes.float8_e4m3),
+    ("F8E3M4", ml_dtypes.float8_e3m4),
+    ("F8E4M3B11Fnuz", ml_dtypes.float8_e4m3b11fnuz),
 ]
 
 

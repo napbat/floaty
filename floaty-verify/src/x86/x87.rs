@@ -375,58 +375,75 @@ fild!(
     fild_m64, i64, "fild qword ptr [{source}]"
 );
 
-/// The largest number of `FPREM1` steps that [`fprem1`] runs. A step that
-/// leaves the reduction incomplete lowers the exponent by at least 32 (Intel
-/// SDM Volume 2A, `FPREM1`). The exponents of two x87 values differ by less
-/// than 2^15 + 64, so about 1,030 steps reduce every pair.
-const FPREM1_STEPS: u64 = 2048;
+/// The largest number of steps that [`fprem1`] and [`fprem`] run. A step
+/// that leaves the reduction incomplete lowers the exponent by at least 32
+/// (Intel SDM Volume 2A, `FPREM1` and `FPREM`). The exponents of two x87
+/// values differ by less than 2^15 + 64, so about 1,030 steps reduce every
+/// pair.
+const PARTIAL_REMAINDER_STEPS: u64 = 2048;
 
-/// Runs `FPREM1` with the dividend `a` in ST(0) and the divisor `b` in ST(1)
-/// until C2 reports a complete reduction, under a control word. Returns the
-/// remainder bits and the status word of the last step.
-///
-/// The exception flags collect over the steps. C2 is set in the returned
-/// status only when the reduction is still incomplete after `FPREM1_STEPS`
-/// steps. C3, C1, and C0 hold the low three bits of the quotient.
-#[must_use]
-pub fn fprem1(a: u128, b: u128, control: u16) -> (u128, u16) {
-    let operands = [a.to_le_bytes(), b.to_le_bytes()];
-    let mut output = [0_u8; 16];
-    let mut saved = 0_u16;
-    let status: u16;
-    // SAFETY: as in `x87!`. The loop repeats `FPREM1` while C2, bit 2 of AH,
-    // is set, and `LOOPNZ` stops the loop after `FPREM1_STEPS` steps. Two
-    // `FSTP` instructions pop the remainder and the divisor, so the stack is
-    // empty on exit.
-    unsafe {
-        asm!(
-            "fnstcw word ptr [{saved}]",
-            "fldcw word ptr [{control}]",
-            "fnclex",
-            "fld tbyte ptr [{operands} + 16]",
-            "fld tbyte ptr [{operands}]",
-            "2:",
-            "fprem1",
-            "fnstsw ax",
-            "test ah, 4",
-            "loopnz 2b",
-            "fstp tbyte ptr [{target}]",
-            "fstp st(0)",
-            "fnclex",
-            "fldcw word ptr [{saved}]",
-            saved = in(reg) &raw mut saved,
-            control = in(reg) &raw const control,
-            operands = in(reg) operands.as_ptr(),
-            target = in(reg) output.as_mut_ptr(),
-            out("ax") status,
-            inout("rcx") FPREM1_STEPS => _,
-            out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
-            out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
-            options(nostack),
-        );
-    }
-    (u128::from_le_bytes(output), status)
+/// Defines a function that runs a partial remainder instruction until C2
+/// reports a complete reduction.
+macro_rules! partial_remainder {
+    ($(#[$doc:meta])* $name:ident, $instruction:literal) => {
+        $(#[$doc])*
+        ///
+        /// The dividend `a` is in ST(0) and the divisor `b` in ST(1), under
+        /// a control word. Returns the remainder bits and the status word of
+        /// the last step. The exception flags collect over the steps. C2 is
+        /// set in the returned status only when the reduction is still
+        /// incomplete after `PARTIAL_REMAINDER_STEPS` steps. C3, C1, and C0
+        /// hold the low three bits of the quotient.
+        #[must_use]
+        pub fn $name(a: u128, b: u128, control: u16) -> (u128, u16) {
+            let operands = [a.to_le_bytes(), b.to_le_bytes()];
+            let mut output = [0_u8; 16];
+            let mut saved = 0_u16;
+            let status: u16;
+            // SAFETY: as in `x87!`. The loop repeats the instruction while
+            // C2, bit 2 of AH, is set, and `LOOPNZ` stops the loop after
+            // `PARTIAL_REMAINDER_STEPS` steps. Two `FSTP` instructions pop
+            // the remainder and the divisor, so the stack is empty on exit.
+            unsafe {
+                asm!(
+                    "fnstcw word ptr [{saved}]",
+                    "fldcw word ptr [{control}]",
+                    "fnclex",
+                    "fld tbyte ptr [{operands} + 16]",
+                    "fld tbyte ptr [{operands}]",
+                    "2:",
+                    $instruction,
+                    "fnstsw ax",
+                    "test ah, 4",
+                    "loopnz 2b",
+                    "fstp tbyte ptr [{target}]",
+                    "fstp st(0)",
+                    "fnclex",
+                    "fldcw word ptr [{saved}]",
+                    saved = in(reg) &raw mut saved,
+                    control = in(reg) &raw const control,
+                    operands = in(reg) operands.as_ptr(),
+                    target = in(reg) output.as_mut_ptr(),
+                    out("ax") status,
+                    inout("rcx") PARTIAL_REMAINDER_STEPS => _,
+                    out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                    out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+                    options(nostack),
+                );
+            }
+            (u128::from_le_bytes(output), status)
+        }
+    };
 }
+
+partial_remainder!(
+    /// Runs `FPREM1`, the IEEE 754 remainder.
+    fprem1, "fprem1"
+);
+partial_remainder!(
+    /// Runs `FPREM`, the remainder of the quotient truncated toward zero.
+    fprem, "fprem"
+);
 
 /// Runs `FSCALE` on `a` in ST(0) with `scale` in ST(1), under a control word.
 /// Returns the result bits and the status word.

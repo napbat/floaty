@@ -3,10 +3,11 @@
 
 use core::cmp::Ordering;
 
-use crate::env::{Behavior, Flags};
+use crate::env::{Behavior, Env, Flags, Rounding};
 use crate::float::F64;
 use crate::format::internal::Host;
 use crate::host::{self, Kind, Operation, Ready};
+use crate::integer::ToInt;
 
 /// Runs binary64 operations under one behavior and collects their flags, as
 /// the status register of a processor does.
@@ -55,6 +56,16 @@ impl<B: Behavior> Steps<B> {
     /// engine.
     fn host_step(&self, step: impl FnOnce(Ready) -> Option<u64>) -> Option<F64> {
         self.host.and_then(step).map(F64::from_bits)
+    }
+
+    /// Runs `block` on steps that round to nearest even under the other
+    /// fields of the behavior, and keeps the flags of its steps, as glibc's
+    /// `SET_RESTORE_ROUND (FE_TONEAREST)` does.
+    pub fn rounding_to_nearest<T>(&mut self, block: impl FnOnce(&mut Steps<Env>) -> T) -> T {
+        let mut nearest = Steps::new(self.behavior.env().with_rounding(Rounding::TiesToEven));
+        let result = block(&mut nearest);
+        self.flags |= nearest.flags;
+        result
     }
 
     /// Returns the flags of every step so far.
@@ -110,6 +121,21 @@ impl<B: Behavior> Steps<B> {
         }
         let step = a.sqrt_with(self.behavior);
         self.record(step)
+    }
+
+    /// Returns `a` truncated toward zero to an integer, as `cvttsd2si` and
+    /// `cvtsi2sd` compute it. The truncation signals inexact for a fraction.
+    /// `cvttsd2si` reports no denormal operand (Intel SDM Volume 2A,
+    /// `CVTTSD2SI`, "SIMD Floating-Point Exceptions": Invalid and Precision),
+    /// so the step reports none. `a` must be below 2^52 in magnitude.
+    pub fn truncate(&mut self, a: F64) -> F64 {
+        let toward_zero = self.behavior.env().with_rounding(Rounding::TowardZero);
+        let (integer, flags) = a.to_int_with::<i64>(toward_zero);
+        self.flags |= flags.difference(Flags::DENORMAL_INPUT);
+        let ToInt::Value(integer) = integer else {
+            unreachable!("a value below 2^52 fits an i64");
+        };
+        F64::from_int_with(integer, self.behavior).0
     }
 
     /// Returns `a * c + b`, rounded once.
