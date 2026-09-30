@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::archive::{Archive, Packing};
-use crate::tools::{HOST_CC, make, run_once, shim_library};
+use crate::tools::{HOST_CC, compiler_release, make, run_once, shim_library};
 
 /// The Intel Decimal Floating-Point Math Library 2.0 Update 2, under the
 /// BSD 3-clause license, with its tests.
@@ -95,7 +95,12 @@ pub(super) fn build(manifest: &Path, out: &Path, libraries: &Path) {
 /// `make clean`.
 fn build_library(library: &Path, libraries: &Path) {
     let settings = make_settings();
-    let key = format!("{} {}", INTEL.sha256, settings.join(" "));
+    let key = format!(
+        "{} {}\n{}",
+        INTEL.sha256,
+        settings.join(" "),
+        compiler_release(HOST_CC)
+    );
     run_once(&libraries.join("bid.stamp"), &key, || {
         make(library, &[String::from("clean")]);
         make(library, &settings);

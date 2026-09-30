@@ -32,6 +32,14 @@ pub(super) fn tool_output(program: &str, arguments: &[&str], advice: &str) -> St
     String::from_utf8(output.stdout).expect("the tool writes text")
 }
 
+/// Returns the first line of `compiler --version`, which names the release
+/// of the compiler. A stamp key holds it, so a new compiler builds again.
+pub(super) fn compiler_release(compiler: &str) -> String {
+    let advice = format!("install {compiler}");
+    let banner = tool_output(compiler, &["--version"], &advice);
+    banner.lines().next().unwrap_or_default().to_owned()
+}
+
 /// Stops the build when `compiler` is not the pinned GCC `version`, whose
 /// machine code floaty's `algorithm` algorithm follows. Returns the first
 /// line of `--version`, which names the distribution build of GCC.
@@ -77,9 +85,9 @@ pub(super) fn compile(compiler: &str, source: &Path, flags: &[&str], object: &Pa
 /// Compiles one shim source file into the static library `lib{name}.a` in
 /// `directory`, with the object `{name}.o` beside it. Returns the object.
 ///
-/// The step runs unless `stamp` holds its key: `key_prefix`, a newline, and
-/// the text of the shim. `key_prefix` must name every other input of the
-/// step.
+/// The step runs unless `stamp` holds its key: `key_prefix`, the release of
+/// the compiler, the flags, and the text of the shim, one per line.
+/// `key_prefix` must name every other input of the step.
 pub(super) fn shim_library(
     compiler: &str,
     shim: &Path,
@@ -92,7 +100,12 @@ pub(super) fn shim_library(
     let content = fs::read_to_string(shim)
         .unwrap_or_else(|error| panic!("the shim {} cannot be read ({error})", shim.display()));
     let object = directory.join(format!("{name}.o"));
-    run_once(stamp, &format!("{key_prefix}\n{content}"), || {
+    let key = format!(
+        "{key_prefix}\n{}\n{}\n{content}",
+        compiler_release(compiler),
+        flags.join(" ")
+    );
+    run_once(stamp, &key, || {
         fs::create_dir_all(directory).expect("the library directory can be created");
         compile(compiler, shim, flags, &object);
         static_library(

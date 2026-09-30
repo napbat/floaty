@@ -115,6 +115,10 @@ const QEMU_POWERPC: &str = "qemu-ppc64le";
 ///   PowerPC system root.
 const IBM_LDOUBLE_FLAGS: [&str; 5] = ["-std=gnu11", "-O2", "-frounding-math", "-Wall", "-static"];
 
+/// The libraries that the batch program links after its source: the libm of
+/// the pinned C library.
+const IBM_LDOUBLE_LIBRARIES: [&str; 1] = ["-lm"];
+
 /// Builds the libgcc batch program for powerpc64le, and names it in
 /// `FLOATY_IBM_LDOUBLE`. Stops the build when the cross compiler is not the
 /// pinned release, or when QEMU cannot run.
@@ -162,18 +166,19 @@ pub(super) fn build(manifest: &Path, out: &Path) {
     let program = out.join("ibm_ldouble");
     let content = fs::read_to_string(&source).expect("the libgcc batch program can be read");
     let key = format!(
-        "{compiler}\n{} {} {} {}\n{content}",
+        "{compiler}\n{} {} {} {} {}\n{content}",
         sha256(&libgcc),
         sha256(&math_library),
         sha256(&c_library),
-        IBM_LDOUBLE_FLAGS.join(" ")
+        IBM_LDOUBLE_FLAGS.join(" "),
+        IBM_LDOUBLE_LIBRARIES.join(" ")
     );
     run_once(&out.with_extension("stamp"), &key, || {
         fs::create_dir_all(out).expect("the program directory can be created");
         let status = Command::new(POWERPC_GCC)
             .args(IBM_LDOUBLE_FLAGS)
             .arg(&source)
-            .arg("-lm")
+            .args(IBM_LDOUBLE_LIBRARIES)
             .arg("-o")
             .arg(&program)
             .status()

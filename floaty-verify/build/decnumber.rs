@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::archive::{Archive, Packing};
-use crate::tools::{HOST_CC, compile, run_once, static_library};
+use crate::tools::{HOST_CC, compile, compiler_release, run_once, static_library};
 
 /// The decTest vectors, version 2.62.
 const DECTEST: Archive = Archive {
@@ -52,7 +52,13 @@ pub(super) fn build(manifest: &Path, out: &Path, libraries: &Path) {
 /// Compiles decNumber into `libdecnumber.a`.
 fn build_library(source: &Path, libraries: &Path) {
     let objects = libraries.join("decnumber");
-    let key = format!("{} {}", DECNUMBER.sha256, DECNUMBER_FLAGS.join(" "));
+    let key = format!(
+        "{} {} {}\n{}",
+        DECNUMBER.sha256,
+        DECNUMBER_SOURCES.join(" "),
+        DECNUMBER_FLAGS.join(" "),
+        compiler_release(HOST_CC)
+    );
     run_once(&objects.with_extension("stamp"), &key, || {
         fs::create_dir_all(&objects).expect("the object directory can be created");
         let objects: Vec<PathBuf> = DECNUMBER_SOURCES
