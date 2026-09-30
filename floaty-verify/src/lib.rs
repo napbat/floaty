@@ -28,6 +28,7 @@ pub mod ibm_ldouble;
 pub mod intel_decimal;
 #[cfg(target_arch = "x86_64")]
 pub mod mesa;
+pub mod ml_dtypes;
 pub mod modes;
 #[cfg(target_arch = "x86_64")]
 pub mod mpfr;

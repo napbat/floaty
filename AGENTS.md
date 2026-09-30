@@ -254,6 +254,7 @@ Never hand-edit a generated file. Change its generator and run it again.
 | Generated file | Command |
 | --- | --- |
 | `floaty-verify/data/fp8-reference.txt`, `fp8-from-f16.bin`, `fp8-arithmetic.bin`, and `fp8-operations.bin` | `floaty-verify/scripts/generate_fp8_reference.py floaty-verify/data`, as its docstring states |
+| `floaty-verify/data/mx-reference.txt`, `mx-from-f16.bin`, and `mx-arithmetic.bin` | `floaty-verify/scripts/generate_mx_reference.py floaty-verify/data`, as its docstring states |
 
 ## Tests
 
@@ -265,7 +266,7 @@ Never hand-edit a generated file. Change its generator and run it again.
   halfway cases, and results that round across a binade.
 - Keep unit tests inline in `#[cfg(test)] mod tests` in the file they test.
   Put oracle comparisons in `floaty-verify`.
-- Test every FP8 input pair in the normal test run. Mark sweeps that take
+- Test every FP8, FP6, and FP4 input pair in the normal test run. Mark sweeps that take
   minutes or longer `#[ignore]`, and give each one a comment that states its
   run time.
 - Keep tests deterministic. Seed every random generator.

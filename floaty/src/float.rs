@@ -7,7 +7,7 @@ use crate::binary::Unpacked;
 use crate::env::{Behavior, Env, Flags, Mode, Override, mode};
 use crate::exact::{Exact, Unrounded};
 use crate::format::internal::{Host, LimbConversion, Source};
-use crate::format::{Bid, Binary, Decimal, Dpd, Fnuz, NoInf, Standard, X87};
+use crate::format::{Bid, Binary, Decimal, Dpd, Finite, Fnuz, NoInf, Standard, X87};
 use crate::host;
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
@@ -142,8 +142,8 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// A subnormal input sets [`Flags::DENORMAL_INPUT`], and reads as a zero
     /// when the behavior has denormals-are-zero set. A signaling NaN input
     /// signals invalid. A destination without an infinity converts an infinity
-    /// to a NaN, or to the largest finite value when the behavior saturates,
-    /// and signals invalid. An unsupported x87 input signals invalid and gives
+    /// to a NaN, or to the largest finite value when the behavior saturates or
+    /// the destination has no NaN, and signals invalid. An unsupported x87 input signals invalid and gives
     /// the default NaN.
     ///
     /// A NaN converts by the NaN rule of the behavior.
@@ -151,7 +151,8 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// default NaN. The other rules keep the sign, make the NaN quiet, and
     /// keep the high-order payload bits, as x86 and ARM do. A narrowing
     /// conversion drops the low-order payload bits, and a format with one NaN
-    /// encoding gives that NaN. Between two decimal formats, the payload keeps
+    /// encoding gives that NaN. A format without a NaN, such as
+    /// [`F4E2M1Fn`](crate::F4E2M1Fn), gives `+0` and signals invalid. Between two decimal formats, the payload keeps
     /// its high-order digits. Between a binary and a decimal format, the
     /// payload bits align with the trailing significand field of the decimal
     /// format, and a decimal payload above `10^(PRECISION - 1) - 1` becomes
@@ -542,6 +543,13 @@ pub type F8E5M2 = Float<Binary<5>, 8>;
 pub type F8E4M3Fnuz = Float<Binary<4, Fnuz>, 8>;
 /// FNUZ FP8 E5M2: no infinities, no negative zero, one NaN.
 pub type F8E5M2Fnuz = Float<Binary<5, Fnuz>, 8>;
+/// OCP MX FP4 E2M1: no infinities and no NaNs. LLVM and `ml_dtypes` call it
+/// E2M1FN.
+pub type F4E2M1Fn = Float<Binary<2, Finite>, 4>;
+/// OCP MX FP6 E2M3: no infinities and no NaNs.
+pub type F6E2M3Fn = Float<Binary<2, Finite>, 6>;
+/// OCP MX FP6 E3M2: no infinities and no NaNs.
+pub type F6E3M2Fn = Float<Binary<3, Finite>, 6>;
 /// x87 80-bit extended precision.
 pub type F80 = Float<Binary<15, X87>, 80>;
 /// IEEE 754 decimal32 in the BID encoding.

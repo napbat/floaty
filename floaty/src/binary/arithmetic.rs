@@ -149,11 +149,11 @@ where
     }
 
     /// Returns an infinity, or for a format without one the NaN or, when the
-    /// behavior saturates, the largest finite value.
+    /// behavior saturates or the format has no NaN, the largest finite value.
     pub(super) fn infinity<L: Limbs>(negative: bool, env: &Env) -> Unpacked<L> {
         if Self::TARGET.has_infinity {
             Unpacked::Infinity { negative }
-        } else if env.saturate {
+        } else if env.saturate || !Self::TARGET.has_nan {
             exact::largest(negative, Self::TARGET.precision_in(env), &Self::TARGET)
         } else {
             Unpacked::Nan {

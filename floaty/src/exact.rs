@@ -56,6 +56,9 @@ pub struct Target {
     pub has_infinity: bool,
     /// `true` when an all-ones significand at `emax` is the NaN, as in `NoInf`.
     pub all_ones_is_nan: bool,
+    /// `true` when the format has a NaN. A format without an infinity and a
+    /// NaN saturates every overflow.
+    pub has_nan: bool,
 }
 
 impl Target {
@@ -464,19 +467,22 @@ fn overflow<L: Limbs>(
         Rounding::TowardNegative => negative,
         Rounding::TowardZero | Rounding::ToOdd => false,
     };
-    // A saturating behavior gives the largest finite value in every direction.
+    // A saturating behavior, or a format with neither an infinity nor a NaN,
+    // gives the largest finite value in every direction.
     if to_infinity && !env.saturate {
         if target.has_infinity {
             return (Unpacked::Infinity { negative }, flags | Flags::ROUNDED_UP);
         }
-        return (
-            Unpacked::Nan {
-                negative,
-                signaling: false,
-                payload: L::ZERO,
-            },
-            flags,
-        );
+        if target.has_nan {
+            return (
+                Unpacked::Nan {
+                    negative,
+                    signaling: false,
+                    payload: L::ZERO,
+                },
+                flags,
+            );
+        }
     }
     (largest(negative, precision, target), flags)
 }

@@ -1,5 +1,5 @@
 //! Checks the R11G11B10 recipe of the README against Mesa 25.2.0, which
-//! converts the unsigned floats of that format as GL_EXT_packed_float says.
+//! converts the unsigned floats of that format as `GL_EXT_packed_float` says.
 //! Mesa rounds to nearest even and keeps subnormal values. It gives the
 //! largest finite value for a larger finite value, zero for a negative value
 //! or negative infinity, and one NaN for every NaN.

@@ -1,7 +1,9 @@
 use super::{EncodingKind, Layout, Unpacked};
+use crate::env::{Env, Flags};
 use crate::float::Class;
+use crate::float::{F4E2M1Fn, F6E3M2Fn, F32};
 use crate::format::internal::LimbConversion;
-use crate::format::{Encoding, Fnuz, Ieee, NoInf, Storage, Width, X87};
+use crate::format::{Encoding, Finite, Fnuz, Ieee, NoInf, Storage, Width, X87};
 use crate::limbs::Limbs;
 
 type X87Layout = Layout<15, X87, 80>;
@@ -95,6 +97,40 @@ fn ieee_formats_round_trip_and_match_their_census() {
     assert_eq!(sweep::<5, Ieee, 16>(), ieee_census(5, 10));
     assert_eq!(sweep::<8, Ieee, 16>(), ieee_census(8, 7));
     assert_eq!(sweep::<8, Ieee, 19>(), ieee_census(8, 10));
+}
+
+#[test]
+fn finite_formats_round_trip_and_match_their_census() {
+    let census = |e: u32, f: u32| Census {
+        zero: 2,
+        subnormal: 2 * ((1 << f) - 1),
+        normal: 2 * ((1 << e) - 1) * (1 << f),
+        ..Census::default()
+    };
+    assert_eq!(sweep::<2, Finite, 4>(), census(2, 1));
+    assert_eq!(sweep::<2, Finite, 6>(), census(2, 3));
+    assert_eq!(sweep::<3, Finite, 6>(), census(3, 2));
+}
+
+#[test]
+fn a_finite_format_saturates_and_gives_zero_for_a_nan() {
+    let (zero, six) = (F4E2M1Fn::from_bits(0), F4E2M1Fn::from_bits(0x7));
+    let (sum, flags) = six.add_with(six, Env::IEEE);
+    assert_eq!(
+        (sum.to_bits(), flags),
+        (0x7, Flags::OVERFLOW | Flags::INEXACT)
+    );
+    let (quotient, flags) = six.div_with(zero, Env::IEEE);
+    assert_eq!((quotient.to_bits(), flags), (0x7, Flags::DIVIDE_BY_ZERO));
+    let (nan, flags) = zero.div_with(zero, Env::IEEE);
+    assert_eq!((nan.to_bits(), flags), (0, Flags::INVALID));
+    let (root, flags) = F4E2M1Fn::from_bits(0xA).sqrt_with(Env::IEEE);
+    assert_eq!((root.to_bits(), flags), (0, Flags::INVALID));
+    assert_eq!(six.next_up().to_bits(), 0x7);
+    let (converted, flags) = F32::from_bits(0xFFC0_0000).convert_with::<F6E3M2Fn>(Env::IEEE);
+    assert_eq!((converted.to_bits(), flags), (0, Flags::INVALID));
+    let (converted, flags) = F32::from_bits(0xFF80_0000).convert_with::<F6E3M2Fn>(Env::IEEE);
+    assert_eq!((converted.to_bits(), flags), (0x3F, Flags::INVALID));
 }
 
 #[test]

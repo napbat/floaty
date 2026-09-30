@@ -288,8 +288,11 @@ fn number(value: &BigFloat, format: &Format) -> Outcome {
 }
 
 /// Returns the default NaN of the NaN rule. The one NaN of `Fnuz` is
-/// negative.
+/// negative. A format without a NaN gives positive zero instead.
 fn default_nan(format: &Format, env: &Env) -> Outcome {
+    if format.specials == Specials::Finite {
+        return Outcome::Zero { negative: false };
+    }
     Outcome::Nan {
         negative: env.nan.default_negative || format.specials == Specials::Fnuz,
         signaling: false,

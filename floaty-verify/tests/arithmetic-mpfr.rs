@@ -12,8 +12,8 @@ use core::num::NonZeroU32;
 
 use floaty::env::{InvalidProduct, NanPropagation, NanRule, Tininess};
 use floaty::{
-    BF16, Binary, Class, Decoded, Env, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz, F80, F256, F512,
-    Float, Rounding, TF32,
+    BF16, Binary, Class, Decoded, Env, F4E2M1Fn, F6E2M3Fn, F6E3M2Fn, F8E4M3Fn, F8E4M3Fnuz, F8E5M2,
+    F8E5M2Fnuz, F80, F256, F512, Float, Rounding, TF32,
 };
 use floaty_verify::arithmetic::{self, Operand, Operation};
 use floaty_verify::encodings::{IntegerBit, boundary_encodings, to_limbs};
@@ -139,17 +139,18 @@ fn check_nan(result: &Decoded<8>, operands: &[Operand<8>], flags: floaty::Flags,
     );
 }
 
-/// Checks every operand pair and every operand of an FP8 format, and random
-/// triples for the fused multiply-add.
-macro_rules! fp8 {
-    ($alias:ty, $specials:expr, $seed:literal) => {{
+/// Checks every operand pair and every operand of a format of `$width`
+/// bits, at most 8, and random triples for the fused multiply-add.
+macro_rules! small {
+    ($alias:ty, $width:literal, $specials:expr, $seed:literal) => {{
         let format = format_of!($alias, $specials);
         let mut random = SplitMix64::new($seed);
+        let encodings = || (0..1_u16 << $width).map(|bits| u8::try_from(bits).expect("8 bits"));
         for env in behaviors() {
-            for a in 0..=u8::MAX {
+            for a in encodings() {
                 let x = <$alias>::from_bits(a);
                 compare!(format, env, Operation::Sqrt, x.sqrt_with(env), [x]);
-                for b in 0..=u8::MAX {
+                for b in encodings() {
                     let y = <$alias>::from_bits(b);
                     compare!(format, env, Operation::Add, x.add_with(y, env), [x, y]);
                     compare!(format, env, Operation::Sub, x.sub_with(y, env), [x, y]);
@@ -184,10 +185,17 @@ macro_rules! fp8 {
 
 #[test]
 fn every_fp8_operand_pair() {
-    fp8!(F8E4M3Fn, Specials::NoInf, 1);
-    fp8!(F8E5M2, Specials::Ieee, 2);
-    fp8!(F8E4M3Fnuz, Specials::Fnuz, 3);
-    fp8!(F8E5M2Fnuz, Specials::Fnuz, 4);
+    small!(F8E4M3Fn, 8, Specials::NoInf, 1);
+    small!(F8E5M2, 8, Specials::Ieee, 2);
+    small!(F8E4M3Fnuz, 8, Specials::Fnuz, 3);
+    small!(F8E5M2Fnuz, 8, Specials::Fnuz, 4);
+}
+
+#[test]
+fn every_mx_operand_pair() {
+    small!(F4E2M1Fn, 4, Specials::Finite, 5);
+    small!(F6E2M3Fn, 6, Specials::Finite, 6);
+    small!(F6E3M2Fn, 6, Specials::Finite, 7);
 }
 
 /// Returns the negated product `a * b`, rounded to nearest. As an addend, it

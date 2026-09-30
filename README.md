@@ -8,8 +8,9 @@ the same bits and the same flags on every host. floaty is a base layer for
 binary lifters, decompilers, constant folders, and FPU emulators.
 
 - **Formats.** Every IEEE 754 binary interchange format from 16 to 512
-  bits, bfloat16, TF32, OCP FP8 E4M3 and E5M2, the FNUZ FP8 variants, x87
-  80-bit extended precision, and custom binary layouts up to 512 bits.
+  bits, bfloat16, TF32, OCP FP8 E4M3 and E5M2, the FNUZ FP8 variants, the
+  OCP MX formats FP4 and FP6, x87 80-bit extended precision, and custom
+  binary layouts up to 512 bits.
   decimal32, decimal64, and decimal128 in the BID and DPD encodings. Double-double values that match
   the IBM `long double` of libgcc or the `dd_real` of QD, bit for bit.
 - **Correct rounding.** Addition, subtraction, multiplication, division,
@@ -79,14 +80,15 @@ register. Type aliases name the common formats.
 | `TF32` | NVIDIA TensorFloat-32, 19 bits | 11 bits |
 | `F8E4M3Fn`, `F8E5M2` | OCP FP8. E4M3 has no infinity, so LLVM and `ml_dtypes` call it E4M3FN. | 4, 3 bits |
 | `F8E4M3Fnuz`, `F8E5M2Fnuz` | FP8 with one NaN and no negative zero | 4, 3 bits |
+| `F4E2M1Fn`, `F6E2M3Fn`, `F6E3M2Fn` | OCP MX FP4 and FP6: no infinity and no NaN | 2, 4, 3 bits |
 | `F80` | x87 extended precision, with an explicit integer bit | 64 bits |
 | `D32Bid`, `D64Bid`, `D128Bid` | IEEE 754 decimal formats, BID encoding | 7, 16, 34 digits |
 | `D32Dpd`, `D64Dpd`, `D128Dpd` | IEEE 754 decimal formats, DPD encoding | 7, 16, 34 digits |
 
 `Binary<E, Enc>` describes other binary layouts: 2 to 28 exponent bits `E`,
 at least one fraction bit, a width up to 512 bits, and an encoding of the
-special values, `Ieee`, `NoInf`, `Fnuz`, or `X87`. An invalid layout fails
-to compile.
+special values, `Ieee`, `NoInf`, `Fnuz`, `Finite`, or `X87`. An invalid
+layout fails to compile.
 
 ```rust
 use floaty::{Binary, Decoded, Float};
@@ -100,10 +102,12 @@ assert_eq!(largest, Decoded::Finite { negative: false, exponent: 4, significand:
 ```
 
 The formats without an infinity overflow to the NaN. A saturating behavior
-gives the largest finite value instead, in every binary format:
+gives the largest finite value instead, in every binary format. The MX
+formats have neither an infinity nor a NaN, so they always saturate, and an
+invalid operation gives `+0` with `INVALID`:
 
 ```rust
-use floaty::{F8E4M3Fn, F8E5M2, Flags};
+use floaty::{F4E2M1Fn, F8E4M3Fn, F8E5M2, Flags};
 
 let largest = F8E4M3Fn::from_bits(0x7E); // 448
 let (nan, flags) = largest.add_with(largest, F8E4M3Fn::ENV);
@@ -116,6 +120,11 @@ assert_eq!(saturated.to_bits(), 0x7E);
 let largest = F8E5M2::from_bits(0x7B);
 let (saturated, flags) = largest.add_with(largest, F8E5M2::ENV.with_saturate(true));
 assert_eq!((saturated.to_bits(), flags), (0x7B, Flags::OVERFLOW | Flags::INEXACT));
+
+// FP4 E2M1: 6 + 6 saturates to 6, and 0 / 0 gives +0.
+let (zero, six) = (F4E2M1Fn::from_bits(0x0), F4E2M1Fn::from_bits(0x7));
+assert_eq!(six.add_with(six, F4E2M1Fn::ENV).0.to_bits(), 0x7);
+assert_eq!(zero.div_with(zero, F4E2M1Fn::ENV), (zero, Flags::INVALID));
 ```
 
 ### Unsigned floats of R11G11B10
@@ -438,7 +447,7 @@ IEEE 754 or a vendor manual with MPFR or decNumber.
 | Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in the six directions of TestFloat, under four NaN rules |
 | MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of the formats that TestFloat lacks. Conversions between those formats and the decimal formats. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, and `scale_b` |
-| `ml_dtypes` 0.6.0 | Every FP8 encoding and operand pair, as generated tables |
+| `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, as generated tables |
 | The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 tests run under QEMU 10.2.1. |
 | decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations, with FTZ, DAZ, and precision limits |
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
@@ -470,8 +479,6 @@ The minimum supported Rust version is 1.85. The crate uses edition 2024.
   stable Rust cannot call.
 - No traps. floaty reports flags and never traps.
 - Presets for x86 SSE and x87 only.
-- No OCP MX FP4 and FP6 formats yet. They need an encoding without an
-  infinity or a NaN.
 - No decimal formats wider than 128 bits. No hardware or major library
   uses them.
 - QEMU stands in for POWER hardware in the `Gcc` tests.

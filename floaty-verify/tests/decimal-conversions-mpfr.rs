@@ -57,7 +57,7 @@ fn binary_payload(source: &Decoded<2>, trailing: u32, format: &Format) -> Intege
             trailing,
             format.precision - 2,
         ),
-        Specials::NoInf | Specials::Fnuz => Integer::ZERO,
+        Specials::NoInf | Specials::Fnuz | Specials::Finite => Integer::ZERO,
     }
 }
 

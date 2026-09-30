@@ -2,7 +2,7 @@
 //!
 //! `build.rs` fetches `format_r11g11b10f.h` and `rounding.h` of Mesa 25.2.0,
 //! and the shim `shim/mesa_r11g11b10.c` exposes the inline functions of the
-//! header. The conversions follow GL_EXT_packed_float. Each function takes
+//! header. The conversions follow `GL_EXT_packed_float`. Each function takes
 //! and returns encodings.
 
 unsafe extern "C" {
@@ -13,6 +13,10 @@ unsafe extern "C" {
 }
 
 /// Returns the 11-bit channel of a binary32 encoding.
+///
+/// # Panics
+///
+/// Panics when Mesa gives a channel of more than 16 bits.
 #[must_use]
 pub fn to_eleven(bits: u32) -> u16 {
     // SAFETY: the shim function takes an encoding by value and reads no
@@ -22,6 +26,10 @@ pub fn to_eleven(bits: u32) -> u16 {
 }
 
 /// Returns the 10-bit channel of a binary32 encoding.
+///
+/// # Panics
+///
+/// Panics when Mesa gives a channel of more than 16 bits.
 #[must_use]
 pub fn to_ten(bits: u32) -> u16 {
     // SAFETY: the shim function takes an encoding by value and reads no

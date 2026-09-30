@@ -30,6 +30,8 @@ pub enum EncodingKind {
     Fnuz,
     /// x87 extended precision, with an explicit integer bit.
     X87,
+    /// No infinity and no NaN; every encoding is a number.
+    Finite,
 }
 
 pub(crate) use crate::unpacked::Number;
@@ -73,7 +75,9 @@ where
 
     const BIAS: i32 = match Enc::KIND {
         EncodingKind::Fnuz => 1 << (E - 1),
-        EncodingKind::Ieee | EncodingKind::NoInf | EncodingKind::X87 => (1 << (E - 1)) - 1,
+        EncodingKind::Ieee | EncodingKind::NoInf | EncodingKind::X87 | EncodingKind::Finite => {
+            (1 << (E - 1)) - 1
+        }
     };
 
     const PRECISION: u32 = {
@@ -89,7 +93,9 @@ where
         let () = Self::VALID;
         match Enc::KIND {
             EncodingKind::Ieee | EncodingKind::X87 => (1 << E) - 2 - Self::BIAS,
-            EncodingKind::NoInf | EncodingKind::Fnuz => (1 << E) - 1 - Self::BIAS,
+            EncodingKind::NoInf | EncodingKind::Fnuz | EncodingKind::Finite => {
+                (1 << E) - 1 - Self::BIAS
+            }
         }
     };
 
@@ -108,6 +114,7 @@ where
         emax: Self::EMAX,
         has_infinity: matches!(Enc::KIND, EncodingKind::Ieee | EncodingKind::X87),
         all_ones_is_nan: matches!(Enc::KIND, EncodingKind::NoInf),
+        has_nan: !matches!(Enc::KIND, EncodingKind::Finite),
     };
 
     /// The host format with the same encoding.
@@ -124,7 +131,7 @@ where
     const PAYLOAD_DIGITS: u32 = match Enc::KIND {
         EncodingKind::Ieee => Self::FRACTION_BITS - 1,
         EncodingKind::X87 => 62,
-        EncodingKind::NoInf | EncodingKind::Fnuz => 0,
+        EncodingKind::NoInf | EncodingKind::Fnuz | EncodingKind::Finite => 0,
     };
 
     /// Decodes an encoding.
@@ -167,9 +174,10 @@ where
                 }
             }
             EncodingKind::X87 => Self::decode_x87(negative, field, fraction),
-            EncodingKind::Ieee | EncodingKind::NoInf | EncodingKind::Fnuz => {
-                Self::decode_finite(negative, field, fraction)
-            }
+            EncodingKind::Ieee
+            | EncodingKind::NoInf
+            | EncodingKind::Fnuz
+            | EncodingKind::Finite => Self::decode_finite(negative, field, fraction),
         }
     }
 
@@ -183,7 +191,7 @@ where
         let field = bits.field(Self::FRACTION_BITS, E);
         let normal = match Enc::KIND {
             EncodingKind::Ieee | EncodingKind::NoInf => field != 0 && field != Self::FIELD_MAX,
-            EncodingKind::Fnuz => field != 0,
+            EncodingKind::Fnuz | EncodingKind::Finite => field != 0,
             EncodingKind::X87 => field != 0 && field != Self::FIELD_MAX && bits.bit(63),
         };
         if !normal {
@@ -320,14 +328,16 @@ where
     /// The largest exponent field value of a finite number.
     const FINITE_FIELD_MAX: u64 = match Enc::KIND {
         EncodingKind::Ieee | EncodingKind::X87 => Self::FIELD_MAX - 1,
-        EncodingKind::NoInf | EncodingKind::Fnuz => Self::FIELD_MAX,
+        EncodingKind::NoInf | EncodingKind::Fnuz | EncodingKind::Finite => Self::FIELD_MAX,
     };
 
     /// Encodes a value in its canonical encoding.
     ///
     /// The value must be representable in the format. A negative zero in
     /// [`Fnuz`](crate::Fnuz) encodes as positive zero, because the format has
-    /// no negative zero.
+    /// no negative zero. A NaN in [`Finite`](crate::Finite) encodes as
+    /// positive zero, because the format has no NaN; the operation that gives
+    /// the NaN signals invalid.
     #[inline]
     pub fn encode<L: Limbs>(value: Unpacked<L>) -> L {
         let () = Self::VALID;
@@ -346,7 +356,7 @@ where
                 EncodingKind::X87 => {
                     Self::assemble(negative, Self::FIELD_MAX, L::ZERO.with_bit(63))
                 }
-                EncodingKind::NoInf | EncodingKind::Fnuz => {
+                EncodingKind::NoInf | EncodingKind::Fnuz | EncodingKind::Finite => {
                     unreachable!("no caller gives an infinity to a format without one")
                 }
             },
@@ -437,6 +447,7 @@ where
                 debug_assert!(!signaling, "the format has no signaling NaN");
                 Self::assemble(true, 0, L::ZERO)
             }
+            EncodingKind::Finite => Self::assemble(false, 0, L::ZERO),
         }
     }
 
@@ -493,8 +504,9 @@ where
         }
     }
 
-    /// Converts a NaN. The payload keeps its high-order bits. The function
-    /// stays out of line, so that the number path of
+    /// Converts a NaN. The payload keeps its high-order bits. A format without
+    /// a NaN gives positive zero and signals invalid. The function stays out
+    /// of line, so that the number path of
     /// [`convert_from`](Self::convert_from) inlines into its caller.
     #[inline(never)]
     fn convert_nan<In: Limbs, Out: Limbs>(
@@ -504,6 +516,9 @@ where
         source: Source,
         env: &Env,
     ) -> (Out, Flags) {
+        if !Self::TARGET.has_nan {
+            return (Self::encode(Unpacked::zero(false)), Flags::INVALID);
+        }
         let flags = if signaling {
             Flags::INVALID
         } else {
@@ -523,13 +538,14 @@ where
     }
 
     /// Converts an infinity. A format without an infinity gives a NaN, or the
-    /// largest finite value when `saturate` is set, and signals invalid.
+    /// largest finite value when `saturate` is set or the format has no NaN,
+    /// and signals invalid.
     #[inline(never)]
     fn convert_infinity<Out: Limbs>(negative: bool, env: &Env) -> (Out, Flags) {
         if Self::TARGET.has_infinity {
             return (Self::encode(Unpacked::Infinity { negative }), Flags::NONE);
         }
-        let value = if env.saturate {
+        let value = if env.saturate || !Self::TARGET.has_nan {
             exact::largest(negative, Self::TARGET.precision_in(env), &Self::TARGET)
         } else {
             Unpacked::Nan {

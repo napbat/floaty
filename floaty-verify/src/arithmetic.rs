@@ -158,7 +158,12 @@ fn is_zero_times_infinity(first: &Number, second: &Number) -> bool {
     )
 }
 
-fn invalid() -> (Value, Flags) {
+/// Returns the result of an invalid operation: a NaN, or positive zero in a
+/// format without a NaN.
+fn invalid(format: &Format) -> (Value, Flags) {
+    if format.specials == Specials::Finite {
+        return (Value::Zero { negative: false }, Flags::INVALID);
+    }
     (Value::Nan { negative: false }, Flags::INVALID)
 }
 
@@ -169,12 +174,12 @@ fn zero(negative: bool, format: &Format) -> Value {
 }
 
 /// Returns an infinity, or for a format without one the NaN or, when the
-/// behavior saturates, the largest finite value.
+/// behavior saturates or the format has no NaN, the largest finite value.
 fn infinity(negative: bool, format: &Format, env: &Env) -> Value {
     if format.specials == Specials::Ieee {
         return Value::Infinity { negative };
     }
-    if !env.saturate {
+    if !env.saturate && format.specials != Specials::Finite {
         return Value::Nan { negative: false };
     }
     let precision = format.precision_in(env);
@@ -218,7 +223,7 @@ fn working(format: &Format) -> u32 {
 
 fn add(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, Flags) {
     match (first, second) {
-        (Number::Infinity(a), Number::Infinity(b)) if a != b => invalid(),
+        (Number::Infinity(a), Number::Infinity(b)) if a != b => invalid(format),
         (Number::Infinity(negative), _) | (_, Number::Infinity(negative)) => {
             (infinity(*negative, format, env), Flags::NONE)
         }
@@ -242,7 +247,7 @@ fn add(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, F
 fn mul(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, Flags) {
     let negative = first.negative() != second.negative();
     match (first, second) {
-        _ if is_zero_times_infinity(first, second) => invalid(),
+        _ if is_zero_times_infinity(first, second) => invalid(format),
         (Number::Infinity(_), _) | (_, Number::Infinity(_)) => {
             (infinity(negative, format, env), Flags::NONE)
         }
@@ -258,7 +263,7 @@ fn div(first: &Number, second: &Number, format: &Format, env: &Env) -> (Value, F
     let negative = first.negative() != second.negative();
     match (first, second) {
         (Number::Infinity(_), Number::Infinity(_)) | (Number::Zero(_), Number::Zero(_)) => {
-            invalid()
+            invalid(format)
         }
         (Number::Infinity(_), _) => (infinity(negative, format, env), Flags::NONE),
         (_, Number::Infinity(_)) | (Number::Zero(_), _) => (zero(negative, format), Flags::NONE),
@@ -275,8 +280,8 @@ fn sqrt(value: &Number, format: &Format, env: &Env) -> (Value, Flags) {
     match value {
         Number::Zero(negative) => (zero(*negative, format), Flags::NONE),
         Number::Infinity(false) => (infinity(false, format, env), Flags::NONE),
-        Number::Infinity(true) => invalid(),
-        Number::Finite(value) if value.is_sign_negative() => invalid(),
+        Number::Infinity(true) => invalid(format),
+        Number::Finite(value) if value.is_sign_negative() => invalid(format),
         Number::Finite(value) => {
             let (root, ordering) =
                 BigFloat::with_val_round(working(format), value.sqrt_ref(), Round::Zero);
@@ -293,7 +298,7 @@ fn mul_add(
     env: &Env,
 ) -> (Value, Flags) {
     if is_zero_times_infinity(first, second) {
-        return invalid();
+        return invalid(format);
     }
     let product_negative = first.negative() != second.negative();
     let product_infinite =
@@ -301,7 +306,7 @@ fn mul_add(
     let product_zero = matches!(first, Number::Zero(_)) || matches!(second, Number::Zero(_));
     match addend {
         _ if product_infinite => match addend {
-            Number::Infinity(negative) if *negative != product_negative => invalid(),
+            Number::Infinity(negative) if *negative != product_negative => invalid(format),
             _ => (infinity(product_negative, format, env), Flags::NONE),
         },
         Number::Infinity(negative) => (infinity(*negative, format, env), Flags::NONE),

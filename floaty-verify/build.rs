@@ -171,7 +171,7 @@ const QD: Archive = Archive {
 
 /// Mesa's conversions of the unsigned 11-bit and 10-bit floats of
 /// R11G11B10, from its release 25.2.0, under the MIT license. They follow
-/// GL_EXT_packed_float.
+/// `GL_EXT_packed_float`.
 const MESA_R11G11B10: Archive = Archive {
     file: "mesa-25.2.0-format_r11g11b10f.h",
     packing: Packing::File("format_r11g11b10f.h"),

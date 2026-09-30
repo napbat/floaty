@@ -112,6 +112,8 @@ where
             EncodingKind::NoInf => magnitude != L::ones(Self::WIDTH - 1),
             // The one NaN has the sign bit set and a zero magnitude.
             EncodingKind::Fnuz => !negative || !magnitude.is_zero(),
+            // Every encoding is a number.
+            EncodingKind::Finite => true,
             // The integer bit, bit 63, is set exactly when the exponent field
             // is not zero. An infinity has a zero fraction below it.
             EncodingKind::X87 => {

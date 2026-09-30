@@ -26,6 +26,9 @@ pub enum Specials {
     NoInf,
     /// No infinity and no negative zero; the one NaN is negative.
     Fnuz,
+    /// No infinity and no NaN. Every overflow saturates, and a NaN result is
+    /// positive zero.
+    Finite,
 }
 
 /// The parameters of a format, as the oracle uses them.
@@ -193,7 +196,11 @@ fn zero(negative: bool, format: &Format) -> Value {
     }
 }
 
+/// Returns the NaN of a format, or positive zero in a format without a NaN.
 fn nan(negative: bool, format: &Format) -> Value {
+    if format.specials == Specials::Finite {
+        return Value::Zero { negative: false };
+    }
     Value::Nan {
         negative: negative || format.specials == Specials::Fnuz,
     }
@@ -236,7 +243,7 @@ fn overflow(negative: bool, format: &Format, precision: u32, env: &Env) -> (Valu
     };
     // A saturating behavior gives the largest finite value, as the OCP FP8
     // saturation mode does for an overflow.
-    if to_infinity && !env.saturate {
+    if to_infinity && !env.saturate && format.specials != Specials::Finite {
         if format.specials == Specials::Ieee {
             return (Value::Infinity { negative }, flags | Flags::ROUNDED_UP);
         }
@@ -362,7 +369,7 @@ pub fn convert<const N: usize>(
         Decoded::Infinity { negative } if format.specials == Specials::Ieee => {
             (Value::Infinity { negative }, Flags::NONE)
         }
-        Decoded::Infinity { negative } if env.saturate => {
+        Decoded::Infinity { negative } if env.saturate || format.specials == Specials::Finite => {
             let mut value = largest(format, format.precision_in(env));
             if negative {
                 value = -value;
@@ -375,7 +382,8 @@ pub fn convert<const N: usize>(
             signaling,
             ..
         } => {
-            let flags = if signaling {
+            // A format without a NaN cannot hold the NaN.
+            let flags = if signaling || format.specials == Specials::Finite {
                 Flags::INVALID
             } else {
                 Flags::NONE

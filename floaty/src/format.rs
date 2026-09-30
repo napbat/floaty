@@ -461,8 +461,8 @@ impl<const E: u32, Enc: Encoding> Sealed for Binary<E, Enc> {}
 
 /// The special values, bias, and integer bit of a binary format.
 ///
-/// The trait is sealed. The encodings are [`Ieee`], [`NoInf`], [`Fnuz`], and
-/// [`X87`].
+/// The trait is sealed. The encodings are [`Ieee`], [`NoInf`], [`Fnuz`],
+/// [`Finite`], and [`X87`].
 pub trait Encoding: Sealed + 'static {
     /// The encoding rules that the binary engine applies.
     #[doc(hidden)]
@@ -505,6 +505,21 @@ pub enum Fnuz {}
 impl Sealed for Fnuz {}
 impl Encoding for Fnuz {
     const KIND: EncodingKind = EncodingKind::Fnuz;
+}
+
+/// An encoding without infinities and without NaNs, for the OCP
+/// microscaling (MX) formats FP4 E2M1, FP6 E2M3, and FP6 E3M2.
+///
+/// Every encoding is a number, and the format has a negative zero. The bias
+/// is `2^(E-1) - 1`. Every overflow gives the largest finite value of its
+/// sign, as the MX formats saturate, and so does an infinite operand of a
+/// conversion. A NaN result, from an invalid operation or from a NaN operand
+/// of a conversion, gives positive zero, and the operation signals invalid.
+pub enum Finite {}
+
+impl Sealed for Finite {}
+impl Encoding for Finite {
+    const KIND: EncodingKind = EncodingKind::Finite;
 }
 
 /// The x87 extended-precision encoding, with an explicit integer bit.
