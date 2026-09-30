@@ -547,7 +547,7 @@ decNumber.
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
 | glibc 2.43 libm of the powerpc64le cross C library, under QEMU | `sqrt`, `remainder`, `%`, `mul_add`, `next_up`, `next_down`, and `is_canonical` of `DoubleDouble<Gcc>` |
-| QD 2.3.24 | `DoubleDouble<Qd>` |
+| QD 2.3.24 | `DoubleDouble<Qd>`, also under the FTZ and DAZ bits of MXCSR |
 | Mesa 25.2.0, `format_r11g11b10f.h` | The R11G11B10 recipe: every rounding case of both channels, and every channel code |
 
 The normal test run tests every FP8, FP6, and FP4 operand pair of every

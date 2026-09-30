@@ -365,11 +365,14 @@ fn qd_returns_the_flags_of_each_operation() {
 
 #[test]
 fn qd_restores_the_floating_point_environment() {
-    use floaty_verify::x86::{MXCSR_MASKED, MXCSR_ROUNDINGS, mxcsr, with_mxcsr};
+    use floaty_verify::x86::{
+        MXCSR_DAZ, MXCSR_FTZ, MXCSR_MASKED, MXCSR_ROUNDINGS, mxcsr, with_mxcsr,
+    };
     // The precision flag, PE, of MXCSR.
     const PRECISION: u32 = 1 << 5;
+    // The shim keeps the FTZ and DAZ bits too, which `qd::with_flush` sets.
     for (rounding, field) in MXCSR_ROUNDINGS {
-        for flags in [0, PRECISION] {
+        for flags in [0, PRECISION, MXCSR_FTZ, MXCSR_DAZ | PRECISION] {
             let control = MXCSR_MASKED | field | flags;
             let after = with_mxcsr(control, || {
                 for direction in Rounding::ALL {

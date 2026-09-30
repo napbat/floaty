@@ -8,7 +8,8 @@
 //! The block of `fmal` rounds to nearest even, as glibc's
 //! `SET_RESTORE_ROUND (FE_TONEAREST)` does. libgcc and QD define the results
 //! only in the behaviors of their platforms, and `tests/double-double.rs` and
-//! `tests/double-double-functions.rs` compare those. No implementation
+//! `tests/double-double-functions.rs` compare those, with `Qd` also under the
+//! FTZ and DAZ bits of MXCSR. No implementation
 //! defines the other behaviors: flush-to-zero and denormals-are-zero for
 //! `Gcc`, precision limits, the other directions, the other NaN and tininess
 //! rules, saturation, and the flags `TINY`, `ROUNDED_UP`, and

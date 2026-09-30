@@ -13,6 +13,10 @@
 //! the thread had before the call. A thread that rounds to nearest before a
 //! call thus rounds to nearest after it.
 //!
+//! Each function keeps the flush-to-zero and denormals-are-zero bits of
+//! MXCSR, because it changes only the rounding direction and the flags. So
+//! [`with_flush`] runs QD with either bit set.
+//!
 //! QD computes on the host: x86-64 SSE for each binary64 step, and the C
 //! library `fma`, which [`c_fma`] also calls. glibc's `fetestexcept` does not
 //! report the denormal flag (DE of MXCSR), so an [`Outcome`] holds only the
@@ -30,6 +34,26 @@ use core::ffi::{c_int, c_uint};
 use floaty::{Env, F64};
 
 pub use crate::double_double::reference::{Flags, Outcome, Pair, Rounding};
+use crate::x86::{MXCSR_DAZ, MXCSR_FTZ, MXCSR_MASKED, with_mxcsr};
+
+/// The settings of the flush-to-zero and denormals-are-zero bits of MXCSR
+/// other than the default: FTZ, DAZ, and both. Each is `(ftz, daz)`.
+pub const FLUSH_SETTINGS: [(bool, bool); 3] = [(true, false), (false, true), (true, true)];
+
+/// Runs `body`, which calls functions of this module, with the flush-to-zero
+/// bit of MXCSR set to `ftz` and the denormals-are-zero bit set to `daz`.
+/// Every exception stays masked. MXCSR has its value from before the call
+/// again when `body` returns.
+///
+/// Rust assumes the default floating-point environment, so `body` must not
+/// depend on its own host floating-point arithmetic.
+pub fn with_flush<T>(ftz: bool, daz: bool, body: impl FnOnce() -> T) -> T {
+    let bit = |set: bool, bit: u32| if set { bit } else { 0 };
+    with_mxcsr(
+        MXCSR_MASKED | bit(ftz, MXCSR_FTZ) | bit(daz, MXCSR_DAZ),
+        body,
+    )
+}
 
 /// Returns `fma(x, y, z)` of the C library that QD calls, on binary64
 /// encodings, rounded to nearest. glibc selects its `fma` at run time, so the

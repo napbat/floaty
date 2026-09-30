@@ -5,9 +5,10 @@
 //! Each case compares both halves of the result bit for bit, with the sign
 //! and payload of a NaN half, and the five IEEE flags, in each of the four
 //! rounding directions. floaty runs `Gcc` under the behavior of PowerPC,
-//! `ibm_ldouble::behavior`, and `Qd` under `Env::X86_SSE`. The test counts
-//! the cases with a malformed operand, a finite high half and a NaN low half,
-//! whose NaN the fused NaN order decides.
+//! `ibm_ldouble::behavior`, and `Qd` under `Env::X86_SSE`. `Qd` also runs
+//! with flush-to-zero and denormals-are-zero, and QD with the FTZ and DAZ
+//! bits of MXCSR. The test counts the cases with a malformed operand, a finite
+//! high half and a NaN low half, whose NaN the fused NaN order decides.
 //!
 //! Each case runs again with saturation, and must give the result of the
 //! reference. Double-double arithmetic ignores saturation, because neither
@@ -28,6 +29,7 @@ use floaty_verify::ibm_ldouble::{
 };
 use floaty_verify::qd;
 use floaty_verify::random::SplitMix64;
+use floaty_verify::x86::sse_env;
 
 /// The layout of the halves.
 const BINARY64: Layout = Layout::BINARY64;
@@ -409,4 +411,60 @@ fn qd_matches_the_qd_library() {
     assert_eq!(tally.passed, 3 * 480_100);
     assert_eq!(operator_checks, 480_100 / 4);
     assert_eq!(overflow, 26_065);
+}
+
+#[test]
+fn qd_matches_the_qd_library_with_flush_to_zero_and_denormals_are_zero() {
+    const NAMES: [&str; 5] = ["add", "sub", "mul", "div", "sqrt"];
+    qd::check_host_fma();
+    let mut operands = Operands {
+        random: SplitMix64::new(0x0D_F7D2),
+    };
+    let mut tally = Tally::default();
+    let random = (0..PAIRS).map(|_| {
+        let a = operands.operand();
+        (a, operands.second(a))
+    });
+    let pairs: Vec<(Pair, Pair)> = FIXED.into_iter().chain(random).collect();
+    // The cases in which FTZ or DAZ changes the result or the flags of QD.
+    let mut changed = 0_usize;
+    for (a, b) in pairs {
+        let (x, y) = (value::<Qd>(a), value::<Qd>(b));
+        for rounding in Rounding::ALL {
+            let reference = || {
+                [
+                    qd::add(a, b, rounding),
+                    qd::sub(a, b, rounding),
+                    qd::mul(a, b, rounding),
+                    qd::div(a, b, rounding),
+                    qd::sqrt(a, rounding),
+                ]
+            };
+            let default = reference();
+            for (ftz, daz) in qd::FLUSH_SETTINGS {
+                let env = sse_env(rounding.into(), ftz, daz);
+                let ours = [
+                    x.add_with(y, env),
+                    x.sub_with(y, env),
+                    x.mul_with(y, env),
+                    x.div_with(y, env),
+                    x.sqrt_with(env),
+                ]
+                .map(|(result, flags)| outcome(result.hi(), result.lo(), flags));
+                let theirs = qd::with_flush(ftz, daz, reference);
+                for (index, (ours, theirs)) in ours.into_iter().zip(theirs).enumerate() {
+                    changed += usize::from(theirs != default[index]);
+                    let name = NAMES[index];
+                    let context = || format!("{name} {a:?} {b:?} {rounding:?} FTZ {ftz} DAZ {daz}");
+                    tally.check(context, ours, theirs);
+                }
+            }
+        }
+    }
+    tally.report("Qd against QD with FTZ and DAZ");
+    println!("  noted   {changed:7}: results that FTZ or DAZ changes");
+    assert_eq!(tally.failed, 0, "floaty matches QD");
+    // The generator is seeded, so the counts are exact. The changed results
+    // show that QD runs with the MXCSR bits set.
+    assert_eq!((tally.passed, changed), (3 * 5 * 4 * 24_005, 195_272));
 }

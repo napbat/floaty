@@ -6,7 +6,9 @@
 //! Each case compares both halves of the result bit for bit, with the sign
 //! and payload of a NaN half, and the five IEEE flags, in each of the four
 //! rounding directions. floaty runs `Gcc` under the behavior of PowerPC,
-//! `ibm_ldouble::behavior`, and `Qd` under `Env::X86_SSE`.
+//! `ibm_ldouble::behavior`, and `Qd` under `Env::X86_SSE`. `Qd` also runs
+//! with flush-to-zero and denormals-are-zero, and QD with the FTZ and DAZ
+//! bits of MXCSR.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -19,6 +21,7 @@ use floaty_verify::ibm_ldouble::{
 };
 use floaty_verify::qd;
 use floaty_verify::random::SplitMix64;
+use floaty_verify::x86::sse_env;
 
 /// The layout of the halves.
 const BINARY64: Layout = Layout::BINARY64;
@@ -380,12 +383,10 @@ fn is_canonical_matches_glibc() {
     assert_eq!(compare(&cases), 50_020);
 }
 
-#[test]
-fn qd_remainders_match_qd() {
-    qd::check_host_fma();
+/// Returns the operand pairs of the `Qd` remainder tests: fixed pairs with a
+/// tiny dividend, and seeded random pairs.
+fn remainder_pairs() -> Vec<(Pair, Pair)> {
     let mut random = SplitMix64::new(0x0D_F30D);
-    let mut failures = Vec::new();
-    let mut count = 0;
     // A tiny dividend and a larger divisor round the quotient to a zero,
     // whose sign in the directed roundings reaches the low half.
     let tiny = [
@@ -401,16 +402,32 @@ fn qd_remainders_match_qd() {
         ]
         .map(|b| (Pair::new(a, 0), Pair::new(b, 0)))
     });
-    let random_pairs: Vec<(Pair, Pair)> = (0..20_000)
-        .map(|_| {
-            let a = operand(&mut random);
-            (a, divisor(&mut random, a))
-        })
-        .collect();
-    for (a, b) in fixed.chain(random_pairs) {
-        let qd_value = |pair: Pair| {
-            DoubleDouble::<Qd>::from_parts(F64::from_bits(pair.hi), F64::from_bits(pair.lo))
-        };
+    let random_pairs = (0..20_000).map(|_| {
+        let a = operand(&mut random);
+        (a, divisor(&mut random, a))
+    });
+    fixed.chain(random_pairs).collect()
+}
+
+/// Returns the `Qd` value of a pair.
+fn qd_value(pair: Pair) -> DoubleDouble<Qd> {
+    DoubleDouble::from_parts(F64::from_bits(pair.hi), F64::from_bits(pair.lo))
+}
+
+/// Returns floaty's outcome of a result and its flags.
+fn qd_outcome((result, flags): (DoubleDouble<Qd>, Flags)) -> Outcome {
+    Outcome {
+        result: Pair::new(result.hi().to_bits(), result.lo().to_bits()),
+        flags: ReferenceFlags::from_floaty(flags),
+    }
+}
+
+#[test]
+fn qd_remainders_match_qd() {
+    qd::check_host_fma();
+    let mut failures = Vec::new();
+    let mut count = 0;
+    for (a, b) in remainder_pairs() {
         let (x, y) = (qd_value(a), qd_value(b));
         for rounding in Rounding::ALL {
             let env = Env::X86_SSE.with_rounding(rounding.into());
@@ -422,11 +439,8 @@ fn qd_remainders_match_qd() {
                     qd::fmod(a, b, rounding),
                 ),
             ];
-            for (name, (result, flags), theirs) in checks {
-                let ours = Outcome {
-                    result: Pair::new(result.hi().to_bits(), result.lo().to_bits()),
-                    flags: ReferenceFlags::from_floaty(flags),
-                };
+            for (name, result, theirs) in checks {
+                let ours = qd_outcome(result);
                 count += 1;
                 if ours != theirs && failures.len() < 40 {
                     failures.push(format!(
@@ -442,4 +456,45 @@ fn qd_remainders_match_qd() {
     }
     assert!(failures.is_empty(), "floaty matches QD");
     assert_eq!(count, 2 * 4 * 20_009);
+}
+
+#[test]
+fn qd_remainders_match_qd_with_flush_to_zero_and_denormals_are_zero() {
+    qd::check_host_fma();
+    let mut failures = Vec::new();
+    // The cases in which FTZ or DAZ changes the result or the flags of QD.
+    let (mut count, mut changed) = (0, 0);
+    for (a, b) in remainder_pairs() {
+        let (x, y) = (qd_value(a), qd_value(b));
+        for rounding in Rounding::ALL {
+            let reference = || [qd::drem(a, b, rounding), qd::fmod(a, b, rounding)];
+            let default = reference();
+            for (ftz, daz) in qd::FLUSH_SETTINGS {
+                let env = sse_env(rounding.into(), ftz, daz);
+                let ours =
+                    [x.remainder_with(y, env), x.truncated_remainder_with(y, env)].map(qd_outcome);
+                let theirs = qd::with_flush(ftz, daz, reference);
+                for (index, (ours, theirs)) in ours.into_iter().zip(theirs).enumerate() {
+                    count += 1;
+                    changed += usize::from(theirs != default[index]);
+                    if ours != theirs && failures.len() < 40 {
+                        let name = ["drem", "fmod"][index];
+                        failures.push(format!(
+                            "{name} {a:?} {b:?} {rounding:?} FTZ {ftz} DAZ {daz}: floaty {:?} \
+                             {:?}, QD {:?} {:?}",
+                            ours.result, ours.flags, theirs.result, theirs.flags
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for failure in &failures {
+        println!("FAILED {failure}");
+    }
+    println!("noted {changed}: results that FTZ or DAZ changes");
+    assert!(failures.is_empty(), "floaty matches QD");
+    // The generator is seeded, so the counts are exact. The changed results
+    // show that QD runs with the MXCSR bits set.
+    assert_eq!((count, changed), (3 * 2 * 4 * 20_009, 31_270));
 }
