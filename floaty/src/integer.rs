@@ -3,10 +3,10 @@
 //! conversion to an integer.
 
 use crate::env::Flags;
-use crate::exact::Integral;
 use crate::format::internal::LimbConversion;
 use crate::format::{Storage, Width};
 use crate::limbs::Limbs;
+use crate::rounding::Integral;
 use crate::sealed::Sealed;
 use crate::unpacked::Unpacked;
 

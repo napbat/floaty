@@ -2,7 +2,7 @@
 //! rounded to a decimal format with the preferred exponent of its operation.
 //!
 //! The routine shares the choice of the direction with the binary routine,
-//! [`exact::rounds_up`](crate::exact::rounds_up). IEEE 754 detects the
+//! `rounding::rounds_up`. IEEE 754 detects the
 //! tininess of a decimal result before rounding, so the routine ignores the
 //! tininess rule of the behavior.
 
@@ -10,8 +10,9 @@ use core::cmp::Ordering;
 
 use super::digits::{self, digit_count, last_digit, power_of_ten};
 use crate::env::{Behavior, Env, Flags, Rounding};
-use crate::exact::{self, Dropped, Integral, Underflow, Unrounded};
+use crate::exact::Unrounded;
 use crate::limbs::{self, Limbs};
+use crate::rounding::{self, Dropped, Integral, Underflow};
 use crate::unpacked::Unpacked;
 
 /// The parameters of the decimal format that the routine rounds to.
@@ -94,7 +95,7 @@ pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
     let position = exponent.max(top - i64::from(precision) + 1).max(lowest);
     let (kept, dropped) = cut::<In, Out>(value, position - exponent, digits);
     let inexact = dropped.is_inexact();
-    let step = exact::rounds_up(env.rounding, negative, dropped, last_digit(&kept), 10);
+    let step = rounding::rounds_up(env.rounding, negative, dropped, last_digit(&kept), 10);
     let (mut kept, mut position) = (kept, position);
     if step {
         kept = kept.increment();
@@ -108,7 +109,7 @@ pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
         negative,
         exponent: narrow(full_lowest),
     };
-    let mut flags = match exact::underflow(tiny, inexact, env) {
+    let mut flags = match rounding::underflow(tiny, inexact, env) {
         Underflow::Flushed(flags) => return (zero, flags),
         Underflow::Kept(flags) => flags,
     };
@@ -200,7 +201,7 @@ pub fn round_digits<In: Limbs, Out: Limbs>(
 ) -> Integral<Out> {
     let digits = digit_count(&value.significand);
     let (kept, dropped) = cut::<In, Out>(value, drop, digits);
-    let rounded_up = exact::rounds_up(rounding, value.negative, dropped, last_digit(&kept), 10);
+    let rounded_up = rounding::rounds_up(rounding, value.negative, dropped, last_digit(&kept), 10);
     let magnitude = if rounded_up { kept.increment() } else { kept };
     Integral {
         magnitude,
@@ -317,7 +318,7 @@ fn overflow<L: Limbs>(
     env: &Env,
 ) -> (Unpacked<L>, Flags) {
     let flags = Flags::OVERFLOW | Flags::INEXACT;
-    if exact::overflows_to_infinity(env.rounding, negative) {
+    if rounding::overflows_to_infinity(env.rounding, negative) {
         return (Unpacked::Infinity { negative }, flags | Flags::ROUNDED_UP);
     }
     (largest(negative, precision, target), flags)

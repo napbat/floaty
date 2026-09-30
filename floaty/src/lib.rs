@@ -53,6 +53,7 @@ mod lanes;
 mod limbs;
 mod nan;
 mod radix;
+mod rounding;
 mod unpacked;
 
 pub use double_double::{Algorithm, DoubleDouble, Gcc, Qd};

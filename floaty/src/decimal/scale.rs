@@ -5,11 +5,12 @@ use super::digits::digit_count;
 use super::round;
 use super::{DecimalLayout, Wide};
 use crate::env::{Env, Flags};
-use crate::exact::{Integral, Unrounded};
+use crate::exact::Unrounded;
 use crate::format::internal::Step;
 use crate::format::{DecimalEncoding, Storage, Width};
 use crate::limbs::{self, Limbs, Widen};
 use crate::nan::{self, default_nan};
+use crate::rounding::Integral;
 use crate::unpacked::{SCALE_LIMIT, Unpacked};
 
 impl<Enc: DecimalEncoding, const W: usize> DecimalLayout<Enc, W>

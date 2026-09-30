@@ -12,12 +12,13 @@ use core::cmp::Ordering;
 use super::convert::{BINARY, round_value};
 use super::{Algorithm, DoubleDouble, LOWEST, Magnitude};
 use crate::env::{Behavior, Env, Flags, Mode, Override};
-use crate::exact::{self, Integral, Unrounded};
+use crate::exact::{self, Unrounded};
 use crate::float::F64;
 use crate::format::internal::MinMax;
 use crate::format::{Binary, Standard};
 use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
+use crate::rounding::Integral;
 use crate::unpacked::{SCALE_LIMIT, Unpacked};
 
 /// The limbs of the integer part of a finite pair, below 2^1025, with the

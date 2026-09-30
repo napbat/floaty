@@ -7,12 +7,13 @@ use super::digits::{digit_count, power_of_ten};
 use super::round;
 use super::{DecimalLayout, Wide};
 use crate::env::{Env, Flags};
-use crate::exact::{Integral, Unrounded};
+use crate::exact::Unrounded;
 use crate::format::internal::Quotient;
 use crate::format::{DecimalEncoding, Storage, Width};
 use crate::integer::{Integer, ToInt};
 use crate::limbs::{self, Limbs, Widen};
 use crate::nan::{self, default_nan};
+use crate::rounding::Integral;
 use crate::unpacked::Unpacked;
 
 /// The largest adjusted exponent of a value that can fit a 512-bit integer:
