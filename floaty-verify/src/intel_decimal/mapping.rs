@@ -4,7 +4,7 @@
 use floaty::format::{Bid, Decimal, Standard};
 use floaty::{Env, Float, ToInt};
 
-use super::{Flags, Format, Integer};
+use super::{Flags, Format, Integer, Rounding};
 
 /// The flags that a library function reports, as floaty's flags map to them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub enum Value {
 }
 
 /// The rule for `minnum` and `maxnum` of operands that compare equal, which
-/// [`super::equal_operand_choice`] applies.
+/// [`equal_operand_choice`] applies.
 pub const EQUAL_OPERANDS: &str = "floaty's rule for operands that compare equal: -0 below +0, and \
      the members of a cohort in totalOrder";
 
@@ -83,4 +83,69 @@ where
         ToInt::OutOfRange { .. } | ToInt::Nan => integer.indefinite(),
     };
     (value, flags)
+}
+
+/// Returns the floaty behavior that follows the library in `rounding`.
+///
+/// - A two-operand function returns the first NaN operand, made quiet, and
+///   gives a signaling NaN no priority, as `bid64_add.c` shows.
+/// - `fma` checks its NaN operands before the invalid product `0 * inf`, so
+///   a quiet NaN addend gives that NaN without invalid, as `bid64_fma.c`
+///   shows. The order of its NaN operands is `y`, `z`, then `x`; floaty
+///   has no rule with that order.
+/// - A conversion to a binary format detects tininess after rounding, as
+///   every conversion line of `readtest.in` expects. A decimal result
+///   detects tininess before rounding, as floaty always does.
+/// - The default NaN is positive with a zero payload, as floaty's is.
+#[must_use]
+pub fn env(rounding: Rounding) -> floaty::Env {
+    use floaty::env::{InvalidProduct, NanPropagation, NanRule};
+    let nan = NanRule::new(NanPropagation::FirstOperand)
+        .with_invalid_product(InvalidProduct::YieldsToNan);
+    floaty::Env::IEEE
+        .with_rounding(rounding.into())
+        .with_nan(nan)
+}
+
+/// The minimum or the maximum operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Extremum {
+    /// `minNum`, `minimum`, or `minimumNumber`.
+    Minimum,
+    /// `maxNum`, `maximum`, or `maximumNumber`.
+    Maximum,
+}
+
+/// Returns the result that floaty gives the minimum or the maximum of
+/// two operands that compare equal.
+///
+/// IEEE 754-2008 section 5.3.1 lets `minNum` and `maxNum` return either
+/// operand when the operands compare equal, and `readtest.c` accepts either
+/// one. floaty fixes the choice: `-0` is below `+0`, and the members of
+/// a cohort order as `totalOrder` of IEEE 754-2019 section 5.10 orders them.
+/// The library's `totalOrder` decides the order here, and the result is the
+/// canonical encoding of the operand that it puts first for the minimum, or
+/// last for the maximum.
+///
+/// # Panics
+///
+/// Panics when [`Layout::canonical`](super::Layout::canonical) does not give
+/// a canonical encoding of the same datum, as the library reads it.
+#[must_use]
+pub fn equal_operand_choice<F: Format>(x: F::Bits, y: F::Bits, extremum: Extremum) -> F::Bits {
+    let x_first = F::total_order(x, y);
+    let chosen = match (extremum, x_first) {
+        (Extremum::Minimum, true) | (Extremum::Maximum, false) => x,
+        (Extremum::Minimum, false) | (Extremum::Maximum, true) => y,
+    };
+    let canonical = F::Bits::try_from(F::LAYOUT.canonical(chosen.into()))
+        .ok()
+        .expect("a canonical encoding fits the storage of its format");
+    assert!(
+        F::is_canonical(canonical)
+            && F::total_order(canonical, chosen)
+            && F::total_order(chosen, canonical),
+        "{canonical:#x} is the canonical encoding of {chosen:#x}"
+    );
+    canonical
 }
