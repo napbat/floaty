@@ -99,11 +99,7 @@ where
                 limbs::to_u128(&field)
             }
         };
-        if payload > Self::LARGEST_PAYLOAD {
-            0
-        } else {
-            payload
-        }
+        Self::canonical_payload(payload)
     }
 
     /// Converts `significand * 2^exponent`, correctly rounded.
@@ -119,7 +115,7 @@ where
         env: &Env,
     ) -> (Out, Flags) {
         let precision = i64::from(Self::PRECISION);
-        let (lowest, _) = Self::exponent_range();
+        let (lowest, _) = Self::TARGET.exponent_range();
         let top = i64::from(exponent) + i64::from(significand.bit_length()) - 1;
         let digits = radix::digits_estimate(top);
         let unit: Wide<Out> = power_of_ten(Self::PRECISION + 1);

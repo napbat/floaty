@@ -123,10 +123,14 @@ where
         exponent < Self::EMIN && coefficient < power_of_ten_u128(Self::EMIN.abs_diff(exponent))
     }
 
-    /// Returns the smallest and the largest exponent of a coefficient of the
-    /// format precision.
-    fn exponent_range() -> (i64, i64) {
-        Self::TARGET.exponents(Self::PRECISION)
+    /// Returns a NaN payload, or zero for a payload above `10^(p - 1) - 1`,
+    /// which is not canonical.
+    fn canonical_payload(payload: u128) -> u128 {
+        if payload > Self::LARGEST_PAYLOAD {
+            0
+        } else {
+            payload
+        }
     }
 
     /// Returns the class of an encoding.

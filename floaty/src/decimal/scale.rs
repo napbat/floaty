@@ -72,14 +72,12 @@ where
     /// Returns the least number above a number, with every digit, or `None`
     /// above the largest finite value.
     fn successor<L: Limbs>(value: Unpacked<L>) -> Option<Unpacked<L>> {
-        let (lowest, highest) = Self::exponent_range();
-        let narrow =
-            |exponent: i64| i32::try_from(exponent).expect("an exponent of the format fits an i32");
+        let (lowest, highest) = Self::TARGET.exponent_range();
         let (negative, coefficient, exponent) = match value {
             Unpacked::Zero { .. } => {
                 return Some(Unpacked::Finite {
                     negative: false,
-                    exponent: narrow(lowest),
+                    exponent: round::narrow(lowest),
                     significand: L::ZERO.with_bit(0),
                 });
             }
@@ -108,7 +106,7 @@ where
             if next.is_zero() {
                 return Some(Unpacked::Zero {
                     negative: true,
-                    exponent: narrow(exponent),
+                    exponent: round::narrow(exponent),
                 });
             }
             if digit_count(&next) < Self::PRECISION && exponent > lowest {
@@ -116,13 +114,13 @@ where
                 let full = limbs::multiply_small(coefficient, 10).sub(one);
                 return Some(Unpacked::Finite {
                     negative: true,
-                    exponent: narrow(exponent - 1),
+                    exponent: round::narrow(exponent - 1),
                     significand: full,
                 });
             }
             return Some(Unpacked::Finite {
                 negative: true,
-                exponent: narrow(exponent),
+                exponent: round::narrow(exponent),
                 significand: next,
             });
         }
@@ -136,7 +134,7 @@ where
         }
         Some(Unpacked::Finite {
             negative: false,
-            exponent: narrow(exponent),
+            exponent: round::narrow(exponent),
             significand: next,
         })
     }

@@ -182,7 +182,7 @@ where
     }
 
     /// Returns the minimum or the maximum of one family. The NaN cases follow
-    /// the binary engine. Equal values order by sign and then by exponent, so
+    /// `nan::min_max`. Equal values order by sign and then by exponent, so
     /// the maximum of 1.0 and 1.00 is 1.0.
     pub fn min_max<L: Widen>(left: L, right: L, operation: MinMax, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;

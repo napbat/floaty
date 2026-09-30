@@ -27,10 +27,17 @@ pub struct DecimalTarget {
 }
 
 impl DecimalTarget {
+    /// Returns the smallest and the largest exponent of a coefficient of the
+    /// format precision.
+    #[inline]
+    pub fn exponent_range(&self) -> (i64, i64) {
+        self.exponents(self.precision)
+    }
+
     /// Returns the smallest and the largest exponent of a coefficient of
     /// `precision` digits.
     #[inline]
-    pub fn exponents(&self, precision: u32) -> (i64, i64) {
+    fn exponents(&self, precision: u32) -> (i64, i64) {
         let digits = i64::from(precision);
         (
             i64::from(self.emin) - digits + 1,
@@ -50,7 +57,7 @@ pub trait DecimalRoundingTarget {
 
 /// Returns an exponent that fits an `i32`.
 #[inline]
-fn narrow(exponent: i64) -> i32 {
+pub(super) fn narrow(exponent: i64) -> i32 {
     i32::try_from(exponent).expect("a decimal exponent of a format fits an i32")
 }
 
@@ -78,7 +85,7 @@ pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
     let negative = value.negative;
     let precision = env.precision_within(target.precision);
     let (lowest, _) = target.exponents(precision);
-    let (full_lowest, _) = target.exponents(target.precision);
+    let (full_lowest, _) = target.exponent_range();
     let digits = digit_count(&value.significand);
     if digits == 0 {
         debug_assert!(!value.sticky, "a sticky bit needs a nonzero significand");
@@ -222,7 +229,7 @@ fn nearest_to_preferred<L: Limbs>(
     preferred: i32,
     target: &DecimalTarget,
 ) -> (L, i64) {
-    let (lowest, highest) = target.exponents(target.precision);
+    let (lowest, highest) = target.exponent_range();
     let preferred = i64::from(preferred).clamp(lowest, highest);
     match position.cmp(&preferred) {
         // Most coefficients end in a nonzero digit, so one test skips the
@@ -291,7 +298,7 @@ pub fn least_exponent<L: Limbs>(
     mut position: i64,
     target: &DecimalTarget,
 ) -> (L, i64) {
-    let (lowest, highest) = target.exponents(target.precision);
+    let (lowest, highest) = target.exponent_range();
     let appended;
     (kept, appended) = append_zeros(kept, digits, gap(position - lowest), target.precision);
     position -= i64::from(appended);
@@ -302,7 +309,7 @@ pub fn least_exponent<L: Limbs>(
 /// Returns a zero at `exponent`, or at the nearest exponent of a coefficient
 /// of the format precision.
 pub fn zero<L>(negative: bool, exponent: i64, target: &DecimalTarget) -> Unpacked<L> {
-    let (lowest, highest) = target.exponents(target.precision);
+    let (lowest, highest) = target.exponent_range();
     Unpacked::Zero {
         negative,
         exponent: narrow(exponent.clamp(lowest, highest)),
@@ -328,7 +335,7 @@ fn overflow<L: Limbs>(
 /// possible exponent: `(10^precision - 1) * 10^(p - precision)` at the largest
 /// exponent of a full coefficient.
 pub fn largest<L: Limbs>(negative: bool, precision: u32, target: &DecimalTarget) -> Unpacked<L> {
-    let (_, highest) = target.exponents(target.precision);
+    let (_, highest) = target.exponent_range();
     let significand =
         power_of_ten::<L>(target.precision).sub(power_of_ten::<L>(target.precision - precision));
     Unpacked::Finite {

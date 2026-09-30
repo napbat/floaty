@@ -33,11 +33,7 @@ where
             return Unpacked::Nan {
                 negative,
                 signaling: (bits >> Self::SIGNALING_BIT) & 1 == 1,
-                payload: limbs::from_u128(if payload > Self::LARGEST_PAYLOAD {
-                    0
-                } else {
-                    payload
-                }),
+                payload: limbs::from_u128(Self::canonical_payload(payload)),
             };
         }
         if leading == 0b11110 {

@@ -166,6 +166,20 @@ where
         }
     }
 
+    /// Returns the exact product of two zero or finite values, with the sign
+    /// `negative`.
+    #[inline]
+    fn product<L: Widen>(x: &Unpacked<L>, y: &Unpacked<L>, negative: bool) -> Term<Wide<L>> {
+        Term {
+            negative,
+            exponent: Self::exponent_of(x) + Self::exponent_of(y),
+            coefficient: limbs::multiply_fit(
+                Self::term::<L, Wide<L>>(x).coefficient,
+                Self::term::<L, Wide<L>>(y).coefficient,
+            ),
+        }
+    }
+
     /// Returns the exponent of a zero or a finite value.
     fn exponent_of<L>(value: &Unpacked<L>) -> i64 {
         match *value {
@@ -247,18 +261,14 @@ where
                 Self::exact(Unpacked::Infinity { negative }, flags)
             }
             _ => {
-                let exponent = Self::exponent_of(&x) + Self::exponent_of(&y);
-                let product = limbs::multiply_fit(
-                    Self::term::<L, Wide<L>>(&x).coefficient,
-                    Self::term::<L, Wide<L>>(&y).coefficient,
-                );
+                let product = Self::product(&x, &y, negative);
                 let value = Unrounded {
                     negative,
-                    exponent: narrow(exponent),
-                    significand: product,
+                    exponent: narrow(product.exponent),
+                    significand: product.coefficient,
                     sticky: false,
                 };
-                Self::finish(&value, exponent, behavior, flags)
+                Self::finish(&value, product.exponent, behavior, flags)
             }
         }
     }
@@ -274,7 +284,7 @@ where
             return Self::exact(value, flags | special);
         }
         let negative = x.is_negative() != y.is_negative();
-        let (lowest, _) = Self::exponent_range();
+        let (lowest, _) = Self::TARGET.exponent_range();
         match (x, y) {
             (Unpacked::Infinity { .. }, Unpacked::Infinity { .. })
             | (Unpacked::Zero { .. }, Unpacked::Zero { .. }) => {
@@ -393,17 +403,9 @@ where
             },
             Unpacked::Infinity { .. } => Self::exact(z, flags),
             _ => {
-                let product_exponent = Self::exponent_of(&x) + Self::exponent_of(&y);
-                let product = Term {
-                    negative: product_negative,
-                    exponent: product_exponent,
-                    coefficient: limbs::multiply_fit(
-                        Self::term::<L, Wide<L>>(&x).coefficient,
-                        Self::term::<L, Wide<L>>(&y).coefficient,
-                    ),
-                };
+                let product = Self::product(&x, &y, product_negative);
                 let addend = Self::term::<L, Wide<L>>(&z);
-                let preferred = product_exponent.min(addend.exponent);
+                let preferred = product.exponent.min(addend.exponent);
                 let zero_sign = env.zero_sum_sign(product.negative, addend.negative);
                 Self::finish_sum(
                     &sum(product, addend, Self::PRECISION),
