@@ -18,7 +18,7 @@ use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
 
 use super::{
-    Operand, Parameters, Read, Underflow, limit_precision, overflows_to_infinity, select_nan,
+    Nan, Operand, Parameters, Read, Underflow, limit_precision, overflows_to_infinity, select_nan,
     underflow_flags,
 };
 
@@ -375,11 +375,9 @@ fn overflow(
 /// infinity keeps its sign. A NaN gives the NaN that the NaN rule selects
 /// from it, by [`select_nan`]: the NaN with its sign, or the default NaN.
 /// The payload of the selected NaN follows [`decimal_payload`] from a field
-/// of `payload_bits` bits. A signaling NaN signals invalid.
-///
-/// # Panics
-///
-/// Panics for an unsupported source encoding.
+/// of `payload_bits` bits. A signaling NaN signals invalid. An unsupported
+/// x87 encoding gives the default NaN and signals invalid, as the
+/// documentation of `convert_with` states.
 #[must_use]
 pub fn convert<const N: usize>(
     source: &Operand<N>,
@@ -415,7 +413,13 @@ pub fn convert<const N: usize>(
             let negative = selected.negative;
             (DecimalValue::Nan { negative, payload }, flags)
         }
-        Read::Unsupported => panic!("the oracle has no rule for an unsupported encoding"),
+        Read::Unsupported => (
+            DecimalValue::Nan {
+                negative: Nan::default_of(env).negative,
+                payload: Integer::ZERO,
+            },
+            flags | Flags::INVALID,
+        ),
     }
 }
 

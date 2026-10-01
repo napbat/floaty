@@ -1,6 +1,8 @@
 //! Compares the conversions between the decimal formats and the binary
 //! formats that the Intel decimal library lacks with MPFR: binary16,
-//! bfloat16, TF32, the FP8 formats, binary256, and binary512.
+//! bfloat16, TF32, the FP8 formats, binary256, and binary512. binary32,
+//! binary64, x87 extended, and binary128 run here too, in the behaviors that
+//! the Intel library lacks, and with the unsupported x87 encodings.
 //!
 //! - To decimal: MPFR gives the leading digits of the exact binary value,
 //!   truncated and rounded away from zero, and the digit after them. The
@@ -31,10 +33,12 @@ use core::marker::PhantomData;
 use floaty::env::NanPropagation;
 use floaty::format::Standard;
 use floaty::{
-    BF16, Binary, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F16, F256,
-    F512, Flags, Float, TF32,
+    BF16, Binary, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, Env, Exact, F16, F32,
+    F64, F80, F128, F256, F512, Flags, Float, TF32,
 };
-use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs, to_u128};
+use floaty_verify::encodings::{
+    Layout, boundary_encodings, sample_encodings_u128, to_limbs, to_u128,
+};
 use floaty_verify::mpfr::decimal::{
     self, DecimalFormat, DecimalValue, FROM_DECIMAL_BEHAVIORS, TO_DECIMAL_BEHAVIORS, align,
 };
@@ -552,4 +556,46 @@ fn from_decimal128_to_binary() {
     let dpd: Vec<D128Dpd> = decimal_values!(D128Dpd, 389, 100, 0xD128D, DECIMAL128_SPECIALS);
     check_to_binary!(D128Dpd, dpd => TF32: Specials::Ieee);
     to_every_listed_format(&dpd, "D128Dpd");
+}
+
+/// binary32, binary64, x87 extended, and binary128 convert to every decimal
+/// format in every behavior. The Intel library tests run these conversions
+/// in five directions with its NaN rule only.
+#[test]
+fn from_the_standard_formats_to_decimal() {
+    let mut random = SplitMix64::new(0xDEC_0032);
+    let mut samples = |layout| sample_encodings_u128(layout, 1_500, &mut random);
+    let singles: Vec<F32> = samples(Layout::BINARY32)
+        .into_iter()
+        .map(|bits| F32::from_bits(u32::try_from(bits).expect("the format has 32 bits")))
+        .collect();
+    to_every_decimal_format(&singles, "F32");
+    let doubles: Vec<F64> = samples(Layout::BINARY64)
+        .into_iter()
+        .map(|bits| F64::from_bits(u64::try_from(bits).expect("the format has 64 bits")))
+        .collect();
+    to_every_decimal_format(&doubles, "F64");
+    let extended: Vec<F80> = samples(Layout::X87_EXTENDED)
+        .into_iter()
+        .map(F80::from_bits)
+        .collect();
+    to_every_decimal_format(&extended, "F80");
+    let quads: Vec<F128> = samples(Layout::BINARY128)
+        .into_iter()
+        .map(F128::from_bits)
+        .collect();
+    to_every_decimal_format(&quads, "F128");
+}
+
+/// Every decimal format converts to binary32, binary64, x87 extended, and
+/// binary128 in every behavior.
+#[test]
+fn from_decimal_to_the_standard_formats() {
+    let ieee = Specials::Ieee;
+    let d32: Vec<D32Dpd> = decimal_values!(D32Dpd, 3, 1_000, 0xD32F, DECIMAL32_SPECIALS);
+    check_to_binary!(D32Dpd, d32 => F32: ieee, F64: ieee, F80: ieee, F128: ieee);
+    let d64: Vec<D64Bid> = decimal_values!(D64Bid, 11, 1_000, 0xD64F, DECIMAL64_SPECIALS);
+    check_to_binary!(D64Bid, d64 => F32: ieee, F64: ieee, F80: ieee, F128: ieee);
+    let d128: Vec<D128Dpd> = decimal_values!(D128Dpd, 389, 300, 0xD128F, DECIMAL128_SPECIALS);
+    check_to_binary!(D128Dpd, d128 => F32: ieee, F64: ieee, F80: ieee, F128: ieee);
 }

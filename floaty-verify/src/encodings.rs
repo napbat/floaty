@@ -1,8 +1,8 @@
 //! The field layouts of the binary formats, and test encodings at the field
 //! boundaries of a layout and at the rounding edges.
 //!
-//! [`Layout`], [`boundary_encodings_u128`], [`rounding_edges`], and
-//! [`integer_edges`] build on every target. The functions on MPFR's integers
+//! [`Layout`], [`boundary_encodings_u128`], [`sample_encodings_u128`],
+//! [`rounding_edges`], and [`integer_edges`] build on every target. The functions on MPFR's integers
 //! build only for x86-64, with MPFR.
 
 use core::ops::RangeInclusive;
@@ -246,6 +246,40 @@ pub fn boundary_encodings_u128(layout: Layout) -> Vec<u128> {
             }
         }
     }
+    encodings
+}
+
+/// Returns the boundary encodings and `count` random encodings of a format
+/// of at most 128 bits. One random encoding in 16 gets the exponent field of
+/// the NaNs. Three x87 encodings in four get the integer bit of a canonical
+/// encoding, and the fourth keeps a random integer bit, which gives unnormals
+/// and pseudo-denormals.
+///
+/// # Panics
+///
+/// Panics when the format has more than 128 bits.
+#[must_use]
+pub fn sample_encodings_u128(layout: Layout, count: usize, random: &mut SplitMix64) -> Vec<u128> {
+    let mask = u128::MAX >> (128 - layout.width);
+    let fraction_bits = layout.fraction_bits();
+    let nan_field = u128::from(layout.largest_field()) << fraction_bits;
+    let mut encodings = boundary_encodings_u128(layout);
+    encodings.extend((0..count).map(|index| {
+        let mut bits = random.next_u128() & mask;
+        if index % 16 == 0 {
+            bits |= nan_field;
+        }
+        if layout.integer_bit == IntegerBit::Explicit && index % 4 != 0 {
+            let integer_bit = 1 << (fraction_bits - 1);
+            let field_is_zero = bits & (u128::from(layout.largest_field()) << fraction_bits) == 0;
+            bits = if field_is_zero {
+                bits & !integer_bit
+            } else {
+                bits | integer_bit
+            };
+        }
+        bits
+    }));
     encodings
 }
 
