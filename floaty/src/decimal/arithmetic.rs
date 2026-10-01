@@ -69,6 +69,7 @@ fn narrow(exponent: i64) -> i32 {
 /// its round digit is at `c` or above. The true sum and the cut sum then lie
 /// strictly between the same two consecutive multiples of `10^c`, so they
 /// round alike.
+#[inline]
 fn sum<L: Limbs>(first: Term<L>, second: Term<L>, precision: u32) -> Sum<L> {
     let (dominant, dominant_top, other, other_top) = match (first.top(), second.top()) {
         (None, None) => return Sum::Zero,
@@ -94,7 +95,9 @@ fn sum<L: Limbs>(first: Term<L>, second: Term<L>, precision: u32) -> Sum<L> {
     let dominant_digits = scale(&dominant);
     let other_digits = if jam {
         let shift = u32::try_from(cut - other.exponent).unwrap_or(u32::MAX);
-        let (kept, lost) = divide_by_power(other.coefficient, shift);
+        let count = u32::try_from(other_top - other.exponent + 1)
+            .expect("a nonzero coefficient has a positive digit count");
+        let (kept, lost) = divide_by_power(other.coefficient, count, shift);
         limbs::multiply_small(kept, 10).add(limbs::from_u128(u128::from(lost)))
     } else {
         scale(&other)
@@ -131,14 +134,26 @@ const fn holds_sums<L: Limbs>(precision: u32) -> bool {
     L::BITS >= 128 || bound >> L::BITS == 0
 }
 
-/// Divides by `10^exponent`. Returns the quotient and `true` when the
-/// remainder is not zero.
-fn divide_by_power<L: Limbs>(value: L, exponent: u32) -> (L, bool) {
-    if exponent > digit_count(&value) {
+/// Divides a value of `digits` digits by `10^exponent`. Returns the quotient
+/// and `true` when the remainder is not zero.
+///
+/// Each step divides by at most 10^19 with a reciprocal, which is faster than
+/// a hardware division.
+fn divide_by_power<L: Limbs>(value: L, digits: u32, exponent: u32) -> (L, bool) {
+    if exponent > digits {
         return (L::ZERO, !value.is_zero());
     }
-    let (quotient, remainder) = limbs::divide(value, power_of_ten(exponent));
-    (quotient, !remainder.is_zero())
+    let mut quotient = value;
+    let mut lost = false;
+    let mut left = exponent;
+    while left > 0 {
+        let chunk = left.min(19);
+        let (next, remainder) = limbs::divide_small(quotient, digits::power_divisor(chunk));
+        quotient = next;
+        lost |= remainder != 0;
+        left -= chunk;
+    }
+    (quotient, lost)
 }
 
 impl<Enc: DecimalEncoding, const W: usize> DecimalLayout<Enc, W>
@@ -173,10 +188,9 @@ where
         Term {
             negative,
             exponent: Self::exponent_of(x) + Self::exponent_of(y),
-            coefficient: limbs::multiply_fit(
-                Self::term::<L, Wide<L>>(x).coefficient,
-                Self::term::<L, Wide<L>>(y).coefficient,
-            ),
+            coefficient: Self::term::<L, L>(x)
+                .coefficient
+                .widening_mul(Self::term::<L, L>(y).coefficient),
         }
     }
 

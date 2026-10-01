@@ -100,18 +100,30 @@ pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
     // IEEE 754 detects decimal tininess before rounding.
     let tiny = top < i64::from(target.emin);
     let position = exponent.max(top - i64::from(precision) + 1).max(lowest);
-    let (kept, dropped) = cut::<In, Out>(value, position - exponent, digits);
+    let drop = position - exponent;
+    let (kept, dropped) = cut::<In, Out>(value, drop, digits);
+    // The kept part has the digits above the cut, at most `precision`.
+    let mut kept_digits = u32::try_from(i64::from(digits) - drop).unwrap_or(0);
     let inexact = dropped.is_inexact();
     let step = rounding::rounds_up(env.rounding, negative, dropped, last_digit(&kept), 10);
     let (mut kept, mut position) = (kept, position);
+    // An increment adds a digit only when the carry reaches 10^kept_digits.
     if step {
         kept = kept.increment();
-        if digit_count(&kept) > precision {
-            // The carry reached 10^precision.
+        if kept.compare(&power_of_ten(kept_digits)).is_eq() {
+            kept_digits += 1;
+        }
+        if kept_digits > precision {
             kept = limbs::divide_small(kept, digits::power_divisor(1)).0;
+            kept_digits = precision;
             position += 1;
         }
     }
+    debug_assert_eq!(
+        kept_digits,
+        digit_count(&kept),
+        "the count follows the kept digits"
+    );
     let zero = Unpacked::Zero {
         negative,
         exponent: narrow(full_lowest),
@@ -126,14 +138,13 @@ pub fn round<In: Limbs, Out: Limbs, F: DecimalRoundingTarget, B: Behavior>(
     if kept.is_zero() {
         return (zero, flags);
     }
-    let digits = digit_count(&kept);
-    if position + i64::from(digits) - 1 > i64::from(target.emax) {
+    if position + i64::from(kept_digits) - 1 > i64::from(target.emax) {
         return overflow(negative, precision, target, env);
     }
     let (kept, position) = if inexact {
-        least_exponent(kept, digits, position, target)
+        least_exponent(kept, kept_digits, position, target)
     } else {
-        nearest_to_preferred(kept, digits, position, preferred, target)
+        nearest_to_preferred(kept, kept_digits, position, preferred, target)
     };
     let finite = Unpacked::Finite {
         negative,
@@ -222,6 +233,7 @@ pub fn round_digits<In: Limbs, Out: Limbs>(
 /// while the coefficient has room. An exponent above the range of the format
 /// clamps down by trailing zeros. The coefficient has room, because the value
 /// is below the overflow bound.
+#[inline]
 fn nearest_to_preferred<L: Limbs>(
     mut kept: L,
     digits: u32,
@@ -292,6 +304,7 @@ fn append_zeros<L: Limbs>(kept: L, digits: u32, limit: u32, precision: u32) -> (
 
 /// Adds trailing zeros to a nonzero coefficient, down to the least possible
 /// exponent. A precision limit leaves fewer digits than the format holds.
+#[inline]
 pub fn least_exponent<L: Limbs>(
     mut kept: L,
     digits: u32,

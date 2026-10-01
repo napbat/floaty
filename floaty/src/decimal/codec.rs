@@ -12,6 +12,16 @@ use crate::unpacked::Unpacked;
 /// The weight of the second group of six declets, 10^18.
 const GROUP_WEIGHT: u128 = power_of_ten_u128(18);
 
+/// The weight of each declet in a group of six: 1000^0 to 1000^5.
+const GROUP_DECLET_WEIGHTS: [u64; 6] = [
+    1,
+    1_000,
+    1_000_000,
+    1_000_000_000,
+    1_000_000_000_000,
+    1_000_000_000_000_000,
+];
+
 impl<Enc: DecimalEncoding, const W: usize> DecimalLayout<Enc, W>
 where
     Width<W>: Storage,
@@ -64,14 +74,19 @@ where
             DecimalKind::Bid => trailing,
             DecimalKind::Dpd => {
                 // Six declets hold 18 digits, which fit a u64. One 128-bit
-                // multiplication joins the two groups of declets.
-                let group = |declets: core::ops::Range<u32>| {
-                    declets.rev().fold(0, |value, index| {
-                        let declet = Self::field(trailing, 10 * index, 10);
-                        let digits =
-                            declet::VALUES[usize::try_from(declet).expect("a declet fits a usize")];
-                        value * 1000 + u64::from(digits)
-                    })
+                // multiplication joins the two groups of declets. The
+                // products of a group do not depend on each other, so they
+                // form no chain of multiplications.
+                let group = |declets: core::ops::Range<u32>| -> u64 {
+                    declets
+                        .zip(GROUP_DECLET_WEIGHTS)
+                        .map(|(index, weight)| {
+                            let declet = Self::field(trailing, 10 * index, 10);
+                            let digits = declet::VALUES
+                                [usize::try_from(declet).expect("a declet fits a usize")];
+                            u64::from(digits) * weight
+                        })
+                        .sum()
                 };
                 let split = Self::DECLETS.min(6);
                 u128::from(group(split..Self::DECLETS)) * GROUP_WEIGHT + u128::from(group(0..split))
@@ -126,34 +141,41 @@ where
     /// Returns the digit of `value` above its declets, and the declets as a
     /// trailing significand field. `value` is below `10^(3 * declets + 1)`.
     fn declets(value: u128) -> (u128, u128) {
-        // A u64 holds six groups of three digits, and divides by 1000 with a
-        // multiplication. A value of at least 10^18 takes one division by
-        // 10^18, which splits it into two such parts.
+        // A u64 holds six groups of three digits. A value of at least 10^18
+        // takes one division by 10^18, which splits it into two such parts.
+        // The high limb of a value of at most 34 digits is below 10^18, so
+        // one step of the division gives the quotient.
         let (high, low) = match u64::try_from(value) {
             Ok(low) if value < GROUP_WEIGHT => (0, low),
             _ => {
-                let ([high, above], low) =
-                    limbs::divide_small(limbs::split_u128(value), power_divisor(18));
-                debug_assert!(above == 0, "the value has at most 34 digits");
-                (high, low)
+                let [low, high] = limbs::split_u128(value);
+                debug_assert!(
+                    u128::from(high) < GROUP_WEIGHT,
+                    "the value has at most 34 digits"
+                );
+                power_divisor(18).divide_limb(high, low)
             }
         };
-        let mut groups = [low, high].into_iter().flat_map(|part| {
-            (0..6).scan(part, |rest, _| {
-                let group = *rest % 1000;
-                *rest /= 1000;
-                Some(group)
-            })
-        });
+        // Each part splits into two halves of nine digits, which fit a u32.
+        // Each group divides its half by a constant, which compiles to a
+        // 32-bit multiplication, so the groups do not wait for each other.
+        let split = |part: u64| {
+            let groups = |half: u64| {
+                let half = u32::try_from(half).expect("nine digits fit a u32");
+                [half % 1000, half / 1000 % 1000, half / 1_000_000]
+            };
+            let (low, high) = (groups(part % 1_000_000_000), groups(part / 1_000_000_000));
+            [low[0], low[1], low[2], high[0], high[1], high[2]]
+        };
+        let parts = [split(low), split(high)];
+        let groups = parts.as_flattened();
         let field = (0..Self::DECLETS)
-            .zip(&mut groups)
-            .fold(0, |field, (index, group)| {
+            .zip(groups)
+            .fold(0, |field, (index, &group)| {
                 let declet = declet::DECLETS[usize::try_from(group).expect("a group fits a usize")];
                 field | (u128::from(declet) << (10 * index))
             });
-        let digit = groups
-            .next()
-            .expect("two parts of six groups hold every digit");
+        let digit = groups[usize::try_from(Self::DECLETS).expect("a declet count fits a usize")];
         (u128::from(digit), field)
     }
 

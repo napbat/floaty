@@ -1,7 +1,7 @@
 //! Decimal digits of binary integers: powers of 10, digit counts, and the
 //! last digit.
 
-use crate::limbs::{self, Divisor, Limbs};
+use crate::limbs::{self, Divisor, Limbs, high_u64, low_u64};
 
 /// The powers of 10 that fit a `u128`: 10^0 to 10^38.
 const POWERS: [u128; 39] = {
@@ -10,6 +10,56 @@ const POWERS: [u128; 39] = {
     while index < 39 {
         table[index] = table[index - 1] * 10;
         index += 1;
+    }
+    table
+};
+
+/// The powers of 10 from 10^39 to 10^77 in four limbs, low limb first.
+/// 10^77 is the largest power of 10 below 2^256.
+const WIDE_POWERS: [[u64; 4]; 39] = {
+    let mut table = [[0; 4]; 39];
+    let mut power = [low_u64(POWERS[38]), high_u64(POWERS[38]), 0, 0];
+    let mut index = 0;
+    while index < 39 {
+        // Multiplies `power` by 10. `u128::from` is not callable in a
+        // constant; the casts widen.
+        let mut carry = 0;
+        let mut limb = 0;
+        while limb < 4 {
+            let product = power[limb] as u128 * 10 + carry as u128;
+            power[limb] = low_u64(product);
+            carry = high_u64(product);
+            limb += 1;
+        }
+        table[index] = power;
+        index += 1;
+    }
+    table
+};
+
+/// For each bit length from 0 to 128: the digit count of the smallest value
+/// of that length, and the power of 10 that adds a digit, or 0 when no value
+/// of that length reaches the next power.
+const BIT_LENGTH_DIGITS: [(u32, u128); 129] = {
+    let mut table = [(0, 0); 129];
+    let mut bits = 1;
+    while bits <= 128 {
+        // The smallest value of the length is 2^(bits - 1).
+        let smallest = 1_u128 << (bits - 1);
+        // `usize::from` is not callable in a constant; the casts widen.
+        let mut count = 1_u32;
+        while count < 39 && POWERS[count as usize] <= smallest {
+            count += 1;
+        }
+        // The power at `count` is above `smallest`. A value of the length
+        // reaches it when the power has the same length.
+        let threshold = if count < 39 && (bits == 128 || POWERS[count as usize] >> bits == 0) {
+            POWERS[count as usize]
+        } else {
+            0
+        };
+        table[bits] = (count, threshold);
+        bits += 1;
     }
     table
 };
@@ -71,8 +121,11 @@ const LOG10_2: u64 = 0x4D10_4D42_7DE7_FBCC;
 /// Returns the number of decimal digits of `value`, or 0 for zero.
 pub fn digit_count<L: Limbs>(value: &L) -> u32 {
     let bits = value.bit_length();
-    if bits == 0 {
-        return 0;
+    if bits <= 128 {
+        let (count, threshold) =
+            BIT_LENGTH_DIGITS[usize::try_from(bits).expect("a bit length fits a usize")];
+        let reaches = threshold != 0 && limbs::to_u128(value) >= threshold;
+        return count + u32::from(reaches);
     }
     // With n = bits - 1, the value has floor(n * log10(2)) + 1 digits, or
     // one more. `LOG10_2` is below log10(2) by less than 2^-64, so the
@@ -81,13 +134,14 @@ pub fn digit_count<L: Limbs>(value: &L) -> u32 {
     // the count is `estimate` or `estimate + 1` for every u32 bit count.
     let product = u128::from(bits - 1) * u128::from(LOG10_2);
     let estimate = u32::try_from((product >> 64) + 1).expect("a digit count fits a u32");
-    if bits <= 128 {
-        // The estimate is at most 39 here. The table ends at 10^38, and a
-        // u128 is below 10^39, so a missing entry means `estimate` digits.
-        let index = usize::try_from(estimate).expect("a digit count fits a usize");
-        let reaches = POWERS
-            .get(index)
-            .is_some_and(|&power| limbs::to_u128(value) >= power);
+    if bits <= 256 {
+        // The estimate is from 39 to 77 here, so the table holds its power.
+        let index = usize::try_from(estimate - 39).expect("a digit count fits a usize");
+        let reaches = (0..4)
+            .rev()
+            .map(|limb| value.limb(limb))
+            .cmp(WIDE_POWERS[index].iter().rev().copied())
+            .is_ge();
         return estimate + u32::from(reaches);
     }
     // value >= 10^estimate exactly when value / 10 >= 10^(estimate - 1), a
@@ -139,11 +193,19 @@ mod tests {
 
     #[test]
     fn digit_counts_change_at_each_power_of_ten() {
-        for exponent in 0..=40 {
-            let power: [u64; 4] = power_of_ten(exponent);
-            let below = power.sub([1, 0, 0, 0]);
+        // Eight limbs reach the division past 256 bits, four limbs the table
+        // of wide powers, and two limbs the table of `u128` powers.
+        let one = [1, 0, 0, 0, 0, 0, 0, 0];
+        for exponent in 0..=100 {
+            let power: [u64; 8] = power_of_ten(exponent);
+            let below = power.sub(one);
             assert_eq!(digit_count(&power), exponent + 1, "10^{exponent}");
             assert_eq!(digit_count(&below), exponent, "10^{exponent} - 1");
+            if power.bit_length() <= 256 {
+                let four: [u64; 4] = power.resize();
+                assert_eq!(digit_count(&four), exponent + 1, "10^{exponent}");
+                assert_eq!(digit_count(&below.resize::<[u64; 4]>()), exponent);
+            }
             if power.bit_length() <= 128 {
                 let narrow: [u64; 2] = power.resize();
                 assert_eq!(digit_count(&narrow), exponent + 1, "10^{exponent}");
@@ -153,5 +215,29 @@ mod tests {
         // 2^128 - 1 and 2^128 have 39 digits, on each side of the u128 range.
         assert_eq!(digit_count(&[u64::MAX, u64::MAX]), 39);
         assert_eq!(digit_count(&[0_u64, 0, 1, 0]), 39);
+        // 2^256 - 1 and 2^256 have 78 digits, on each side of the wide table.
+        assert_eq!(digit_count(&[u64::MAX; 4]), 78);
+        assert_eq!(digit_count(&[0_u64, 0, 0, 0, 1, 0, 0, 0]), 78);
+    }
+
+    #[test]
+    fn digit_counts_hold_at_both_ends_of_each_bit_length() {
+        // Counts the digits by repeated division, independent of the tables.
+        let reference = |mut value: u128| {
+            let mut count = 0;
+            while value != 0 {
+                value /= 10;
+                count += 1;
+            }
+            count
+        };
+        for bits in 1..=128 {
+            let smallest = 1_u128 << (bits - 1);
+            let largest = smallest | (smallest - 1);
+            for value in [smallest, largest] {
+                let limbs: [u64; 2] = crate::limbs::from_u128(value);
+                assert_eq!(digit_count(&limbs), reference(value), "{value}");
+            }
+        }
     }
 }

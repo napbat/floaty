@@ -497,13 +497,13 @@ const LARGE_BUFFER: usize = 257;
 /// with a cast, as its name states.
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
-const fn low_u64(value: u128) -> u64 {
+pub const fn low_u64(value: u128) -> u64 {
     value as u64
 }
 
 /// Returns the high 64 bits of a `u128`.
 #[inline]
-const fn high_u64(value: u128) -> u64 {
+pub const fn high_u64(value: u128) -> u64 {
     low_u64(value >> 64)
 }
 
@@ -670,7 +670,7 @@ impl Divisor {
     /// Divides `rest * 2^64 + limb` by the divisor. `rest` must be below the
     /// divisor. Returns the quotient and the remainder.
     #[inline]
-    fn divide_limb(self, rest: u64, limb: u64) -> (u64, u64) {
+    pub fn divide_limb(self, rest: u64, limb: u64) -> (u64, u64) {
         // The shift of both the value and the divisor keeps the quotient and
         // shifts the remainder.
         let (high, low) = if self.shift == 0 {
@@ -688,13 +688,20 @@ impl Divisor {
 
 /// Divides `value` by a divisor of one limb. Returns the quotient and the
 /// remainder. The division needs no buffer, so it takes a value of any width.
+#[inline]
 pub fn divide_small<L: Limbs>(value: L, divisor: Divisor) -> (L, u64) {
     let mut quotient = L::ZERO;
     let mut rest = 0_u64;
+    let count = usize::try_from(L::BITS / 64).expect("a limb count fits a usize");
     // The remainder passes from each limb to the next lower one, so the loop
-    // indexes.
-    for index in (0..limb_count(&value)).rev() {
-        let (digit, remainder) = divisor.divide_limb(rest, value.limb(index));
+    // indexes. A fixed count lets the compiler keep the limbs in registers,
+    // and the zero limbs at the top skip their division.
+    for index in (0..count).rev() {
+        let limb = value.limb(index);
+        if rest == 0 && limb == 0 {
+            continue;
+        }
+        let (digit, remainder) = divisor.divide_limb(rest, limb);
         quotient = quotient.with_limb(index, digit);
         rest = remainder;
     }
