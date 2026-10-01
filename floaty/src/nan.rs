@@ -86,6 +86,35 @@ pub fn propagate<L: Limbs>(
     select(&[first, second], env)
 }
 
+/// Returns the NaN that the rule selects from any number of operands in
+/// order, made quiet, as [`propagate`] does from two. At least one operand
+/// is a NaN. A signaling NaN operand signals invalid.
+pub fn select_all<L: Limbs>(
+    operands: impl Iterator<Item = Unpacked<L>>,
+    env: &Env,
+) -> (Unpacked<L>, Flags) {
+    let mut flags = Flags::NONE;
+    let propagation = env.nan.propagation;
+    let mut chosen: Option<Unpacked<L>> = None;
+    for value in operands.filter(Unpacked::is_nan) {
+        if value.is_signaling() {
+            flags = Flags::INVALID;
+        }
+        chosen = Some(match chosen {
+            Some(earlier) if propagation != NanPropagation::DefaultNan => {
+                *choose(&earlier, &value, propagation)
+            }
+            Some(earlier) => earlier,
+            None => value,
+        });
+    }
+    let chosen = chosen.expect("an operand is a NaN");
+    if propagation == NanPropagation::DefaultNan {
+        return (default_nan(env), flags);
+    }
+    (chosen.quiet(), flags)
+}
+
 /// Returns the NaN of a fused multiply-add with a NaN factor, made quiet, in
 /// the order of [`FusedNanOrder`]. A signaling NaN operand signals invalid.
 pub fn fused<L: Limbs>(

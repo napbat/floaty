@@ -10,6 +10,7 @@ mod convert;
 mod from_decimal;
 mod integral;
 mod payload;
+mod reduction;
 mod remainder;
 mod scale;
 
@@ -22,6 +23,8 @@ use crate::host::Host;
 use crate::integer::{Integer, ToInt};
 use crate::limbs::Limbs;
 use crate::unpacked::{Number, Unpacked};
+
+pub(crate) use self::reduction::{Factor, Summand};
 
 /// The layout constants and codec of `Binary<E, Enc>` at width `W`.
 pub struct Layout<const E: u32, Enc, const W: usize> {

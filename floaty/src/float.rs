@@ -18,9 +18,11 @@ mod binary;
 mod compare;
 mod decimal;
 mod integer;
+mod reduction;
 
 pub use self::binary::Augmented;
 pub(crate) use self::integer::from_host_integer;
+pub use self::reduction::Scaled;
 
 /// A floating-point value of standard `S` at width `W`, with default mode `M`.
 ///

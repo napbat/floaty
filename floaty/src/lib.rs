@@ -63,7 +63,7 @@ pub use float::{
     Augmented, BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, F4E2M1Fn,
     F6E2M3Fn, F6E3M2Fn, F8E3M4, F8E4M3, F8E4M3B11Fnuz, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F8E5M2Fnuz,
     F16, F32, F64, F80, F128, F160, F192, F224, F256, F288, F320, F352, F384, F416, F448, F480,
-    F512, Float, FloatType, TF32,
+    F512, Float, FloatType, Scaled, TF32,
 };
 pub use format::{B11Fnuz, Bid, Binary, Decimal, Dpd, Finite, Fnuz, Ieee, NoInf, X87};
 pub use integer::{Int, Integer, ToInt, UInt};
