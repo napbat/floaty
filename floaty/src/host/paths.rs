@@ -465,10 +465,16 @@ pub fn min_max<S: Standard<W>, const W: usize>(
 
 /// The largest difference of the exponent fields of a dividend and a divisor
 /// that the remainder path takes: ten steps of `FPREM1`, each of which
-/// reduces the difference by up to 63. Each step takes about 12 nanoseconds,
-/// and the engine grows more slowly. At a difference of 700, binary64 took 175
-/// nanoseconds on the path and 181 in the engine, and at 1,000, 252 and 182.
+/// reduces the difference by up to 63. Each step takes about 16 nanoseconds,
+/// and the engine grows more slowly. At a difference of 576, x87 extended took
+/// 151 nanoseconds on the path and 264 in the engine.
 const REMAINDER_REACH: u64 = 630;
+
+/// The reach of the remainder path for binary64: five steps of `FPREM1`. The
+/// engine reduces a binary64 modulus with its reciprocal, so it catches up
+/// sooner. At a difference of 320, binary64 took 85 nanoseconds on the path
+/// and 88 in the engine, and at 512, 135 on the path and 93 in the engine.
+const DOUBLE_REMAINDER_REACH: u64 = 315;
 
 /// Returns `true` when the remainder path takes a dividend and a divisor
 /// with the exponent fields `dividend` and `divisor`, in a format of
@@ -479,12 +485,11 @@ const REMAINDER_REACH: u64 = 630;
 /// divisor, so the remainder is a multiple of half the unit in the last place
 /// of the divisor. When the quotient is zero, the remainder is the dividend.
 /// So the remainder can be subnormal only when the exponent field of the
-/// divisor is at most the precision.
+/// divisor is at most the precision. A difference above `reach` also goes to
+/// the engine.
 #[inline]
-fn remainder_fits(dividend: u64, divisor: u64, precision: u32) -> bool {
-    dividend != 0
-        && divisor > u64::from(precision)
-        && dividend.saturating_sub(divisor) <= REMAINDER_REACH
+fn remainder_fits(dividend: u64, divisor: u64, precision: u32, reach: u64) -> bool {
+    dividend != 0 && divisor > u64::from(precision) && dividend.saturating_sub(divisor) <= reach
 }
 
 /// Returns the remainder of two binary16 or bfloat16 values, widened to the
@@ -495,7 +500,8 @@ fn remainder_fits(dividend: u64, divisor: u64, precision: u32) -> bool {
 #[inline]
 fn widened_remainder(dividend: u32, divisor: u32) -> Option<f32> {
     let field = |bits: u32| u64::from((bits >> 23) & 0xFF);
-    if !remainder_fits(field(dividend), field(divisor), Host::Single.precision()) {
+    let precision = Host::Single.precision();
+    if !remainder_fits(field(dividend), field(divisor), precision, REMAINDER_REACH) {
         return None;
     }
     environment::x87_remainder_single(dividend, divisor).map(f32::from_bits)
@@ -531,7 +537,8 @@ pub fn remainder<S: Standard<W>, const W: usize>(
             bfloat_encoding::<S, W>(widened_remainder(a.to_bits(), b.to_bits())?)
         }
         Host::Single => {
-            if !remainder_fits((x >> 23) & 0xFF, (y >> 23) & 0xFF, S::PRECISION) {
+            let (a, b) = ((x >> 23) & 0xFF, (y >> 23) & 0xFF);
+            if !remainder_fits(a, b, S::PRECISION, REMAINDER_REACH) {
                 return None;
             }
             let bits = |value: u64| u32::try_from(value).expect("a binary32 encoding has 32 bits");
@@ -539,14 +546,15 @@ pub fn remainder<S: Standard<W>, const W: usize>(
             encoding::<S, W>(u64::from(result), false)
         }
         Host::Double => {
-            if !remainder_fits((x >> 52) & 0x7FF, (y >> 52) & 0x7FF, S::PRECISION) {
+            let (a, b) = ((x >> 52) & 0x7FF, (y >> 52) & 0x7FF);
+            if !remainder_fits(a, b, S::PRECISION, DOUBLE_REMAINDER_REACH) {
                 return None;
             }
             encoding::<S, W>(environment::x87_remainder_double(x, y)?, false)
         }
         Host::Extended => {
             let (x, y) = (extended::<S, W>(dividend), extended::<S, W>(divisor));
-            if !remainder_fits(x[1] & 0x7FFF, y[1] & 0x7FFF, S::PRECISION) {
+            if !remainder_fits(x[1] & 0x7FFF, y[1] & 0x7FFF, S::PRECISION, REMAINDER_REACH) {
                 return None;
             }
             environment::x87_remainder(&x, &y).map(extended_encoding::<S, W>)

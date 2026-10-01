@@ -7,7 +7,7 @@ use crate::env::{Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::internal::Quotient;
 use crate::format::{Encoding, Storage, Width};
-use crate::limbs::{self, Limbs, Widen};
+use crate::limbs::{self, Divisor, Limbs, Widen};
 use crate::nan::{self, default_nan};
 use crate::unpacked::Unpacked;
 
@@ -98,11 +98,7 @@ where
             // Twice the divisor has PRECISION + 1 bits, and every storage type
             // holds PRECISION + 2 bits.
             let modulus = divisor_significand.shl(1);
-            let residue = multiply_mod(
-                limbs::divide(significand, modulus).1,
-                power_of_two_mod(steps, modulus),
-                modulus,
-            );
+            let residue = Self::shifted_mod(significand, steps, modulus);
             let odd = residue.compare(&divisor_significand) != Ordering::Less;
             let rest = if odd {
                 residue.sub(divisor_significand)
@@ -149,6 +145,27 @@ where
         Self::exact_remainder(value, env, flags)
     }
 
+    /// Returns `value * 2^exponent mod modulus`. The modulus is twice a
+    /// divisor significand, so it has at most `PRECISION + 1` bits.
+    ///
+    /// The product of two residues needs the library division of 128 bits
+    /// when the precision has 32 to 62 bits, as in binary64. Such a modulus
+    /// reduces each product with its reciprocal instead, when the exponent
+    /// needs a few squarings. It cut the remainder of binary64 operands
+    /// `EMAX / 2` apart from 172 to 90 ns. A narrower precision divides
+    /// natively, which is faster than a reciprocal.
+    fn shifted_mod<L: Widen>(value: L, exponent: u32, modulus: L) -> L {
+        if L::BITS == 64 && Self::PRECISION >= 32 && exponent >= RECIPROCAL_EXPONENT {
+            let shifted = shifted_mod_limb(value.limb(0), exponent, modulus.limb(0));
+            return L::ZERO.with_limb(0, shifted);
+        }
+        multiply_mod(
+            limbs::divide(value, modulus).1,
+            power_of_two_mod(exponent, modulus),
+            modulus,
+        )
+    }
+
     /// Encodes a nonzero remainder, which the format holds exactly. The
     /// rounding routine gives the canonical form and reports `TINY` for a
     /// subnormal remainder.
@@ -172,6 +189,31 @@ where
 fn multiply_mod<L: Widen>(left: L, right: L, modulus: L) -> L {
     let (_, rest) = limbs::divide(left.widening_mul(right), modulus.resize::<L::Double>());
     rest.resize()
+}
+
+/// The smallest exponent that takes four squarings. From there on, the
+/// reciprocal of a modulus of one limb repays its cost. Below it, the
+/// remainder divides at each step.
+const RECIPROCAL_EXPONENT: u32 = 8;
+
+/// Returns `value * 2^exponent mod modulus` for a modulus of one limb, with
+/// each product reduced by the reciprocal of the modulus. Twice a residue
+/// fits a limb.
+fn shifted_mod_limb(value: u64, exponent: u32, modulus: u64) -> u64 {
+    let divisor = Divisor::new(modulus);
+    let multiply =
+        |left: [u64; 1], right: [u64; 1]| [multiply_mod_limb(left[0], right[0], divisor)];
+    let power = power_of_two(exponent, [modulus], multiply);
+    multiply_mod_limb(divisor.divide_limb(0, value).1, power[0], divisor)
+}
+
+/// Returns `left * right mod divisor` for factors below a divisor of one
+/// limb. The product is below the divisor times 2^64, so one step of the
+/// division by the reciprocal gives the remainder, without the library
+/// division of 128 bits.
+fn multiply_mod_limb(left: u64, right: u64, divisor: Divisor) -> u64 {
+    let [low, high] = limbs::split_u128(u128::from(left) * u128::from(right));
+    divisor.divide_limb(high, low).1
 }
 
 /// Barrett's reduction modulo a fixed modulus of `width` bits: the quotient
@@ -261,10 +303,10 @@ fn power_of_two<L: Widen>(exponent: u32, modulus: L, multiply: impl Fn(L, L) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{Barrett, multiply_mod};
+    use super::{Barrett, multiply_mod, multiply_mod_limb};
     use crate::env::{Env, Flags};
     use crate::float::F64;
-    use crate::limbs::{self, Limbs};
+    use crate::limbs::{self, Divisor, Limbs};
 
     fn remainder(left: u64, right: u64) -> (u64, Flags) {
         let (value, flags) = F64::from_bits(left).remainder_with(F64::from_bits(right), Env::IEEE);
@@ -327,6 +369,38 @@ mod tests {
         assert_eq!(remainder(FIVE, 0), (0x7FF8_0000_0000_0000, Flags::INVALID));
         // The smallest subnormal is its own remainder by 1.
         assert_eq!(remainder(1, ONE), (1, Flags::DENORMAL_INPUT | Flags::TINY));
+    }
+
+    #[test]
+    fn reciprocal_products_match_the_division() {
+        let mut state = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        // The moduli of 33 to 64 bits at both ends, one above a power of two,
+        // and random moduli of each width.
+        let fixed = [(1_u64 << 32) + 1, u64::MAX, (1 << 63) | 1, (1 << 53) | 1];
+        let random: [u64; 32] = core::array::from_fn(|index| {
+            let width = 33 + u32::try_from(index).expect("an index fits a u32");
+            (next() >> (64 - width)) | (1 << (width - 1))
+        });
+        for modulus in fixed.into_iter().chain(random) {
+            let divisor = Divisor::new(modulus);
+            let edges = [0, 1, modulus - 1, modulus - 2];
+            let lefts: [u64; 40] = core::array::from_fn(|_| next() % modulus);
+            for left in edges.into_iter().chain(lefts) {
+                for right in edges.into_iter().chain(lefts.into_iter().take(8)) {
+                    assert_eq!(
+                        [multiply_mod_limb(left, right, divisor)],
+                        multiply_mod([left], [right], [modulus]),
+                        "{left:x} * {right:x} mod {modulus:x}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

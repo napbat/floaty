@@ -9,8 +9,9 @@ use super::operands::{close_pairs, every_16_bit_pair, random_pairs};
 
 #[test]
 fn remainders_give_the_default_mode_results() {
-    // The x87 path takes operands whose exponents differ by up to 630, and
-    // the pairs reach past that bound.
+    // The x87 path takes operands whose exponents differ by up to 315 in
+    // binary64 and by up to 630 in the other formats, and the pairs reach
+    // past those bounds.
     let mut random = SplitMix64::new(0xE3E3);
     let mut singles = close_pairs(&mut random, Layout::BINARY32, 300);
     singles.extend(random_pairs::<u128>(&mut random, Layout::BINARY32, 4_000));
