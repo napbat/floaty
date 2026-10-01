@@ -11,6 +11,7 @@ mod convert;
 mod declet;
 mod digits;
 mod integral;
+mod payload;
 mod round;
 mod scale;
 

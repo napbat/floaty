@@ -1,5 +1,5 @@
-//! The operations of the binary formats alone: `log_b` and the augmented
-//! operations.
+//! The operations of the binary formats alone: `log_b`, the augmented
+//! operations, and the NaN payload operations.
 
 use super::Float;
 use crate::binary::Layout;
@@ -184,6 +184,66 @@ where
             &behavior.apply::<M>().env(),
         );
         (Self::augmented(head, tail), flags)
+    }
+
+    /// Returns the payload of a NaN, as IEEE 754-2019 `getPayload` does.
+    ///
+    /// The payload is the fraction below the quiet bit, as an integer. A
+    /// format whose NaN has no payload, such as [`NoInf`](crate::NoInf),
+    /// gives 0. Every encoding that is not a NaN gives -1, an unsupported x87
+    /// encoding included. The operation reads no behavior and signals
+    /// nothing.
+    ///
+    /// ```
+    /// use floaty::F64;
+    ///
+    /// let nan = F64::from_bits(0xFFF8_0000_0000_0005);
+    /// assert_eq!(nan.payload().to_bits(), 0x4014_0000_0000_0000); // 5
+    /// let one = F64::from_bits(0x3FF0_0000_0000_0000);
+    /// assert_eq!(one.payload().to_bits(), 0xBFF0_0000_0000_0000); // -1
+    /// ```
+    #[must_use]
+    pub fn payload(self) -> Self {
+        let bits = Layout::<E, Enc, W>::get_payload(self.bits.to_limbs());
+        Self::from_masked(LimbConversion::from_limbs(bits))
+    }
+
+    /// Returns the quiet NaN with the payload `payload`, as IEEE 754-2019
+    /// `setPayload` does.
+    ///
+    /// The admissible payloads are +0 and the positive integers below `2^b`,
+    /// for the `b` fraction bits below the quiet bit. A format whose NaN has
+    /// no payload admits only +0, and a format without a NaN admits none.
+    /// Every other value, -0 included, gives +0. The NaN is positive, except
+    /// the one NaN of [`Fnuz`](crate::Fnuz). The operation reads no behavior
+    /// and signals nothing.
+    ///
+    /// ```
+    /// use floaty::F64;
+    ///
+    /// let five = F64::from_bits(0x4014_0000_0000_0000);
+    /// assert_eq!(F64::from_payload(five).to_bits(), 0x7FF8_0000_0000_0005);
+    /// let half = F64::from_bits(0x3FE0_0000_0000_0000);
+    /// assert_eq!(F64::from_payload(half).to_bits(), 0);
+    /// ```
+    #[must_use]
+    pub fn from_payload(payload: Self) -> Self {
+        let bits = Layout::<E, Enc, W>::set_payload(payload.bits.to_limbs(), false);
+        Self::from_masked(LimbConversion::from_limbs(bits))
+    }
+
+    /// Returns the signaling NaN with the payload `payload`, as IEEE 754-2019
+    /// `setPayloadSignaling` does.
+    ///
+    /// The admissible payloads are the positive integers below `2^b`, for the
+    /// `b` fraction bits below the quiet bit. Zero is not admissible, because
+    /// its encoding is an infinity. Only the IEEE and x87 encodings have a
+    /// signaling NaN. Every other value gives +0. The NaN is positive. The
+    /// operation reads no behavior and signals nothing.
+    #[must_use]
+    pub fn from_payload_signaling(payload: Self) -> Self {
+        let bits = Layout::<E, Enc, W>::set_payload(payload.bits.to_limbs(), true);
+        Self::from_masked(LimbConversion::from_limbs(bits))
     }
 
     /// Returns the results of an augmented operation from their limbs.

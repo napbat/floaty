@@ -31,6 +31,8 @@ pub mod ibm_ldouble;
 #[cfg(target_arch = "x86_64")]
 pub mod intel_decimal;
 #[cfg(target_arch = "x86_64")]
+pub mod libm;
+#[cfg(target_arch = "x86_64")]
 pub mod mesa;
 pub mod ml_dtypes;
 pub mod modes;

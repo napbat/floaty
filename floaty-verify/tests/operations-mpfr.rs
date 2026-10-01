@@ -5,9 +5,9 @@
 //!
 //! The pair operations are the comparisons, the total order, the sign
 //! operations, the ten minimum and maximum operations, the remainder, and the
-//! three augmented operations. The
-//! operations on one operand are rounding to an integral value, conversion to
-//! seven integer types, scaling, `log_b`, and the next value up and down. Three 8-bit
+//! three augmented operations. The operations on one operand are rounding to
+//! an integral value, conversion to seven integer types, scaling, `log_b`,
+//! the NaN payload operations, and the next value up and down. Three 8-bit
 //! layouts with a small exponent range also run, because a rounded integer
 //! can overflow them.
 
@@ -155,6 +155,22 @@ macro_rules! log_b_of_every_encoding {
 #[test]
 fn every_small_format_operand_log_b() {
     floaty_verify::for_each_small_format!(log_b_of_every_encoding);
+}
+
+/// Checks the NaN payload operations on every encoding of one format of the
+/// small format lists. They read no behavior.
+macro_rules! payload_of_every_encoding {
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+        let format = Format::of::<floaty::$alias>($specials);
+        for x in &cases::<$standard, $width>() {
+            check::check_payload(x, &format, |value, operation| operation.apply(value));
+        }
+    }};
+}
+
+#[test]
+fn every_small_format_operand_payload() {
+    floaty_verify::for_each_small_format!(payload_of_every_encoding);
 }
 
 /// Checks the augmented operations on every pair of encodings of one format

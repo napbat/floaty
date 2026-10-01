@@ -28,6 +28,7 @@ use floaty_verify::operations::BEHAVIORS;
 use floaty_verify::operations::augmented::Augmentation;
 use floaty_verify::operations::check::{self, Case};
 use floaty_verify::operations::integral::IntegerValue;
+use floaty_verify::operations::payload::Payload;
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
 use rug::integer::Order;
@@ -177,6 +178,57 @@ fn remainder_pairs(
         .collect()
 }
 
+/// Returns the encodings of the NaN payload tests: the integers at the edges
+/// of the payload range and random payloads, with both signs, values half
+/// an integer from small integers, and NaNs with random payloads.
+fn payload_encodings(layout: Layout, random: &mut SplitMix64) -> Vec<Integer> {
+    let bits = match layout.integer_bit {
+        IntegerBit::Implicit => layout.precision() - 2,
+        IntegerBit::Explicit => 62,
+    };
+    // The value `integer * 2^-shift`.
+    let value = |integer: &Integer, shift: u32| {
+        let width = integer.significant_bits();
+        // Each value is at least 1/2, so it is normal in every format here.
+        let field = bias(layout) + u64::from(width) - 1 - u64::from(shift);
+        let fraction = Integer::from(integer << (layout.precision() - width));
+        assemble(layout, false, field, &fraction)
+    };
+    let top = Integer::from(1) << bits;
+    let mut integers: Vec<Integer> = vec![
+        Integer::from(1),
+        Integer::from(2),
+        Integer::from(3),
+        Integer::from(&top >> 1),
+        Integer::from(&top - 1),
+        top.clone(),
+        Integer::from(&top + 2),
+    ];
+    integers.extend(
+        (0..4)
+            .map(|_| random_bits(random, bits))
+            .filter(|n| *n != 0),
+    );
+    let mut encodings = Vec::new();
+    for integer in &integers {
+        let positive = value(integer, 0);
+        let mut negative = positive.clone();
+        negative.set_bit(layout.width - 1, true);
+        encodings.extend([positive, negative]);
+    }
+    encodings.extend((0..3_u32).map(|n| value(&Integer::from(2 * n + 1), 1)));
+    for signaling in [false, true] {
+        let mut fraction = random_bits(random, bits);
+        fraction.set_bit(bits, !signaling);
+        if fraction == 0 {
+            fraction = Integer::from(1);
+        }
+        let field = u64::from(layout.largest_field());
+        encodings.push(assemble(layout, random.below(2) == 0, field, &fraction));
+    }
+    encodings
+}
+
 /// Returns the scales of `scale_b` for one value: small scales, the
 /// extremes, and the scales that move the value to the overflow threshold
 /// and through the subnormal range.
@@ -226,6 +278,8 @@ struct Plan<'a, S: Standard<W>, const W: usize> {
     log_b: &'a dyn Fn(Float<S, W>, Env) -> (Float<S, W>, Flags),
     /// The augmented operations, which only the binary formats have.
     augmented: &'a dyn Fn(Float<S, W>, Float<S, W>, Augmentation, Env) -> AugmentedWithFlags<S, W>,
+    /// The NaN payload operations, which only the binary formats have.
+    payload: &'a dyn Fn(Float<S, W>, Payload) -> Float<S, W>,
     /// The number of random encodings and of remainder pairs.
     count: usize,
     /// The behaviors of the operations on pairs.
@@ -255,6 +309,13 @@ fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
         .iter()
         .map(|(x, y)| (case(x), case(y)))
         .collect();
+    let payloads: Vec<Case<S, W>> = payload_encodings(layout, &mut random)
+        .iter()
+        .map(case)
+        .collect();
+    for x in boundaries.iter().chain(&samples).chain(&payloads) {
+        check::check_payload(x, &format, plan.payload);
+    }
     for &(x, y) in &pairs {
         check::check_order_and_signs(x, y, Specials::Ieee, plan.make);
         check::check_default_mode(x, y, &format);
@@ -293,6 +354,7 @@ fn bfloat16_and_tf32() {
         make: &from_u16::<Binary<8>, 16>,
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -305,6 +367,7 @@ fn bfloat16_and_tf32() {
         },
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -319,6 +382,7 @@ fn binary16_binary32_binary64_and_binary128() {
         make: &from_u16::<Binary<5>, 16>,
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -331,6 +395,7 @@ fn binary16_binary32_binary64_and_binary128() {
         },
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -343,6 +408,7 @@ fn binary16_binary32_binary64_and_binary128() {
         },
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
         count: 3_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -355,6 +421,7 @@ fn binary16_binary32_binary64_and_binary128() {
         },
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
         count: 2_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -371,6 +438,7 @@ fn a_layout_whose_exponent_crosses_a_limb() {
         },
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
         count: 3_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -408,6 +476,7 @@ fn x87_extended_with_precision_control() {
         },
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
         count: 3_000,
         pair_envs: &pair_envs,
         single_envs: &single_envs,
@@ -422,6 +491,7 @@ fn binary256_and_binary512() {
         make: &|bits: &Integer| F256::from_bits(to_limbs::<4>(bits)),
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
         count: 1_500,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -432,6 +502,7 @@ fn binary256_and_binary512() {
         make: &|bits: &Integer| F512::from_bits(to_limbs::<8>(bits)),
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
         count: 1_500,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -450,6 +521,7 @@ macro_rules! other_wide_format {
             make: &|bits: &Integer| floaty::$alias::from_bits(to_limbs::<$limbs>(bits)),
             log_b: &|value, env| value.log_b_with(env),
             augmented: &|x, y, operation, env| operation.apply(x, y, env),
+            payload: &|value, operation| operation.apply(value),
             count: 500,
             pair_envs: &BEHAVIORS,
             single_envs: &BEHAVIORS,

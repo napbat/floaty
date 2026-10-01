@@ -128,7 +128,8 @@ cargo +1.85 clippy -p floaty --all-targets --target s390x-unknown-linux-gnu -- -
   libraries and its x86 hardware tests only for x86-64. That build runs on
   Linux x86-64 hosts only, and needs the submodules (`git submodule update
   --init`), `make`, `gcc`, `g++` 15.2.0, `objcopy`, `m4`, `curl`, `tar`,
-  `sha256sum`, `python3`, `powerpc64le-linux-gnu-gcc` 15.2.0 with its
+  `sha256sum`, `python3`, a host glibc 2.32 or later, whose libm has the
+  C23 NaN payload functions, `powerpc64le-linux-gnu-gcc` 15.2.0 with its
   binutils (package gcc-powerpc64le-linux-gnu) and its glibc 2.43 (package
   libc6-dev-ppc64el-cross 2.43-2ubuntu2cross1), and `qemu-ppc64le` 10.2.1
   (package qemu-user). The build compiles TestFloat, MPFR, decNumber, the Intel

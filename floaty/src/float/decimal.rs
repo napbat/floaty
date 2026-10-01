@@ -1,5 +1,5 @@
 //! The operations of the decimal formats alone: the quantum operations of
-//! IEEE 754-2019 section 5.3.2, and `log_b`.
+//! IEEE 754-2019 section 5.3.2, `log_b`, and the NaN payload operations.
 
 use super::Float;
 use crate::decimal::DecimalLayout;
@@ -86,5 +86,53 @@ where
         let (bits, flags) =
             DecimalLayout::<Enc, W>::log_b(self.bits.to_limbs(), &behavior.apply::<M>().env());
         (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+    }
+
+    /// Returns the payload of a NaN, as IEEE 754-2019 `getPayload` does.
+    ///
+    /// The payload is the value of the trailing significand field, as an
+    /// integer with exponent 0. A payload above `10^(p - 1) - 1` is not
+    /// canonical and gives 0. Every encoding that is not a NaN gives -1. The
+    /// operation reads no behavior and signals nothing.
+    ///
+    /// ```
+    /// use floaty::D64Bid;
+    ///
+    /// let nan = D64Bid::from_bits(0x7C00_0000_0000_007B);
+    /// assert_eq!(nan.payload().to_bits(), 0x31C0_0000_0000_007B); // 123
+    /// ```
+    #[must_use]
+    pub fn payload(self) -> Self {
+        let bits = DecimalLayout::<Enc, W>::get_payload(self.bits.to_limbs());
+        Self::from_masked(LimbConversion::from_limbs(bits))
+    }
+
+    /// Returns the quiet NaN with the payload `payload`, as IEEE 754-2019
+    /// `setPayload` does.
+    ///
+    /// The admissible payloads are +0 and the positive integers up to
+    /// `10^(p - 1) - 1`, with any exponent. Every other value, -0 included,
+    /// gives +0 with exponent 0. The NaN is positive and canonical. The
+    /// operation reads no behavior and signals nothing.
+    ///
+    /// ```
+    /// use floaty::D64Bid;
+    ///
+    /// let payload = D64Bid::from_bits(0x31C0_0000_0000_007B); // 123
+    /// assert_eq!(D64Bid::from_payload(payload).to_bits(), 0x7C00_0000_0000_007B);
+    /// ```
+    #[must_use]
+    pub fn from_payload(payload: Self) -> Self {
+        let bits = DecimalLayout::<Enc, W>::set_payload(payload.bits.to_limbs(), false);
+        Self::from_masked(LimbConversion::from_limbs(bits))
+    }
+
+    /// Returns the signaling NaN with the payload `payload`, as IEEE 754-2019
+    /// `setPayloadSignaling` does. The admissible payloads are those of
+    /// [`from_payload`](Self::from_payload), +0 included.
+    #[must_use]
+    pub fn from_payload_signaling(payload: Self) -> Self {
+        let bits = DecimalLayout::<Enc, W>::set_payload(payload.bits.to_limbs(), true);
+        Self::from_masked(LimbConversion::from_limbs(bits))
     }
 }

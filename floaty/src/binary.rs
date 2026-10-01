@@ -9,6 +9,7 @@ mod compare;
 mod convert;
 mod from_decimal;
 mod integral;
+mod payload;
 mod remainder;
 mod scale;
 

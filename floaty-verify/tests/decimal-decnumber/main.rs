@@ -25,6 +25,9 @@
 //! and the BID result back to DPD.
 //! - [`minimum`]: the minimum and maximum operations of IEEE 754-2019, which
 //!   decNumber lacks, composed from its `max`, `min`, `add`, and `canonical`.
+//! - [`payload`]: the NaN payload operations of IEEE 754-2019, which
+//!   decNumber lacks, by the rule of floaty with decNumber's strings, on DPD
+//!   and BID.
 //!
 //! The rounding modes `ceiling`, `floor`, `down`, `up`, `half_even`,
 //! `half_up`, `half_down`, and `05up` are floaty's `TowardPositive`,
@@ -89,6 +92,7 @@ mod integers;
 mod limit;
 mod minimum;
 mod operands;
+mod payload;
 mod random;
 mod square_root;
 mod total_order;

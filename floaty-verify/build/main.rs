@@ -11,6 +11,7 @@
 //!   powerpc64le libgcc, and the IBM `long double` functions of the libm of
 //!   its glibc 2.43, run in a batch program under `qemu-ppc64le`. QD comes
 //!   from a pinned release archive, as the decimal libraries do.
+//! - The NaN payload functions of the host glibc libm, through a shim.
 //!
 //! The build needs `make`, `gcc`, `g++` 15.2.0, `ar`, `objcopy`, `curl`,
 //! `tar`, `python3`, `sha256sum`, `powerpc64le-linux-gnu-gcc` 15.2.0, and
@@ -25,6 +26,7 @@ mod archive;
 mod decnumber;
 mod ibm_ldouble;
 mod intel;
+mod libm;
 mod mesa;
 mod qd;
 mod testfloat;
@@ -66,4 +68,5 @@ fn main() {
     ibm_ldouble::build(&manifest, &out.join("ibm_ldouble"));
     qd::build(&manifest, &out.join("qd"));
     mesa::build(&manifest, &out.join("mesa"));
+    libm::build(&manifest, &out.join("libm"));
 }

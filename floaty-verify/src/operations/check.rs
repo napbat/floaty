@@ -13,6 +13,7 @@ use crate::encodings::Layout;
 use super::augmented::{self, Augmentation};
 use super::compare::{self, MinMax};
 use super::integral::{self, IntegerValue, to_int_value};
+use super::payload::{self, Payload};
 use super::{
     Direction, Outcome, Sample, next, outcome, remainder, scale_b, truncated_remainder, with_sign,
 };
@@ -280,6 +281,34 @@ pub fn check_augmented<S: Standard<W>, const W: usize>(
         assert_eq!(
             (outcome(result.head), outcome(result.tail), flags),
             augmented::augmented(operation, &x.sample.operand, &y.sample.operand, format, env),
+            "{}",
+            context()
+        );
+    }
+}
+
+/// Checks the NaN payload operations on one value. `run` runs an operation
+/// of floaty, which only the binary formats have.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_payload<S: Standard<W>, const W: usize>(
+    x: &Case<S, W>,
+    format: &Format,
+    run: impl Fn(Float<S, W>, Payload) -> Float<S, W>,
+) {
+    for operation in Payload::ALL {
+        let result = run(x.value, operation);
+        let context = || format!("{operation:?} {:?}", x.value);
+        assert!(
+            result.is_canonical(),
+            "{}: {result:?} is canonical",
+            context()
+        );
+        assert_eq!(
+            outcome(result),
+            payload::payload(operation, &x.sample, format),
             "{}",
             context()
         );

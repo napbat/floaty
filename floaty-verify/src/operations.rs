@@ -1,7 +1,8 @@
 //! An oracle for the operations beyond arithmetic: comparison, total order,
 //! minimum and maximum, rounding to an integral value, conversion to and from
 //! an integer, the remainder, scaling by a power of two, the next value up or
-//! down, the sign operations, and the augmented operations.
+//! down, the sign operations, the augmented operations, and the NaN payload
+//! operations.
 //!
 //! MPFR computes each finite result. The operations that do not round get the
 //! exact MPFR value, and the others round with the oracle in [`crate::mpfr`].
@@ -30,6 +31,7 @@ pub mod augmented;
 pub mod check;
 pub mod compare;
 pub mod integral;
+pub mod payload;
 
 /// The behaviors of the operation tests. Together they use every rounding
 /// direction, every NaN rule, both tininess rules, flush-to-zero,
