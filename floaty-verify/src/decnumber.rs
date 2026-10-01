@@ -574,6 +574,25 @@ pub fn limited<F: Format>(
     ffi::limited::<F>(operation, operands, digits, rounding)
 }
 
+/// Returns the value of a finite encoding `x` of format `S`, rounded once to
+/// `digits` digits with the exponent range of format `T`, and every
+/// condition that it raised: the conversion of [`limited`] to `T`.
+///
+/// `decNumberFromString` reads the scientific string of `x` in the context
+/// of [`limited`] for `T`, and rounds it there once.
+///
+/// # Panics
+///
+/// Panics when `x` is an infinity or a NaN.
+#[must_use]
+pub fn limited_conversion<S: Format, T: Format>(
+    x: S::Bits,
+    digits: u32,
+    rounding: Rounding,
+) -> Outcome<String> {
+    ffi::limited_conversion::<S, T>(x, digits, rounding)
+}
+
 /// decimal32 in the DPD encoding: decNumber's `decSingle`.
 #[derive(Clone, Copy, Debug)]
 pub enum Single {}

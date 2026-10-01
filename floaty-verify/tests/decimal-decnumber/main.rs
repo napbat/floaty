@@ -653,6 +653,32 @@ where
     Some(outcome)
 }
 
+/// Runs the add, subtract, multiply, or divide of [`run_floaty_encoded`]
+/// with the static mode `M`, in the encoding `E`. Returns `None` for the
+/// other operations.
+fn run_floaty_mode<F: Arithmetic, const W: usize, E: DecimalEncoding, M: floaty::env::Mode>(
+    operation: &Operation,
+    operands: &[F::Bits],
+    (encode, decode): (impl Fn(F::Bits) -> F::Bits, impl Fn(F::Bits) -> F::Bits),
+) -> Option<(Answer<F::Bits>, Flags)>
+where
+    Width<W>: Storage<Bits = F::Bits>,
+    Decimal<E>: Standard<W, Bits = F::Bits>,
+{
+    let Operation::Binary(binary) = operation else {
+        return None;
+    };
+    let value = |index: usize| Float::<Decimal<E>, W, M>::from_bits(encode(operands[index]));
+    let (result, flags) = match binary {
+        Binary::Add => value(0).add_with(value(1), M::default()),
+        Binary::Subtract => value(0).sub_with(value(1), M::default()),
+        Binary::Multiply => value(0).mul_with(value(1), M::default()),
+        Binary::Divide => value(0).div_with(value(1), M::default()),
+        _ => return None,
+    };
+    Some((Answer::Encoding(decode(result.to_bits())), flags))
+}
+
 /// Runs an operation on decNumber. Returns the result and the conditions.
 ///
 /// `fma`, `comparetotal`, and `comparetotmag` go through decNumber's

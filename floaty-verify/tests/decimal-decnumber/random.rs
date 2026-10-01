@@ -16,13 +16,25 @@
 //! in the fused order of the rule, and `0 * inf` with a NaN addend follows
 //! its invalid-product rule, as the documentation of `FusedNanOrder` and
 //! `InvalidProduct` states. decNumber encodes the expected NaN from its text.
+//!
+//! The add, subtract, multiply, and divide cases in the direction to
+//! nearest even also run with the static modes of [`check_modes`], in the
+//! DPD and the BID formats. Each mode must give the result and the flags of
+//! its behavior `M::ENV`, which the checks of the behaviors compare with
+//! decNumber.
+//!
 //! The decimal32 operations leave out the copies, because
 //! decNumber's arbitrary-precision copies give a canonical encoding, and
 //! floaty's sign operations keep the bits. The `dd` and `dq` vectors and the
 //! decimal64 and decimal128 random cases check the copies.
 
-use floaty::env::{FusedNanOrder, InvalidProduct, NanPropagation, NanRule};
+use floaty::env::{FusedNanOrder, InvalidProduct, Mode, NanPropagation, NanRule};
 use floaty::format::{Bid, Decimal, Dpd, Standard, Storage, Width};
+use floaty::mode::switch::On;
+use floaty::mode::{
+    DenormalsAreZero, DetectTininess, FlushToZero, FullPrecision, Ieee, Precision, Propagation,
+    X86Sse, X87, propagation, tininess,
+};
 use floaty::{Decoded, Env, Flags};
 use floaty_verify::decnumber::{self, Arithmetic, Binary, Double, Quad, Single, Unary};
 use floaty_verify::dectest::Operation;
@@ -34,7 +46,7 @@ use super::operands::{Generator, Shape};
 use super::{
     Answer, DpdFloat, Report, SHARED_ROUNDINGS, Tally, Transcode, compared, describe,
     describe_operands, details, direction, excluded, flags_of, keeps_encoding, noted, run_floaty,
-    run_floaty_bid, run_floaty_in, run_floaty_static, run_oracle,
+    run_floaty_bid, run_floaty_in, run_floaty_mode, run_floaty_static, run_oracle, to_bid,
 };
 
 /// The NaN rules of the NaN cases: the default NaN, negative so that its
@@ -207,6 +219,89 @@ where
     NAN_RULES.len()
 }
 
+/// Compares the static mode `M` with its behavior `M::ENV` on one case of
+/// [`run_floaty_mode`], in the DPD and the BID formats, and records a
+/// failure when they differ. Returns the number of checks.
+fn check_mode<F: Transcode, const W: usize, M: Mode>(
+    operation: &Operation,
+    operands: &[F::Bits],
+    tally: &mut Tally,
+) -> usize
+where
+    Width<W>: Storage<Bits = F::Bits>,
+    Decimal<Dpd>: Standard<W, Bits = F::Bits>,
+    Decimal<Bid>: Standard<W, Bits = F::Bits>,
+{
+    use floaty_verify::intel_decimal::Format as _;
+    let identity = (|bits| bits, |bits| bits);
+    let Some(dpd) = run_floaty_mode::<F, W, Dpd, M>(operation, operands, identity) else {
+        return 0;
+    };
+    let codecs = (to_bid::<F, W>, F::Bid::to_dpd);
+    let bid = run_floaty_mode::<F, W, Bid, M>(operation, operands, codecs)
+        .expect("the BID format runs the operations of the DPD format");
+    let checks = [
+        (
+            "DPD",
+            dpd,
+            run_floaty_in::<F, W>(operation, operands, M::ENV),
+        ),
+        (
+            "BID",
+            bid,
+            run_floaty_bid::<F, W>(operation, operands, M::ENV),
+        ),
+    ];
+    for (encoding, (answer, flags), (env_answer, env_flags)) in checks {
+        if (answer, flags) != (env_answer, env_flags) {
+            tally.fail(|| {
+                format!(
+                    "{operation:?} {encoding} in the mode of {:?} [{}]: the mode gives {} \
+                     {flags:?}, its behavior {} {env_flags:?}",
+                    M::ENV,
+                    describe_operands::<F>(operands),
+                    describe::<F>(&answer),
+                    describe::<F>(&env_answer),
+                )
+            });
+        }
+    }
+    checks.len()
+}
+
+/// Compares each static mode of the decimal formats with its behavior on
+/// one case, by [`check_mode`]: the presets, flush-to-zero,
+/// denormals-are-zero, both, a precision limit, a removed precision limit,
+/// two NaN propagation rules, and the other tininess rule. Returns the
+/// number of checks.
+fn check_modes<F: Transcode, const W: usize>(
+    operation: &Operation,
+    operands: &[F::Bits],
+    tally: &mut Tally,
+) -> usize
+where
+    Width<W>: Storage<Bits = F::Bits>,
+    Decimal<Dpd>: Standard<W, Bits = F::Bits>,
+    Decimal<Bid>: Standard<W, Bits = F::Bits>,
+{
+    check_mode::<F, W, X86Sse>(operation, operands, tally)
+        + check_mode::<F, W, X87>(operation, operands, tally)
+        + check_mode::<F, W, FlushToZero<Ieee, On>>(operation, operands, tally)
+        + check_mode::<F, W, DenormalsAreZero<Ieee, On>>(operation, operands, tally)
+        + check_mode::<F, W, FlushToZero<DenormalsAreZero<X86Sse, On>, On>>(
+            operation, operands, tally,
+        )
+        + check_mode::<F, W, Precision<Ieee, 7>>(operation, operands, tally)
+        + check_mode::<F, W, FullPrecision<Precision<Ieee, 3>>>(operation, operands, tally)
+        + check_mode::<F, W, Propagation<Ieee, propagation::DefaultNan>>(operation, operands, tally)
+        + check_mode::<F, W, Propagation<Ieee, propagation::LargerSignificand>>(
+            operation, operands, tally,
+        )
+        + check_mode::<F, W, DetectTininess<Ieee, tininess::BeforeRounding>>(
+            operation, operands, tally,
+        )
+}
+
 /// The arithmetic operations, which round.
 pub(super) fn arithmetic() -> Vec<Operation> {
     [
@@ -269,6 +364,7 @@ where
     let mut tally = Tally::default();
     let mut static_checks = 0_usize;
     let mut nan_rule_checks = 0_usize;
+    let mut mode_checks = 0_usize;
     for operation in operations {
         let report = Report::of(operation);
         for _ in 0..count {
@@ -308,6 +404,7 @@ where
                 let expected_flags =
                     flags_of(status) | details::<F>(operation, (expected, status), toward_zero);
                 if rounding == floaty_verify::decnumber::Rounding::HalfEven {
+                    mode_checks += check_modes::<F, W>(operation, &operands, &mut tally);
                     nan_rule_checks += check_nan_rules::<F, W>(
                         operation,
                         &operands,
@@ -355,6 +452,10 @@ where
     assert!(
         static_checks > 0 || !has_addition,
         "the static modes checked arithmetic cases"
+    );
+    assert!(
+        mode_checks > 0 || !has_addition,
+        "the other static modes checked arithmetic cases"
     );
     assert!(
         nan_rule_checks > 0,

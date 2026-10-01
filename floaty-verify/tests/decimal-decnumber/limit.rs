@@ -28,7 +28,12 @@
 //!   exponent `emax - p + 1`.
 //!
 //! `TINY` and `ROUNDED_UP` follow from the result rounded toward zero, as
-//! for every rounded operation. A special operand gives a special result,
+//! for every rounded operation.
+//!
+//! The conversions between the widths run at the limits of the destination
+//! too, on the DPD and the BID formats. `decnumber::limited_conversion`
+//! rounds the value of the operand once in the context of the destination,
+//! and the preferred exponent is the exponent of the operand. A special operand gives a special result,
 //! which the limit does not change, so decNumber's operation at the full
 //! precision gives it.
 
@@ -36,7 +41,7 @@ use core::num::NonZeroU32;
 
 use floaty::format::{Bid, Decimal, Dpd, Standard, Storage, Width};
 use floaty::{Env, Flags, Float};
-use floaty_verify::decnumber::{self, Arithmetic, Binary, Double, Limited, Quad, Status};
+use floaty_verify::decnumber::{self, Arithmetic, Binary, Double, Limited, Quad, Single, Status};
 use floaty_verify::dectest::Operation;
 
 use super::operands::{Generator, Number, Shape, digit_count, power_of_ten, signed};
@@ -368,6 +373,138 @@ fn skips(nan: usize, limit: usize, exponent: usize, pair: usize) -> [(&'static s
 /// The note of a fused multiply-add of `0 * inf` and a quiet NaN.
 const INVALID_PRODUCT: &str =
     "fma: 0 * inf + quiet NaN, which runs with InvalidProduct::YieldsToNan";
+
+/// Converts `x` from format `S` to format `T` at the precision limit
+/// `limit` of `T`, in every shared rounding mode, on the DPD and the BID
+/// formats, and compares floaty with the rule applied to decNumber.
+fn check_conversion<S: Transcode, T: Transcode, const FROM: usize, const TO: usize>(
+    tally: &mut Tally,
+    x: S::Bits,
+    limit: u32,
+) where
+    Width<FROM>: Storage<Bits = S::Bits>,
+    Decimal<Dpd>: Standard<FROM, Bits = S::Bits>,
+    Decimal<Bid>: Standard<FROM, Bits = S::Bits>,
+    Width<TO>: Storage<Bits = T::Bits>,
+    Decimal<Dpd>: Standard<TO, Bits = T::Bits>,
+    Decimal<Bid>: Standard<TO, Bits = T::Bits>,
+{
+    use floaty_verify::intel_decimal::Format as _;
+    let expected = |rounding| {
+        let outcome = decnumber::limited_conversion::<S, T>(x, limit, rounding);
+        let bits = represent::<T>(&outcome.value, outcome.status, exponent_of::<S>(x), limit);
+        (bits, outcome.status)
+    };
+    let toward_zero = expected(decnumber::Rounding::Down);
+    for rounding in SHARED_ROUNDINGS {
+        let (want, status) = expected(rounding);
+        let want_flags = flags_of(status) | Report::Rounded.flags::<T>((want, status), toward_zero);
+        let env = Env::IEEE
+            .with_rounding(direction(rounding))
+            .with_precision(NonZeroU32::new(limit));
+        let dpd = DpdFloat::<FROM>::from_bits(x).convert_with::<DpdFloat<TO>>(env);
+        let bid = Float::<Decimal<Bid>, FROM>::from_bits(to_bid::<S, FROM>(x))
+            .convert_with::<Float<Decimal<Bid>, TO>>(env);
+        let results = [
+            ("DPD", dpd.0.to_bits(), dpd.1),
+            ("BID", T::Bid::to_dpd(bid.0.to_bits()), bid.1),
+        ];
+        for (encoding, result, flags) in results {
+            let flags = compared(flags);
+            if result == want && flags == want_flags {
+                tally.passed += 1;
+                continue;
+            }
+            tally.fail(|| {
+                format!(
+                    "{} to {} limit {limit} {rounding:?} {encoding} [{}]: floaty gives {} \
+                     {flags:?}, expected {} {want_flags:?} ({status})",
+                    S::NAME,
+                    T::NAME,
+                    describe_operands::<S>(&[x]),
+                    describe::<T>(&Answer::Encoding(result)),
+                    describe::<T>(&Answer::Encoding(want)),
+                )
+            });
+        }
+    }
+}
+
+/// Converts `count` random finite operands of format `S` to format `T` at
+/// each precision limit of `T`. A narrowing draws operands with the digits
+/// of `S` and the exponent range of `T`, so that they reach its subnormal
+/// range and its overflow.
+fn run_conversions<S: Transcode, T: Transcode, const FROM: usize, const TO: usize>(
+    count: usize,
+    seed: u64,
+) -> Tally
+where
+    Width<FROM>: Storage<Bits = S::Bits>,
+    Decimal<Dpd>: Standard<FROM, Bits = S::Bits>,
+    Decimal<Bid>: Standard<FROM, Bits = S::Bits>,
+    Width<TO>: Storage<Bits = T::Bits>,
+    Decimal<Dpd>: Standard<TO, Bits = T::Bits>,
+    Decimal<Bid>: Standard<TO, Bits = T::Bits>,
+{
+    let mut tally = Tally::default();
+    for limit in limits::<T>() {
+        let shape = if S::PRECISION > T::PRECISION {
+            Shape {
+                digits: S::PRECISION,
+                precision: limit,
+                ..Shape::of::<T>()
+            }
+        } else {
+            Shape {
+                precision: limit.min(S::PRECISION),
+                ..Shape::of::<S>()
+            }
+        };
+        let mut generator = Generator::<S>::new(seed ^ u64::from(limit), shape);
+        for _ in 0..count {
+            let (x, _) = generator.operand();
+            let class = S::class(x);
+            if class.ends_with("Infinity") || class.ends_with("NaN") {
+                continue;
+            }
+            check_conversion::<S, T, FROM, TO>(&mut tally, x, limit);
+        }
+    }
+    tally
+}
+
+#[test]
+fn conversions_at_a_precision_limit() {
+    let tallies = [
+        (
+            "decimal32 to decimal64",
+            run_conversions::<Single, Double, 32, 64>(2_000, 0x3264_0017),
+            143_296,
+        ),
+        (
+            "decimal64 to decimal128",
+            run_conversions::<Double, Quad, 64, 128>(2_000, 0x6428_0017),
+            143_120,
+        ),
+        (
+            "decimal64 to decimal32",
+            run_conversions::<Double, Single, 64, 32>(2_000, 0x6432_0017),
+            143_024,
+        ),
+        (
+            "decimal128 to decimal64",
+            run_conversions::<Quad, Double, 128, 64>(2_000, 0x2864_0017),
+            142_848,
+        ),
+    ];
+    for (name, tally, _) in &tallies {
+        tally.report(&format!("{name} at a precision limit"));
+    }
+    // The generator is seeded, so the counts are exact.
+    for (_, tally, passed) in tallies {
+        tally.assert_counts(passed, &[], &[]);
+    }
+}
 
 #[test]
 fn decimal64_precision_limit() {

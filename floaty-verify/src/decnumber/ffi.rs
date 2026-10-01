@@ -301,6 +301,26 @@ pub(super) fn limited<F: Format + ?Sized>(
     }
 }
 
+/// Returns the value of `x` of format `S`, rounded once to `digits` digits
+/// with the exponent range of format `T`, and every condition that it
+/// raised, as `decnumber::limited_conversion` describes.
+pub(super) fn limited_conversion<S: Format + ?Sized, T: Format + ?Sized>(
+    x: S::Bits,
+    digits: u32,
+    rounding: Rounding,
+) -> Outcome<String> {
+    assert!(
+        !Number::exact::<S>(x).is_special(),
+        "the precision limit applies only to finite operands"
+    );
+    let mut limit = Context::limited::<T>(digits, rounding);
+    let rounded = Number::parse(&S::to_string(x), &mut limit);
+    Outcome {
+        value: rounded.text(),
+        status: limit.status(),
+    }
+}
+
 /// Orders two encodings of format `F` by the total order of decNumber's
 /// arbitrary-precision numbers, of the values or of their magnitudes.
 pub(super) fn total_order<F: Format + ?Sized>(
