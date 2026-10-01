@@ -19,6 +19,10 @@
 //! - [`limit`]: the precision limit of `Env`, against decNumber's
 //!   arbitrary-precision numbers at fewer digits.
 //! - [`flush`]: flush-to-zero and denormals-are-zero.
+//!
+//! [`random`], [`flush`], and [`limit`] also run each case on the BID format
+//! of the width. The Intel decimal library converts the DPD operands to BID
+//! and the BID result back to DPD.
 //! - [`minimum`]: the minimum and maximum operations of IEEE 754-2019, which
 //!   decNumber lacks, composed from its `max`, `min`, `add`, and `canonical`.
 //!
@@ -94,15 +98,38 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use floaty::env::InvalidProduct;
-use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
+use floaty::format::{Bid, Decimal, DecimalEncoding, Dpd, Standard, Storage, Width};
 use floaty::{Class, Env, Flags, Float, Rounding};
-use floaty_verify::decnumber::{self, Arithmetic, Binary, Format, Status, Unary};
+use floaty_verify::decnumber::{
+    self, Arithmetic, Binary, Double, Format, Quad, Single, Status, Unary,
+};
 use floaty_verify::dectest::Operation;
+use floaty_verify::intel_decimal::{self, Bid32, Bid64, Bid128};
 
 use self::operands::signed;
 
 /// A floaty DPD format of width `W`.
 type DpdFloat<const W: usize> = Float<Decimal<Dpd>, W>;
+
+/// A decNumber format and the BID format of its width. The Intel decimal
+/// library converts between the two encodings, so that a check of decNumber
+/// on DPD operands also checks floaty's BID formats.
+trait Transcode: Arithmetic {
+    /// The BID format of the Intel library.
+    type Bid: intel_decimal::Format<Bits = Self::Bits>;
+}
+
+impl Transcode for Single {
+    type Bid = Bid32;
+}
+
+impl Transcode for Double {
+    type Bid = Bid64;
+}
+
+impl Transcode for Quad {
+    type Bid = Bid128;
+}
 
 /// The five IEEE 754 flags, which decNumber also reports.
 const IEEE_FLAGS: [Flags; 5] = [
@@ -406,9 +433,9 @@ fn compares(operation: &Operation) -> bool {
 }
 
 /// Returns the class name that decNumber gives for a floaty value.
-fn class_name<const W: usize>(value: DpdFloat<W>) -> &'static str
+fn class_name<E: DecimalEncoding, const W: usize>(value: Float<Decimal<E>, W>) -> &'static str
 where
-    Decimal<Dpd>: Standard<W>,
+    Decimal<E>: Standard<W>,
 {
     let signed = |negative: &'static str, positive: &'static str| {
         if value.is_sign_negative() {
@@ -453,10 +480,91 @@ where
     Width<W>: Storage<Bits = F::Bits>,
     Decimal<Dpd>: Standard<W, Bits = F::Bits>,
 {
-    let value = |index: usize| DpdFloat::<W>::from_bits(operands[index]);
+    run_floaty_encoded::<F, W, Dpd>(operation, operands, env, (|bits| bits, |bits| bits))
+}
+
+/// Returns a DPD encoding of `W` bits with the bits between the signaling
+/// bit and the trailing field of a NaN cleared. Those bits of a NaN make it
+/// non-canonical, and decNumber reads them as zero.
+fn without_nan_extra_bits<const W: usize>(bits: <Width<W> as Storage>::Bits) -> u128
+where
+    Width<W>: Storage,
+    <Width<W> as Storage>::Bits: Into<u128>,
+{
+    let bits: u128 = bits.into();
+    let width = u32::try_from(W).expect("a width fits a u32");
+    if (bits >> (width - 6)) & 0x1F != 0x1F {
+        return bits;
+    }
+    // The exponent continuation field has W / 16 + 4 bits, and the
+    // signaling bit is its first bit.
+    let continuation = width / 16 + 4;
+    let trailing = width - 6 - continuation;
+    let extra = ((1_u128 << (continuation - 1)) - 1) << trailing;
+    bits & !extra
+}
+
+/// Runs an operation of [`run_floaty_in`] on the BID format of the width.
+/// The Intel library converts the DPD operands to BID, and converts an
+/// encoding result back to DPD.
+///
+/// Conflict: the Intel library converts the quiet DPD NaN
+/// `0x7d46ec24f90000c0`, whose bits between the signaling bit and the
+/// trailing field are not zero, to the signaling BID NaN
+/// `0x7e236cdb3735280c`. For decimal32 and decimal64 `bid_dpd_to_bid*` adds
+/// those bits to the exponent of the NaN, and the exponent field of the
+/// result overlaps the signaling bit (`bid_dpd.c` of the Intel
+/// Decimal Floating-Point Math Library 2.0 Update 2, line 297 for decimal64).
+/// decimal128 leaves them out (line 515). decNumber reads the bits as zero,
+/// as IEEE 754-2019 section 3.5.2 lets a non-canonical NaN read. Resolution:
+/// the test clears the bits before the conversion, by
+/// [`without_nan_extra_bits`]. `decimal-intel-random.rs` checks the BID NaNs
+/// with extra bits against the library.
+fn run_floaty_bid<F: Transcode, const W: usize>(
+    operation: &Operation,
+    operands: &[F::Bits],
+    env: Env,
+) -> (Answer<F::Bits>, Flags)
+where
+    Width<W>: Storage<Bits = F::Bits>,
+    Decimal<Bid>: Standard<W, Bits = F::Bits>,
+{
+    use intel_decimal::Format as _;
+    run_floaty_encoded::<F, W, Bid>(operation, operands, env, (to_bid::<F, W>, F::Bid::to_dpd))
+}
+
+/// Returns the BID encoding of a DPD encoding by the Intel library, after
+/// [`without_nan_extra_bits`]; see [`run_floaty_bid`].
+fn to_bid<F: Transcode, const W: usize>(bits: F::Bits) -> F::Bits
+where
+    Width<W>: Storage<Bits = F::Bits>,
+{
+    use intel_decimal::Format as _;
+    let cleared = F::Bits::try_from(without_nan_extra_bits::<W>(bits))
+        .ok()
+        .expect("clearing bits keeps the width");
+    F::Bid::from_dpd(cleared)
+}
+
+/// Runs an operation of [`run_floaty_in`] on the decimal format of the
+/// encoding `E`. `encode` converts each DPD operand to `E`, and `decode`
+/// converts an encoding result back to DPD. A scale operand of `scaleb`
+/// reads as its DPD encoding.
+fn run_floaty_encoded<F: Arithmetic, const W: usize, E: DecimalEncoding>(
+    operation: &Operation,
+    operands: &[F::Bits],
+    env: Env,
+    (encode, decode): (impl Fn(F::Bits) -> F::Bits, impl Fn(F::Bits) -> F::Bits),
+) -> (Answer<F::Bits>, Flags)
+where
+    Width<W>: Storage<Bits = F::Bits>,
+    Decimal<E>: Standard<W, Bits = F::Bits>,
+{
+    type Value<E, const W: usize> = Float<Decimal<E>, W>;
+    let value = |index: usize| Value::<E, W>::from_bits(encode(operands[index]));
     let rounded =
-        |(result, flags): (DpdFloat<W>, Flags)| (Answer::Encoding(result.to_bits()), flags);
-    let quiet = |result: DpdFloat<W>| (Answer::Encoding(result.to_bits()), Flags::NONE);
+        |(result, flags): (Value<E, W>, Flags)| (Answer::Encoding(decode(result.to_bits())), flags);
+    let quiet = |result: Value<E, W>| (Answer::Encoding(decode(result.to_bits())), Flags::NONE);
     let order = |(order, flags)| (Answer::Order(order), flags);
     let (answer, flags) = match operation {
         Operation::Unary(Unary::Copy) => quiet(value(0)),

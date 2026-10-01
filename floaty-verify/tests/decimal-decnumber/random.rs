@@ -1,6 +1,8 @@
 //! Seeded random operands through floaty and decNumber, in the eight rounding
 //! modes of decNumber: result bits, the five IEEE 754 flags, `TINY`, and
-//! `ROUNDED_UP`.
+//! `ROUNDED_UP`. Each case also runs on the BID format of the width, through
+//! the BID and DPD conversions of the Intel decimal library, except the
+//! copies, whose result keeps the encoding of the operand.
 //!
 //! decimal64 and decimal128 run against `decDouble` and `decQuad`, and
 //! decimal32 against decNumber's arbitrary-precision numbers in the decimal32
@@ -20,7 +22,7 @@
 //! decimal64 and decimal128 random cases check the copies.
 
 use floaty::env::{FusedNanOrder, InvalidProduct, NanPropagation, NanRule};
-use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
+use floaty::format::{Bid, Decimal, Dpd, Standard, Storage, Width};
 use floaty::{Decoded, Env, Flags};
 use floaty_verify::decnumber::{self, Arithmetic, Binary, Double, Quad, Single, Unary};
 use floaty_verify::dectest::Operation;
@@ -30,9 +32,9 @@ use rug::integer::Order;
 
 use super::operands::{Generator, Shape};
 use super::{
-    Answer, DpdFloat, Report, SHARED_ROUNDINGS, Tally, compared, describe, describe_operands,
-    details, direction, excluded, flags_of, keeps_encoding, noted, run_floaty, run_floaty_in,
-    run_floaty_static, run_oracle,
+    Answer, DpdFloat, Report, SHARED_ROUNDINGS, Tally, Transcode, compared, describe,
+    describe_operands, details, direction, excluded, flags_of, keeps_encoding, noted, run_floaty,
+    run_floaty_bid, run_floaty_in, run_floaty_static, run_oracle,
 };
 
 /// The NaN rules of the NaN cases: the default NaN, negative so that its
@@ -253,7 +255,7 @@ pub(super) fn others() -> Vec<Operation> {
 
 /// Runs `count` random cases of each operation in format `F`, in every
 /// shared rounding mode, and compares floaty with decNumber.
-fn run_random<F: Arithmetic, const W: usize>(
+fn run_random<F: Transcode, const W: usize>(
     operations: &[Operation],
     count: usize,
     seed: u64,
@@ -261,6 +263,7 @@ fn run_random<F: Arithmetic, const W: usize>(
 where
     Width<W>: Storage<Bits = F::Bits>,
     Decimal<Dpd>: Standard<W, Bits = F::Bits>,
+    Decimal<Bid>: Standard<W, Bits = F::Bits>,
 {
     let mut generator = Generator::<F>::new(seed, Shape::of::<F>());
     let mut tally = Tally::default();
@@ -311,6 +314,24 @@ where
                         (expected, expected_flags),
                         &mut tally,
                     );
+                }
+                if !keeps_encoding(operation) {
+                    let env = Env::IEEE.with_rounding(direction);
+                    let (bid, bid_flags) = run_floaty_bid::<F, W>(operation, &operands, env);
+                    let bid_flags = compared(bid_flags);
+                    if bid == expected && bid_flags == expected_flags {
+                        tally.passed += 1;
+                    } else {
+                        tally.fail(|| {
+                            format!(
+                                "{operation:?} {rounding:?} BID [{}]: floaty gives {} \
+                                 {bid_flags:?}, decNumber {} {expected_flags:?} ({status})",
+                                describe_operands::<F>(&operands),
+                                describe::<F>(&bid),
+                                describe::<F>(&expected),
+                            )
+                        });
+                    }
                 }
                 if answer == expected && flags == expected_flags {
                     tally.passed += 1;
@@ -379,9 +400,10 @@ fn other_skips(
 fn random_decimal64_arithmetic() {
     let tally = run_random::<Double, 64>(&arithmetic(), 30_000, 0x6464_0001);
     tally.report("random decimal64 arithmetic");
-    // The generator is seeded, so the counts are exact.
+    // The generator is seeded, so the counts are exact. Each case passes
+    // once for DPD and once for BID.
     tally.assert_counts(
-        1_199_816,
+        2_399_632,
         &[(SIGNALING_PAIR, 184)],
         &[(INVALID_PRODUCT, 1144)],
     );
@@ -391,7 +413,7 @@ fn random_decimal64_arithmetic() {
 fn random_decimal64_operations() {
     let tally = run_random::<Double, 64>(&others(), 10_000, 0x6464_0002);
     tally.report("random decimal64 operations");
-    tally.assert_counts(1_578_200, &other_skips(10_112, 584, 3784, 7320), &[]);
+    tally.assert_counts(2_836_400, &other_skips(10_112, 584, 3784, 7320), &[]);
 }
 
 #[test]
@@ -399,7 +421,7 @@ fn random_decimal128_arithmetic() {
     let tally = run_random::<Quad, 128>(&arithmetic(), 30_000, 0x0128_0001);
     tally.report("random decimal128 arithmetic");
     tally.assert_counts(
-        1_199_816,
+        2_399_632,
         &[(SIGNALING_PAIR, 184)],
         &[(INVALID_PRODUCT, 1160)],
     );
@@ -409,7 +431,7 @@ fn random_decimal128_arithmetic() {
 fn random_decimal128_operations() {
     let tally = run_random::<Quad, 128>(&others(), 10_000, 0x0128_0002);
     tally.report("random decimal128 operations");
-    tally.assert_counts(1_578_576, &other_skips(9496, 664, 4080, 7184), &[]);
+    tally.assert_counts(2_837_152, &other_skips(9496, 664, 4080, 7184), &[]);
 }
 
 #[test]
@@ -417,7 +439,7 @@ fn random_decimal32_arithmetic() {
     let tally = run_random::<Single, 32>(&arithmetic(), 30_000, 0x0032_0002);
     tally.report("random decimal32 arithmetic");
     tally.assert_counts(
-        1_199_840,
+        2_399_680,
         &[(SIGNALING_PAIR, 160)],
         &[(INVALID_PRODUCT, 928)],
     );
@@ -431,5 +453,5 @@ fn random_decimal32_operations() {
         .collect();
     let tally = run_random::<Single, 32>(&operations, 10_000, 0x0032_0003);
     tally.report("random decimal32 operations");
-    tally.assert_counts(1_256_424, &other_skips(11_608, 496, 4352, 7120), &[]);
+    tally.assert_counts(2_512_848, &other_skips(11_608, 496, 4352, 7120), &[]);
 }

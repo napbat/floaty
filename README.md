@@ -550,7 +550,7 @@ decNumber.
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, and `scale_b` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
 | The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 tests run under QEMU 10.2.1. |
-| decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations, with FTZ, DAZ, and precision limits. The minimum and maximum operations of IEEE 754-2019, by floaty's rule. |
+| decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations in every direction, with FTZ, DAZ, and precision limits, in DPD and, through the conversions of the Intel library, in BID. The minimum and maximum operations of IEEE 754-2019, by floaty's rule. |
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
 | glibc 2.43 libm of the powerpc64le cross C library, under QEMU | `sqrt`, `remainder`, `%`, `mul_add`, `next_up`, `next_down`, and `is_canonical` of `DoubleDouble<Gcc>` |

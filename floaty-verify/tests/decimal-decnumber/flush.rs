@@ -18,10 +18,11 @@
 //!   operand as that zero. The expected result is decNumber's `ToWider` or
 //!   `FromWider` of the zero.
 //!
-//! decimal32 runs without the copies, as for its random cases in
-//! `random.rs`.
+//! Each case runs on the DPD format and, except the copies, on the BID
+//! format of the width, as in `random.rs`. decimal32 runs without the
+//! copies, as for its random cases in `random.rs`.
 
-use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
+use floaty::format::{Bid, Decimal, Dpd, Standard, Storage, Width};
 use floaty::{Env, Flags, Rounding};
 use floaty_verify::decnumber::{
     self, Arithmetic, Binary, Double, Outcome, Quad, Single, Status, Unary, Widening,
@@ -31,8 +32,8 @@ use floaty_verify::dectest::Operation;
 use super::operands::{Generator, Shape};
 use super::random::{SIGNALING_PAIR, arithmetic, others};
 use super::{
-    Answer, DpdFloat, SHARED_ROUNDINGS, Tally, describe, describe_operands, direction, excluded,
-    flags_of, ieee, keeps_encoding, run_floaty_in, run_oracle,
+    Answer, DpdFloat, SHARED_ROUNDINGS, Tally, Transcode, describe, describe_operands, direction,
+    excluded, flags_of, ieee, keeps_encoding, run_floaty_bid, run_floaty_in, run_oracle,
 };
 
 /// Returns whether an operation rounds its result, so that FTZ applies.
@@ -190,10 +191,11 @@ fn behaviors(rounding: Rounding) -> [Env; 3] {
 
 /// Runs `count` random cases of every operation in format `F`, in every
 /// shared rounding mode and every behavior.
-fn run<F: Arithmetic, const W: usize>(count: usize, seed: u64) -> Tally
+fn run<F: Transcode, const W: usize>(count: usize, seed: u64) -> Tally
 where
     Width<W>: Storage<Bits = F::Bits>,
     Decimal<Dpd>: Standard<W, Bits = F::Bits>,
+    Decimal<Bid>: Standard<W, Bits = F::Bits>,
 {
     let operations: Vec<Operation> = arithmetic().into_iter().chain(others()).collect();
     run_operations::<F, W>(&operations, count, seed)
@@ -201,7 +203,7 @@ where
 
 /// Runs `count` random cases of each operation in format `F`, in every
 /// shared rounding mode and every behavior.
-fn run_operations<F: Arithmetic, const W: usize>(
+fn run_operations<F: Transcode, const W: usize>(
     operations: &[Operation],
     count: usize,
     seed: u64,
@@ -209,6 +211,7 @@ fn run_operations<F: Arithmetic, const W: usize>(
 where
     Width<W>: Storage<Bits = F::Bits>,
     Decimal<Dpd>: Standard<W, Bits = F::Bits>,
+    Decimal<Bid>: Standard<W, Bits = F::Bits>,
 {
     let mut generator = Generator::<F>::new(seed, Shape::of::<F>());
     let mut tally = Tally::default();
@@ -229,28 +232,33 @@ where
                     if let Some(note) = note {
                         tally.note(note);
                     }
-                    let (answer, flags) = run_floaty_in::<F, W>(operation, &operands, env);
-                    let denormal = if flags.contains(Flags::DENORMAL_INPUT) {
-                        Flags::DENORMAL_INPUT
-                    } else {
-                        Flags::NONE
-                    };
-                    let flags = ieee(flags) | denormal;
-                    if answer == expected && flags == expected_flags {
-                        tally.passed += 1;
-                        continue;
+                    let mut runs = vec![("DPD", run_floaty_in::<F, W>(operation, &operands, env))];
+                    if !keeps_encoding(operation) {
+                        runs.push(("BID", run_floaty_bid::<F, W>(operation, &operands, env)));
                     }
-                    tally.fail(|| {
-                        format!(
-                            "{operation:?} {rounding:?} ftz {} daz {} [{}]: floaty gives {} \
-                             {flags:?}, expected {} {expected_flags:?}",
-                            env.flush_to_zero,
-                            env.denormals_are_zero,
-                            describe_operands::<F>(&operands),
-                            describe::<F>(&answer),
-                            describe::<F>(&expected),
-                        )
-                    });
+                    for (encoding, (answer, flags)) in runs {
+                        let denormal = if flags.contains(Flags::DENORMAL_INPUT) {
+                            Flags::DENORMAL_INPUT
+                        } else {
+                            Flags::NONE
+                        };
+                        let flags = ieee(flags) | denormal;
+                        if answer == expected && flags == expected_flags {
+                            tally.passed += 1;
+                            continue;
+                        }
+                        tally.fail(|| {
+                            format!(
+                                "{operation:?} {rounding:?} {encoding} ftz {} daz {} [{}]: \
+                                 floaty gives {} {flags:?}, expected {} {expected_flags:?}",
+                                env.flush_to_zero,
+                                env.denormals_are_zero,
+                                describe_operands::<F>(&operands),
+                                describe::<F>(&answer),
+                                describe::<F>(&expected),
+                            )
+                        });
+                    }
                 }
             }
         }
@@ -290,7 +298,11 @@ fn decimal64_flush_to_zero_and_denormals_are_zero() {
     // The generator is seeded, so the counts are exact.
     let mut skipped = skips(2360, 192, 1440, 2184);
     skipped.push((SIGNALING_PAIR, 24));
-    tally.assert_counts(593_800, &skipped, &[(REPLACED, 39_000), (FLUSHED, 10_032)]);
+    tally.assert_counts(
+        1_091_600,
+        &skipped,
+        &[(REPLACED, 39_000), (FLUSHED, 10_032)],
+    );
 }
 
 #[test]
@@ -298,7 +310,7 @@ fn decimal128_flush_to_zero_and_denormals_are_zero() {
     let tally = run::<Quad, 128>(1_000, 0x0128_0F70);
     tally.report("decimal128 FTZ and DAZ");
     let skipped = skips(2824, 168, 1632, 2112);
-    tally.assert_counts(593_264, &skipped, &[(REPLACED, 38_248), (FLUSHED, 9_544)]);
+    tally.assert_counts(1_090_528, &skipped, &[(REPLACED, 38_248), (FLUSHED, 9_544)]);
 }
 
 #[test]
@@ -315,7 +327,7 @@ fn decimal32_flush_to_zero_and_denormals_are_zero() {
     tally.report("decimal32 FTZ and DAZ");
     let mut skipped = skips(2896, 96, 1128, 2352);
     skipped.push((SIGNALING_PAIR, 24));
-    tally.assert_counts(497_504, &skipped, &[(REPLACED, 37_424), (FLUSHED, 9_968)]);
+    tally.assert_counts(995_008, &skipped, &[(REPLACED, 37_424), (FLUSHED, 9_968)]);
 }
 
 /// The note of a conversion of a subnormal operand under DAZ.

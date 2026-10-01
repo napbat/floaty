@@ -2,8 +2,9 @@
 //!
 //! `add`, `sub`, `mul`, `div`, `mul_add`, `sqrt`, and `scale_b` of
 //! decimal64 and decimal128 run at limits of 1, 2, 3, 7, and `p - 1`
-//! digits, in the eight rounding modes of decNumber. The test compares the
-//! result bits, the five IEEE 754 flags, `TINY`, and `ROUNDED_UP`.
+//! digits, in the eight rounding modes of decNumber, on the DPD and the BID
+//! format. The test compares the result bits, the five IEEE 754 flags,
+//! `TINY`, and `ROUNDED_UP`.
 //!
 //! No decimal library has a precision limit, so the test applies floaty's
 //! rule to decNumber's results. The limit moves only the rounding
@@ -33,15 +34,16 @@
 
 use core::num::NonZeroU32;
 
-use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
-use floaty::{Env, Flags};
+use floaty::format::{Bid, Decimal, Dpd, Standard, Storage, Width};
+use floaty::{Env, Flags, Float};
 use floaty_verify::decnumber::{self, Arithmetic, Binary, Double, Limited, Quad, Status};
 use floaty_verify::dectest::Operation;
 
 use super::operands::{Generator, Number, Shape, digit_count, power_of_ten, signed};
 use super::{
-    Answer, DpdFloat, Report, SHARED_ROUNDINGS, Tally, compared, describe, describe_operands,
-    direction, excluded, flags_of, noted, run_floaty_in, run_oracle, scale, square_root,
+    Answer, DpdFloat, Report, SHARED_ROUNDINGS, Tally, Transcode, compared, describe,
+    describe_operands, direction, excluded, flags_of, noted, run_floaty_bid, run_floaty_in,
+    run_oracle, scale, square_root, to_bid,
 };
 
 /// The operations of the test.
@@ -230,9 +232,34 @@ where
     (bits, flags)
 }
 
+/// Runs an operation of [`run_floaty`] on the BID format of the width,
+/// through the BID and DPD conversions of the Intel library.
+fn run_floaty_bid_limited<F: Transcode, const W: usize>(
+    operation: Option<&Operation>,
+    operands: &[F::Bits],
+    env: Env,
+) -> (F::Bits, Flags)
+where
+    Width<W>: Storage<Bits = F::Bits>,
+    Decimal<Bid>: Standard<W, Bits = F::Bits>,
+{
+    use floaty_verify::intel_decimal::Format as _;
+    let Some(operation) = operation else {
+        let value = Float::<Decimal<Bid>, W>::from_bits(to_bid::<F, W>(operands[0]));
+        let (root, flags) = value.sqrt_with(env);
+        return (F::Bid::to_dpd(root.to_bits()), flags);
+    };
+    let (answer, flags) = run_floaty_bid::<F, W>(operation, operands, env);
+    let bits = answer
+        .encoding()
+        .expect("a rounded operation gives an encoding");
+    (bits, flags)
+}
+
 /// Runs one case on floaty at a precision limit, in every shared rounding
-/// mode, and compares it with the rule applied to decNumber.
-fn check_case<F: Arithmetic, const W: usize>(
+/// mode, on the DPD and the BID format, and compares it with the rule
+/// applied to decNumber.
+fn check_case<F: Transcode, const W: usize>(
     tally: &mut Tally,
     limited: Limited,
     operands: &[F::Bits],
@@ -240,6 +267,7 @@ fn check_case<F: Arithmetic, const W: usize>(
 ) where
     Width<W>: Storage<Bits = F::Bits>,
     Decimal<Dpd>: Standard<W, Bits = F::Bits>,
+    Decimal<Bid>: Standard<W, Bits = F::Bits>,
 {
     let operation = operation(limited);
     if let Some(reason) = operation
@@ -265,31 +293,40 @@ fn check_case<F: Arithmetic, const W: usize>(
         let env = Env::IEEE
             .with_rounding(direction)
             .with_precision(NonZeroU32::new(limit));
-        let (result, flags) = run_floaty::<F, W>(operation.as_ref(), operands, env);
-        let flags = compared(flags);
-        if result == want && flags == want_flags {
-            tally.passed += 1;
-            continue;
+        let runs = [
+            ("DPD", run_floaty::<F, W>(operation.as_ref(), operands, env)),
+            (
+                "BID",
+                run_floaty_bid_limited::<F, W>(operation.as_ref(), operands, env),
+            ),
+        ];
+        for (encoding, (result, flags)) in runs {
+            let flags = compared(flags);
+            if result == want && flags == want_flags {
+                tally.passed += 1;
+                continue;
+            }
+            tally.fail(|| {
+                format!(
+                    "{limited:?} limit {limit} {rounding:?} {encoding} [{}]: floaty gives {} \
+                     {flags:?}, expected {} {want_flags:?} ({status})",
+                    describe_operands::<F>(operands),
+                    describe::<F>(&Answer::Encoding(result)),
+                    describe::<F>(&Answer::Encoding(want)),
+                )
+            });
         }
-        tally.fail(|| {
-            format!(
-                "{limited:?} limit {limit} {rounding:?} [{}]: floaty gives {} {flags:?}, \
-                 expected {} {want_flags:?} ({status})",
-                describe_operands::<F>(operands),
-                describe::<F>(&Answer::Encoding(result)),
-                describe::<F>(&Answer::Encoding(want)),
-            )
-        });
     }
 }
 
 /// Runs `count` random cases of each operation at each limit in format
 /// `F`. The operands probe the edges of the format and the subnormal range
 /// of the limit.
-fn run<F: Arithmetic, const W: usize>(count: usize, seed: u64) -> Tally
+fn run<F: Transcode, const W: usize>(count: usize, seed: u64) -> Tally
 where
     Width<W>: Storage<Bits = F::Bits>,
     Decimal<Dpd>: Standard<W, Bits = F::Bits>,
+    Decimal<Bid>: Standard<W, Bits = F::Bits>,
 {
     let mut tally = Tally::default();
     for limit in limits::<F>() {
@@ -338,7 +375,7 @@ fn decimal64_precision_limit() {
     tally.report("decimal64 precision limit");
     // The generator is seeded, so the counts are exact.
     tally.assert_counts(
-        822_224,
+        1_644_448,
         &skips(736, 6072, 10_912, 56),
         &[(INVALID_PRODUCT, 384)],
     );
@@ -349,7 +386,7 @@ fn decimal128_precision_limit() {
     let tally = run::<Quad, 128>(3_000, 0x0128_0017);
     tally.report("decimal128 precision limit");
     tally.assert_counts(
-        821_992,
+        1_643_984,
         &skips(1000, 5760, 11_184, 64),
         &[(INVALID_PRODUCT, 360)],
     );
