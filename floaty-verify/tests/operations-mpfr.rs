@@ -4,7 +4,8 @@
 //! `operations::BEHAVIORS`.
 //!
 //! The pair operations are the comparisons, the total order, the sign
-//! operations, the six minimum and maximum operations, and the remainder. The
+//! operations, the ten minimum and maximum operations, the remainder, and the
+//! three augmented operations. The
 //! operations on one operand are rounding to an integral value, conversion to
 //! seven integer types, scaling, `log_b`, and the next value up and down. Three 8-bit
 //! layouts with a small exponent range also run, because a rounded integer
@@ -154,6 +155,29 @@ macro_rules! log_b_of_every_encoding {
 #[test]
 fn every_small_format_operand_log_b() {
     floaty_verify::for_each_small_format!(log_b_of_every_encoding);
+}
+
+/// Checks the augmented operations on every pair of encodings of one format
+/// of the small format lists, in every behavior.
+macro_rules! augmented_of_every_pair {
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+        let format = Format::of::<floaty::$alias>($specials);
+        let cases = cases::<$standard, $width>();
+        for env in &BEHAVIORS {
+            for x in &cases {
+                for y in &cases {
+                    check::check_augmented(x, y, &format, env, |x, y, operation, env| {
+                        operation.apply(x, y, env)
+                    });
+                }
+            }
+        }
+    }};
+}
+
+#[test]
+fn every_small_format_pair_augmented() {
+    floaty_verify::for_each_small_format!(augmented_of_every_pair);
 }
 
 /// Runs a check for 8-bit layouts whose largest finite value is below

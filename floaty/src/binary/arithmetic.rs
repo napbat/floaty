@@ -19,22 +19,22 @@ use crate::unpacked::{Number, Unpacked};
 
 /// A nonzero finite value: `significand * 2^exponent`.
 #[derive(Clone, Copy)]
-struct Term<L> {
-    negative: bool,
-    exponent: i64,
-    significand: L,
+pub(super) struct Term<L> {
+    pub(super) negative: bool,
+    pub(super) exponent: i64,
+    pub(super) significand: L,
 }
 
 impl<L: Limbs> Term<L> {
     /// Returns the weight of the highest significand bit.
     #[inline]
-    fn top(&self) -> i64 {
+    pub(super) fn top(&self) -> i64 {
         self.exponent + i64::from(self.significand.bit_length()) - 1
     }
 }
 
 /// The exact sum of two terms.
-enum Sum<L> {
+pub(super) enum Sum<L> {
     /// A nonzero sum. The lowest bit can mark a value that is not exact.
     Value(Unrounded<L>),
     /// An exact zero.
@@ -58,7 +58,7 @@ enum Sum<L> {
 // binary128 addition with a mode from 25.8 to 19.7 ns in the benchmark.
 #[allow(clippy::inline_always)]
 #[inline(always)]
-fn sum<L: Limbs>(first: Term<L>, second: Term<L>) -> Sum<L> {
+pub(super) fn sum<L: Limbs>(first: Term<L>, second: Term<L>) -> Sum<L> {
     let highest = first.top().max(second.top());
     let floor = highest - i64::from(L::BITS - 3);
     let common = first.exponent.min(second.exponent).max(floor);
@@ -111,7 +111,7 @@ where
 
     /// Returns `significand * 2^exponent` of a finite operand, widened.
     #[inline]
-    fn term<L: Widen>(negative: bool, exponent: i32, significand: L) -> Term<L::Double> {
+    pub(super) fn term<L: Widen>(negative: bool, exponent: i32, significand: L) -> Term<L::Double> {
         Term {
             negative,
             exponent: i64::from(exponent),
@@ -476,7 +476,7 @@ where
 
     /// Returns the exact product of two nonzero finite operands.
     #[inline]
-    fn product<L: Widen>(a: Number<L>, b: Number<L>) -> Term<L::Double> {
+    pub(super) fn product<L: Widen>(a: Number<L>, b: Number<L>) -> Term<L::Double> {
         Term {
             negative: a.negative != b.negative,
             exponent: i64::from(a.exponent) + i64::from(b.exponent),
@@ -537,7 +537,7 @@ where
 
 impl<L: Limbs> Unrounded<L> {
     /// Returns an exact term as a value to round.
-    fn from_term(term: Term<L>) -> Self {
+    pub(super) fn from_term(term: Term<L>) -> Self {
         Self {
             negative: term.negative,
             exponent: i32::try_from(term.exponent)

@@ -19,6 +19,7 @@ mod compare;
 mod decimal;
 mod integer;
 
+pub use self::binary::Augmented;
 pub(crate) use self::integer::from_host_integer;
 
 /// A floating-point value of standard `S` at width `W`, with default mode `M`.

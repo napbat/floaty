@@ -25,6 +25,7 @@ use floaty::{
 use floaty_verify::encodings::{IntegerBit, Layout, boundary_encodings, to_limbs};
 use floaty_verify::mpfr::{DIRECTIONS, Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
+use floaty_verify::operations::augmented::Augmentation;
 use floaty_verify::operations::check::{self, Case};
 use floaty_verify::operations::integral::IntegerValue;
 use floaty_verify::random::SplitMix64;
@@ -213,6 +214,9 @@ fn to_ints<S: Standard<W>, const W: usize>(x: &Case<S, W>, env: &Env) {
     check::check_to_int::<u128, S, W>(x, env);
 }
 
+/// The results and the flags of an augmented operation.
+type AugmentedWithFlags<S, const W: usize> = (floaty::Augmented<Float<S, W>>, Flags);
+
 /// What one run of a format checks.
 struct Plan<'a, S: Standard<W>, const W: usize> {
     layout: Layout,
@@ -220,6 +224,8 @@ struct Plan<'a, S: Standard<W>, const W: usize> {
     make: &'a dyn Fn(&Integer) -> Float<S, W>,
     /// `log_b_with`, which only the binary formats have.
     log_b: &'a dyn Fn(Float<S, W>, Env) -> (Float<S, W>, Flags),
+    /// The augmented operations, which only the binary formats have.
+    augmented: &'a dyn Fn(Float<S, W>, Float<S, W>, Augmentation, Env) -> AugmentedWithFlags<S, W>,
     /// The number of random encodings and of remainder pairs.
     count: usize,
     /// The behaviors of the operations on pairs.
@@ -258,9 +264,11 @@ fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
             check::check_comparisons(x, y, env);
             check::check_min_max(x, y, &format, env);
             check::check_remainder(x, y, &format, env);
+            check::check_augmented(x, y, &format, env, plan.augmented);
         }
         for (x, y) in &near {
             check::check_remainder(x, y, &format, env);
+            check::check_augmented(x, y, &format, env, plan.augmented);
         }
     }
     for env in plan.single_envs {
@@ -284,6 +292,7 @@ fn bfloat16_and_tf32() {
         layout: Layout::BFLOAT16,
         make: &from_u16::<Binary<8>, 16>,
         log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -295,6 +304,7 @@ fn bfloat16_and_tf32() {
             TF32::from_bits(bits.to_u32().expect("a TF32 encoding has 19 bits"))
         },
         log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -308,6 +318,7 @@ fn binary16_binary32_binary64_and_binary128() {
         layout: Layout::BINARY16,
         make: &from_u16::<Binary<5>, 16>,
         log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -319,6 +330,7 @@ fn binary16_binary32_binary64_and_binary128() {
             F32::from_bits(bits.to_u32().expect("a binary32 encoding fits a u32"))
         },
         log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -330,6 +342,7 @@ fn binary16_binary32_binary64_and_binary128() {
             F64::from_bits(bits.to_u64().expect("a binary64 encoding fits a u64"))
         },
         log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
         count: 3_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -341,6 +354,7 @@ fn binary16_binary32_binary64_and_binary128() {
             F128::from_bits(bits.to_u128().expect("a binary128 encoding fits a u128"))
         },
         log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
         count: 2_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -356,6 +370,7 @@ fn a_layout_whose_exponent_crosses_a_limb() {
             Wide72::from_bits(bits.to_u128().expect("a 72-bit encoding fits a u128"))
         },
         log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
         count: 3_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -392,6 +407,7 @@ fn x87_extended_with_precision_control() {
             F80::from_bits(bits.to_u128().expect("an x87 encoding fits a u128"))
         },
         log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
         count: 3_000,
         pair_envs: &pair_envs,
         single_envs: &single_envs,
@@ -405,6 +421,7 @@ fn binary256_and_binary512() {
         layout: Layout::BINARY256,
         make: &|bits: &Integer| F256::from_bits(to_limbs::<4>(bits)),
         log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
         count: 1_500,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -414,6 +431,7 @@ fn binary256_and_binary512() {
         layout: Layout::BINARY512,
         make: &|bits: &Integer| F512::from_bits(to_limbs::<8>(bits)),
         log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
         count: 1_500,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -431,6 +449,7 @@ macro_rules! other_wide_format {
             layout: Layout::ieee($width, $exponent_bits),
             make: &|bits: &Integer| floaty::$alias::from_bits(to_limbs::<$limbs>(bits)),
             log_b: &|value, env| value.log_b_with(env),
+            augmented: &|x, y, operation, env| operation.apply(x, y, env),
             count: 500,
             pair_envs: &BEHAVIORS,
             single_envs: &BEHAVIORS,

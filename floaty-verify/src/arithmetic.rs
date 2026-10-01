@@ -238,7 +238,12 @@ fn zero_sum_sign(env: &Env) -> bool {
 
 /// Rounds an MPFR result, computed at the format precision plus 64 bits
 /// toward zero, to the format.
-fn finish(value: &BigFloat, ordering: Ordering, format: &Format, env: &Env) -> (Value, Flags) {
+pub(crate) fn finish(
+    value: &BigFloat,
+    ordering: Ordering,
+    format: &Format,
+    env: &Env,
+) -> (Value, Flags) {
     let (integer, exponent) = value
         .to_integer_exp()
         .expect("the result is finite and nonzero");
@@ -252,7 +257,7 @@ fn finish(value: &BigFloat, ordering: Ordering, format: &Format, env: &Env) -> (
 }
 
 /// The working precision of MPFR.
-fn working(format: &Format) -> u32 {
+pub(crate) fn working(format: &Format) -> u32 {
     format.precision + 64
 }
 

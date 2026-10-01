@@ -5,11 +5,12 @@
 //! floaty differs from the oracle. A float result must also be canonical.
 
 use floaty::format::Standard;
-use floaty::{Env, Flags, Float, TotalOrder};
+use floaty::{Augmented, Env, Flags, Float, TotalOrder};
 use rug::Integer;
 
 use crate::encodings::Layout;
 
+use super::augmented::{self, Augmentation};
 use super::compare::{self, MinMax};
 use super::integral::{self, IntegerValue, to_int_value};
 use super::{
@@ -253,6 +254,36 @@ pub fn check_log_b<S: Standard<W>, const W: usize>(
         &super::log_b(&x.sample.operand, format, env),
         &|| format!("log_b {:?} {env:?}", x.value),
     );
+}
+
+/// Checks the augmented operations on one pair. `run` runs an operation of
+/// floaty, which only the binary formats have.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_augmented<S: Standard<W>, const W: usize>(
+    x: &Case<S, W>,
+    y: &Case<S, W>,
+    format: &Format,
+    env: &Env,
+    run: impl Fn(Float<S, W>, Float<S, W>, Augmentation, Env) -> (Augmented<Float<S, W>>, Flags),
+) {
+    for operation in Augmentation::ALL {
+        let (result, flags) = run(x.value, y.value, operation, *env);
+        let context = || format!("{operation:?} {:?} {:?} {env:?}", x.value, y.value);
+        assert!(
+            result.head.is_canonical() && result.tail.is_canonical(),
+            "{}: {result:?} is canonical",
+            context()
+        );
+        assert_eq!(
+            (outcome(result.head), outcome(result.tail), flags),
+            augmented::augmented(operation, &x.sample.operand, &y.sample.operand, format, env),
+            "{}",
+            context()
+        );
+    }
 }
 
 /// Checks `to_int_with` into the integer type `I` on one value.
