@@ -266,6 +266,20 @@ fn to_ints<S: Standard<W>, const W: usize>(x: &Case<S, W>, env: &Env) {
     check::check_to_int::<u128, S, W>(x, env);
 }
 
+/// `pown_with` or `rootn_with` of a format.
+type Power<S, const W: usize> = dyn Fn(Float<S, W>, i64, Env) -> (Float<S, W>, Flags);
+
+/// The exponents of the `pown` and `rootn` checks of the wide formats: the
+/// ends of the exact range, small exponents, and the steps past the limit.
+const WIDE_POWERS: [i64; 16] = [
+    -65, -64, -63, -7, -3, -2, -1, 1, 2, 3, 7, 63, 64, 65, 1000, -1000,
+];
+
+/// The number of samples of each wide format that the `pown` and `rootn`
+/// checks take: the boundary encodings first, then random encodings. The
+/// exact powers of the widest formats are slow in a test build.
+const POWER_SAMPLES: usize = 256;
+
 /// The results and the flags of an augmented operation.
 type AugmentedWithFlags<S, const W: usize> = (floaty::Augmented<Float<S, W>>, Flags);
 
@@ -284,6 +298,8 @@ struct Plan<'a, S: Standard<W>, const W: usize> {
     hypot: &'a dyn Fn(Float<S, W>, Float<S, W>, Env) -> (Float<S, W>, Flags),
     /// `reciprocal_sqrt_with`, which only the binary formats have.
     reciprocal_sqrt: &'a dyn Fn(Float<S, W>, Env) -> (Float<S, W>, Flags),
+    /// `pown_with` and `rootn_with`, which only the binary formats have.
+    powers: (&'a Power<S, W>, &'a Power<S, W>),
     /// The number of random encodings and of remainder pairs.
     count: usize,
     /// The behaviors of the operations on pairs.
@@ -339,11 +355,14 @@ fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
         }
     }
     for env in plan.single_envs {
-        for x in &samples {
+        for (index, x) in samples.iter().enumerate() {
             check::check_integral_and_next(x, &format, env);
             check::check_scale_b(x, &scales(x, &format), &format, env);
             check::check_log_b(x, &format, env, plan.log_b);
             check::check_reciprocal_sqrt(x, &format, env, plan.reciprocal_sqrt);
+            if index < POWER_SAMPLES {
+                check::check_powers(x, &WIDE_POWERS, &format, env, plan.powers);
+            }
             to_ints(x, env);
         }
     }
@@ -354,8 +373,8 @@ fn from_u16<S: Standard<W, Bits = u16>, const W: usize>(bits: &Integer) -> Float
     Float::from_bits(bits.to_u16().expect("the encoding fits 16 bits"))
 }
 
-/// Checks `reciprocal_sqrt_with` on every encoding of a 16-bit format, in
-/// every behavior.
+/// Checks `reciprocal_sqrt_with`, and `pown_with` and `rootn_with` with a few
+/// exponents, on every encoding of a 16-bit format, in every behavior.
 fn every_reciprocal_sqrt<const E: u32>(layout: Layout)
 where
     Binary<E>: Standard<16, Bits = u16>,
@@ -371,12 +390,17 @@ where
             check::check_reciprocal_sqrt(&x, &format, env, |value, env| {
                 value.reciprocal_sqrt_with(env)
             });
+            let powers = (
+                |value: Float<Binary<E>, 16>, n, env| value.pown_with(n, env),
+                |value: Float<Binary<E>, 16>, n, env| value.rootn_with(n, env),
+            );
+            check::check_powers(&x, &[-3, 2, 3, 65], &format, env, powers);
         }
     }
 }
 
 #[test]
-fn every_binary16_and_bfloat16_reciprocal_sqrt() {
+fn every_binary16_and_bfloat16_one_operand_function() {
     every_reciprocal_sqrt::<5>(Layout::BINARY16);
     every_reciprocal_sqrt::<8>(Layout::BFLOAT16);
 }
@@ -391,6 +415,10 @@ fn bfloat16_and_tf32() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -406,6 +434,10 @@ fn bfloat16_and_tf32() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -427,6 +459,10 @@ fn layouts_whose_precision_fills_the_storage() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 2_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -442,6 +478,10 @@ fn layouts_whose_precision_fills_the_storage() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 2_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -459,6 +499,10 @@ fn binary16_binary32_binary64_and_binary128() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -474,6 +518,10 @@ fn binary16_binary32_binary64_and_binary128() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -489,6 +537,10 @@ fn binary16_binary32_binary64_and_binary128() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 3_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -504,6 +556,10 @@ fn binary16_binary32_binary64_and_binary128() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 2_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -523,6 +579,10 @@ fn a_layout_whose_exponent_crosses_a_limb() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 3_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -563,6 +623,10 @@ fn x87_extended_with_precision_control() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 3_000,
         pair_envs: &pair_envs,
         single_envs: &single_envs,
@@ -580,6 +644,10 @@ fn binary256_and_binary512() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 1_500,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -593,6 +661,10 @@ fn binary256_and_binary512() {
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        powers: (
+            &|value, n, env| value.pown_with(n, env),
+            &|value, n, env| value.rootn_with(n, env),
+        ),
         count: 1_500,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -614,6 +686,10 @@ macro_rules! other_wide_format {
             payload: &|value, operation| operation.apply(value),
             hypot: &|x, y, env| x.hypot_with(y, env),
             reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+            powers: (
+                &|value, n, env| value.pown_with(n, env),
+                &|value, n, env| value.rootn_with(n, env),
+            ),
             count: 500,
             pair_envs: &BEHAVIORS,
             single_envs: &BEHAVIORS,

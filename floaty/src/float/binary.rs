@@ -1,6 +1,6 @@
-//! The operations of the binary formats alone: `log_b`, `hypot`, the
-//! reciprocal square root, the augmented operations, and the NaN payload
-//! operations.
+//! The operations of the binary formats alone: `log_b`, the algebraic
+//! functions `hypot`, the reciprocal square root, `pown`, and `rootn`, the
+//! augmented operations, and the NaN payload operations.
 
 use super::Float;
 use crate::binary::Layout;
@@ -151,6 +151,82 @@ where
             self.bits.to_limbs(),
             &behavior.apply::<M>().env(),
         );
+        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+    }
+
+    /// Returns `self^n`, with the default mode.
+    #[must_use]
+    pub fn pown(self, n: i64) -> Self {
+        self.pown_with(n, M::default()).0
+    }
+
+    /// Returns `self^n` for an integer `n`, as IEEE 754-2019 `pown` does, and
+    /// the flags.
+    ///
+    /// For `|n|` up to 64 the exact power rounds once in the direction of
+    /// the behavior. A correctly rounded power needs about `|n| * p` bits in
+    /// the worst case, so past 64 the power multiplies by squaring, from the
+    /// top bit of `|n|`. Each product then rounds to the precision in the
+    /// direction of the behavior, without an exponent limit. The last
+    /// product of a positive `n` rounds into the format, and a negative `n`
+    /// ends with the reciprocal, rounded into the format. The flags are those
+    /// of that last rounding, and `INEXACT` when an earlier step rounds.
+    ///
+    /// The special cases follow IEEE 754-2019 section 9.2.1. `n = 0` gives 1
+    /// for every value, a quiet NaN and an infinity included, but a
+    /// signaling NaN gives a NaN and signals invalid. A zero gives a zero for
+    /// a positive `n`, and an infinity with divide-by-zero for a negative
+    /// `n`. An infinity gives an infinity for a positive `n`, and a zero for a
+    /// negative `n`. Each takes the sign of the value for an odd `n`, and is
+    /// positive for an even `n`. A format without an infinity gives its NaN
+    /// or its largest finite value for an infinite result.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// // 3^40 is 12157665459056928801, which binary64 rounds.
+    /// let (power, flags) = F64::from_bits(0x4008_0000_0000_0000).pown_with(40, Env::IEEE);
+    /// assert_eq!((power.to_bits(), flags), (0x43E5_1716_8A45_23FD, Flags::INEXACT));
+    /// ```
+    #[must_use]
+    pub fn pown_with(self, n: i64, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) =
+            Layout::<E, Enc, W>::pown(self.bits.to_limbs(), n, &behavior.apply::<M>().env());
+        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+    }
+
+    /// Returns `self^(1/n)`, with the default mode.
+    #[must_use]
+    pub fn rootn(self, n: i64) -> Self {
+        self.rootn_with(n, M::default()).0
+    }
+
+    /// Returns `self^(1/n)` for an integer `n` from -64 to 64, as IEEE
+    /// 754-2019 `rootn` does, and the flags.
+    ///
+    /// The exact root rounds once in the direction of the behavior. A
+    /// correctly rounded root needs about `|n| * p` bits in the worst case,
+    /// so `n = 0` and `|n| > 64` give the default NaN and signal invalid.
+    ///
+    /// The special cases follow IEEE 754-2019 section 9.2.1. A zero gives a
+    /// zero for a positive `n`, and an infinity with divide-by-zero for a
+    /// negative `n`. +inf gives +inf for a positive `n` and +0 for a negative
+    /// `n`. A negative value or -inf gives the default NaN and signals
+    /// invalid for an even `n`. An odd `n` keeps the sign. A NaN gives the NaN
+    /// of the NaN rule.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let cube_root = |bits| F64::from_bits(bits).rootn_with(3, Env::IEEE);
+    /// // The cube root of -27 is -3 exactly, and that of 2 rounds.
+    /// assert_eq!(cube_root(0xC03B_0000_0000_0000), (F64::from_bits(0xC008_0000_0000_0000), Flags::NONE));
+    /// assert_eq!(cube_root(0x4000_0000_0000_0000).0.to_bits(), 0x3FF4_28A2_F98D_728B);
+    /// ```
+    #[must_use]
+    pub fn rootn_with(self, n: i64, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) =
+            Layout::<E, Enc, W>::rootn(self.bits.to_limbs(), n, &behavior.apply::<M>().env());
         (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
     }
 

@@ -355,6 +355,64 @@ pub fn check_reciprocal_sqrt<S: Standard<W>, const W: usize>(
     );
 }
 
+/// The exponents of the `pown` and `rootn` checks: every `n` up to 66 in
+/// magnitude, which crosses the limit of 64, and the extremes of `i64`.
+pub const POWERS: [i64; 141] = {
+    let mut powers = [0; 141];
+    let (mut index, mut power) = (0, -66);
+    while power <= 66 {
+        powers[index] = power;
+        index += 1;
+        power += 1;
+    }
+    let extremes = [
+        100,
+        -100,
+        1 << 40,
+        -(1 << 40),
+        0x7FFF_FFFF_FFFF_FFFF,
+        -0x7FFF_FFFF_FFFF_FFFF,
+        i64::MIN,
+        1023,
+    ];
+    while index < 141 {
+        powers[index] = extremes[index - 133];
+        index += 1;
+    }
+    powers
+};
+
+/// Checks `pown_with` and `rootn_with` on one value for each exponent of
+/// `powers`. `pown` and `rootn` run the operations of floaty, which only the
+/// binary formats have.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_powers<S: Standard<W>, const W: usize>(
+    x: &Case<S, W>,
+    powers: &[i64],
+    format: &Format,
+    env: &Env,
+    (pown, rootn): (
+        impl Fn(Float<S, W>, i64, Env) -> (Float<S, W>, Flags),
+        impl Fn(Float<S, W>, i64, Env) -> (Float<S, W>, Flags),
+    ),
+) {
+    for &n in powers {
+        check_float(
+            pown(x.value, n, *env),
+            &algebraic::pown(&x.sample.operand, n, format, env),
+            &|| format!("pown {:?} {n} {env:?}", x.value),
+        );
+        check_float(
+            rootn(x.value, n, *env),
+            &algebraic::rootn(&x.sample.operand, n, format, env),
+            &|| format!("rootn {:?} {n} {env:?}", x.value),
+        );
+    }
+}
+
 /// Checks `to_int_with` into the integer type `I` on one value.
 ///
 /// # Panics

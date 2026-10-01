@@ -7,8 +7,9 @@
 //! operations, the ten minimum and maximum operations, the remainder, and the
 //! three augmented operations, and `hypot`. The operations on one operand are
 //! rounding to an integral value, conversion to seven integer types,
-//! scaling, `log_b`, the reciprocal square root, the NaN payload operations,
-//! and the next value up and down. Three 8-bit layouts with a small
+//! scaling, `log_b`, the reciprocal square root, `pown` and `rootn` with
+//! every `n` up to 66 in magnitude and the extremes, the NaN payload
+//! operations, and the next value up and down. Three 8-bit layouts with a small
 //! exponent range also run, because a rounded integer can overflow them, and
 //! they run the operations that only the binary formats have.
 
@@ -174,8 +175,9 @@ fn every_small_format_operand_payload() {
     floaty_verify::for_each_small_format!(payload_of_every_encoding);
 }
 
-/// Checks `hypot_with` on every pair, and `reciprocal_sqrt_with` on every
-/// encoding, of one format of the small format lists, in every behavior.
+/// Checks `hypot_with` on every pair, and `reciprocal_sqrt_with`, `pown_with`,
+/// and `rootn_with` on every encoding, of one format of the small format
+/// lists, in every behavior.
 macro_rules! algebraic_of_every_encoding {
     ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
         let format = Format::of::<floaty::$alias>($specials);
@@ -185,6 +187,11 @@ macro_rules! algebraic_of_every_encoding {
                 check::check_reciprocal_sqrt(x, &format, env, |value, env| {
                     value.reciprocal_sqrt_with(env)
                 });
+                let powers = (
+                    |value: floaty::$alias, n, env| value.pown_with(n, env),
+                    |value: floaty::$alias, n, env| value.rootn_with(n, env),
+                );
+                check::check_powers(x, &check::POWERS, &format, env, powers);
                 for y in &cases {
                     check::check_hypot(x, y, &format, env, |x, y, env| x.hypot_with(y, env));
                 }
@@ -194,7 +201,7 @@ macro_rules! algebraic_of_every_encoding {
 }
 
 #[test]
-fn every_small_format_pair_hypot_and_reciprocal_sqrt() {
+fn every_small_format_algebraic_function() {
     floaty_verify::for_each_small_format!(algebraic_of_every_encoding);
 }
 
@@ -252,6 +259,8 @@ where
             check::check_reciprocal_sqrt(x, &format, env, |value, env| {
                 value.reciprocal_sqrt_with(env)
             });
+            let powers = (Float::pown_with, Float::rootn_with);
+            check::check_powers(x, &check::POWERS, &format, env, powers);
             for y in &cases {
                 check::check_hypot(x, y, &format, env, Float::hypot_with);
                 check::check_augmented(x, y, &format, env, |x, y, operation, env| {

@@ -11,6 +11,7 @@ mod convert;
 mod from_decimal;
 mod integral;
 mod payload;
+mod power;
 mod reduction;
 mod remainder;
 mod scale;

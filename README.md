@@ -21,9 +21,10 @@ binary lifters, decompilers, constant folders, and FPU emulators.
 - **The IEEE 754 operations.** Comparisons, total order, the IEEE 754-2019
   minimum, maximum, and magnitude operations and the IEEE 754-2008 `minNum`
   and `maxNum`, the remainder, rounding to an integral value, integer
-  conversions up to 512 bits, `scale_b` and `log_b`, `hypot` and the
-  reciprocal square root of the binary formats, correctly rounded, the IEEE
-  754-2019 augmented addition, subtraction, and multiplication of the binary
+  conversions up to 512 bits, `scale_b` and `log_b`, `hypot`, the
+  reciprocal square root, `pown`, and `rootn` of the binary formats,
+  correctly rounded, the last two for `|n|` up to 64, the IEEE 754-2019
+  augmented addition, subtraction, and multiplication of the binary
   formats, `next_up` and `next_down`, the sign operations, the NaN payload
   operations, the reduction operations of the binary formats, and the
   decimal quantum operations. The sums of the reductions round once. The
@@ -551,7 +552,7 @@ decNumber.
 | Reference | What it checks |
 | --- | --- |
 | Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in the six directions of TestFloat, under four NaN rules |
-| MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, with FTZ, DAZ, and saturation, and with unsupported operands, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, from binary32, binary64, x87 extended, and binary128 to them, and between every binary format and the decimal formats, in every behavior of the conversion tests. The truncated remainder. `hypot` and the reciprocal square root, against `mpfr_hypot` and `mpfr_rec_sqrt`. The augmented operations, whose tail `mpfr_sum` rounds. The sums of the reduction operations, with `mpfr_sum` and `mpfr_dot`, and each step of the scaled products. The NaN payload operations of every binary format, by floaty's rule. The operations of `DoubleDouble` on its exact value, by their rules, with exact rationals. Each binary64 step of the other `DoubleDouble` operations, in the behaviors that libgcc and QD do not define. |
+| MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, with FTZ, DAZ, and saturation, and with unsupported operands, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, from binary32, binary64, x87 extended, and binary128 to them, and between every binary format and the decimal formats, in every behavior of the conversion tests. The truncated remainder. `hypot`, the reciprocal square root, `pown`, and `rootn`, against `mpfr_hypot`, `mpfr_rec_sqrt`, `mpfr_pow_si`, and `mpfr_rootn_si`, and the rounded steps of `pown` past `|n| = 64`. The augmented operations, whose tail `mpfr_sum` rounds. The sums of the reduction operations, with `mpfr_sum` and `mpfr_dot`, and each step of the scaled products. The NaN payload operations of every binary format, by floaty's rule. The operations of `DoubleDouble` on its exact value, by their rules, with exact rationals. Each binary64 step of the other `DoubleDouble` operations, in the behaviors that libgcc and QD do not define. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, `scale_b`, and `log_b` against `ilogb` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
 | The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 tests run under QEMU 10.2.1. |
@@ -592,8 +593,10 @@ The minimum supported Rust version is 1.85. The crate uses edition 2024.
 - Presets for x86 SSE and x87 only.
 - No decimal formats wider than 128 bits. No hardware or major library
   uses them.
-- No reduction operations, `hypot`, or reciprocal square root for the
-  decimal formats.
+- No reduction operations or algebraic functions for the decimal formats.
+- `pown` rounds once only for `|n|` up to 64, and `rootn` takes only those
+  `n`: a correctly rounded result for every `n` needs memory that grows
+  with `n`. Past 64, `pown` rounds each step of its squaring.
 - QEMU stands in for POWER hardware in the `Gcc` tests and for
   `mode::Libgcc`.
 

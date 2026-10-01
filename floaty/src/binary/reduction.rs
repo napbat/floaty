@@ -512,7 +512,7 @@ where
     }
 
     /// Returns 1 as a number.
-    fn one<L: Limbs>() -> Number<L> {
+    pub(super) fn one<L: Limbs>() -> Number<L> {
         Number {
             negative: false,
             exponent: -Self::SHIFT,
