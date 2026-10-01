@@ -7,30 +7,50 @@
 //! context.
 //!
 //! Each case whose result is a NaN in the direction to nearest even also runs
-//! with the `DefaultNan` rule. It must give floaty's default NaN, quiet with
-//! a zero payload, with the flags of the case. The NaN rule selects only the
-//! NaN, so the flags do not change. The decimal32 operations leave out the copies, because
+//! with each NaN rule of [`NAN_RULES`]. It must give the NaN that the rule
+//! selects from the NaN operands, by `floaty_verify::mpfr::select_nan`, and
+//! the flags of the case. An invalid operation without a NaN operand gives
+//! the default NaN of the rule. A fused multiply-add offers its NaN operands
+//! in the fused order of the rule, and `0 * inf` with a NaN addend follows
+//! its invalid-product rule, as the documentation of `FusedNanOrder` and
+//! `InvalidProduct` states. decNumber encodes the expected NaN from its text.
+//! The decimal32 operations leave out the copies, because
 //! decNumber's arbitrary-precision copies give a canonical encoding, and
 //! floaty's sign operations keep the bits. The `dd` and `dq` vectors and the
 //! decimal64 and decimal128 random cases check the copies.
 
-use floaty::Env;
-use floaty::env::{NanPropagation, NanRule};
+use floaty::env::{FusedNanOrder, InvalidProduct, NanPropagation, NanRule};
 use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
-use floaty_verify::decnumber::{Arithmetic, Binary, Double, Quad, Single, Unary};
+use floaty::{Decoded, Env, Flags};
+use floaty_verify::decnumber::{self, Arithmetic, Binary, Double, Quad, Single, Unary};
 use floaty_verify::dectest::Operation;
+use floaty_verify::mpfr::{Nan, select_nan};
+use rug::Integer;
+use rug::integer::Order;
 
 use super::operands::{Generator, Shape};
 use super::{
-    Answer, Report, SHARED_ROUNDINGS, Tally, compared, describe, describe_operands, details,
-    direction, excluded, flags_of, keeps_encoding, noted, run_floaty, run_floaty_in,
+    Answer, DpdFloat, Report, SHARED_ROUNDINGS, Tally, compared, describe, describe_operands,
+    details, direction, excluded, flags_of, keeps_encoding, noted, run_floaty, run_floaty_in,
     run_floaty_static, run_oracle,
 };
 
-/// The behavior of the default-NaN cases: round to nearest even, with a
-/// negative default NaN, so that the sign of the result shows the rule.
-const DEFAULT_NAN: Env =
-    Env::IEEE.with_nan(NanRule::new(NanPropagation::DefaultNan).with_default_negative(true));
+/// The NaN rules of the NaN cases: the default NaN, negative so that its
+/// sign shows the rule; the first operand, with a NaN addend before the
+/// invalid product; the larger significand, with the addend first and a
+/// signaling invalid product; and the signaling NaN first, with the addend
+/// second, as on PowerPC.
+const NAN_RULES: [NanRule; 4] = [
+    NanRule::new(NanPropagation::DefaultNan).with_default_negative(true),
+    NanRule::new(NanPropagation::FirstOperand).with_invalid_product(InvalidProduct::YieldsToNan),
+    NanRule::new(NanPropagation::LargerSignificand)
+        .with_default_negative(true)
+        .with_fused_order(FusedNanOrder::AddendFirst)
+        .with_invalid_product(InvalidProduct::Signals),
+    NanRule::new(NanPropagation::SignalingFirst)
+        .with_fused_order(FusedNanOrder::AddendSecond)
+        .with_invalid_product(InvalidProduct::SignalsAndYieldsToNan),
+];
 
 /// Returns `true` for a DPD encoding of `W` bits that is a NaN: its five
 /// combination bits below the sign are all ones.
@@ -39,22 +59,99 @@ fn is_nan<const W: usize>(bits: u128) -> bool {
     (bits >> (width - 6)) & 0x1F == 0x1F
 }
 
-/// Returns the DPD encoding of `W` bits of the default NaN of
-/// [`DEFAULT_NAN`]: negative, quiet, and with a zero payload.
-fn default_nan<const W: usize>() -> u128 {
-    let width = u32::try_from(W).expect("a width fits a u32");
-    0xFC << (width - 8)
+/// Returns an operand as a NaN of the oracle, or `None` for a number.
+fn nan_of<const W: usize>(bits: <Width<W> as Storage>::Bits) -> Option<Nan>
+where
+    Width<W>: Storage,
+    Decimal<Dpd>: Standard<W, Bits = <Width<W> as Storage>::Bits>,
+{
+    match DpdFloat::<W>::from_bits(bits).decode::<2>() {
+        Decoded::Nan {
+            negative,
+            signaling,
+            payload,
+        } => Some(Nan {
+            negative,
+            signaling,
+            payload: Integer::from_digits(&payload, Order::Lsf),
+        }),
+        _ => None,
+    }
 }
 
-/// Runs a case whose decNumber result `expected` is a NaN with the
-/// `DefaultNan` rule, and records a failure when floaty does not give the
-/// default NaN with `expected_flags`. Returns `true` when the case runs.
-fn check_default_nan<F: Arithmetic, const W: usize>(
+/// Returns the NaN that `env` gives for an operation on `operands`, and
+/// whether the invalid product of a fused multiply-add signals invalid.
+fn expected_nan<const W: usize>(
+    operation: &Operation,
+    operands: &[<Width<W> as Storage>::Bits],
+    env: &Env,
+) -> (Nan, bool)
+where
+    Width<W>: Storage,
+    Decimal<Dpd>: Standard<W, Bits = <Width<W> as Storage>::Bits>,
+{
+    let nans: Vec<Option<Nan>> = operands.iter().map(|&bits| nan_of::<W>(bits)).collect();
+    let offer = |list: &[&Option<Nan>]| -> Option<Nan> {
+        let offered: Vec<Nan> = list.iter().filter_map(|nan| (*nan).clone()).collect();
+        (!offered.is_empty()).then(|| select_nan(&offered, env))
+    };
+    let Operation::Fma = operation else {
+        let all: Vec<&Option<Nan>> = nans.iter().collect();
+        return (offer(&all).unwrap_or_else(|| Nan::default_of(env)), false);
+    };
+    let [first, second, addend] = &nans[..] else {
+        panic!("a fused multiply-add takes three operands");
+    };
+    if first.is_some() || second.is_some() {
+        let nan = match env.nan.fused_order {
+            FusedNanOrder::ProductFirst => {
+                let product = offer(&[first, second]);
+                offer(&[&product, addend])
+            }
+            FusedNanOrder::AddendFirst => offer(&[addend, first, second]),
+            FusedNanOrder::AddendSecond => offer(&[first, addend, second]),
+            other => panic!("the test has no rule for {other:?}"),
+        };
+        return (nan.expect("a factor is a NaN"), false);
+    }
+    let Some(addend) = addend else {
+        // An invalid operation of numbers, such as `inf * 0 + inf`.
+        return (Nan::default_of(env), false);
+    };
+    let zero_times_infinity = {
+        let class = |bits| DpdFloat::<W>::from_bits(bits).classify();
+        let (a, b) = (class(operands[0]), class(operands[1]));
+        matches!(
+            (a, b),
+            (floaty::Class::Zero, floaty::Class::Infinite)
+                | (floaty::Class::Infinite, floaty::Class::Zero)
+        )
+    };
+    if !zero_times_infinity {
+        return (select_nan(core::slice::from_ref(addend), env), false);
+    }
+    match env.nan.invalid_product {
+        InvalidProduct::Signals => (
+            select_nan(&[Nan::default_of(env), addend.clone()], env),
+            true,
+        ),
+        InvalidProduct::YieldsToNan => (select_nan(core::slice::from_ref(addend), env), false),
+        InvalidProduct::SignalsAndYieldsToNan => {
+            (select_nan(core::slice::from_ref(addend), env), true)
+        }
+        other => panic!("the test has no rule for {other:?}"),
+    }
+}
+
+/// Runs a case whose decNumber result `expected` is a NaN with each rule of
+/// [`NAN_RULES`], and records a failure when floaty does not give the NaN of
+/// [`expected_nan`] with `expected_flags`. Returns the number of checks.
+fn check_nan_rules<F: Arithmetic, const W: usize>(
     operation: &Operation,
     operands: &[F::Bits],
-    (expected, expected_flags): (Answer<F::Bits>, floaty::Flags),
+    (expected, expected_flags): (Answer<F::Bits>, Flags),
     tally: &mut Tally,
-) -> bool
+) -> usize
 where
     Width<W>: Storage<Bits = F::Bits>,
     Decimal<Dpd>: Standard<W, Bits = F::Bits>,
@@ -64,25 +161,48 @@ where
         .encoding()
         .is_some_and(|bits| is_nan::<W>(bits.into()));
     if keeps_encoding(operation) || !nan_result {
-        return false;
+        return 0;
     }
-    let (answer, flags) = run_floaty_in::<F, W>(operation, operands, DEFAULT_NAN);
-    let default = F::Bits::try_from(default_nan::<W>())
-        .ok()
-        .expect("the default NaN fits the storage of its format");
-    let flags = compared(flags);
-    if answer != Answer::Encoding(default) || flags != expected_flags {
-        tally.fail(|| {
-            format!(
-                "{operation:?} DefaultNan [{}]: floaty gives {} {flags:?}, expected {} \
-                 {expected_flags:?}",
-                describe_operands::<F>(operands),
-                describe::<F>(&answer),
-                describe::<F>(&Answer::Encoding(default)),
-            )
-        });
+    for rule in NAN_RULES {
+        let env = Env::IEEE.with_nan(rule);
+        let (answer, flags) = match operation {
+            // `run_floaty_in` gives `fma` the invalid-product rule of
+            // decNumber, so the rule of the case runs here.
+            Operation::Fma => {
+                let value = |index: usize| DpdFloat::<W>::from_bits(operands[index]);
+                let (result, flags) = value(0).mul_add_with(value(1), value(2), env);
+                (Answer::Encoding(result.to_bits()), flags)
+            }
+            _ => run_floaty_in::<F, W>(operation, operands, env),
+        };
+        let (nan, signals) = expected_nan::<W>(operation, operands, &env);
+        let sign = if nan.negative { "-" } else { "" };
+        let payload = if nan.payload == 0 {
+            String::new()
+        } else {
+            nan.payload.to_string()
+        };
+        let text = format!("{sign}NaN{payload}");
+        let want = Answer::Encoding(F::from_string(&text, decnumber::Rounding::HalfEven).value);
+        let want_flags = if signals {
+            expected_flags | Flags::INVALID
+        } else {
+            expected_flags
+        };
+        let flags = compared(flags);
+        if answer != want || flags != want_flags {
+            tally.fail(|| {
+                format!(
+                    "{operation:?} {rule:?} [{}]: floaty gives {} {flags:?}, expected {} \
+                     {want_flags:?}",
+                    describe_operands::<F>(operands),
+                    describe::<F>(&answer),
+                    describe::<F>(&want),
+                )
+            });
+        }
     }
-    true
+    NAN_RULES.len()
 }
 
 /// The arithmetic operations, which round.
@@ -145,7 +265,7 @@ where
     let mut generator = Generator::<F>::new(seed, Shape::of::<F>());
     let mut tally = Tally::default();
     let mut static_checks = 0_usize;
-    let mut default_nan_checks = 0_usize;
+    let mut nan_rule_checks = 0_usize;
     for operation in operations {
         let report = Report::of(operation);
         for _ in 0..count {
@@ -184,15 +304,13 @@ where
                 let flags = compared(flags);
                 let expected_flags =
                     flags_of(status) | details::<F>(operation, (expected, status), toward_zero);
-                if rounding == floaty_verify::decnumber::Rounding::HalfEven
-                    && check_default_nan::<F, W>(
+                if rounding == floaty_verify::decnumber::Rounding::HalfEven {
+                    nan_rule_checks += check_nan_rules::<F, W>(
                         operation,
                         &operands,
                         (expected, expected_flags),
                         &mut tally,
-                    )
-                {
-                    default_nan_checks += 1;
+                    );
                 }
                 if answer == expected && flags == expected_flags {
                     tally.passed += 1;
@@ -218,8 +336,8 @@ where
         "the static modes checked arithmetic cases"
     );
     assert!(
-        default_nan_checks > 0,
-        "the DefaultNan rule checked cases with a NaN result"
+        nan_rule_checks > 0,
+        "the NaN rules checked cases with a NaN result"
     );
     tally
 }
