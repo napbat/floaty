@@ -118,7 +118,7 @@ fn samples(layout: Layout, count: usize, random: &mut SplitMix64) -> Vec<Integer
         .filter(|top| *top <= 8 || *top >= precision - 3 || top % 17 == 0)
         .collect();
     tops.extend([
-        22, 23, 24, 98, 99, 100, 126, 127, 128, 198, 199, 200, 510, 511, 512,
+        14, 15, 16, 22, 23, 24, 98, 99, 100, 126, 127, 128, 198, 199, 200, 510, 511, 512,
     ]);
     let (bias, field_max) = (bias(layout), u64::from(layout.largest_field()));
     let fields = tops
@@ -197,6 +197,10 @@ fn scales<S: Standard<W>, const W: usize>(x: &Case<S, W>, format: &Format) -> Ve
 
 /// Checks `to_int_with` into every integer type of the wide tests.
 fn to_ints<S: Standard<W>, const W: usize>(x: &Case<S, W>, env: &Env) {
+    check::check_to_int::<i8, S, W>(x, env);
+    check::check_to_int::<u8, S, W>(x, env);
+    check::check_to_int::<i16, S, W>(x, env);
+    check::check_to_int::<u16, S, W>(x, env);
     check::check_to_int::<Int<24>, S, W>(x, env);
     check::check_to_int::<UInt<24>, S, W>(x, env);
     check::check_to_int::<Int<100>, S, W>(x, env);
