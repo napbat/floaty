@@ -6,8 +6,10 @@
 //! [`crate::mpfr`] then rounds that value. The extra bits make the second
 //! rounding give the correctly rounded result, by the round-to-odd property.
 //!
-//! A NaN result follows the NaN rule of the `Env`, as its documentation
-//! states. The rule has a propagation rule and a default NaN. For a fused
+//! An unsupported operand, such as an x87 unnormal, signals invalid and
+//! gives the default NaN, as the documentation of `Class::Unsupported`
+//! states. A NaN result follows the NaN rule of the `Env`, as its
+//! documentation states. The rule has a propagation rule and a default NaN. For a fused
 //! multiply-add, it also has a rule for `0 * inf + NaN` and an order of the
 //! NaN operands. An overflow in a format without an infinity gives the NaN of
 //! that format, with the sign of the result.
@@ -83,8 +85,7 @@ impl Number {
 ///
 /// # Panics
 ///
-/// Panics for an unsupported operand, which these formats do not have, and
-/// for a NaN rule that a later floaty adds.
+/// Panics for a NaN rule that a later floaty adds.
 #[must_use]
 pub fn compute<const N: usize>(
     operation: Operation,
@@ -97,12 +98,18 @@ pub fn compute<const N: usize>(
         .iter()
         .map(|operand| operand.read(env, &mut flags))
         .collect();
+    if reads.iter().any(|read| matches!(read, Read::Unsupported)) {
+        return Expected {
+            value: format.nan(Nan::default_of(env).negative),
+            payload: [0; N],
+            flags: flags | Flags::INVALID,
+        };
+    }
     let numbers: Vec<Number> = reads
         .iter()
         .map(|read| match read {
             Read::Number(value) => Number::of(value),
-            Read::Nan(_) => Number::Zero(false),
-            Read::Unsupported => panic!("the oracle has no rule for an unsupported operand"),
+            Read::Nan(_) | Read::Unsupported => Number::Zero(false),
         })
         .collect();
     if reads.iter().any(Read::is_signaling) {

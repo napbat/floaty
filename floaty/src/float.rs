@@ -517,7 +517,9 @@ pub enum Class {
     SignalingNan,
     /// An encoding that the format does not define as a value, such as an x87
     /// unnormal, pseudo-NaN, or pseudo-infinity. Arithmetic treats it as an
-    /// invalid operand.
+    /// invalid operand: an operation with an unsupported operand signals
+    /// invalid and gives the default NaN. That rule comes before the rules
+    /// for a NaN operand and for `0 * inf` in a fused multiply-add.
     Unsupported,
 }
 

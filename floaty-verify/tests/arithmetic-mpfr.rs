@@ -5,7 +5,10 @@
 //! limb boundary. binary16, binary32, binary64, and binary128 run here too,
 //! for the behaviors that TestFloat lacks. These are two rounding directions,
 //! saturation, precision limits, flush-to-zero with tininess before rounding,
-//! and the NaN rules of x87, PowerPC, and Arm.
+//! and the NaN rules of x87, PowerPC, and Arm. x87 extended precision runs
+//! with precision control, FTZ, DAZ, and saturation, which the x87 unit does
+//! not have, and with unsupported operands, which its fused multiply-add
+//! meets.
 //!
 //! Every FP8, FP6, and FP4 operand pair runs in every behavior of
 //! `behaviors`.
@@ -429,10 +432,13 @@ fn static_modes() {
 }
 
 /// Checks x87 arithmetic and fused multiply-add with precision control at 24,
-/// 53, and 64 bits, with canonical operands and pseudo-denormals. The x87 unit
-/// has no fused multiply-add, so MPFR is its only reference.
+/// 53, and 64 bits, and with flush-to-zero, denormals-are-zero, and
+/// saturation. The operands are canonical encodings, pseudo-denormals, and
+/// unsupported encodings: unnormals, pseudo-infinities, and pseudo-NaNs. The
+/// x87 unit has no fused multiply-add, FTZ, DAZ, or saturation, so MPFR is
+/// the only reference for them.
 #[test]
-fn x87_arithmetic_with_precision_control() {
+fn x87_arithmetic_in_every_behavior() {
     let format = Format::of::<F80>(Specials::Ieee);
     let mut random = SplitMix64::new(0x0087_F3A0);
     let mask = (1_u128 << 80) - 1;
@@ -447,47 +453,73 @@ fn x87_arithmetic_with_precision_control() {
             bits | integer
         }
     };
-    let values: Vec<F80> = (0..6_000)
+    let integer = 1_u128 << 63;
+    let values: Vec<F80> = (0..8_000)
         .map(|index| {
             let bits = random.next_u128() & mask;
-            match index % 6 {
-                // Bias a third of the exponents toward the subnormal range.
+            match index % 8 {
+                // Bias a quarter of the exponents toward the subnormal range.
                 0 | 3 => F80::from_bits(canonical(bits & !(0x7FC0_u128 << 64))),
                 // A pseudo-denormal: exponent field 0 with the integer bit set.
-                5 => F80::from_bits((bits & !(0x7FFF_u128 << 64)) | (1 << 63)),
+                5 => F80::from_bits((bits & !(0x7FFF_u128 << 64)) | integer),
+                // An unnormal: a nonzero exponent field with the integer bit
+                // clear. A zero field would give a canonical subnormal.
+                6 => F80::from_bits((canonical(bits) | (1 << 64)) & !integer),
+                // A pseudo-infinity or a pseudo-NaN: the largest exponent
+                // field with the integer bit clear.
+                7 => F80::from_bits((bits | (0x7FFF_u128 << 64)) & !integer),
                 _ => F80::from_bits(canonical(bits)),
             }
         })
         .collect();
-    for precision in [None, NonZeroU32::new(24), NonZeroU32::new(53)] {
-        for rounding in DIRECTIONS {
-            let env = Env::IEEE.with_rounding(rounding).with_precision(precision);
-            for pair in values.chunks_exact(2) {
-                let [x, y] = [pair[0], pair[1]];
-                compare!(format, env, Operation::Add, x.add_with(y, env), [x, y]);
-                compare!(format, env, Operation::Sub, x.sub_with(y, env), [x, y]);
-                compare!(format, env, Operation::Mul, x.mul_with(y, env), [x, y]);
-                compare!(format, env, Operation::Div, x.div_with(y, env), [x, y]);
-                compare!(format, env, Operation::Sqrt, x.sqrt_with(env), [x]);
-            }
-            for triple in values.chunks_exact(3) {
-                let [a, b, c] = [triple[0], triple[1], triple[2]];
-                compare!(
-                    format,
-                    env,
-                    Operation::MulAdd,
-                    a.mul_add_with(b, c, env),
-                    [a, b, c]
-                );
-                let cancel = cancelling_addend(a, b);
-                compare!(
-                    format,
-                    env,
-                    Operation::MulAdd,
-                    a.mul_add_with(b, cancel, env),
-                    [a, b, cancel]
-                );
-            }
+    let mut envs: Vec<Env> = [None, NonZeroU32::new(24), NonZeroU32::new(53)]
+        .into_iter()
+        .flat_map(|precision| {
+            DIRECTIONS.map(|rounding| Env::IEEE.with_rounding(rounding).with_precision(precision))
+        })
+        .collect();
+    envs.extend([
+        Env::X87.with_flush_to_zero(true),
+        Env::X87.with_denormals_are_zero(true),
+        Env::X87
+            .with_flush_to_zero(true)
+            .with_denormals_are_zero(true)
+            .with_rounding(Rounding::TowardZero),
+        Env::X87.with_saturate(true),
+        Env::X87
+            .with_saturate(true)
+            .with_rounding(Rounding::TowardPositive)
+            .with_precision(NonZeroU32::new(24)),
+        Env::IEEE
+            .with_flush_to_zero(true)
+            .with_tininess(Tininess::BeforeRounding),
+    ]);
+    for env in envs {
+        for pair in values.chunks_exact(2) {
+            let [x, y] = [pair[0], pair[1]];
+            compare!(format, env, Operation::Add, x.add_with(y, env), [x, y]);
+            compare!(format, env, Operation::Sub, x.sub_with(y, env), [x, y]);
+            compare!(format, env, Operation::Mul, x.mul_with(y, env), [x, y]);
+            compare!(format, env, Operation::Div, x.div_with(y, env), [x, y]);
+            compare!(format, env, Operation::Sqrt, x.sqrt_with(env), [x]);
+        }
+        for triple in values.chunks_exact(3) {
+            let [a, b, c] = [triple[0], triple[1], triple[2]];
+            compare!(
+                format,
+                env,
+                Operation::MulAdd,
+                a.mul_add_with(b, c, env),
+                [a, b, c]
+            );
+            let cancel = cancelling_addend(a, b);
+            compare!(
+                format,
+                env,
+                Operation::MulAdd,
+                a.mul_add_with(b, cancel, env),
+                [a, b, cancel]
+            );
         }
     }
 }
