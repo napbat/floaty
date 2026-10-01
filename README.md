@@ -579,7 +579,7 @@ The minimum supported Rust version is 1.85. The crate uses edition 2024.
 ## Limitations
 
 - No transcendental functions, such as `sin`, `exp`, and `log`.
-- No decimal text parsing or printing.
+- No text parsing or printing, in decimal or in hexadecimal.
 - No `const fn` evaluation. The engine uses traits, which a `const fn` on
   stable Rust cannot call.
 - No traps. floaty reports flags and never traps.
