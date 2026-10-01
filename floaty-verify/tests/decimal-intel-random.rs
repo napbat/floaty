@@ -36,7 +36,7 @@
 use core::cmp::Ordering;
 
 use floaty::format::{Bid, Decimal, Standard, Storage, Width};
-use floaty::{Flags, Float};
+use floaty::{Flags, Float, TotalOrder};
 use floaty_verify::intel_decimal::{
     self, Bid32, Bid64, Bid128, Class as IntelClass, EQUAL_OPERANDS, Extremum, Flags as IntelFlags,
     Format, Group, Inexact, Integer as IntelInteger, Layout, Outcome, Predicate, Report,
@@ -398,6 +398,59 @@ const QUANTUM_INFINITY: &str = "IEEE 754 for an infinity: the library keeps extr
 /// The rule for `quantum` of a decimal32 coefficient in the `100` form.
 const QUANTUM_FORM: &str = "IEEE 754 for the 100 form: the library reads the wrong exponent bits";
 
+/// Returns the order of `TotalOrder::Encoding`. Two data take the order of
+/// the library's `totalOrder`. Two encodings of one datum, which the library
+/// orders both ways, take the order of their bits below the sign, reversed
+/// for a negative sign, as `TotalOrder::Encoding` states.
+fn encoding_order<F: Format>(x: F::Bits, y: F::Bits) -> Ordering
+where
+    F::Bits: Into<u128>,
+{
+    match (F::total_order(x, y), F::total_order(y, x)) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        _ => {
+            let sign = 1_u128 << (F::LAYOUT.width - 1);
+            let (x, y) = (x.into(), y.into());
+            let magnitude = (x & !sign).cmp(&(y & !sign));
+            if x & sign == 0 {
+                magnitude
+            } else {
+                magnitude.reverse()
+            }
+        }
+    }
+}
+
+/// Compares `TotalOrder::Encoding` on the pair `(xb, yb)`, and on `xb`
+/// with the canonical twin of its encoding `x` in both orders.
+fn encoding_orders<F, const W: usize>(report: &mut Report, x: u128, (xb, yb): (Bits<W>, Bits<W>))
+where
+    F: Format<Bits = Bits<W>>,
+    Width<W>: Storage,
+    Decimal<Bid>: Standard<W, Bits = Bits<W>>,
+    Bits<W>: Into<u128>,
+{
+    let twin = encoding::<F>(F::LAYOUT.canonical(x));
+    let order = |ordering: Ordering| {
+        let value = match ordering {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        };
+        plain(value, Flags::NONE, Signals::Ieee)
+    };
+    for (a, b) in [(xb, yb), (xb, twin), (twin, xb)] {
+        let (af, bf) = (BidFloat::<W>::from_bits(a), BidFloat::<W>::from_bits(b));
+        report.check(
+            format!("{}_totalOrder by encoding", F::NAME),
+            &|| format!("{:#x} {:#x}", a.into(), b.into()),
+            order(af.total_cmp_with(bf, TotalOrder::Encoding)),
+            order(encoding_order::<F>(a, b)),
+        );
+    }
+}
+
 /// Compares the comparisons, the total order, `minnum`, `maxnum`, the
 /// class, and the sign operations of one format.
 fn comparisons<F, const W: usize>(report: &mut Report, rng: &mut SplitMix64, cases: usize)
@@ -448,6 +501,7 @@ where
             flag(total(xf.abs(), yf.abs())),
             library(F::total_order_mag(xb, yb)),
         );
+        encoding_orders::<F, W>(report, x, (xb, yb));
         report.check(
             name("sameQuantum"),
             &operands,
@@ -726,7 +780,7 @@ fn comparisons_match_the_library() {
         ],
     );
     report.assert_counts(
-        3_600_000,
+        3_960_000,
         &[
             ("bid32_minnum", EQUAL_OPERANDS, 4_129),
             ("bid64_minnum", EQUAL_OPERANDS, 4_340),

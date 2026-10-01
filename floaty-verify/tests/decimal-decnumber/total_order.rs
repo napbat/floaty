@@ -12,7 +12,7 @@ use std::cmp::Ordering;
 
 use floaty::TotalOrder;
 use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
-use floaty_verify::decnumber::{self, Arithmetic, Double, Quad, Unary};
+use floaty_verify::decnumber::{self, Arithmetic, Double, Quad, Single, Unary};
 
 use super::operands::{Generator, Shape};
 use super::{DpdFloat, Tally};
@@ -84,6 +84,13 @@ where
         }
     }
     tally
+}
+
+#[test]
+fn decimal32_total_order_of_twins() {
+    let tally = run::<Single, 32>(20_000, 0x3232_7070);
+    tally.report("decimal32 total order");
+    tally.assert_counts(320_000, &[], &[(TWINS, 2_084)]);
 }
 
 #[test]
