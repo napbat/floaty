@@ -151,6 +151,10 @@ pub fn check_min_max<S: Standard<W>, const W: usize>(
             MinMax::MaximumNumber => a.maximum_number_with(b, *env),
             MinMax::MinNum => a.min_num_with(b, *env),
             MinMax::MaxNum => a.max_num_with(b, *env),
+            MinMax::MinimumMagnitude => a.minimum_magnitude_with(b, *env),
+            MinMax::MaximumMagnitude => a.maximum_magnitude_with(b, *env),
+            MinMax::MinimumMagnitudeNumber => a.minimum_magnitude_number_with(b, *env),
+            MinMax::MaximumMagnitudeNumber => a.maximum_magnitude_number_with(b, *env),
         };
         let expected =
             compare::min_max(operation, &x.sample.operand, &y.sample.operand, format, env);

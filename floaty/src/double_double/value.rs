@@ -340,7 +340,7 @@ fn has_negative_sign(value: &Unpacked<Magnitude>) -> bool {
 
 /// Orders two exact values as IEEE 754 `totalOrder` orders values of one
 /// format.
-fn order_values(first: &Unpacked<Magnitude>, second: &Unpacked<Magnitude>) -> Ordering {
+pub(super) fn order_values(first: &Unpacked<Magnitude>, second: &Unpacked<Magnitude>) -> Ordering {
     let (first_negative, second_negative) = (has_negative_sign(first), has_negative_sign(second));
     if first_negative != second_negative {
         return if first_negative {

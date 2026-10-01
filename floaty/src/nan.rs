@@ -231,7 +231,8 @@ fn choose<'a, L: Limbs>(
 /// `minimum` and `maximum` return a NaN for a NaN operand. `minimumNumber`
 /// and `maximumNumber` return the number, and signal invalid for a signaling
 /// NaN. `minNum` and `maxNum` return the number for a quiet NaN, and a NaN for
-/// a signaling NaN. The NaN rule selects a NaN result.
+/// a signaling NaN. A magnitude operation follows the operation of the values
+/// of its family. The NaN rule selects a NaN result.
 pub fn min_max<L: Limbs>(
     first: &Unpacked<L>,
     second: &Unpacked<L>,
@@ -244,9 +245,15 @@ pub fn min_max<L: Limbs>(
         (true, true) => Some(propagate(first, second, env)),
         (true, false) | (false, true) => {
             let returns_nan = match operation {
-                MinMax::Minimum | MinMax::Maximum => true,
+                MinMax::Minimum
+                | MinMax::Maximum
+                | MinMax::MinimumMagnitude
+                | MinMax::MaximumMagnitude => true,
                 MinMax::MinNum | MinMax::MaxNum => signaling,
-                MinMax::MinimumNumber | MinMax::MaximumNumber => false,
+                MinMax::MinimumNumber
+                | MinMax::MaximumNumber
+                | MinMax::MinimumMagnitudeNumber
+                | MinMax::MaximumMagnitudeNumber => false,
             };
             if returns_nan {
                 return Some(propagate(first, second, env));

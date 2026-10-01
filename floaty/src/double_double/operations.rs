@@ -9,7 +9,7 @@
 
 use core::cmp::Ordering;
 
-use super::value::Magnitude;
+use super::value::{Magnitude, order_values};
 use super::{Algorithm, DoubleDouble};
 use crate::env::{Behavior, Flags, Mode, Override, Rounding};
 use crate::exact::{self, Unrounded};
@@ -56,7 +56,8 @@ macro_rules! min_max {
         ///
         /// The operands order by their exact values, and `-0` orders below
         /// `+0`. Two pairs of one value order by
-        /// [`total_cmp`](Self::total_cmp). The result is an operand as it
+        /// [`total_cmp`](Self::total_cmp). A magnitude operation first orders
+        /// the magnitudes of the exact values. The result is an operand as it
         /// is, or a NaN with a `+0` low half. That NaN, and the flags, are
         /// those of the binary64 operation on the halves that hold the NaNs,
         /// with a zero for a number.
@@ -210,7 +211,13 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
             let number = if first.is_nan() { other } else { self };
             return (number, flags);
         }
-        let first_is_smaller = self.total_cmp(other) != Ordering::Greater;
+        let order = self.total_cmp(other);
+        let order = if operation.is_magnitude() {
+            order_values(&first.abs(), &second.abs()).then(order)
+        } else {
+            order
+        };
+        let first_is_smaller = order != Ordering::Greater;
         let result = if first_is_smaller == operation.is_minimum() {
             self
         } else {
@@ -262,5 +269,29 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         max_num_with,
         MaxNum,
         "the IEEE 754-2008 `maxNum`: a quiet NaN operand gives the other operand, and a signaling NaN gives a NaN"
+    );
+    min_max!(
+        minimum_magnitude,
+        minimum_magnitude_with,
+        MinimumMagnitude,
+        "the IEEE 754-2019 `minimumMagnitude`: the operand of the smaller magnitude, or the `minimum` of operands of one magnitude"
+    );
+    min_max!(
+        maximum_magnitude,
+        maximum_magnitude_with,
+        MaximumMagnitude,
+        "the IEEE 754-2019 `maximumMagnitude`: the operand of the larger magnitude, or the `maximum` of operands of one magnitude"
+    );
+    min_max!(
+        minimum_magnitude_number,
+        minimum_magnitude_number_with,
+        MinimumMagnitudeNumber,
+        "the IEEE 754-2019 `minimumMagnitudeNumber`: the operand of the smaller magnitude, or the `minimumNumber` of operands of one magnitude"
+    );
+    min_max!(
+        maximum_magnitude_number,
+        maximum_magnitude_number_with,
+        MaximumMagnitudeNumber,
+        "the IEEE 754-2019 `maximumMagnitudeNumber`: the operand of the larger magnitude, or the `maximumNumber` of operands of one magnitude"
     );
 }

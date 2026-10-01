@@ -101,6 +101,14 @@ pub struct Comparisons<B> {
     pub min_num: B,
     /// `maxNum`.
     pub max_num: B,
+    /// `minimumMagnitude`.
+    pub minimum_magnitude: B,
+    /// `maximumMagnitude`.
+    pub maximum_magnitude: B,
+    /// `minimumMagnitudeNumber`.
+    pub minimum_magnitude_number: B,
+    /// `maximumMagnitudeNumber`.
+    pub maximum_magnitude_number: B,
 }
 
 /// Returns the results of `partial_cmp`, `==`, and the minimum and maximum
@@ -119,6 +127,10 @@ pub fn comparisons<S: Standard<W>, const W: usize, M: Mode>(
         maximum_number: x.maximum_number(y).to_bits(),
         min_num: x.min_num(y).to_bits(),
         max_num: x.max_num(y).to_bits(),
+        minimum_magnitude: x.minimum_magnitude(y).to_bits(),
+        maximum_magnitude: x.maximum_magnitude(y).to_bits(),
+        minimum_magnitude_number: x.minimum_magnitude_number(y).to_bits(),
+        maximum_magnitude_number: x.maximum_magnitude_number(y).to_bits(),
     }
 }
 
@@ -141,6 +153,10 @@ pub fn comparisons_with<S: Standard<W>, const W: usize, M: Mode>(
         maximum_number: x.maximum_number_with(y, env).0.to_bits(),
         min_num: x.min_num_with(y, env).0.to_bits(),
         max_num: x.max_num_with(y, env).0.to_bits(),
+        minimum_magnitude: x.minimum_magnitude_with(y, env).0.to_bits(),
+        maximum_magnitude: x.maximum_magnitude_with(y, env).0.to_bits(),
+        minimum_magnitude_number: x.minimum_magnitude_number_with(y, env).0.to_bits(),
+        maximum_magnitude_number: x.maximum_magnitude_number_with(y, env).0.to_bits(),
     }
 }
 
@@ -308,6 +324,14 @@ pub struct LaneComparisons<B, const N: usize> {
     pub min_num: [B; N],
     /// `maxNum`.
     pub max_num: [B; N],
+    /// `minimumMagnitude`.
+    pub minimum_magnitude: [B; N],
+    /// `maximumMagnitude`.
+    pub maximum_magnitude: [B; N],
+    /// `minimumMagnitudeNumber`.
+    pub minimum_magnitude_number: [B; N],
+    /// `maximumMagnitudeNumber`.
+    pub maximum_magnitude_number: [B; N],
 }
 
 /// Returns the results of `compare_quiet` and the minimum and maximum
@@ -325,6 +349,10 @@ pub fn lane_comparisons<S: Standard<W>, const W: usize, M: Mode, const N: usize>
         maximum_number: x.maximum_number(y).to_bits(),
         min_num: x.min_num(y).to_bits(),
         max_num: x.max_num(y).to_bits(),
+        minimum_magnitude: x.minimum_magnitude(y).to_bits(),
+        maximum_magnitude: x.maximum_magnitude(y).to_bits(),
+        minimum_magnitude_number: x.minimum_magnitude_number(y).to_bits(),
+        maximum_magnitude_number: x.maximum_magnitude_number(y).to_bits(),
     }
 }
 
@@ -344,6 +372,10 @@ pub fn lane_comparisons_with<S: Standard<W>, const W: usize, M: Mode, const N: u
         maximum_number: x.maximum_number_with(y, env).0.to_bits(),
         min_num: x.min_num_with(y, env).0.to_bits(),
         max_num: x.max_num_with(y, env).0.to_bits(),
+        minimum_magnitude: x.minimum_magnitude_with(y, env).0.to_bits(),
+        maximum_magnitude: x.maximum_magnitude_with(y, env).0.to_bits(),
+        minimum_magnitude_number: x.minimum_magnitude_number_with(y, env).0.to_bits(),
+        maximum_magnitude_number: x.maximum_magnitude_number_with(y, env).0.to_bits(),
     }
 }
 

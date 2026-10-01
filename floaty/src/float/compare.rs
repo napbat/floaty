@@ -169,6 +169,30 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
         MaxNum,
         "the IEEE 754-2008 `maxNum`: a quiet NaN operand gives the other operand, and a signaling NaN gives a NaN"
     );
+    min_max!(
+        minimum_magnitude,
+        minimum_magnitude_with,
+        MinimumMagnitude,
+        "the IEEE 754-2019 `minimumMagnitude`: the operand of the smaller magnitude, or the `minimum` of operands of one magnitude"
+    );
+    min_max!(
+        maximum_magnitude,
+        maximum_magnitude_with,
+        MaximumMagnitude,
+        "the IEEE 754-2019 `maximumMagnitude`: the operand of the larger magnitude, or the `maximum` of operands of one magnitude"
+    );
+    min_max!(
+        minimum_magnitude_number,
+        minimum_magnitude_number_with,
+        MinimumMagnitudeNumber,
+        "the IEEE 754-2019 `minimumMagnitudeNumber`: the operand of the smaller magnitude, or the `minimumNumber` of operands of one magnitude"
+    );
+    min_max!(
+        maximum_magnitude_number,
+        maximum_magnitude_number_with,
+        MaximumMagnitudeNumber,
+        "the IEEE 754-2019 `maximumMagnitudeNumber`: the operand of the larger magnitude, or the `maximumNumber` of operands of one magnitude"
+    );
 }
 
 /// Equality as the IEEE 754 `compareQuietEqual` predicate, with the default

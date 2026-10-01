@@ -252,9 +252,10 @@ fn nan_half((hi, lo): (u64, u64)) -> F64 {
     }
 }
 
-/// Checks one minimum or maximum operation of two pairs against its rule.
+/// Checks one minimum or maximum operation of two pairs against its rule. A
+/// magnitude operation orders the magnitudes of the exact values first.
 macro_rules! check_min_max {
-    ($a:expr, $b:expr, $env:expr, $with:ident, $minimum:expr) => {{
+    ($a:expr, $b:expr, $env:expr, $with:ident, $minimum:expr, $magnitude:expr) => {{
         let (a, b, env): ((u64, u64), (u64, u64), Env) = ($a, $b, $env);
         let (ours, flags) = value(a.0, a.1).$with(value(b.0, b.1), env);
         let (first, second) = (exact(Pair::new(a.0, a.1)), exact(Pair::new(b.0, b.1)));
@@ -269,7 +270,13 @@ macro_rules! check_min_max {
                 (a, flags)
             }
         } else {
-            let smaller_first = expected_order(a, b) != Ordering::Greater;
+            let order = expected_order(a, b);
+            let order = if $magnitude {
+                rank(&first).cmp(&rank(&second)).then(order)
+            } else {
+                order
+            };
+            let smaller_first = order != Ordering::Greater;
             let result = if smaller_first == $minimum { a } else { b };
             (result, Flags::NONE)
         };
@@ -285,12 +292,16 @@ fn minimum_and_maximum_select_by_the_exact_value() {
     for _ in 0..30_000 {
         let (a, b) = two_pairs(&mut random);
         for env in behaviors() {
-            check_min_max!(a, b, env, minimum_with, true);
-            check_min_max!(a, b, env, maximum_with, false);
-            check_min_max!(a, b, env, minimum_number_with, true);
-            check_min_max!(a, b, env, maximum_number_with, false);
-            check_min_max!(a, b, env, min_num_with, true);
-            check_min_max!(a, b, env, max_num_with, false);
+            check_min_max!(a, b, env, minimum_with, true, false);
+            check_min_max!(a, b, env, maximum_with, false, false);
+            check_min_max!(a, b, env, minimum_number_with, true, false);
+            check_min_max!(a, b, env, maximum_number_with, false, false);
+            check_min_max!(a, b, env, min_num_with, true, false);
+            check_min_max!(a, b, env, max_num_with, false, false);
+            check_min_max!(a, b, env, minimum_magnitude_with, true, true);
+            check_min_max!(a, b, env, maximum_magnitude_with, false, true);
+            check_min_max!(a, b, env, minimum_magnitude_number_with, true, true);
+            check_min_max!(a, b, env, maximum_magnitude_number_with, false, true);
         }
         let (x, y) = (value(a.0, a.1), value(b.0, b.1));
         let same = |left: DoubleDouble<Gcc>, right: DoubleDouble<Gcc>| {

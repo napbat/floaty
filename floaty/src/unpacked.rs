@@ -95,6 +95,17 @@ impl<L> Unpacked<L> {
         }
     }
 
+    /// Returns the value with a positive sign. A NaN keeps its sign.
+    #[must_use]
+    #[inline]
+    pub fn abs(self) -> Self {
+        if self.is_negative() {
+            self.negate()
+        } else {
+            self
+        }
+    }
+
     /// Returns `true` for a negative zero, finite, or infinite value. A NaN
     /// or an unsupported value gives `false`: an operation reads the sign of
     /// a number only after it handles those values.

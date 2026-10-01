@@ -698,6 +698,27 @@ macro_rules! methods_match {
                 union(&|x, y| x.max_num_with(y, behavior)),
                 "{context}"
             );
+            // The magnitude operations, which no packed path takes.
+            assert_eq!(
+                a.minimum_magnitude(b).to_bits(),
+                each(&|x, y| x.minimum_magnitude(y)),
+                "{context}: minimum_magnitude"
+            );
+            assert_eq!(
+                a.maximum_magnitude(b).to_bits(),
+                each(&|x, y| x.maximum_magnitude(y)),
+                "{context}: maximum_magnitude"
+            );
+            assert_eq!(
+                lanes(a.minimum_magnitude_number_with(b, behavior)),
+                union(&|x, y| x.minimum_magnitude_number_with(y, behavior)),
+                "{context}"
+            );
+            assert_eq!(
+                lanes(a.maximum_magnitude_number_with(b, behavior)),
+                union(&|x, y| x.maximum_magnitude_number_with(y, behavior)),
+                "{context}"
+            );
         }
     }};
 }

@@ -1,16 +1,19 @@
 //! The minimum and maximum operations of IEEE 754-2019 section 9.6 on the
-//! DPD formats: `minimum`, `maximum`, `minimum_number`, and
-//! `maximum_number`. decNumber and the Intel decimal library have only the
-//! operations of IEEE 754-2008, `min_num` and `max_num`, so the test
-//! evaluates the documented rule of floaty with decNumber:
+//! DPD formats: `minimum`, `maximum`, `minimum_number`, `maximum_number`,
+//! and the four magnitude operations. decNumber and the Intel decimal
+//! library have only the operations of IEEE 754-2008, so the test evaluates
+//! the documented rule of floaty with decNumber:
 //!
 //! - Two numbers: decNumber's `max` or `min`, which breaks a tie by the
-//!   total order, as floaty does, and gives the canonical encoding.
+//!   total order, as floaty does, and gives the canonical encoding. A
+//!   magnitude operation takes `maxmag` or `minmag`, which compare the
+//!   magnitudes and then take `max` or `min`.
 //! - `minimum` and `maximum` with a NaN operand: the NaN that decNumber's
 //!   addition gives by the NaN rule of `Env::IEEE`, with its conditions.
-//! - `minimum_number` and `maximum_number` with one NaN operand: decNumber's
-//!   canonical encoding of the number, and invalid for a signaling NaN. With
-//!   two NaN operands, the NaN of the addition.
+//! - `minimum_number` and `maximum_number`, and their magnitude operations,
+//!   with one NaN operand: decNumber's canonical encoding of the number, and
+//!   invalid for a signaling NaN. With two NaN operands, the NaN of the
+//!   addition.
 
 use floaty::format::{Decimal, Dpd, Standard, Storage, Width};
 use floaty::{Env, Flags};
@@ -27,24 +30,55 @@ enum MinMax {
     Maximum,
     MinimumNumber,
     MaximumNumber,
+    MinimumMagnitude,
+    MaximumMagnitude,
+    MinimumMagnitudeNumber,
+    MaximumMagnitudeNumber,
 }
 
 impl MinMax {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 8] = [
         Self::Minimum,
         Self::Maximum,
         Self::MinimumNumber,
         Self::MaximumNumber,
+        Self::MinimumMagnitude,
+        Self::MaximumMagnitude,
+        Self::MinimumMagnitudeNumber,
+        Self::MaximumMagnitudeNumber,
     ];
 
     /// Returns `true` for an operation that gives the larger operand.
     fn larger(self) -> bool {
-        matches!(self, Self::Maximum | Self::MaximumNumber)
+        matches!(
+            self,
+            Self::Maximum
+                | Self::MaximumNumber
+                | Self::MaximumMagnitude
+                | Self::MaximumMagnitudeNumber
+        )
     }
 
     /// Returns `true` for an operation that prefers a number to a NaN.
     fn prefers_numbers(self) -> bool {
-        matches!(self, Self::MinimumNumber | Self::MaximumNumber)
+        matches!(
+            self,
+            Self::MinimumNumber
+                | Self::MaximumNumber
+                | Self::MinimumMagnitudeNumber
+                | Self::MaximumMagnitudeNumber
+        )
+    }
+
+    /// Returns `true` for an operation that compares the magnitudes first.
+    fn magnitude(self) -> bool {
+        matches!(
+            self,
+            Self::MinimumMagnitude
+                | Self::MaximumMagnitude
+                | Self::MinimumMagnitudeNumber
+                | Self::MaximumMagnitudeNumber
+        )
     }
 }
 
@@ -56,10 +90,11 @@ fn expected<F: Arithmetic>(operation: MinMax, x: F::Bits, y: F::Bits) -> (F::Bit
     let of = |outcome: Outcome<F::Bits>| (outcome.value, flags_of(outcome.status));
     match (nan(x), nan(y)) {
         (false, false) => {
-            let extremum = if operation.larger() {
-                Binary::Max
-            } else {
-                Binary::Min
+            let extremum = match (operation.magnitude(), operation.larger()) {
+                (false, true) => Binary::Max,
+                (false, false) => Binary::Min,
+                (true, true) => Binary::MaxMag,
+                (true, false) => Binary::MinMag,
             };
             of(F::binary(extremum, x, y, rounding))
         }
@@ -76,7 +111,7 @@ fn expected<F: Arithmetic>(operation: MinMax, x: F::Bits, y: F::Bits) -> (F::Bit
     }
 }
 
-/// Runs the four operations on `count` random pairs of format `F`, in both
+/// Runs the eight operations on `count` random pairs of format `F`, in both
 /// operand orders, and compares floaty with decNumber. A quarter of the
 /// pairs are raw encodings, which can be non-canonical.
 fn run<F: Arithmetic, const W: usize>(count: usize, seed: u64) -> Tally
@@ -103,6 +138,14 @@ where
                     MinMax::Maximum => af.maximum_with(bf, Env::IEEE),
                     MinMax::MinimumNumber => af.minimum_number_with(bf, Env::IEEE),
                     MinMax::MaximumNumber => af.maximum_number_with(bf, Env::IEEE),
+                    MinMax::MinimumMagnitude => af.minimum_magnitude_with(bf, Env::IEEE),
+                    MinMax::MaximumMagnitude => af.maximum_magnitude_with(bf, Env::IEEE),
+                    MinMax::MinimumMagnitudeNumber => {
+                        af.minimum_magnitude_number_with(bf, Env::IEEE)
+                    }
+                    MinMax::MaximumMagnitudeNumber => {
+                        af.maximum_magnitude_number_with(bf, Env::IEEE)
+                    }
                 };
                 let ours = (result.to_bits(), compared(flags));
                 let want = expected::<F>(operation, a, b);
@@ -130,19 +173,19 @@ where
 fn decimal32_minimum_and_maximum() {
     let tally = run::<Single, 32>(20_000, 0x0032_3196);
     tally.report("decimal32 minimum and maximum");
-    tally.assert_counts(160_000, &[], &[]);
+    tally.assert_counts(320_000, &[], &[]);
 }
 
 #[test]
 fn decimal64_minimum_and_maximum() {
     let tally = run::<Double, 64>(20_000, 0x0064_3196);
     tally.report("decimal64 minimum and maximum");
-    tally.assert_counts(160_000, &[], &[]);
+    tally.assert_counts(320_000, &[], &[]);
 }
 
 #[test]
 fn decimal128_minimum_and_maximum() {
     let tally = run::<Quad, 128>(20_000, 0x0128_3196);
     tally.report("decimal128 minimum and maximum");
-    tally.assert_counts(160_000, &[], &[]);
+    tally.assert_counts(320_000, &[], &[]);
 }

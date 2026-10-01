@@ -183,7 +183,8 @@ where
 
     /// Returns the minimum or the maximum of one family. The NaN cases follow
     /// `nan::min_max`. Equal values order by sign and then by exponent, so
-    /// the maximum of 1.0 and 1.00 is 1.0.
+    /// the maximum of 1.0 and 1.00 is 1.0. A magnitude operation orders the
+    /// magnitudes first, and then the values.
     pub fn min_max<L: Widen>(left: L, right: L, operation: MinMax, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
@@ -192,6 +193,11 @@ where
             return Self::exact(value, flags | special);
         }
         let order = compare_numbers(&first, &second).then_with(|| order_in_cohort(&first, &second));
+        let order = if operation.is_magnitude() {
+            compare_numbers(&first.abs(), &second.abs()).then(order)
+        } else {
+            order
+        };
         let take_first = if operation.is_minimum() {
             order != Ordering::Greater
         } else {

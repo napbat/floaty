@@ -184,17 +184,29 @@ pub enum MinMax {
     MinNum,
     /// IEEE 754-2008 `maxNum`.
     MaxNum,
+    /// IEEE 754-2019 `minimumMagnitude`.
+    MinimumMagnitude,
+    /// IEEE 754-2019 `maximumMagnitude`.
+    MaximumMagnitude,
+    /// IEEE 754-2019 `minimumMagnitudeNumber`.
+    MinimumMagnitudeNumber,
+    /// IEEE 754-2019 `maximumMagnitudeNumber`.
+    MaximumMagnitudeNumber,
 }
 
 impl MinMax {
     /// Every operation.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 10] = [
         Self::Minimum,
         Self::Maximum,
         Self::MinimumNumber,
         Self::MaximumNumber,
         Self::MinNum,
         Self::MaxNum,
+        Self::MinimumMagnitude,
+        Self::MaximumMagnitude,
+        Self::MinimumMagnitudeNumber,
+        Self::MaximumMagnitudeNumber,
     ];
 }
 
@@ -202,9 +214,15 @@ impl MinMax {
 ///
 /// IEEE 754-2019 section 9.6: `minimum` gives a NaN for a NaN operand, and
 /// `minimumNumber` gives the number and signals invalid for a signaling NaN.
-/// IEEE 754-2008 section 5.3.1: `minNum` gives the number for a quiet NaN and
-/// a NaN for a signaling NaN. floaty orders `-0` below `+0` in every
-/// family, and returns the operand in its canonical encoding.
+/// `minimumMagnitude` and `minimumMagnitudeNumber` give the operand of the
+/// smaller magnitude, and `minimum` or `minimumNumber` of operands of one
+/// magnitude. IEEE 754-2008 section 5.3.1: `minNum` gives the number for a
+/// quiet NaN and a NaN for a signaling NaN. floaty orders `-0` below `+0` in
+/// every family, and returns the operand in its canonical encoding.
+///
+/// # Panics
+///
+/// Never: MPFR compares the magnitudes of two numbers.
 #[must_use]
 pub fn min_max<const N: usize>(
     operation: MinMax,
@@ -226,9 +244,15 @@ pub fn min_max<const N: usize>(
         [Read::Number(a), Read::Number(b)] => (a, b),
         [Read::Number(value), _] | [_, Read::Number(value)] => {
             let gives_nan = match operation {
-                MinMax::Minimum | MinMax::Maximum => true,
+                MinMax::Minimum
+                | MinMax::Maximum
+                | MinMax::MinimumMagnitude
+                | MinMax::MaximumMagnitude => true,
                 MinMax::MinNum | MinMax::MaxNum => signaling,
-                MinMax::MinimumNumber | MinMax::MaximumNumber => false,
+                MinMax::MinimumNumber
+                | MinMax::MaximumNumber
+                | MinMax::MinimumMagnitudeNumber
+                | MinMax::MaximumMagnitudeNumber => false,
             };
             if !gives_nan {
                 let invalid = if signaling {
@@ -248,9 +272,27 @@ pub fn min_max<const N: usize>(
     };
     // MPFR's total order orders numbers by value, with -0 below +0.
     let order = a.total_cmp(b);
+    let magnitude = matches!(
+        operation,
+        MinMax::MinimumMagnitude
+            | MinMax::MaximumMagnitude
+            | MinMax::MinimumMagnitudeNumber
+            | MinMax::MaximumMagnitudeNumber
+    );
+    let order = if magnitude {
+        a.cmp_abs(b)
+            .expect("two numbers compare in magnitude")
+            .then(order)
+    } else {
+        order
+    };
     let minimum = matches!(
         operation,
-        MinMax::Minimum | MinMax::MinimumNumber | MinMax::MinNum
+        MinMax::Minimum
+            | MinMax::MinimumNumber
+            | MinMax::MinNum
+            | MinMax::MinimumMagnitude
+            | MinMax::MinimumMagnitudeNumber
     );
     let chosen = match (minimum, order) {
         (true, Ordering::Greater) | (false, Ordering::Less) => b,

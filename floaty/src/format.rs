@@ -207,13 +207,44 @@ pub(crate) mod internal {
         MinNum,
         /// IEEE 754-2008 `maxNum`: a quiet NaN operand gives the number.
         MaxNum,
+        /// IEEE 754-2019 `minimumMagnitude`: `minimum` of the magnitudes.
+        MinimumMagnitude,
+        /// IEEE 754-2019 `maximumMagnitude`: `maximum` of the magnitudes.
+        MaximumMagnitude,
+        /// IEEE 754-2019 `minimumMagnitudeNumber`: `minimumNumber` of the
+        /// magnitudes.
+        MinimumMagnitudeNumber,
+        /// IEEE 754-2019 `maximumMagnitudeNumber`: `maximumNumber` of the
+        /// magnitudes.
+        MaximumMagnitudeNumber,
     }
 
     impl MinMax {
         /// Returns `true` for a minimum operation.
         #[inline]
         pub fn is_minimum(self) -> bool {
-            matches!(self, Self::Minimum | Self::MinimumNumber | Self::MinNum)
+            matches!(
+                self,
+                Self::Minimum
+                    | Self::MinimumNumber
+                    | Self::MinNum
+                    | Self::MinimumMagnitude
+                    | Self::MinimumMagnitudeNumber
+            )
+        }
+
+        /// Returns `true` for an operation that compares the magnitudes
+        /// first. Two operands of one magnitude then order as for the
+        /// operation of the values.
+        #[inline]
+        pub fn is_magnitude(self) -> bool {
+            matches!(
+                self,
+                Self::MinimumMagnitude
+                    | Self::MaximumMagnitude
+                    | Self::MinimumMagnitudeNumber
+                    | Self::MaximumMagnitudeNumber
+            )
         }
     }
 

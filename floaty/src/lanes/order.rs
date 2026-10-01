@@ -134,3 +134,27 @@ min_max!(
 );
 min_max!(min_num, min_num_with, MinNum, "the IEEE 754-2008 `minNum`");
 min_max!(max_num, max_num_with, MaxNum, "the IEEE 754-2008 `maxNum`");
+min_max!(
+    minimum_magnitude,
+    minimum_magnitude_with,
+    MinimumMagnitude,
+    "the IEEE 754-2019 `minimumMagnitude`"
+);
+min_max!(
+    maximum_magnitude,
+    maximum_magnitude_with,
+    MaximumMagnitude,
+    "the IEEE 754-2019 `maximumMagnitude`"
+);
+min_max!(
+    minimum_magnitude_number,
+    minimum_magnitude_number_with,
+    MinimumMagnitudeNumber,
+    "the IEEE 754-2019 `minimumMagnitudeNumber`"
+);
+min_max!(
+    maximum_magnitude_number,
+    maximum_magnitude_number_with,
+    MaximumMagnitudeNumber,
+    "the IEEE 754-2019 `maximumMagnitudeNumber`"
+);

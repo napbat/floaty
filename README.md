@@ -19,11 +19,12 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   eight directions: the five of IEEE 754, round to odd, and the two extra
   directions of IBM POWER decimal floating point.
 - **The IEEE 754 operations.** Comparisons, total order, the IEEE 754-2019
-  and IEEE 754-2008 minimum and maximum operations, the remainder, rounding
-  to an integral value, integer conversions up to 512 bits, `scale_b` and
-  `log_b`, `next_up` and `next_down`, the sign operations, and the decimal
-  quantum operations. The operators include `%`, the truncated remainder of C
-  `fmod`, and the compound assignments such as `+=`.
+  minimum, maximum, and magnitude operations and the IEEE 754-2008 `minNum`
+  and `maxNum`, the remainder, rounding to an integral value, integer
+  conversions up to 512 bits, `scale_b` and `log_b`, `next_up` and
+  `next_down`, the sign operations, and the decimal quantum operations. The
+  operators include `%`, the truncated remainder of C `fmod`, and the
+  compound assignments such as `+=`.
 - **Hardware behavior as data.** Flush-to-zero, denormals-are-zero, tininess
   detection, NaN propagation rules, x87 precision control, and saturation
   of overflows. Presets give the x86 SSE and x87 behavior.

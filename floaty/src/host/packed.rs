@@ -630,7 +630,8 @@ pub fn min_max<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     operation: MinMax,
     env: &Env,
 ) -> Option<[Float<S, W, M>; N]> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+    // The instructions compare values, not magnitudes.
+    if operation.is_magnitude() || !ready_for(S::HOST, env, S::PRECISION) {
         return None;
     }
     order::min_max(left, right, operation)

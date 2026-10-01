@@ -245,9 +245,13 @@ where
     /// `minimumNumber` and `maximumNumber` return the number, and signal
     /// invalid for a signaling NaN. `minNum` and `maxNum` return the number
     /// for a quiet NaN, and a NaN for a signaling NaN. The NaN rule selects a
-    /// NaN result. Every family orders `-0` below `+0`.
+    /// NaN result. Every family orders `-0` below `+0`. A magnitude operation
+    /// orders the magnitudes first, and then the values.
     #[inline]
     pub fn min_max<L: Limbs>(left: L, right: L, operation: MinMax, env: &Env) -> (L, Flags) {
+        if operation.is_magnitude() {
+            return Self::min_max_decoded(left, right, operation, env);
+        }
         let Some((first, second, flags)) = Self::ordered_pair(left, right, env) else {
             return Self::min_max_decoded(left, right, operation, env);
         };
@@ -290,6 +294,11 @@ where
                 _ => Ordering::Equal,
             },
             order => order,
+        };
+        let order = if operation.is_magnitude() {
+            compare_numbers(&first.abs(), &second.abs()).then(order)
+        } else {
+            order
         };
         let take_first = if operation.is_minimum() {
             order != Ordering::Greater

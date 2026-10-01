@@ -430,7 +430,8 @@ pub fn min_max<S: Standard<W>, const W: usize>(
     operation: MinMax,
     env: &Env,
 ) -> Option<S::Bits> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+    // The instructions compare values, not magnitudes.
+    if operation.is_magnitude() || !ready_for(S::HOST, env, S::PRECISION) {
         return None;
     }
     // The widened values of binary16 and bfloat16 are exact, and the
