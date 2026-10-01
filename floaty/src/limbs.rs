@@ -605,6 +605,7 @@ const RECIPROCAL_TABLE: [u16; 256] = {
 impl Divisor {
     /// Returns a nonzero divisor with its reciprocal.
     #[must_use]
+    #[inline]
     pub const fn new(divisor: u64) -> Self {
         assert!(divisor != 0, "a divisor is not zero");
         let shift = divisor.leading_zeros();
@@ -620,6 +621,7 @@ impl Divisor {
     /// division, by Algorithm 3 of Möller and Granlund. The table gives 11
     /// bits. Two Newton steps give 22 and then 35 bits, a third step gives
     /// the reciprocal less at most 1, and the last step corrects it.
+    #[inline]
     const fn reciprocal(d: u64) -> u64 {
         let d0 = d & 1;
         let d40 = (d >> 24) + 1;

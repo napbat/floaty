@@ -40,6 +40,11 @@ type Edge64 = Float<Binary<5>, 64>;
 type Short64 = Float<Binary<4>, 64>;
 type Edge128 = Float<Binary<5>, 128>;
 
+/// The largest precision whose quotient fits one limb. The quotient of the
+/// division has up to p + 3 bits, 64 bits at precision 61, and the division
+/// takes the reciprocal of the divisor.
+type Quotient64 = Float<Binary<3>, 64>;
+
 /// Every direction, and the other behaviors with nearest-even rounding.
 fn behaviors() -> Vec<Env> {
     let mut envs: Vec<Env> = DIRECTIONS
@@ -326,6 +331,11 @@ fn layouts_at_the_width_of_the_addition() {
     wide!(Edge64, Layout::ieee(64, 5), to_u64, 20_000, 64);
     wide!(Short64, Layout::ieee(64, 4), to_u64, 20_000, 65);
     wide!(Edge128, Layout::ieee(128, 5), to_u128, 10_000, 128);
+}
+
+#[test]
+fn the_widest_quotient_of_one_limb() {
+    wide!(Quotient64, Layout::ieee(64, 3), to_u64, 20_000, 61);
 }
 
 #[test]

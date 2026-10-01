@@ -13,7 +13,7 @@ use super::Layout;
 use crate::env::{Behavior, Env, Flags};
 use crate::exact::Unrounded;
 use crate::format::{Encoding, Storage, Width};
-use crate::limbs::{self, Limbs, Widen};
+use crate::limbs::{self, Divisor, Limbs, Widen};
 use crate::nan::{self, default_nan};
 use crate::unpacked::{Number, Unpacked};
 
@@ -357,13 +357,27 @@ where
         // The numerator then has at most 2p + 2 bits.
         let shift = Self::PRECISION + 2 + b.significand.bit_length() - a.significand.bit_length();
         let numerator = a.significand.resize::<L::Double>().shl(shift);
-        let (quotient, remainder) = limbs::divide(numerator, b.significand.resize());
+        let one_limb_quotient = L::BITS == 64 && Self::PRECISION + 3 <= 64;
+        let (quotient, inexact) = if one_limb_quotient && 2 * Self::PRECISION + 2 > 64 {
+            // The numerator can take two limbs, and the quotient has at most
+            // p + 3 bits, so it fits one limb. The high limb of the numerator
+            // is then below the divisor, and one step of the division by the
+            // reciprocal of the divisor gives the quotient, faster than the
+            // library division of 128 bits. A narrower numerator divides
+            // natively, which is faster than a reciprocal.
+            let divisor = Divisor::new(b.significand.limb(0));
+            let (quotient, rest) = divisor.divide_limb(numerator.limb(1), numerator.limb(0));
+            (L::Double::ZERO.with_limb(0, quotient), rest != 0)
+        } else {
+            let (quotient, remainder) = limbs::divide(numerator, b.significand.resize());
+            (quotient, !remainder.is_zero())
+        };
         let shift = i32::try_from(shift).expect("a shift fits an i32");
         let value = Unrounded {
             negative: a.negative != b.negative,
             exponent: a.exponent - b.exponent - shift,
             significand: quotient,
-            sticky: !remainder.is_zero(),
+            sticky: inexact,
         };
         Self::finish(&value, behavior, flags)
     }
