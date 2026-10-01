@@ -186,13 +186,14 @@ fn payload_encodings(layout: Layout, random: &mut SplitMix64) -> Vec<Integer> {
         IntegerBit::Implicit => layout.precision() - 2,
         IntegerBit::Explicit => 62,
     };
-    // The value `integer * 2^-shift`.
+    // The value `integer * 2^-shift`, when it is finite. Each value is at
+    // least 1/2, so it is normal in every format here.
     let value = |integer: &Integer, shift: u32| {
         let width = integer.significant_bits();
-        // Each value is at least 1/2, so it is normal in every format here.
         let field = bias(layout) + u64::from(width) - 1 - u64::from(shift);
         let fraction = Integer::from(integer << (layout.precision() - width));
-        assemble(layout, false, field, &fraction)
+        (field < u64::from(layout.largest_field()))
+            .then(|| assemble(layout, false, field, &fraction))
     };
     let top = Integer::from(1) << bits;
     let mut integers: Vec<Integer> = vec![
@@ -210,13 +211,12 @@ fn payload_encodings(layout: Layout, random: &mut SplitMix64) -> Vec<Integer> {
             .filter(|n| *n != 0),
     );
     let mut encodings = Vec::new();
-    for integer in &integers {
-        let positive = value(integer, 0);
+    for positive in integers.iter().filter_map(|integer| value(integer, 0)) {
         let mut negative = positive.clone();
         negative.set_bit(layout.width - 1, true);
         encodings.extend([positive, negative]);
     }
-    encodings.extend((0..3_u32).map(|n| value(&Integer::from(2 * n + 1), 1)));
+    encodings.extend((0..3_u32).filter_map(|n| value(&Integer::from(2 * n + 1), 1)));
     for signaling in [false, true] {
         let mut fraction = random_bits(random, bits);
         fraction.set_bit(bits, !signaling);
@@ -280,6 +280,10 @@ struct Plan<'a, S: Standard<W>, const W: usize> {
     augmented: &'a dyn Fn(Float<S, W>, Float<S, W>, Augmentation, Env) -> AugmentedWithFlags<S, W>,
     /// The NaN payload operations, which only the binary formats have.
     payload: &'a dyn Fn(Float<S, W>, Payload) -> Float<S, W>,
+    /// `hypot_with`, which only the binary formats have.
+    hypot: &'a dyn Fn(Float<S, W>, Float<S, W>, Env) -> (Float<S, W>, Flags),
+    /// `reciprocal_sqrt_with`, which only the binary formats have.
+    reciprocal_sqrt: &'a dyn Fn(Float<S, W>, Env) -> (Float<S, W>, Flags),
     /// The number of random encodings and of remainder pairs.
     count: usize,
     /// The behaviors of the operations on pairs.
@@ -326,10 +330,12 @@ fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
             check::check_min_max(x, y, &format, env);
             check::check_remainder(x, y, &format, env);
             check::check_augmented(x, y, &format, env, plan.augmented);
+            check::check_hypot(x, y, &format, env, plan.hypot);
         }
         for (x, y) in &near {
             check::check_remainder(x, y, &format, env);
             check::check_augmented(x, y, &format, env, plan.augmented);
+            check::check_hypot(x, y, &format, env, plan.hypot);
         }
     }
     for env in plan.single_envs {
@@ -337,6 +343,7 @@ fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
             check::check_integral_and_next(x, &format, env);
             check::check_scale_b(x, &scales(x, &format), &format, env);
             check::check_log_b(x, &format, env, plan.log_b);
+            check::check_reciprocal_sqrt(x, &format, env, plan.reciprocal_sqrt);
             to_ints(x, env);
         }
     }
@@ -347,6 +354,33 @@ fn from_u16<S: Standard<W, Bits = u16>, const W: usize>(bits: &Integer) -> Float
     Float::from_bits(bits.to_u16().expect("the encoding fits 16 bits"))
 }
 
+/// Checks `reciprocal_sqrt_with` on every encoding of a 16-bit format, in
+/// every behavior.
+fn every_reciprocal_sqrt<const E: u32>(layout: Layout)
+where
+    Binary<E>: Standard<16, Bits = u16>,
+{
+    let format = Format::of::<Float<Binary<E>, 16>>(Specials::Ieee);
+    for bits in 0..=u16::MAX {
+        let x = Case::new(
+            Integer::from(bits),
+            layout,
+            Float::<Binary<E>, 16>::from_bits(bits),
+        );
+        for env in &BEHAVIORS {
+            check::check_reciprocal_sqrt(&x, &format, env, |value, env| {
+                value.reciprocal_sqrt_with(env)
+            });
+        }
+    }
+}
+
+#[test]
+fn every_binary16_and_bfloat16_reciprocal_sqrt() {
+    every_reciprocal_sqrt::<5>(Layout::BINARY16);
+    every_reciprocal_sqrt::<8>(Layout::BFLOAT16);
+}
+
 #[test]
 fn bfloat16_and_tf32() {
     check_format(&Plan {
@@ -355,6 +389,8 @@ fn bfloat16_and_tf32() {
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -368,10 +404,48 @@ fn bfloat16_and_tf32() {
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
         seed: 0x0F32,
+    });
+}
+
+/// Layouts whose precision fills the storage up to two bits, the least room
+/// that a storage type keeps.
+#[test]
+fn layouts_whose_precision_fills_the_storage() {
+    check_format(&Plan {
+        layout: Layout::ieee(64, 2),
+        make: &|bits: &Integer| {
+            Float::<Binary<2>, 64>::from_bits(bits.to_u64().expect("the encoding fits a u64"))
+        },
+        log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        count: 2_000,
+        pair_envs: &BEHAVIORS,
+        single_envs: &BEHAVIORS,
+        seed: 0x0264,
+    });
+    check_format(&Plan {
+        layout: Layout::ieee(128, 2),
+        make: &|bits: &Integer| {
+            Float::<Binary<2>, 128>::from_bits(bits.to_u128().expect("the encoding fits a u128"))
+        },
+        log_b: &|value, env| value.log_b_with(env),
+        augmented: &|x, y, operation, env| operation.apply(x, y, env),
+        payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
+        count: 2_000,
+        pair_envs: &BEHAVIORS,
+        single_envs: &BEHAVIORS,
+        seed: 0x0228,
     });
 }
 
@@ -383,6 +457,8 @@ fn binary16_binary32_binary64_and_binary128() {
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -396,6 +472,8 @@ fn binary16_binary32_binary64_and_binary128() {
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -409,6 +487,8 @@ fn binary16_binary32_binary64_and_binary128() {
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         count: 3_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -422,6 +502,8 @@ fn binary16_binary32_binary64_and_binary128() {
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         count: 2_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -439,6 +521,8 @@ fn a_layout_whose_exponent_crosses_a_limb() {
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         count: 3_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -477,6 +561,8 @@ fn x87_extended_with_precision_control() {
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         count: 3_000,
         pair_envs: &pair_envs,
         single_envs: &single_envs,
@@ -492,6 +578,8 @@ fn binary256_and_binary512() {
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         count: 1_500,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -503,6 +591,8 @@ fn binary256_and_binary512() {
         log_b: &|value, env| value.log_b_with(env),
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
+        hypot: &|x, y, env| x.hypot_with(y, env),
+        reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         count: 1_500,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -522,6 +612,8 @@ macro_rules! other_wide_format {
             log_b: &|value, env| value.log_b_with(env),
             augmented: &|x, y, operation, env| operation.apply(x, y, env),
             payload: &|value, operation| operation.apply(value),
+            hypot: &|x, y, env| x.hypot_with(y, env),
+            reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
             count: 500,
             pair_envs: &BEHAVIORS,
             single_envs: &BEHAVIORS,

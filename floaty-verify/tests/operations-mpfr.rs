@@ -5,17 +5,18 @@
 //!
 //! The pair operations are the comparisons, the total order, the sign
 //! operations, the ten minimum and maximum operations, the remainder, and the
-//! three augmented operations. The operations on one operand are rounding to
-//! an integral value, conversion to seven integer types, scaling, `log_b`,
-//! the NaN payload operations, and the next value up and down. Three 8-bit
-//! layouts with a small exponent range also run, because a rounded integer
-//! can overflow them.
+//! three augmented operations, and `hypot`. The operations on one operand are
+//! rounding to an integral value, conversion to seven integer types,
+//! scaling, `log_b`, the reciprocal square root, the NaN payload operations,
+//! and the next value up and down. Three 8-bit layouts with a small
+//! exponent range also run, because a rounded integer can overflow them, and
+//! they run the operations that only the binary formats have.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
-use floaty::format::Standard;
-use floaty::{Binary, Float, Int, NoInf, UInt};
+use floaty::format::{Encoding, Standard};
+use floaty::{Binary, Float, Ieee, Int, NoInf, UInt};
 use floaty_verify::encodings::Layout;
 use floaty_verify::mpfr::{Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
@@ -173,6 +174,30 @@ fn every_small_format_operand_payload() {
     floaty_verify::for_each_small_format!(payload_of_every_encoding);
 }
 
+/// Checks `hypot_with` on every pair, and `reciprocal_sqrt_with` on every
+/// encoding, of one format of the small format lists, in every behavior.
+macro_rules! algebraic_of_every_encoding {
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+        let format = Format::of::<floaty::$alias>($specials);
+        let cases = cases::<$standard, $width>();
+        for env in &BEHAVIORS {
+            for x in &cases {
+                check::check_reciprocal_sqrt(x, &format, env, |value, env| {
+                    value.reciprocal_sqrt_with(env)
+                });
+                for y in &cases {
+                    check::check_hypot(x, y, &format, env, |x, y, env| x.hypot_with(y, env));
+                }
+            }
+        }
+    }};
+}
+
+#[test]
+fn every_small_format_pair_hypot_and_reciprocal_sqrt() {
+    floaty_verify::for_each_small_format!(algebraic_of_every_encoding);
+}
+
 /// Checks the augmented operations on every pair of encodings of one format
 /// of the small format lists, in every behavior.
 macro_rules! augmented_of_every_pair {
@@ -205,6 +230,43 @@ macro_rules! each_small_range_layout {
         $check::<Binary<2>, 8>(Specials::Ieee);
         $check::<Binary<2, NoInf>, 8>(Specials::NoInf);
     };
+}
+
+/// Checks the operations that only the binary formats have on every pair or
+/// encoding of an 8-bit layout of `each_small_range_layout`, in every
+/// behavior: `hypot`, the reciprocal square root, the augmented operations,
+/// and the NaN payload operations. These layouts overflow often, and the
+/// precision 6 of `Binary<2>` gives a reciprocal square root whose quotient
+/// is a perfect square but not exact.
+fn binary_operations<const E: u32, Enc: Encoding>(specials: Specials)
+where
+    Binary<E, Enc>: Standard<8, Bits = u8>,
+{
+    let format = Format::of::<Float<Binary<E, Enc>, 8>>(specials);
+    let cases = cases::<Binary<E, Enc>, 8>();
+    for x in &cases {
+        check::check_payload(x, &format, |value, operation| operation.apply(value));
+    }
+    for env in &BEHAVIORS {
+        for x in &cases {
+            check::check_reciprocal_sqrt(x, &format, env, |value, env| {
+                value.reciprocal_sqrt_with(env)
+            });
+            for y in &cases {
+                check::check_hypot(x, y, &format, env, Float::hypot_with);
+                check::check_augmented(x, y, &format, env, |x, y, operation, env| {
+                    operation.apply(x, y, env)
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn small_range_layouts_binary_operations() {
+    binary_operations::<3, Ieee>(Specials::Ieee);
+    binary_operations::<2, Ieee>(Specials::Ieee);
+    binary_operations::<2, NoInf>(Specials::NoInf);
 }
 
 #[test]

@@ -5,19 +5,20 @@
 //! The oracle finds a NaN and its payload in the bits of the encoding, by
 //! the field layout, without floaty's decoder. The payload is the fraction
 //! below the quiet bit. A NaN of `NoInf` or `Fnuz` has the payload 0, and an
-//! x87 encoding without its integer bit is no NaN. A payload argument reads
-//! by [`Operand::read`](crate::mpfr::Operand::read). The admissible payloads
-//! are +0 and the positive integers below `2^b`, for the `b` payload bits,
+//! x87 encoding without its integer bit is no NaN. The payload rounds to the
+//! format as with `Env::IEEE`. A payload argument reads by
+//! [`Operand::read`](crate::mpfr::Operand::read). The admissible payloads are
+//! +0 and the positive integers below `2^b`, for the `b` payload bits,
 //! without 0 for a signaling NaN. Only an IEEE or x87 encoding has a
 //! signaling NaN.
 
 use floaty::format::{Encoding, Standard, Storage, Width};
 use floaty::{Binary, Env, Flags, Float};
-use rug::{Float as BigFloat, Integer};
+use rug::Integer;
 
 use super::{Outcome, Sample};
 use crate::encodings::IntegerBit;
-use crate::mpfr::{Format, Read, Specials};
+use crate::mpfr::{self, Format, Input, Read, Specials};
 
 /// A NaN payload operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,13 +63,20 @@ pub fn payload(operation: Payload, sample: &Sample<8>, format: &Format) -> Outco
     }
 }
 
-/// Returns the payload of a NaN as an integral value, or -1.
+/// Returns the payload of a NaN as an integral value, rounded as with
+/// `Env::IEEE`, or -1.
 fn get(sample: &Sample<8>, format: &Format) -> Outcome {
-    match nan_payload(sample, format) {
-        Some(payload) if payload == 0 => Outcome::Zero { negative: false },
-        Some(payload) => Outcome::Finite(BigFloat::with_val(format.precision, payload)),
-        None => Outcome::Finite(BigFloat::with_val(format.precision, -1)),
-    }
+    let (negative, integer) = match nan_payload(sample, format) {
+        Some(payload) => (false, payload),
+        None => (true, Integer::from(1)),
+    };
+    let input = Input {
+        negative,
+        exponent: 0,
+        significand: integer,
+        sticky: false,
+    };
+    Outcome::from_value(mpfr::round(&input, format, &Env::IEEE).0)
 }
 
 /// Returns the NaN with the payload of the sample, or +0.

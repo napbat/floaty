@@ -3,6 +3,7 @@
 use core::cmp::Ordering;
 use core::marker::PhantomData;
 
+mod algebraic;
 mod arithmetic;
 mod augmented;
 mod compare;

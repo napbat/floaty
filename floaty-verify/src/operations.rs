@@ -1,8 +1,9 @@
 //! An oracle for the operations beyond arithmetic: comparison, total order,
 //! minimum and maximum, rounding to an integral value, conversion to and from
 //! an integer, the remainder, scaling by a power of two, the next value up or
-//! down, the sign operations, the augmented operations, the NaN payload
-//! operations, and the reduction operations.
+//! down, the sign operations, `hypot` and the reciprocal square root, the
+//! augmented operations, the NaN payload operations, and the reduction
+//! operations.
 //!
 //! MPFR computes each finite result. The operations that do not round get the
 //! exact MPFR value, and the others round with the oracle in [`crate::mpfr`].
@@ -27,6 +28,7 @@ use crate::mpfr::{
     self, Format, Input, Nan, Operand, Read, Specials, Value, exact, select_nan, signed_zero,
 };
 
+pub mod algebraic;
 pub mod augmented;
 pub mod check;
 pub mod compare;

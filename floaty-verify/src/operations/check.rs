@@ -10,6 +10,7 @@ use rug::Integer;
 
 use crate::encodings::Layout;
 
+use super::algebraic;
 use super::augmented::{self, Augmentation};
 use super::compare::{self, MinMax};
 use super::integral::{self, IntegerValue, to_int_value};
@@ -313,6 +314,45 @@ pub fn check_payload<S: Standard<W>, const W: usize>(
             context()
         );
     }
+}
+
+/// Checks `hypot_with` on one pair. `run` runs the operation of floaty,
+/// which only the binary formats have.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_hypot<S: Standard<W>, const W: usize>(
+    x: &Case<S, W>,
+    y: &Case<S, W>,
+    format: &Format,
+    env: &Env,
+    run: impl Fn(Float<S, W>, Float<S, W>, Env) -> (Float<S, W>, Flags),
+) {
+    check_float(
+        run(x.value, y.value, *env),
+        &algebraic::hypot(&x.sample.operand, &y.sample.operand, format, env),
+        &|| format!("hypot {:?} {:?} {env:?}", x.value, y.value),
+    );
+}
+
+/// Checks `reciprocal_sqrt_with` on one value. `run` runs the operation of
+/// floaty, which only the binary formats have.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_reciprocal_sqrt<S: Standard<W>, const W: usize>(
+    x: &Case<S, W>,
+    format: &Format,
+    env: &Env,
+    run: impl Fn(Float<S, W>, Env) -> (Float<S, W>, Flags),
+) {
+    check_float(
+        run(x.value, *env),
+        &algebraic::reciprocal_sqrt(&x.sample.operand, format, env),
+        &|| format!("reciprocal_sqrt {:?} {env:?}", x.value),
+    );
 }
 
 /// Checks `to_int_with` into the integer type `I` on one value.

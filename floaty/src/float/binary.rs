@@ -1,5 +1,6 @@
-//! The operations of the binary formats alone: `log_b`, the augmented
-//! operations, and the NaN payload operations.
+//! The operations of the binary formats alone: `log_b`, `hypot`, the
+//! reciprocal square root, the augmented operations, and the NaN payload
+//! operations.
 
 use super::Float;
 use crate::binary::Layout;
@@ -83,6 +84,73 @@ where
     pub fn log_b_with(self, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) =
             Layout::<E, Enc, W>::log_b(self.bits.to_limbs(), &behavior.apply::<M>().env());
+        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+    }
+
+    /// Returns `sqrt(self^2 + other^2)`, with the default mode.
+    #[must_use]
+    pub fn hypot(self, other: Self) -> Self {
+        self.hypot_with(other, M::default()).0
+    }
+
+    /// Returns `sqrt(self^2 + other^2)`, correctly rounded, as IEEE 754-2019
+    /// `hypot` does, and the flags.
+    ///
+    /// The exact result rounds once in the direction of the behavior, so no
+    /// intermediate square overflows or underflows. Two zeros give +0, and a
+    /// zero and a number give the magnitude of the number, rounded by the
+    /// behavior. An infinity gives +inf, even with a quiet NaN. Otherwise a
+    /// NaN gives the NaN that the NaN rule selects, and a signaling NaN
+    /// signals invalid. An unsupported operand gives the default NaN and
+    /// signals invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// // 3 * 2^1000 and 4 * 2^1000 give 5 * 2^1000, though their squares overflow.
+    /// let (x, y) = (F64::from_bits(0x7E88_0000_0000_0000), F64::from_bits(0x7E90_0000_0000_0000));
+    /// let (hypotenuse, flags) = x.hypot_with(y, Env::IEEE);
+    /// assert_eq!((hypotenuse.to_bits(), flags), (0x7E94_0000_0000_0000, Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn hypot_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::hypot(
+            self.bits.to_limbs(),
+            other.bits.to_limbs(),
+            &behavior.apply::<M>().env(),
+        );
+        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+    }
+
+    /// Returns `1 / sqrt(self)`, with the default mode.
+    #[must_use]
+    pub fn reciprocal_sqrt(self) -> Self {
+        self.reciprocal_sqrt_with(M::default()).0
+    }
+
+    /// Returns `1 / sqrt(self)`, correctly rounded, as IEEE 754-2019 `rSqrt`
+    /// does, and the flags.
+    ///
+    /// The exact result rounds once in the direction of the behavior. A zero
+    /// gives an infinity of its sign and signals divide-by-zero, or the NaN
+    /// or the largest finite value of a format without an infinity. +inf
+    /// gives +0. A negative number and -inf give the default NaN and signal
+    /// invalid. A NaN gives the NaN of the NaN rule.
+    ///
+    /// ```
+    /// use floaty::{Env, F32, Flags};
+    ///
+    /// let rsqrt = |bits| F32::from_bits(bits).reciprocal_sqrt_with(Env::IEEE);
+    /// // 1 / sqrt(4) is 0.5, and 1 / sqrt(2) rounds.
+    /// assert_eq!(rsqrt(0x4080_0000), (F32::from_bits(0x3F00_0000), Flags::NONE));
+    /// assert_eq!(rsqrt(0x4000_0000).0.to_bits(), 0x3F35_04F3);
+    /// ```
+    #[must_use]
+    pub fn reciprocal_sqrt_with(self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = Layout::<E, Enc, W>::reciprocal_sqrt(
+            self.bits.to_limbs(),
+            &behavior.apply::<M>().env(),
+        );
         (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
     }
 
@@ -191,8 +259,10 @@ where
     /// The payload is the fraction below the quiet bit, as an integer. A
     /// format whose NaN has no payload, such as [`NoInf`](crate::NoInf),
     /// gives 0. Every encoding that is not a NaN gives -1, an unsupported x87
-    /// encoding included. The operation reads no behavior and signals
-    /// nothing.
+    /// encoding included. A format with few exponent bits can have payloads
+    /// above its largest finite value; such a payload rounds to nearest, and
+    /// past the overflow threshold to +inf. The operation reads no behavior
+    /// and signals nothing.
     ///
     /// ```
     /// use floaty::F64;

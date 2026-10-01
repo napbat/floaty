@@ -29,7 +29,8 @@ where
                 sticky: false,
             },
         };
-        // A payload has at most p - 2 bits, so the rounding is exact.
+        // A payload has at most p - 2 bits, so the rounding is exact unless
+        // the payload is above the largest finite value.
         let (value, _) = exact::round::<L, L, Self, Env>(&integer, Env::IEEE);
         Self::encode(value)
     }

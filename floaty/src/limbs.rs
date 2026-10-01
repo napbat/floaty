@@ -417,15 +417,20 @@ pub trait Widen: Limbs {
     /// The limb array of twice the width.
     type Double: Limbs;
 
+    /// The limb array of twice the width and one more limb, for a sum of
+    /// products with room above and below it.
+    type Padded: Limbs;
+
     /// Returns the full product.
     fn widening_mul(self, other: Self) -> Self::Double;
 }
 
 macro_rules! widen {
-    ($($limbs:literal => $double:literal),*) => {
+    ($($limbs:literal => $double:literal, $padded:literal),*) => {
         $(
             impl Widen for [u64; $limbs] {
                 type Double = [u64; $double];
+                type Padded = [u64; $padded];
 
                 #[inline]
                 fn widening_mul(self, other: Self) -> [u64; $double] {
@@ -436,7 +441,16 @@ macro_rules! widen {
     };
 }
 
-widen!(1 => 2, 2 => 4, 3 => 6, 4 => 8, 5 => 10, 6 => 12, 7 => 14, 8 => 16);
+widen!(
+    1 => 2, 3,
+    2 => 4, 5,
+    3 => 6, 7,
+    4 => 8, 9,
+    5 => 10, 11,
+    6 => 12, 13,
+    7 => 14, 15,
+    8 => 16, 17
+);
 
 /// Returns the full product of two limb arrays. `D` must be twice `N`.
 #[inline]
