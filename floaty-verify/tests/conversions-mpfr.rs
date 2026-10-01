@@ -1,6 +1,7 @@
 //! Compares conversions from and to the formats that TestFloat lacks with the
 //! MPFR oracle: bfloat16, TF32, the FP8 and MX formats, and every wide format
-//! from binary160 to binary512.
+//! from binary160 to binary512. The sources include binary32, binary64, x87
+//! extended, and binary128, and the unsupported x87 encodings.
 //!
 //! MPFR rounds the finite values. The special values follow floaty's
 //! conversion rules. A NaN result must also have the payload of the rule of
@@ -21,9 +22,11 @@ use floaty::env::NanPropagation;
 use floaty::format::Standard;
 use floaty::{
     BF16, Binary, Decoded, Env, F8E4M3Fn, F8E4M3Fnuz, F8E5M2, F16, F32, F64, F128, F160, F192,
-    F224, F256, F288, F320, F352, F384, F416, F448, F480, F512, Float, TF32,
+    F224, F256, F288, F320, F352, F384, F416, F448, F480, F512, Float, TF32, X87,
 };
-use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs, to_u128};
+use floaty_verify::encodings::{
+    IntegerBit, Layout, boundary_encodings, boundary_encodings_u128, to_limbs, to_u128,
+};
 use floaty_verify::mpfr::decimal::align;
 use floaty_verify::mpfr::{self, CONVERSION_BEHAVIORS, Format, Operand, Specials, Value};
 use floaty_verify::random::SplitMix64;
@@ -322,4 +325,66 @@ fn from_binary256_and_binary512() {
         .collect();
     narrow.extend((0..3_000).map(|_| core::array::from_fn(|_| random.next_u64())));
     check!(F256, narrow => F512: Specials::Ieee, F16: Specials::Ieee, F8E4M3Fn: Specials::NoInf);
+}
+
+/// Returns the boundary encodings and `count` random encodings of a format
+/// of at most 128 bits. One random encoding in 16 gets the exponent field of
+/// the NaNs. Three x87 encodings in four get the integer bit of a canonical
+/// encoding, and the fourth keeps a random integer bit, which gives unnormals
+/// and pseudo-denormals.
+fn encodings_up_to_128(layout: Layout, count: usize, random: &mut SplitMix64) -> Vec<u128> {
+    let mask = u128::MAX >> (128 - layout.width);
+    let fraction_bits = layout.fraction_bits();
+    let nan_field = u128::from(layout.largest_field()) << fraction_bits;
+    let mut encodings = boundary_encodings_u128(layout);
+    encodings.extend((0..count).map(|index| {
+        let mut bits = random.next_u128() & mask;
+        if index % 16 == 0 {
+            bits |= nan_field;
+        }
+        if layout.integer_bit == IntegerBit::Explicit && index % 4 != 0 {
+            let integer_bit = 1 << (fraction_bits - 1);
+            let field_is_zero = bits & (u128::from(layout.largest_field()) << fraction_bits) == 0;
+            bits = if field_is_zero {
+                bits & !integer_bit
+            } else {
+                bits | integer_bit
+            };
+        }
+        bits
+    }));
+    encodings
+}
+
+/// Converts every source value, of the format named `name`, to bfloat16,
+/// TF32, and every format of `for_each_small_format!`.
+fn to_the_formats_that_testfloat_lacks<S: Standard<SW>, const SW: usize>(
+    values: &[Float<S, SW>],
+    name: &str,
+) {
+    check_conversion(values, PhantomData::<BF16>, Specials::Ieee, (name, "BF16"));
+    check_conversion(values, PhantomData::<TF32>, Specials::Ieee, (name, "TF32"));
+    to_every_small_format(values, name);
+}
+
+/// binary32, binary64, x87 extended, and binary128 convert to bfloat16,
+/// TF32, and every small format. TestFloat has none of these destinations.
+#[test]
+fn from_binary32_binary64_x87_extended_and_binary128() {
+    let mut random = SplitMix64::new(0x5741);
+    let narrow = |bits: u128| u64::try_from(bits).expect("the format has at most 64 bits");
+    let singles: Vec<u32> = encodings_up_to_128(Layout::BINARY32, 4_000, &mut random)
+        .into_iter()
+        .map(|bits| u32::try_from(bits).expect("the format has 32 bits"))
+        .collect();
+    to_the_formats_that_testfloat_lacks(&values_of::<Binary<8>, 32>(&singles), "F32");
+    let doubles: Vec<u64> = encodings_up_to_128(Layout::BINARY64, 4_000, &mut random)
+        .into_iter()
+        .map(narrow)
+        .collect();
+    to_the_formats_that_testfloat_lacks(&values_of::<Binary<11>, 64>(&doubles), "F64");
+    let extended = encodings_up_to_128(Layout::X87_EXTENDED, 4_000, &mut random);
+    to_the_formats_that_testfloat_lacks(&values_of::<Binary<15, X87>, 80>(&extended), "F80");
+    let quads = encodings_up_to_128(Layout::BINARY128, 4_000, &mut random);
+    to_the_formats_that_testfloat_lacks(&values_of::<Binary<15>, 128>(&quads), "F128");
 }

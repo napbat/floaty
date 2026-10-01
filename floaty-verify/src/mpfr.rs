@@ -521,12 +521,13 @@ pub const CONVERSION_BEHAVIORS: [Env; 10] = [
 /// `format`, by floaty's conversion rules. MPFR rounds the finite values.
 ///
 /// The special-value rules are floaty's own rules, not an independent
-/// reference.
+/// reference. An unsupported x87 encoding gives the default NaN and signals
+/// invalid, as the documentation of `convert_with` states. The x87 hardware
+/// tests check that rule for binary32 and binary64 destinations.
 ///
 /// # Panics
 ///
-/// Panics for an unsupported source encoding, which the caller checks
-/// against the processor instead.
+/// Never: MPFR gives an integer significand for every finite value.
 #[must_use]
 pub fn convert<const N: usize>(source: &Operand<N>, format: &Format, env: &Env) -> (Value, Flags) {
     let mut flags = Flags::NONE;
@@ -558,6 +559,9 @@ pub fn convert<const N: usize>(source: &Operand<N>, format: &Format, env: &Env) 
             // `DefaultNan` gives the default NaN. The other rules keep the sign.
             (format.nan(select_nan(&[nan], env).negative), flags)
         }
-        Read::Unsupported => panic!("the oracle has no rule for an unsupported encoding"),
+        Read::Unsupported => (
+            format.nan(Nan::default_of(env).negative),
+            flags | Flags::INVALID,
+        ),
     }
 }
