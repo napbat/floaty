@@ -75,7 +75,7 @@ fn inputs(format: &Format, env: &Env, random: &mut SplitMix64) -> Vec<Input> {
         format.emax + 1,
         format.emax,
         format.emax - 1,
-        (format.emax + format.emin) / 2,
+        i32::midpoint(format.emax, format.emin),
         format.emin + 1,
         format.emin,
         format.emin - 1,

@@ -51,7 +51,7 @@ floaty is not on crates.io. Add it as a Git dependency, and pin a revision:
 floaty = { git = "https://github.com/napbat/floaty", rev = "<commit>" }
 ```
 
-floaty needs Rust 1.85 or later.
+floaty needs Rust 1.89 or later.
 
 ## Quick start
 
@@ -581,7 +581,7 @@ beside its test with the evidence and the resolution.
 | `s390x-unknown-linux-gnu` | Tested under QEMU, as a big-endian target |
 | Other targets | The engine has no target-specific code. The gates do not test these targets. |
 
-The minimum supported Rust version is 1.85. The crate uses edition 2024.
+The minimum supported Rust version is 1.89. The crate uses edition 2024.
 
 ## Limitations
 

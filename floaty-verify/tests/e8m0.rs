@@ -63,8 +63,8 @@ fn inputs() -> impl Iterator<Item = u32> {
 #[test]
 fn every_code_reads_like_ml_dtypes() {
     let (values, _) = TABLE.split_at(1024);
-    for (code, bytes) in (0..=u8::MAX).zip(values.chunks_exact(4)) {
-        let expected = u32::from_le_bytes(bytes.try_into().expect("four bytes"));
+    for (code, &bytes) in (0..=u8::MAX).zip(values.as_chunks::<4>().0) {
+        let expected = u32::from_le_bytes(bytes);
         assert_eq!(from_scale(code).to_bits(), expected, "code {code}");
     }
 }

@@ -52,7 +52,10 @@ fn integer(number: Number) -> Option<u128> {
             .and_then(|power| power.checked_mul(number.coefficient));
     }
     let power = 10_u128.checked_pow(scale)?;
-    (number.coefficient % power == 0).then(|| number.coefficient / power)
+    number
+        .coefficient
+        .is_multiple_of(power)
+        .then(|| number.coefficient / power)
 }
 
 /// Returns the expected result of `operation` on `x`, by the rules of the

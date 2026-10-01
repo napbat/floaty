@@ -273,12 +273,13 @@ const BARRETT_SQUARINGS: u32 = 10;
 /// as Barrett's two products in the benchmark.
 fn power_of_two_mod<L: Widen>(exponent: u32, modulus: L) -> L {
     let squarings = u32::BITS - exponent.leading_zeros();
-    if squarings >= BARRETT_SQUARINGS && (65..=128).contains(&modulus.bit_length()) {
-        if let Some(barrett) = Barrett::new(modulus) {
-            return power_of_two(exponent, modulus, |left, right| {
-                barrett.multiply(left, right)
-            });
-        }
+    if squarings >= BARRETT_SQUARINGS
+        && (65..=128).contains(&modulus.bit_length())
+        && let Some(barrett) = Barrett::new(modulus)
+    {
+        return power_of_two(exponent, modulus, |left, right| {
+            barrett.multiply(left, right)
+        });
     }
     power_of_two(exponent, modulus, |left, right| {
         multiply_mod(left, right, modulus)

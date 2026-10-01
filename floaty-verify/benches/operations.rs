@@ -372,8 +372,10 @@ fn lanes_row<S: Standard<W>, const W: usize, const N: usize, T: Copy>(
     let mut random = SplitMix64::new(seed);
     let group = |values: &[Float<S, W>]| -> Vec<Lanes<Float<S, W>, N>> {
         values
-            .chunks_exact(N)
-            .map(|chunk| Lanes::new(chunk.try_into().expect("a chunk holds N lanes")))
+            .as_chunks::<N>()
+            .0
+            .iter()
+            .map(|&chunk| Lanes::new(chunk))
             .collect()
     };
     let first = operands::<S, W>(&mut random);

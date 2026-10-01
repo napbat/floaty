@@ -273,16 +273,14 @@ macro_rules! wide {
                     }
                 }
             }
-            for pair in values.chunks_exact(2) {
-                let [x, y] = [pair[0], pair[1]];
+            for &[x, y] in values.as_chunks::<2>().0 {
                 compare!(format, env, Operation::Add, x.add_with(y, env), [x, y]);
                 compare!(format, env, Operation::Sub, x.sub_with(y, env), [x, y]);
                 compare!(format, env, Operation::Mul, x.mul_with(y, env), [x, y]);
                 compare!(format, env, Operation::Div, x.div_with(y, env), [x, y]);
                 compare!(format, env, Operation::Sqrt, x.sqrt_with(env), [x]);
             }
-            for triple in values.chunks_exact(3) {
-                let [a, b, c] = [triple[0], triple[1], triple[2]];
+            for &[a, b, c] in values.as_chunks::<3>().0 {
                 compare!(
                     format,
                     env,
@@ -389,16 +387,14 @@ macro_rules! in_mode {
             .iter()
             .map(|value| value.with_mode::<$mode>())
             .collect();
-        for pair in values.chunks_exact(2) {
-            let [x, y] = [pair[0], pair[1]];
+        for &[x, y] in values.as_chunks::<2>().0 {
             compare!(format, env, Operation::Add, x.add_with(y, mode), [x, y]);
             compare!(format, env, Operation::Sub, x.sub_with(y, mode), [x, y]);
             compare!(format, env, Operation::Mul, x.mul_with(y, mode), [x, y]);
             compare!(format, env, Operation::Div, x.div_with(y, mode), [x, y]);
             compare!(format, env, Operation::Sqrt, x.sqrt_with(mode), [x]);
         }
-        for triple in values.chunks_exact(3) {
-            let [a, b, c] = [triple[0], triple[1], triple[2]];
+        for &[a, b, c] in values.as_chunks::<3>().0 {
             compare!(
                 format,
                 env,
@@ -505,16 +501,14 @@ fn x87_arithmetic_in_every_behavior() {
             .with_tininess(Tininess::BeforeRounding),
     ]);
     for env in envs {
-        for pair in values.chunks_exact(2) {
-            let [x, y] = [pair[0], pair[1]];
+        for &[x, y] in values.as_chunks::<2>().0 {
             compare!(format, env, Operation::Add, x.add_with(y, env), [x, y]);
             compare!(format, env, Operation::Sub, x.sub_with(y, env), [x, y]);
             compare!(format, env, Operation::Mul, x.mul_with(y, env), [x, y]);
             compare!(format, env, Operation::Div, x.div_with(y, env), [x, y]);
             compare!(format, env, Operation::Sqrt, x.sqrt_with(env), [x]);
         }
-        for triple in values.chunks_exact(3) {
-            let [a, b, c] = [triple[0], triple[1], triple[2]];
+        for &[a, b, c] in values.as_chunks::<3>().0 {
             compare!(
                 format,
                 env,

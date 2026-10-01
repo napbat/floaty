@@ -180,12 +180,16 @@ fn check_vector<const E: u32, Enc: Encoding, const W: usize>(
         );
     }
     let pairs: Vec<(Value<E, Enc, W>, Value<E, Enc, W>)> = values
-        .chunks_exact(2)
-        .map(|pair| (pair[0], pair[1]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[x, y]| (x, y))
         .collect();
     let operand_pairs: Vec<(Operand<8>, Operand<8>)> = operands
-        .chunks_exact(2)
-        .map(|pair| (pair[0], pair[1]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[x, y]| (x, y))
         .collect();
     let (result, flags) = Value::<E, Enc, W>::dot_with(pairs.iter().copied(), *env);
     assert!(result.is_canonical(), "dot {values:?} {env:?}");

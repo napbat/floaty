@@ -324,7 +324,7 @@ fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
         .iter()
         .flat_map(|x| boundaries.iter().map(move |y| (x, y)))
         .collect();
-    pairs.extend(samples.chunks_exact(2).map(|pair| (&pair[0], &pair[1])));
+    pairs.extend(samples.as_chunks::<2>().0.iter().map(|[x, y]| (x, y)));
     let near: Vec<(Case<S, W>, Case<S, W>)> = remainder_pairs(layout, plan.count, &mut random)
         .iter()
         .map(|(x, y)| (case(x), case(y)))

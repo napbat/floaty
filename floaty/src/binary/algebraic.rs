@@ -93,9 +93,12 @@ where
         sticky |= total.any_below(dropped_bits);
         let radicand = total.shr(dropped_bits).resize::<L::Double>();
         let (root, inexact) = limbs::square_root_of_double::<L>(radicand);
+        // The exponent of the radicand, `low + dropped`, is even, so the root
+        // takes exactly half of it.
         let value = Unrounded {
             negative: false,
-            exponent: i32::try_from((low + dropped) / 2).expect("a root exponent fits an i32"),
+            exponent: i32::try_from(i64::midpoint(low, dropped))
+                .expect("a root exponent fits an i32"),
             significand: root,
             sticky: sticky || inexact,
         };

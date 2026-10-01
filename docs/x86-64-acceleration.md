@@ -186,11 +186,11 @@ A mode is a type, so an operation in another mode compiles to the engine.
   on a 512-bit register stops with an illegal instruction. An AVX-512 path
   needs Intel SDE or a processor with AVX-512 for its oracle tests. A new
   build needs its own gates in `AGENTS.md`.
-- Stable Rust 1.85, the minimum version of floaty, never sets
-  `cfg(target_feature = "avx512f")` or the other AVX-512 features. Rust
-  1.89 made them stable. A path at AVX-512F, AVX512_BF16, AVX512-FP16, or
-  AVX-NE-CONVERT needs a minimum version of 1.89 or later. `avx10.1` and
-  `avx10.2` are unstable in Rust 1.98.1.
+- Rust 1.89, the minimum version of floaty, sets
+  `cfg(target_feature = "avx512f")`, `avx512bf16`, `avx512fp16`, and
+  `avxneconvert` on stable Rust, so a path at AVX-512F, AVX512_BF16,
+  AVX512-FP16, or AVX-NE-CONVERT needs no newer compiler. Rust 1.89 does not
+  set `avx10.1` or `avx10.2`, and both are unstable in Rust 1.98.1.
 
 ## Manual Conflicts
 
@@ -251,8 +251,8 @@ path, so the record lists no gap for it.
 
 | Priority | Gap | Instructions | Feature | Cost today | Blocker |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 512-bit chunks, masked tails, directed rounding of the other operations, `scale_b`, conversions of 64-bit integers, `min_num` and `max_num` without the fallback | 512-bit forms, masks, embedded rounding, `VSCALEFPS`, `VCVTPS2QQ`, `VRANGEPS` | AVX-512F, DQ, VL | Engine, or 256-bit paths | No hardware in the gates. Rust 1.89. |
-| 2 | binary16 `mul_add`, and `convert` from binary64 with one rounding | `VFMADD213PH`, `VCVTPD2PH`, `VCVTSD2SH` | AVX512-FP16 | 21.0 to 22.7 per lane, and 12.3 to 12.4 | No hardware in the gates. Rust 1.89. Conflict 1. |
+| 1 | 512-bit chunks, masked tails, directed rounding of the other operations, `scale_b`, conversions of 64-bit integers, `min_num` and `max_num` without the fallback | 512-bit forms, masks, embedded rounding, `VSCALEFPS`, `VCVTPS2QQ`, `VRANGEPS` | AVX-512F, DQ, VL | Engine, or 256-bit paths | No hardware in the gates. |
+| 2 | binary16 `mul_add`, and `convert` from binary64 with one rounding | `VFMADD213PH`, `VCVTPD2PH`, `VCVTSD2SH` | AVX512-FP16 | 21.0 to 22.7 per lane, and 12.3 to 12.4 | No hardware in the gates. Conflict 1. |
 | 3 | The IEEE 754-2019 minimum and maximum without the fallback, bfloat16 `mul_add`, FP8 conversions, and saturating integer conversions | `VMINMAXPS`, `VFMADD213BF16`, `VCVTHF82PH`, `VCVTPH2HF8`, `VCVTTPS2DQS` | AVX10.2 | Engine | No hardware in the gates. `avx10.2` is unstable in Rust. Conflict 2. |
 
 ## No x86-64 Instruction

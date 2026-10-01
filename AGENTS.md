@@ -80,7 +80,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
 cargo test --workspace --no-fail-fast
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
+cargo +1.89 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
 ```
 
 Then run the clippy and test gates in the other builds. These are the
@@ -92,28 +92,28 @@ Each build with its own flags keeps its own target directory.
 export V3="-C target-cpu=x86-64-v3" ENGINE="--cfg floaty_engine_only" FP16="-C target-feature=+fp16,+bf16"
 RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
 RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo test --workspace --no-fail-fast
-RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo +1.85 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
+RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo +1.89 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
 RUSTFLAGS="$ENGINE" CARGO_TARGET_DIR=target/engine-only cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
 RUSTFLAGS="$ENGINE" CARGO_TARGET_DIR=target/engine-only cargo test --workspace --no-fail-fast
 cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 cargo test --workspace --no-fail-fast --target aarch64-unknown-linux-gnu
-cargo +1.85 clippy -p floaty --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
+cargo +1.89 clippy -p floaty --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo test --workspace --no-fail-fast --target aarch64-unknown-linux-gnu
-RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo +1.85 clippy -p floaty --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
+RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo +1.89 clippy -p floaty --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 cargo clippy --workspace --all-targets --target i686-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 cargo test --workspace --no-fail-fast --target i686-unknown-linux-gnu
-cargo +1.85 clippy -p floaty --all-targets --target i686-unknown-linux-gnu -- -D warnings -D clippy::pedantic
+cargo +1.89 clippy -p floaty --all-targets --target i686-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 cargo clippy --workspace --all-targets --target s390x-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 cargo test --workspace --no-fail-fast --target s390x-unknown-linux-gnu
-cargo +1.85 clippy -p floaty --all-targets --target s390x-unknown-linux-gnu -- -D warnings -D clippy::pedantic
+cargo +1.89 clippy -p floaty --all-targets --target s390x-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 ```
 
 - Install the minimum-version toolchain once:
-  `rustup toolchain install 1.85 --profile minimal --component clippy`.
+  `rustup toolchain install 1.89 --profile minimal --component clippy`.
 - Install the AArch64, i686, and s390x targets once for both toolchains:
   `rustup target add aarch64-unknown-linux-gnu i686-unknown-linux-gnu
-  s390x-unknown-linux-gnu`, and the same command with `--toolchain 1.85`.
+  s390x-unknown-linux-gnu`, and the same command with `--toolchain 1.89`.
 - The AArch64 gates need `aarch64-linux-gnu-gcc` 15.2.0 with its C library
   (packages gcc-aarch64-linux-gnu and libc6-dev-arm64-cross) and
   `qemu-aarch64` 10.2.1 (package qemu-user). `.cargo/config.toml` names the

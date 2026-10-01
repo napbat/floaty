@@ -74,7 +74,9 @@ fn integer(exponent: i32, coefficient: u128) -> Option<u128> {
     if exponent >= 0 {
         coefficient.checked_mul(power)
     } else {
-        (coefficient % power == 0).then(|| coefficient / power)
+        coefficient
+            .is_multiple_of(power)
+            .then(|| coefficient / power)
     }
 }
 

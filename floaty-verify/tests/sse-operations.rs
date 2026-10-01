@@ -124,9 +124,8 @@ fn compare_pairs<T: Copy + core::ops::BitXor<Output = T>>(
             pairs.push((a, b));
         }
     }
-    for pair in operands.chunks_exact(2) {
-        let a = pair[0];
-        pairs.extend([(a, pair[1]), (a, a), (a, a ^ sign), (a, a ^ low)]);
+    for &[a, b] in operands.as_chunks::<2>().0 {
+        pairs.extend([(a, b), (a, a), (a, a ^ sign), (a, a ^ low)]);
     }
     pairs
 }

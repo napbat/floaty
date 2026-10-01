@@ -151,9 +151,8 @@ fn compares_match_the_quiet_and_signaling_compares() {
         }
     }
     let operands = random_operands(&mut random, 40_000, -2..=2);
-    for pair in operands.chunks_exact(2) {
-        let a = pair[0];
-        for b in [pair[1], a, a ^ (1 << 79), a ^ 1] {
+    for &[a, second] in operands.as_chunks::<2>().0 {
+        for b in [second, a, a ^ (1 << 79), a ^ 1] {
             check_compare(a, b);
         }
         // A pseudo-denormal equals the normal encoding with exponent field 1

@@ -235,10 +235,10 @@ fn pairs<T: Copy + core::ops::BitXor<Output = T>>(
             pairs.push((a, b));
         }
     }
-    for pair in operands[specials..].chunks_exact(2) {
-        pairs.push((pair[0], pair[1]));
+    for &[a, b] in operands[specials..].as_chunks::<2>().0 {
+        pairs.push((a, b));
         // The same magnitude with the other sign and a changed low bit.
-        pairs.push((pair[0], pair[0] ^ sign ^ flip));
+        pairs.push((a, a ^ sign ^ flip));
     }
     pairs
 }
@@ -348,7 +348,7 @@ fn fused_multiply_add_matches_in_every_mode() {
                 }
             }
         }
-        for triple in single[specials..].chunks_exact(3) {
+        for triple in single[specials..].as_chunks::<3>().0 {
             check_single(triple[0], triple[1], triple[2], control, env, daz);
             // An addend that cancels the product.
             let product = F32::from_bits(triple[0])
@@ -363,7 +363,7 @@ fn fused_multiply_add_matches_in_every_mode() {
                 daz,
             );
         }
-        for triple in double.chunks_exact(3) {
+        for triple in double.as_chunks::<3>().0 {
             let (expected, expected_flags) =
                 x86::vfmadd213sd(triple[0], triple[1], triple[2], control);
             let [a, b, c] = [triple[0], triple[1], triple[2]].map(F64::from_bits);

@@ -487,7 +487,7 @@ fn samples(
         .iter()
         .flat_map(|&x| boundaries.iter().map(move |&y| (x, y)))
         .collect();
-    pairs.extend(encodings.chunks_exact(2).map(|pair| (pair[0], pair[1])));
+    pairs.extend(encodings.as_chunks::<2>().0.iter().map(|&[x, y]| (x, y)));
     (encodings, pairs)
 }
 

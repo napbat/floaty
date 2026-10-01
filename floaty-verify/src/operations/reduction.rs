@@ -83,7 +83,7 @@ impl Product {
         Binary<E, Enc>: Standard<W, Bits = <Width<W> as Storage>::Bits>,
     {
         type Value<const E: u32, Enc, const W: usize> = Float<Binary<E, Enc>, W>;
-        let pairs = operands.chunks_exact(2).map(|pair| (pair[0], pair[1]));
+        let pairs = operands.as_chunks::<2>().0.iter().map(|&[x, y]| (x, y));
         match self {
             Self::Values => Value::<E, Enc, W>::scaled_product_with(operands.iter().copied(), env),
             Self::Sums => Value::<E, Enc, W>::scaled_product_sum_with(pairs, env),
@@ -169,7 +169,9 @@ pub fn dot<const N: usize>(
         return (default_nan(format, env), flags | Flags::INVALID);
     }
     let numbers: Vec<(&BigFloat, &BigFloat)> = reads
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .filter_map(|pair| match pair {
             [Read::Number(x), Read::Number(y)] => Some((x, y)),
             _ => None,
@@ -277,15 +279,17 @@ pub fn scaled_product<const N: usize>(
     let factors: Vec<Vec<BigFloat>> = match product {
         Product::Values => reads.iter().map(|read| vec![number(read)]).collect(),
         Product::Sums | Product::Differences => reads
-            .chunks_exact(2)
-            .map(|pair| {
-                let second = number(&pair[1]);
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[first, second]| {
+                let second = number(second);
                 let second = if product == Product::Differences {
                     -second
                 } else {
                     second
                 };
-                vec![number(&pair[0]), second]
+                vec![number(first), second]
             })
             .collect(),
     };

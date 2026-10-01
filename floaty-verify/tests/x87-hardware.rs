@@ -288,10 +288,10 @@ fn arithmetic_matches_at_every_rounding_and_precision() {
             pairs.push((a, b));
         }
     }
-    for pair in operands[SPECIALS.len()..].chunks_exact(2) {
-        pairs.push((pair[0], pair[1]));
+    for &[a, b] in operands[SPECIALS.len()..].as_chunks::<2>().0 {
+        pairs.push((a, b));
         // The same magnitude with the other sign and a changed low bit.
-        pairs.push((pair[0], pair[0] ^ (1 << 79) ^ 1));
+        pairs.push((a, a ^ (1 << 79) ^ 1));
     }
     arithmetic!(pairs, x86::fadd, add_with);
     arithmetic!(pairs, x86::fsub, sub_with);

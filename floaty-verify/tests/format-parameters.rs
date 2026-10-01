@@ -20,7 +20,7 @@ fn interchange(k: u32) -> (u32, i32, i32) {
         64 => 11,
         _ => {
             assert!(
-                k >= 128 && k % 32 == 0,
+                k >= 128 && k.is_multiple_of(32),
                 "binary{k} is not an interchange format"
             );
             // round(4 * log2(k)) is the n with 2^(2n - 1) <= k^8 < 2^(2n + 1).

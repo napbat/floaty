@@ -838,7 +838,7 @@ fn every_pair_of_boundary_values_orders_as_the_scalar_operations() {
             )
         })
         .collect();
-    for chunk in pairs.chunks_exact(8) {
+    for chunk in pairs.as_chunks::<8>().0 {
         let x = Lanes::<F32, 8>::from_bits(core::array::from_fn(|lane| chunk[lane].0));
         let y = Lanes::<F32, 8>::from_bits(core::array::from_fn(|lane| chunk[lane].1));
         let (a, b) = (x.into_array(), y.into_array());
@@ -881,7 +881,7 @@ fn every_pair_of_boundary_values_orders_as_the_scalar_operations() {
     }
     let doubles = boundary_encodings_u128(Layout::BINARY64);
     for &a in &doubles {
-        for pair in doubles.chunks_exact(4) {
+        for pair in doubles.as_chunks::<4>().0 {
             let x = Lanes::<F64, 4>::from_bits([u64::try_from(a).expect("64 bits"); 4]);
             let y = Lanes::<F64, 4>::from_bits(core::array::from_fn(|lane| {
                 u64::try_from(pair[lane]).expect("64 bits")
