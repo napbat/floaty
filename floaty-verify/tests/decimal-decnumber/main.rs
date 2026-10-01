@@ -19,6 +19,8 @@
 //! - [`limit`]: the precision limit of `Env`, against decNumber's
 //!   arbitrary-precision numbers at fewer digits.
 //! - [`flush`]: flush-to-zero and denormals-are-zero.
+//! - [`minimum`]: the minimum and maximum operations of IEEE 754-2019, which
+//!   decNumber lacks, composed from its `max`, `min`, `add`, and `canonical`.
 //!
 //! The rounding modes `ceiling`, `floor`, `down`, `up`, `half_even`,
 //! `half_up`, `half_down`, and `05up` are floaty's `TowardPositive`,
@@ -81,6 +83,7 @@ mod conversions;
 mod flush;
 mod integers;
 mod limit;
+mod minimum;
 mod operands;
 mod random;
 mod square_root;
