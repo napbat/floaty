@@ -1,12 +1,12 @@
-//! Scaling by a power of two, and the next value up or down, for the binary
-//! formats.
+//! Scaling by a power of two, its inverse `logB`, and the next value up or
+//! down, for the binary formats.
 
 use super::Layout;
 use crate::env::{Env, Flags};
 use crate::exact::{self, Unrounded};
 use crate::format::internal::Step;
 use crate::format::{Encoding, Storage, Width};
-use crate::limbs::Limbs;
+use crate::limbs::{self, Limbs};
 use crate::nan;
 use crate::unpacked::SCALE_LIMIT;
 use crate::unpacked::Unpacked;
@@ -39,6 +39,47 @@ where
                 Self::exact(nan, flags | special)
             }
             Unpacked::Zero { .. } | Unpacked::Infinity { .. } => Self::exact(value, flags),
+        }
+    }
+
+    /// Returns the exponent of the leading bit of a value, `floor(log2(|x|))`,
+    /// as an integral value, as IEEE 754 `logB` does.
+    ///
+    /// The integral value rounds to the format at its full precision, in the
+    /// direction of the behavior, so the precision limit does not apply. A
+    /// zero gives what `-1 / 0` gives: negative infinity and divide-by-zero,
+    /// or the NaN or the largest finite value of a format without an
+    /// infinity. An infinity gives positive infinity.
+    pub fn log_b<L: Limbs>(bits: L, env: &Env) -> (L, Flags) {
+        let mut flags = Flags::NONE;
+        let value = Self::operand(bits, env, &mut flags);
+        match value {
+            Unpacked::Finite {
+                exponent,
+                significand,
+                ..
+            } => {
+                let top = i64::from(exponent) + i64::from(significand.bit_length()) - 1;
+                if top == 0 {
+                    return Self::exact(Unpacked::zero(false), flags);
+                }
+                let integer = Unrounded {
+                    negative: top < 0,
+                    exponent: 0,
+                    significand: limbs::from_u128::<L>(u128::from(top.unsigned_abs())),
+                    sticky: false,
+                };
+                Self::finish(&integer, env.with_precision(None), flags)
+            }
+            Unpacked::Nan { .. } | Unpacked::Unsupported => {
+                let (nan, special) = nan::special_unary(&value, env)
+                    .expect("a NaN or an unsupported operand has a special result");
+                Self::exact(nan, flags | special)
+            }
+            Unpacked::Infinity { .. } => Self::exact(Unpacked::Infinity { negative: false }, flags),
+            Unpacked::Zero { .. } => {
+                Self::exact(Self::infinity(true, env), flags | Flags::DIVIDE_BY_ZERO)
+            }
         }
     }
 

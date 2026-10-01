@@ -20,9 +20,9 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   directions of IBM POWER decimal floating point.
 - **The IEEE 754 operations.** Comparisons, total order, the IEEE 754-2019
   and IEEE 754-2008 minimum and maximum operations, the remainder, rounding
-  to an integral value, integer conversions up to 512 bits, `scale_b`,
-  `next_up` and `next_down`, the sign operations, and the decimal quantum
-  operations. The operators include `%`, the truncated remainder of C
+  to an integral value, integer conversions up to 512 bits, `scale_b` and
+  `log_b`, `next_up` and `next_down`, the sign operations, and the decimal
+  quantum operations. The operators include `%`, the truncated remainder of C
   `fmod`, and the compound assignments such as `+=`.
 - **Hardware behavior as data.** Flush-to-zero, denormals-are-zero, tininess
   detection, NaN propagation rules, x87 precision control, and saturation
@@ -547,7 +547,7 @@ decNumber.
 | --- | --- |
 | Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in the six directions of TestFloat, under four NaN rules |
 | MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, with FTZ, DAZ, and saturation, and with unsupported operands, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, from binary32, binary64, x87 extended, and binary128 to them, and between every binary format and the decimal formats, in every behavior of the conversion tests. The truncated remainder. The operations of `DoubleDouble` on its exact value, by their rules, with exact rationals. Each binary64 step of the other `DoubleDouble` operations, in the behaviors that libgcc and QD do not define. |
-| `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, and `scale_b` |
+| `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, `scale_b`, and `log_b` against `ilogb` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
 | The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 tests run under QEMU 10.2.1. |
 | decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations in every direction, with FTZ, DAZ, precision limits, and every NaN rule, in DPD and, through the conversions of the Intel library, in BID. The conversions between the widths in the same behaviors, the conversions to and from every integer type, and the total order of non-canonical encodings. The minimum and maximum operations of IEEE 754-2019, by floaty's rule. The static modes, against their behaviors. |

@@ -6,7 +6,7 @@
 //! The pair operations are the comparisons, the total order, the sign
 //! operations, the six minimum and maximum operations, and the remainder. The
 //! operations on one operand are rounding to an integral value, conversion to
-//! seven integer types, scaling, and the next value up and down. Three 8-bit
+//! seven integer types, scaling, `log_b`, and the next value up and down. Three 8-bit
 //! layouts with a small exponent range also run, because a rounded integer
 //! can overflow them.
 
@@ -136,6 +136,24 @@ fn one_operand<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
 #[test]
 fn every_small_format_operand_rounds_converts_scales_and_steps() {
     floaty_verify::for_each_small_format!(run_check, one_operand);
+}
+
+/// Checks `log_b_with` on every encoding of one format of the small format
+/// lists, in every behavior.
+macro_rules! log_b_of_every_encoding {
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+        let format = Format::of::<floaty::$alias>($specials);
+        for env in &BEHAVIORS {
+            for x in &cases::<$standard, $width>() {
+                check::check_log_b(x, &format, env, |value, env| value.log_b_with(env));
+            }
+        }
+    }};
+}
+
+#[test]
+fn every_small_format_operand_log_b() {
+    floaty_verify::for_each_small_format!(log_b_of_every_encoding);
 }
 
 /// Runs a check for 8-bit layouts whose largest finite value is below

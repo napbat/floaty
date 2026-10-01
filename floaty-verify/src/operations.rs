@@ -390,6 +390,55 @@ pub fn scale_b<const N: usize>(
     (Outcome::from_value(result), flags | round_flags)
 }
 
+/// Returns the expected result and flags of `log_b_with` of a binary format.
+///
+/// IEEE 754-2019 section 5.3.3 `logB`: the exponent of the leading bit of a
+/// finite nonzero value, `floor(log2(|x|))`, as an integral value. floaty
+/// rounds that integer to the format at its full precision, in the
+/// direction of the behavior, so the oracle rounds it with the precision
+/// limit removed. A zero gives negative infinity and divide-by-zero, as
+/// `-1 / 0` does, by [`Format::infinity`] in a format without an infinity.
+/// An infinity gives positive infinity.
+///
+/// # Panics
+///
+/// Panics when MPFR gives no exponent for a finite nonzero value, which does
+/// not happen.
+#[must_use]
+pub fn log_b<const N: usize>(operand: &Operand<N>, format: &Format, env: &Env) -> (Outcome, Flags) {
+    let mut flags = Flags::NONE;
+    let operands = [operand.read(env, &mut flags)];
+    if let Some((nan, special)) = special_operands(&operands, format, env) {
+        return (nan, flags | special);
+    }
+    let [Read::Number(value)] = &operands else {
+        unreachable!("every special operand has a result");
+    };
+    if value.is_infinite() {
+        return (Outcome::from_value(format.infinity(false, env)), flags);
+    }
+    if value.is_zero() {
+        let infinity = format.infinity(true, env);
+        return (Outcome::from_value(infinity), flags | Flags::DIVIDE_BY_ZERO);
+    }
+    // MPFR's exponent e places the value in [2^(e - 1), 2^e).
+    let top = value
+        .get_exp()
+        .expect("a finite nonzero value has an exponent")
+        - 1;
+    if top == 0 {
+        return (Outcome::from_value(format.zero(false)), flags);
+    }
+    let input = Input {
+        negative: top < 0,
+        exponent: 0,
+        significand: Integer::from(top).abs(),
+        sticky: false,
+    };
+    let (result, round_flags) = mpfr::round(&input, format, &env.with_precision(None));
+    (Outcome::from_value(result), flags | round_flags)
+}
+
 /// The direction of `next_up` and `next_down`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {

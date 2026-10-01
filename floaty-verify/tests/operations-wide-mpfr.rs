@@ -19,7 +19,9 @@
 use core::num::NonZeroU32;
 
 use floaty::format::Standard;
-use floaty::{Binary, Decoded, Env, F32, F64, F80, F128, F256, F512, Float, Int, TF32, UInt, X87};
+use floaty::{
+    Binary, Decoded, Env, F32, F64, F80, F128, F256, F512, Flags, Float, Int, TF32, UInt, X87,
+};
 use floaty_verify::encodings::{IntegerBit, Layout, boundary_encodings, to_limbs};
 use floaty_verify::mpfr::{DIRECTIONS, Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
@@ -216,6 +218,8 @@ struct Plan<'a, S: Standard<W>, const W: usize> {
     layout: Layout,
     /// The value of an encoding.
     make: &'a dyn Fn(&Integer) -> Float<S, W>,
+    /// `log_b_with`, which only the binary formats have.
+    log_b: &'a dyn Fn(Float<S, W>, Env) -> (Float<S, W>, Flags),
     /// The number of random encodings and of remainder pairs.
     count: usize,
     /// The behaviors of the operations on pairs.
@@ -263,6 +267,7 @@ fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
         for x in &samples {
             check::check_integral_and_next(x, &format, env);
             check::check_scale_b(x, &scales(x, &format), &format, env);
+            check::check_log_b(x, &format, env, plan.log_b);
             to_ints(x, env);
         }
     }
@@ -278,6 +283,7 @@ fn bfloat16_and_tf32() {
     check_format(&Plan {
         layout: Layout::BFLOAT16,
         make: &from_u16::<Binary<8>, 16>,
+        log_b: &|value, env| value.log_b_with(env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -288,6 +294,7 @@ fn bfloat16_and_tf32() {
         make: &|bits: &Integer| {
             TF32::from_bits(bits.to_u32().expect("a TF32 encoding has 19 bits"))
         },
+        log_b: &|value, env| value.log_b_with(env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -300,6 +307,7 @@ fn binary16_binary32_binary64_and_binary128() {
     check_format(&Plan {
         layout: Layout::BINARY16,
         make: &from_u16::<Binary<5>, 16>,
+        log_b: &|value, env| value.log_b_with(env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -310,6 +318,7 @@ fn binary16_binary32_binary64_and_binary128() {
         make: &|bits: &Integer| {
             F32::from_bits(bits.to_u32().expect("a binary32 encoding fits a u32"))
         },
+        log_b: &|value, env| value.log_b_with(env),
         count: 4_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -320,6 +329,7 @@ fn binary16_binary32_binary64_and_binary128() {
         make: &|bits: &Integer| {
             F64::from_bits(bits.to_u64().expect("a binary64 encoding fits a u64"))
         },
+        log_b: &|value, env| value.log_b_with(env),
         count: 3_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -330,6 +340,7 @@ fn binary16_binary32_binary64_and_binary128() {
         make: &|bits: &Integer| {
             F128::from_bits(bits.to_u128().expect("a binary128 encoding fits a u128"))
         },
+        log_b: &|value, env| value.log_b_with(env),
         count: 2_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -344,6 +355,7 @@ fn a_layout_whose_exponent_crosses_a_limb() {
         make: &|bits: &Integer| {
             Wide72::from_bits(bits.to_u128().expect("a 72-bit encoding fits a u128"))
         },
+        log_b: &|value, env| value.log_b_with(env),
         count: 3_000,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -379,6 +391,7 @@ fn x87_extended_with_precision_control() {
         make: &|bits: &Integer| {
             F80::from_bits(bits.to_u128().expect("an x87 encoding fits a u128"))
         },
+        log_b: &|value, env| value.log_b_with(env),
         count: 3_000,
         pair_envs: &pair_envs,
         single_envs: &single_envs,
@@ -391,6 +404,7 @@ fn binary256_and_binary512() {
     check_format(&Plan {
         layout: Layout::BINARY256,
         make: &|bits: &Integer| F256::from_bits(to_limbs::<4>(bits)),
+        log_b: &|value, env| value.log_b_with(env),
         count: 1_500,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -399,6 +413,7 @@ fn binary256_and_binary512() {
     check_format(&Plan {
         layout: Layout::BINARY512,
         make: &|bits: &Integer| F512::from_bits(to_limbs::<8>(bits)),
+        log_b: &|value, env| value.log_b_with(env),
         count: 1_500,
         pair_envs: &BEHAVIORS,
         single_envs: &BEHAVIORS,
@@ -415,6 +430,7 @@ macro_rules! other_wide_format {
         check_format(&Plan {
             layout: Layout::ieee($width, $exponent_bits),
             make: &|bits: &Integer| floaty::$alias::from_bits(to_limbs::<$limbs>(bits)),
+            log_b: &|value, env| value.log_b_with(env),
             count: 500,
             pair_envs: &BEHAVIORS,
             single_envs: &BEHAVIORS,

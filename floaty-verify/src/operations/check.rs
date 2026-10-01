@@ -232,6 +232,25 @@ pub fn check_scale_b<S: Standard<W>, const W: usize>(
     }
 }
 
+/// Checks `log_b_with` on one value of a binary format. `log_b` runs the
+/// operation, which only the binary formats have.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_log_b<S: Standard<W>, const W: usize>(
+    x: &Case<S, W>,
+    format: &Format,
+    env: &Env,
+    log_b: impl Fn(Float<S, W>, Env) -> (Float<S, W>, Flags),
+) {
+    check_float(
+        log_b(x.value, *env),
+        &super::log_b(&x.sample.operand, format, env),
+        &|| format!("log_b {:?} {env:?}", x.value),
+    );
+}
+
 /// Checks `to_int_with` into the integer type `I` on one value.
 ///
 /// # Panics

@@ -14,6 +14,7 @@ use crate::sealed::Sealed;
 use crate::unpacked::Unpacked;
 
 mod arithmetic;
+mod binary;
 mod compare;
 mod decimal;
 mod integer;

@@ -1,7 +1,7 @@
 //! Compares operations beyond arithmetic with `rustc_apfloat`, the Rust port of
 //! LLVM APFloat: `next_up` and `next_down`, the IEEE remainder, rounding to an
-//! integral value, conversion to and from integers of several widths, and
-//! scaling. Every FP8 operand pair of the formats that `rustc_apfloat` has
+//! integral value, conversion to and from integers of several widths,
+//! scaling, and `log_b` against `ilogb`. Every FP8 operand pair of the formats that `rustc_apfloat` has
 //! runs, with every binary16 and bfloat16 operand, and boundary and random
 //! operands of the wider formats.
 //!
@@ -43,7 +43,7 @@
 #![cfg(target_arch = "x86_64")]
 
 use floaty::env::{NanPropagation, NanRule};
-use floaty::format::Standard;
+use floaty::format::{Encoding, Standard, Storage, Width};
 use floaty::{
     Binary, Class, Decoded, Env, F80, Flags, Float, Int, NoInf, Rounding, ToInt, UInt, X87,
 };
@@ -56,7 +56,7 @@ use rug::integer::Order;
 use rustc_apfloat::ieee::{
     BFloat, Double, Float8E4M3FN, Float8E5M2, Half, Quad, Single, X87DoubleExtended,
 };
-use rustc_apfloat::{Round, Status, StatusAnd};
+use rustc_apfloat::{IEK_INF, IEK_NAN, IEK_ZERO, Round, Status, StatusAnd};
 
 /// The directions that both implementations have.
 const ROUNDINGS: [(Rounding, Round); 5] = [
@@ -379,6 +379,41 @@ where
     }
 }
 
+impl<const E: u32, Enc: Encoding, const W: usize, A: rustc_apfloat::Float>
+    Formats<Binary<E, Enc>, W, A>
+where
+    Width<W>: Storage,
+    Binary<E, Enc>: Standard<W, Bits = <Width<W> as Storage>::Bits>,
+    <Width<W> as Storage>::Bits: TryFrom<u128> + Into<u128>,
+{
+    /// Checks `log_b_with` against `ilogb` on each encoding. `ilogb` gives
+    /// the exponent of a finite nonzero value as an integer, which
+    /// `rustc_apfloat` converts to the format. For a zero, an infinity, and a
+    /// NaN it gives a sentinel. A zero must give `-1 / 0` of `rustc_apfloat`,
+    /// an infinity positive infinity, and a NaN a NaN.
+    fn log_b(encodings: &[u128]) {
+        for &encoding in encodings {
+            let (x, a) = (ours::<Binary<E, Enc>, W>(encoding), A::from_bits(encoding));
+            let (result, flags) = x.log_b_with(APFLOAT);
+            let context = format!("log_b {x:?}: {result:?} {flags:?}");
+            let expected = match a.ilogb() {
+                IEK_NAN => {
+                    assert!(result.is_nan(), "{context}");
+                    continue;
+                }
+                IEK_INF => Status::OK.and(A::INFINITY),
+                IEK_ZERO => -A::from_i128(1).value / A::ZERO,
+                exponent => A::from_i128(i128::from(exponent)),
+            };
+            assert_eq!(
+                (bits(result), status(flags)),
+                (expected.value.to_bits(), expected.status),
+                "{context}"
+            );
+        }
+    }
+}
+
 /// Returns the limits, the powers of two near them and near each precision,
 /// and random integers of random widths that fit `bits` bits.
 fn integers(bits: u32, signed: bool, random: &mut SplitMix64) -> Vec<Integer> {
@@ -422,7 +457,9 @@ fn every_pair(width: u32) -> impl Iterator<Item = (u128, u128)> {
 fn every_fp8_operand_and_pair() {
     let every: Vec<u128> = (0..256).collect();
     Formats::<Binary<4, NoInf>, 8, Float8E4M3FN>::check(&every, every_pair(8), 1);
+    Formats::<Binary<4, NoInf>, 8, Float8E4M3FN>::log_b(&every);
     Formats::<Binary<5>, 8, Float8E5M2>::check(&every, every_pair(8), 2);
+    Formats::<Binary<5>, 8, Float8E5M2>::log_b(&every);
 }
 
 /// Returns the boundary encodings, random encodings, and pairs of a format:
@@ -459,25 +496,32 @@ fn every_binary16_and_bfloat16_operand() {
     let every: Vec<u128> = (0..1 << 16).collect();
     let (_, pairs) = samples(Layout::BINARY16, 20_000, 16, &|_| true);
     Formats::<Binary<5>, 16, Half>::check(&every, pairs.into_iter(), 16);
+    Formats::<Binary<5>, 16, Half>::log_b(&every);
     let (_, pairs) = samples(Layout::BFLOAT16, 20_000, 17, &|_| true);
     Formats::<Binary<8>, 16, BFloat>::check(&every, pairs.into_iter(), 17);
+    Formats::<Binary<8>, 16, BFloat>::log_b(&every);
 }
 
 #[test]
 fn tf32_binary32_and_binary64() {
     let (encodings, pairs) = samples(Layout::TF32, 20_000, 19, &|_| true);
     Formats::<Binary<8>, 19, Tf32>::check(&encodings, pairs.into_iter(), 19);
+    Formats::<Binary<8>, 19, Tf32>::log_b(&encodings);
     let (encodings, pairs) = samples(Layout::BINARY32, 20_000, 32, &|_| true);
     Formats::<Binary<8>, 32, Single>::check(&encodings, pairs.into_iter(), 32);
+    Formats::<Binary<8>, 32, Single>::log_b(&encodings);
     let (encodings, pairs) = samples(Layout::BINARY64, 20_000, 64, &|_| true);
     Formats::<Binary<11>, 64, Double>::check(&encodings, pairs.into_iter(), 64);
+    Formats::<Binary<11>, 64, Double>::log_b(&encodings);
 }
 
 #[test]
 fn binary128_and_canonical_x87() {
     let (encodings, pairs) = samples(Layout::BINARY128, 10_000, 128, &|_| true);
     Formats::<Binary<15>, 128, Quad>::check(&encodings, pairs.into_iter(), 128);
+    Formats::<Binary<15>, 128, Quad>::log_b(&encodings);
     let canonical = |bits: u128| F80::from_bits(bits).is_canonical();
     let (encodings, pairs) = samples(Layout::X87_EXTENDED, 10_000, 80, &canonical);
     Formats::<Binary<15, X87>, 80, X87DoubleExtended>::check(&encodings, pairs.into_iter(), 80);
+    Formats::<Binary<15, X87>, 80, X87DoubleExtended>::log_b(&encodings);
 }
