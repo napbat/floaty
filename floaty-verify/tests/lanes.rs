@@ -5,11 +5,13 @@
 //! The lane counts take every path of the packed host paths: wide chunks,
 //! narrow chunks, and single lanes. binary32, binary64, binary16, and the
 //! rounding of bfloat16 take the packed paths where the build has them; the
-//! other formats and operations take the scalar operation of each lane.
+//! other formats and operations take the scalar operation of each lane. The
+//! other formats are x87 extended, binary128, the FP8 and MX formats, TF32,
+//! the wide formats, and the decimal formats.
 
 use floaty::env::Rounding;
 use floaty::mode::{Rounded, X86Sse, direction::TowardZero};
-use floaty::{BF16, Env, F16, F32, F64, F80, F128, Flags, Float, Lanes};
+use floaty::{BF16, Env, F16, F32, F64, F80, F128, Flags, Float, Lanes, TF32};
 use floaty_verify::encodings::{Layout, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 
@@ -20,14 +22,71 @@ fn encodings(random: &mut SplitMix64, layout: Layout) -> Vec<u128> {
     encodings
 }
 
+/// Returns `count` random encodings of `width` bits. The random bits reach
+/// the special values of the decimal formats too.
+fn random_encodings(random: &mut SplitMix64, width: u32, count: usize) -> Vec<u128> {
+    (0..count)
+        .map(|_| random.next_u128() >> (128 - width))
+        .collect()
+}
+
+/// Sets bit `bit` of `limbs` to `value`.
+fn put_bit<const N: usize>(limbs: &mut [u64; N], bit: u32, value: bool) {
+    let limb = &mut limbs[usize::try_from(bit / 64).expect("a limb index fits a usize")];
+    let mask = 1 << (bit % 64);
+    *limb = if value { *limb | mask } else { *limb & !mask };
+}
+
+/// Returns encodings of a wide IEEE format of `width` bits in `N` limbs:
+/// both zeros, the smallest subnormals, both infinities, quiet and
+/// signaling NaNs, and random encodings. One random encoding in eight has
+/// the largest exponent field, and one in eight the smallest.
+fn wide_encodings<const N: usize>(
+    random: &mut SplitMix64,
+    width: u32,
+    exponent_bits: u32,
+) -> Vec<[u64; N]> {
+    let fraction_bits = width - 1 - exponent_bits;
+    let storage_bits = u32::try_from(64 * N).expect("the storage has at most 512 bits");
+    let field = |limbs: &mut [u64; N], ones: bool| {
+        (fraction_bits..width - 1).for_each(|bit| put_bit(limbs, bit, ones));
+    };
+    let mut encodings = Vec::new();
+    for negative in [false, true] {
+        for fraction_bit in [None, Some(0), Some(fraction_bits - 1)] {
+            for ones in [false, true] {
+                let mut limbs = [0; N];
+                put_bit(&mut limbs, width - 1, negative);
+                field(&mut limbs, ones);
+                if let Some(bit) = fraction_bit {
+                    put_bit(&mut limbs, bit, true);
+                }
+                encodings.push(limbs);
+            }
+        }
+    }
+    encodings.extend((0..200).map(|index| {
+        let mut limbs: [u64; N] = core::array::from_fn(|_| random.next_u64());
+        (width..storage_bits).for_each(|bit| put_bit(&mut limbs, bit, false));
+        match index % 8 {
+            0 => field(&mut limbs, true),
+            1 => field(&mut limbs, false),
+            _ => {}
+        }
+        limbs
+    }));
+    encodings
+}
+
 /// Returns the lanes that start at `start` in a cycle of `encodings`. Each
 /// encoding reaches every lane as `start` moves.
-fn window<T: TryFrom<u128, Error: core::fmt::Debug>, const N: usize>(
-    encodings: &[u128],
+fn window<T, const N: usize>(
+    encodings: &[impl Copy + TryInto<T, Error: core::fmt::Debug>],
     start: usize,
 ) -> [T; N] {
     core::array::from_fn(|lane| {
-        T::try_from(encodings[(start + lane) % encodings.len()])
+        encodings[(start + lane) % encodings.len()]
+            .try_into()
             .expect("the encoding fits the storage")
     })
 }
@@ -39,7 +98,7 @@ fn window<T: TryFrom<u128, Error: core::fmt::Debug>, const N: usize>(
 macro_rules! lanes_match {
     ($alias:ty, $bits:ty, $lanes:literal, $encodings:expr, $behaviors:expr) => {{
         type Value = $alias;
-        let encodings: &[u128] = $encodings;
+        let encodings: &[_] = $encodings;
         for start in 0..encodings.len() {
             let a = Lanes::<Value, $lanes>::from_bits(window::<$bits, $lanes>(encodings, start));
             let b = Lanes::<Value, $lanes>::from_bits(window::<$bits, $lanes>(encodings, start * 7 + 3));
@@ -354,9 +413,12 @@ fn lanes_convert_as_their_lanes_do() {
 macro_rules! methods_match {
     ($alias:ty, $bits:ty, $lanes:literal, $encodings:expr, $behavior:expr) => {{
         type Value = $alias;
-        let encodings: &[u128] = $encodings;
+        let encodings: &[_] = $encodings;
         let behavior = $behavior;
         for start in 0..encodings.len() {
+            // The integers and the scales come from a generator seeded by the
+            // window, so that they do not depend on the type of the encodings.
+            let mut random = SplitMix64::new(u64::try_from(start).expect("an index fits a u64"));
             let a = Lanes::<Value, $lanes>::from_bits(window::<$bits, $lanes>(encodings, start));
             let b = Lanes::<Value, $lanes>::from_bits(window::<$bits, $lanes>(
                 encodings,
@@ -429,13 +491,8 @@ macro_rules! methods_match {
                 (expected, flags),
                 "{context}: to_int_with"
             );
-            let integers: [i64; $lanes] = core::array::from_fn(|lane| {
-                let bits = encodings[(start * 3 + lane) % encodings.len()];
-                i64::from_ne_bytes(
-                    u64::try_from(bits & u128::from(u64::MAX))
-                        .expect("64 bits")
-                        .to_ne_bytes(),
-                ) >> (bits % 64)
+            let integers: [i64; $lanes] = core::array::from_fn(|_| {
+                i64::from_ne_bytes(random.next_u64().to_ne_bytes()) >> random.below(64)
             });
             assert_eq!(
                 Lanes::<Value, $lanes>::from_int(integers).to_bits(),
@@ -478,9 +535,8 @@ macro_rules! methods_match {
                 union(&|x, _| x.next_down_with(behavior)),
                 "{context}"
             );
-            let scales: [i32; $lanes] = core::array::from_fn(|lane| {
-                i32::try_from(encodings[(start + lane * 5) % encodings.len()] % 97).expect("small")
-                    - 48
+            let scales: [i32; $lanes] = core::array::from_fn(|_| {
+                i32::try_from(random.below(97)).expect("a scale below 97 fits an i32") - 48
             });
             let scaled: [$bits; $lanes] =
                 core::array::from_fn(|lane| x[lane].scale_b(scales[lane]).to_bits());
@@ -690,6 +746,59 @@ fn the_other_methods_of_lanes_give_the_scalar_results() {
     );
     let decimals: Vec<u128> = (0..400).map(|_| u128::from(random.next_u64())).collect();
     methods_match!(floaty::D64Bid, u64, 2, &decimals, floaty::D64Bid::ENV);
+}
+
+/// Every encoding of the FP8 and MX formats, and TF32, fill the lanes. These
+/// formats take the scalar operation of each lane.
+#[test]
+fn lanes_of_the_small_formats_and_tf32_give_the_scalar_results() {
+    macro_rules! small {
+        ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+            let every: Vec<u128> = (0..1_u128 << $width).collect();
+            lanes_match!(floaty::$alias, u8, 5, &every, behaviors());
+            methods_match!(floaty::$alias, u8, 3, &every, Env::IEEE);
+        }};
+    }
+    floaty_verify::for_each_small_format!(small);
+    let mut random = SplitMix64::new(0x1A4E_0019);
+    let tf32 = encodings(&mut random, Layout::TF32);
+    lanes_match!(TF32, u32, 5, &tf32, behaviors());
+    methods_match!(TF32, u32, 4, &tf32, Env::IEEE);
+}
+
+#[test]
+fn lanes_of_the_wide_formats_give_the_scalar_results() {
+    let mut random = SplitMix64::new(0x1A4E_0160);
+    macro_rules! wide {
+        ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {{
+            let encodings = wide_encodings::<$limbs>(&mut random, $width, $exponent_bits);
+            lanes_match!(floaty::$alias, [u64; $limbs], 2, &encodings, behaviors());
+            methods_match!(floaty::$alias, [u64; $limbs], 3, &encodings, Env::IEEE);
+        }};
+    }
+    floaty_verify::for_each_wide_format!(wide);
+}
+
+#[test]
+fn lanes_of_the_decimal_formats_give_the_scalar_results() {
+    use floaty::{D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd};
+    let mut random = SplitMix64::new(0x1A4E_DEC0);
+    let (d32, d64, d128) = (
+        random_encodings(&mut random, 32, 400),
+        random_encodings(&mut random, 64, 400),
+        random_encodings(&mut random, 128, 400),
+    );
+    lanes_match!(D32Bid, u32, 3, &d32, behaviors());
+    methods_match!(D32Bid, u32, 3, &d32, D32Bid::ENV);
+    lanes_match!(D32Dpd, u32, 4, &d32, behaviors());
+    methods_match!(D32Dpd, u32, 4, &d32, D32Dpd::ENV);
+    lanes_match!(D64Bid, u64, 2, &d64, behaviors());
+    lanes_match!(D64Dpd, u64, 3, &d64, behaviors());
+    methods_match!(D64Dpd, u64, 3, &d64, D64Dpd::ENV);
+    lanes_match!(D128Bid, u128, 2, &d128, behaviors());
+    methods_match!(D128Bid, u128, 2, &d128, D128Bid::ENV);
+    lanes_match!(D128Dpd, u128, 3, &d128, behaviors());
+    methods_match!(D128Dpd, u128, 3, &d128, D128Dpd::ENV);
 }
 
 #[test]
