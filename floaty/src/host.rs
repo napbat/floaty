@@ -395,6 +395,7 @@ pub const fn available(host: Host, kind: Kind) -> bool {
     let half = environment::HALF;
     let rounding = environment::ROUNDING;
     let x87 = environment::X87;
+    let x87_full = environment::X87_FULL_PRECISION;
     let fp16 = environment::HALF_FUSED;
     let quad = environment::QUAD;
     match (host, kind) {
@@ -442,15 +443,11 @@ pub const fn available(host: Host, kind: Kind) -> bool {
         // path only with a widening instruction.
         (Host::Half, Kind::Arithmetic | Kind::SquareRoot | Kind::ToInt | Kind::FromInt) => unit,
         (Host::Half, Kind::Comparison) => unit && half,
-        (
-            Host::Extended,
-            Kind::Arithmetic
-            | Kind::SquareRoot
-            | Kind::RoundToIntegral
-            | Kind::ToInt
-            | Kind::FromInt
-            | Kind::Remainder,
-        )
+        // The x87 arithmetic and square root round to the precision control,
+        // which a thread starts at 64 bits on every system but Windows. The
+        // other x87 paths give the same bits at every precision.
+        (Host::Extended, Kind::Arithmetic | Kind::SquareRoot) => unit && x87 && x87_full,
+        (Host::Extended, Kind::RoundToIntegral | Kind::ToInt | Kind::FromInt | Kind::Remainder)
         | (Host::Single | Host::Double | Host::Half | Host::BFloat, Kind::Remainder) => unit && x87,
     }
 }
@@ -527,6 +524,8 @@ mod none {
     pub const ROUNDING: bool = false;
     /// `false`: this build has no x87 unit.
     pub const X87: bool = false;
+    /// `false`: this build has no x87 unit.
+    pub const X87_FULL_PRECISION: bool = false;
     /// `false`: this build has no binary16 fused multiply-add.
     pub const HALF_FUSED: bool = false;
     /// `false`: this build has no rounding of binary64 to binary16.

@@ -190,6 +190,20 @@ pub(super) fn ready_for(host: Host, env: &Env, precision: u32) -> bool {
     compatible(env, precision) && unit
 }
 
+/// Returns `true` when `ready_for` allows a host path whose instructions
+/// round to the precision of the unit: `+`, `-`, `*`, `/`, and `sqrt`. The
+/// x87 unit must then compute at the 64-bit precision too, which its other
+/// paths do not need, as `x87_environment` states.
+#[inline]
+pub(super) fn ready_for_arithmetic(host: Host, env: &Env, precision: u32) -> bool {
+    match host {
+        Host::Extended => compatible(env, precision) && environment::x87_full_precision(),
+        Host::None | Host::Half | Host::BFloat | Host::Single | Host::Double | Host::Quad => {
+            ready_for(host, env, precision)
+        }
+    }
+}
+
 /// Returns the result of `operation` from the host unit, or `None` when the
 /// path does not apply or the result is a NaN.
 #[inline]
@@ -199,7 +213,7 @@ pub fn binary<S: Standard<W>, const W: usize>(
     operation: Operation,
     env: &Env,
 ) -> Option<S::Bits> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+    if !ready_for_arithmetic(S::HOST, env, S::PRECISION) {
         return None;
     }
     match S::HOST {
@@ -235,7 +249,7 @@ pub fn binary<S: Standard<W>, const W: usize>(
 /// not apply or the result is a NaN.
 #[inline]
 pub fn sqrt<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Option<S::Bits> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+    if !ready_for_arithmetic(S::HOST, env, S::PRECISION) {
         return None;
     }
     match S::HOST {

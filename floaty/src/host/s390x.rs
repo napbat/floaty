@@ -33,6 +33,8 @@ pub const HALF: bool = false;
 pub const ROUNDING: bool = true;
 /// `false`: s390x has no x87 unit.
 pub const X87: bool = false;
+/// `false`: s390x has no x87 unit.
+pub const X87_FULL_PRECISION: bool = false;
 /// `true`: `MADBR` computes the binary16 fused multiply-add in binary64, and
 /// integer instructions round the binary64 sum to binary16.
 pub const HALF_FUSED: bool = true;
@@ -398,6 +400,12 @@ pub fn from_int_f64(value: i64) -> Option<f64> {
 /// Returns `false`: s390x has no x87 unit, so no x87 extended path applies.
 #[inline]
 pub fn x87_environment() -> bool {
+    false
+}
+
+/// Returns `false`: s390x has no x87 unit.
+#[inline]
+pub fn x87_full_precision() -> bool {
     false
 }
 

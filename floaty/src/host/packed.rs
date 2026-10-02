@@ -40,7 +40,7 @@ use core::cmp::Ordering;
 
 use super::bits::{nan_16, nan_32, nan_64, nan_bfloat};
 use super::environment::{self, packed};
-use super::paths::{ready_for, ready_for_integral};
+use super::paths::{ready_for, ready_for_arithmetic, ready_for_integral};
 use super::{Isa, Kind, Operation};
 use crate::env::{Env, Mode};
 use crate::float::Float;
@@ -355,7 +355,7 @@ pub fn binary<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     operation: Operation,
     env: &Env,
 ) -> Option<[Float<S, W, M>; N]> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+    if !ready_for_arithmetic(S::HOST, env, S::PRECISION) {
         return None;
     }
     match S::HOST {
@@ -406,7 +406,7 @@ pub fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
     env: &Env,
 ) -> Option<[Float<S, W, M>; N]> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+    if !ready_for_arithmetic(S::HOST, env, S::PRECISION) {
         return None;
     }
     match S::HOST {

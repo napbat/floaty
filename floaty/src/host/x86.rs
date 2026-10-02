@@ -30,9 +30,9 @@ pub mod packed;
 mod x87;
 
 pub use self::x87::{
-    x87_binary, x87_environment, x87_from_double, x87_from_int, x87_from_single, x87_remainder,
-    x87_remainder_double, x87_remainder_single, x87_round, x87_sqrt, x87_to_double, x87_to_int,
-    x87_to_single,
+    x87_binary, x87_environment, x87_from_double, x87_from_int, x87_from_single,
+    x87_full_precision, x87_remainder, x87_remainder_double, x87_remainder_single, x87_round,
+    x87_sqrt, x87_to_double, x87_to_int, x87_to_single,
 };
 
 /// `true`: the build has the SSE unit.
@@ -47,6 +47,12 @@ pub const HALF: bool = cfg!(target_feature = "f16c");
 pub const ROUNDING: bool = cfg!(target_feature = "sse4.1");
 /// `true`: every x86 processor has the x87 unit.
 pub const X87: bool = true;
+/// `true` when a thread starts with the x87 unit at the 64-bit precision,
+/// which the arithmetic and the square root of x87 extended values need, as
+/// `x87_environment` states. Linux and the other systems start a thread with
+/// the control word 037FH. Windows starts one with 027FH, at the 53-bit
+/// precision, on x86 and x86-64, so those two paths would never apply there.
+pub const X87_FULL_PRECISION: bool = !cfg!(windows);
 /// `true`: every x86 target with SSE2 computes the binary16 fused multiply-add
 /// through binary64, with integer instructions for the last rounding.
 pub const HALF_FUSED: bool = true;

@@ -4,20 +4,22 @@
 use super::super::Operation;
 use crate::host::bits;
 
-/// Returns `true` when the x87 unit rounds to nearest even at the 64-bit
-/// precision, and masks every exception.
-///
-/// Linux starts a process with that control word, 037FH, but other systems
-/// and libraries can select a 53-bit precision. An unmasked exception traps,
-/// and the engine never traps. The fields are in the Intel SDM Volume 1,
+/// The exception masks IM, DM, ZM, OM, UM, and PM of the x87 control word.
+/// A clear mask traps, and the engine never traps.
+const MASKS: u16 = 0x3F;
+
+/// The precision control field of the x87 control word, which holds 11B for
+/// the 64-bit precision.
+const PRECISION: u16 = 3 << 8;
+
+/// The rounding control field of the x87 control word, which holds zero to
+/// round to nearest even.
+const ROUNDING: u16 = 3 << 10;
+
+/// Returns the x87 control word. The fields are in the Intel SDM Volume 1,
 /// revision 253665-093US, section 8.1.5, Figure 8-6.
 #[inline]
-pub fn x87_environment() -> bool {
-    // The exception masks IM, DM, ZM, OM, UM, and PM are one, the precision
-    // control is 11B for 64 bits, and the rounding control is zero.
-    const MASKS: u16 = 0x3F;
-    const PRECISION: u16 = 3 << 8;
-    const ROUNDING: u16 = 3 << 10;
+fn control_word() -> u16 {
     let control: u16;
     // SAFETY: the block stores the x87 control word in eight bytes that it
     // takes below the stack pointer, loads the value into a register, and
@@ -32,7 +34,31 @@ pub fn x87_environment() -> bool {
             options(preserves_flags),
         );
     }
-    control & (MASKS | PRECISION | ROUNDING) == MASKS | PRECISION
+    control
+}
+
+/// Returns `true` when the x87 unit rounds to nearest even and masks every
+/// exception, at any precision.
+///
+/// Linux starts a thread with the control word 037FH, at the 64-bit
+/// precision. Windows starts one with 027FH, at the 53-bit precision: the
+/// x64 calling convention states it, and 32-bit Windows does the same. The
+/// precision control applies only to `FADD`, `FSUB`, `FMUL`, `FDIV`, their
+/// other forms, and `FSQRT`, Intel SDM Volume 1, section 8.1.5.2. So only
+/// the arithmetic and the square root of x87 extended values need the 64-bit
+/// precision, which `x87_full_precision` checks. The loads, the stores,
+/// `FRNDINT`, `FISTP`, and `FPREM1` give the same bits at every precision.
+#[inline]
+pub fn x87_environment() -> bool {
+    control_word() & (MASKS | ROUNDING) == MASKS
+}
+
+/// Returns `true` when the x87 unit rounds to nearest even at the 64-bit
+/// precision, and masks every exception, as the arithmetic and the square
+/// root of x87 extended values need.
+#[inline]
+pub fn x87_full_precision() -> bool {
+    control_word() & (MASKS | PRECISION | ROUNDING) == MASKS | PRECISION
 }
 
 /// Returns an 80-bit result of the x87 unit, or `None` for a NaN. The unit
@@ -356,4 +382,136 @@ pub fn x87_remainder(dividend: &[u64; 2], divisor: &[u64; 2]) -> Option<[u64; 2]
         );
     }
     extended_result(scratch)
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::{control_word, x87_environment, x87_full_precision};
+    use crate::env::Env;
+    use crate::float::Float;
+    use crate::format::internal::LimbConversion;
+    use crate::format::{Binary, Standard, X87};
+    use crate::host::{self, Host, Kind, Operation};
+    use crate::limbs::Limbs;
+
+    /// x87 extended precision.
+    type Extended = Binary<15, X87>;
+
+    /// The control word of a new Linux thread: round to nearest at the
+    /// 64-bit precision, with every exception masked.
+    const LINUX: u16 = 0x037F;
+
+    /// The control word of a new Windows thread, as the x64 calling
+    /// convention states: the same at the 53-bit precision.
+    const WINDOWS: u16 = 0x027F;
+
+    /// Loads an x87 control word, and loads the saved word back when it
+    /// drops, also after a failed assertion.
+    struct Loaded(u16);
+
+    impl Loaded {
+        fn new(control: u16) -> Self {
+            let saved = control_word();
+            load(control);
+            Self(saved)
+        }
+    }
+
+    impl Drop for Loaded {
+        fn drop(&mut self) {
+            load(self.0);
+        }
+    }
+
+    /// Loads the x87 control word `control`.
+    fn load(control: u16) {
+        // SAFETY: `FNCLEX` clears the exception flags, so no flag traps under
+        // the new word, and `FLDCW` loads the control word from `control`.
+        // Neither uses the x87 stack.
+        unsafe {
+            core::arch::asm!(
+                "fnclex",
+                "fldcw word ptr [{control}]",
+                control = in(reg) &raw const control,
+                options(nostack),
+            );
+        }
+    }
+
+    /// Returns the encoding of `integer` in the format `S`.
+    fn value<S: Standard<W>, const W: usize>(integer: i64) -> S::Bits {
+        Float::<S, W>::from_int(integer).to_bits()
+    }
+
+    /// Asserts that the host path gives the remainder of 3 and 2 in the
+    /// format `S`, which is -1.
+    fn assert_remainder<S: Standard<W>, const W: usize>(control: u16) {
+        let (three, two) = (value::<S, W>(3), value::<S, W>(2));
+        assert_eq!(
+            host::remainder::<S, W>(three, two, &Env::IEEE),
+            Some(value::<S, W>(-1)),
+            "{:?} remainder under {control:#06x}",
+            S::HOST
+        );
+    }
+
+    #[test]
+    fn a_new_thread_has_the_x87_precision_of_the_claims() {
+        let (environment, full) = std::thread::spawn(|| (x87_environment(), x87_full_precision()))
+            .join()
+            .expect("the thread reads the control word");
+        assert!(
+            environment,
+            "a new thread rounds to nearest and masks every exception"
+        );
+        assert_eq!(
+            full,
+            super::super::X87_FULL_PRECISION,
+            "the precision of a new thread"
+        );
+        for kind in [Kind::Arithmetic, Kind::SquareRoot] {
+            assert_eq!(host::available(Host::Extended, kind), full, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_extended_arithmetic_needs_the_64_bit_precision() {
+        let env = Env::IEEE;
+        let extended = value::<Extended, 80>;
+        let single_three = u64::from(3.0_f32.to_bits());
+        let extended_three = extended(3).to_limbs();
+        let extended_three = [extended_three.limb(0), extended_three.limb(1)];
+        for (control, full) in [(LINUX, true), (WINDOWS, false)] {
+            let _loaded = Loaded::new(control);
+            assert!(x87_environment(), "{control:#06x}");
+            assert_eq!(x87_full_precision(), full, "{control:#06x}");
+            assert_remainder::<Binary<5>, 16>(control);
+            assert_remainder::<Binary<8>, 16>(control);
+            assert_remainder::<Binary<8>, 32>(control);
+            assert_remainder::<Binary<11>, 64>(control);
+            assert_remainder::<Extended, 80>(control);
+            let three = extended(3);
+            assert_eq!(
+                host::round_to_integral::<Extended, 80>(three, &env),
+                Some(three)
+            );
+            assert_eq!(host::to_int::<Extended, 80>(three, &env), Some(3));
+            assert_eq!(host::from_int::<Extended, 80>(3, &env), Some(three));
+            assert_eq!(
+                host::convert(Host::Single, Host::Extended, [single_three, 0], &env),
+                Some(extended_three)
+            );
+            assert_eq!(
+                host::convert(Host::Extended, Host::Single, extended_three, &env),
+                Some([single_three, 0])
+            );
+            // `FADD` and `FSQRT` round to the precision control.
+            let sum = host::binary::<Extended, 80>(three, extended(2), Operation::Add, &env);
+            assert_eq!(sum, full.then(|| extended(5)), "{control:#06x}");
+            let root = host::sqrt::<Extended, 80>(extended(9), &env);
+            assert_eq!(root, full.then_some(three), "{control:#06x}");
+        }
+    }
 }

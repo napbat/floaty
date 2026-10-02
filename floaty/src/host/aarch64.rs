@@ -19,6 +19,8 @@ pub const HALF: bool = true;
 pub const ROUNDING: bool = true;
 /// `false`: AArch64 has no x87 unit.
 pub const X87: bool = false;
+/// `false`: AArch64 has no x87 unit.
+pub const X87_FULL_PRECISION: bool = false;
 /// `true`: `FEAT_FP16` computes the binary16 fused multiply-add in its own
 /// precision, and every other AArch64 target computes it through binary64.
 pub const HALF_FUSED: bool = true;
@@ -568,6 +570,12 @@ pub fn from_int_f64(value: i64) -> Option<f64> {
 /// Returns `false`: AArch64 has no x87 unit, so no x87 extended path applies.
 #[inline]
 pub fn x87_environment() -> bool {
+    false
+}
+
+/// Returns `false`: AArch64 has no x87 unit.
+#[inline]
+pub fn x87_full_precision() -> bool {
     false
 }
 
