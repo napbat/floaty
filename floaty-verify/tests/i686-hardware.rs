@@ -44,11 +44,15 @@ const MXCSR_SETTINGS: [u32; 11] = [
 const X87_DEFAULT: u16 = 0x037F;
 
 /// The x87 control words that change a result of the x87 unit, or unmask an
-/// exception: the 24-bit and 53-bit precisions, each rounding direction, and
-/// each exception mask cleared.
-const X87_SETTINGS: [u16; 11] = [
-    X87_DEFAULT & !(3 << 8),
-    X87_DEFAULT & !(1 << 8),
+/// exception: each rounding direction and each exception mask cleared.
+///
+/// The 24-bit and 53-bit precisions are left out. The precision control
+/// applies only to FADD, FSUB, FMUL, FDIV, and FSQRT (SDM section 8.1.5.2),
+/// so the x87 remainders and conversions run at any precision. `qemu-i386`
+/// and `qemu-x86_64` 10.2.1 round FPREM1, FRNDINT, and FLD to the precision
+/// as well, which the hardware does not. `x87-hardware` checks both
+/// precisions on x86-64 hardware.
+const X87_SETTINGS: [u16; 9] = [
     X87_DEFAULT | 1 << 10,
     X87_DEFAULT | 2 << 10,
     X87_DEFAULT | 3 << 10,
