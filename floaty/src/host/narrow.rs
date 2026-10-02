@@ -171,8 +171,13 @@ pub fn round_to_half_lanes(bits: u32, subnormal: u32) -> u16 {
     let normal = mask((0x3880_0000..0x477F_F000).contains(&magnitude));
     let infinite = mask((0x477F_F000..=0x7F80_0000).contains(&magnitude));
     let nan = mask(magnitude > 0x7F80_0000);
+    // The lanes of the other cases compute garbage, which their masks drop,
+    // so the arithmetic wraps.
     let count = subnormal.wrapping_sub(SUBNORMAL_BIAS);
-    let rounded = (magnitude.wrapping_sub(0x3800_0000) + 0xFFF + ((magnitude >> 13) & 1)) >> 13;
+    let rounded = magnitude
+        .wrapping_sub(0x3800_0000)
+        .wrapping_add(0xFFF + ((magnitude >> 13) & 1))
+        >> 13;
     let quiet = 0x7E00 | ((magnitude >> 13) & 0x3FF);
     let result = sign | (tiny & count) | (normal & rounded) | (infinite & 0x7C00) | (nan & quiet);
     // The result has 16 bits: the low two bytes hold it on every host.
