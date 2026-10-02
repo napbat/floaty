@@ -23,7 +23,8 @@ fn control_word() -> u16 {
     let control: u16;
     // SAFETY: the block stores the x87 control word in eight bytes that it
     // takes below the stack pointer, loads the value into a register, and
-    // restores the stack pointer. It changes no other state.
+    // restores the stack pointer. `SUB` and `ADD` change the arithmetic
+    // flags, so the block does not preserve them. It changes no other state.
     unsafe {
         core::arch::asm!(
             concat!("sub ", stack_pointer!(), ", 8"),
@@ -31,7 +32,6 @@ fn control_word() -> u16 {
             concat!("movzx {control:e}, word ptr [", stack_pointer!(), "]"),
             concat!("add ", stack_pointer!(), ", 8"),
             control = out(reg) control,
-            options(preserves_flags),
         );
     }
     control

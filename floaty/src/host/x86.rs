@@ -78,8 +78,9 @@ pub fn default_environment() -> bool {
     let mxcsr: u32;
     // SAFETY: the block stores MXCSR in eight bytes that it takes below the
     // stack pointer, loads the value into a register, and restores the stack
-    // pointer. It changes no other state. Its own stack slot keeps the
-    // four-byte store apart from the stack frame of the caller.
+    // pointer. `SUB` and `ADD` change the arithmetic flags, so the block does
+    // not preserve them. It changes no other state. Its own stack slot keeps
+    // the four-byte store apart from the stack frame of the caller.
     unsafe {
         core::arch::asm!(
             concat!("sub ", stack_pointer!(), ", 8"),
@@ -87,7 +88,6 @@ pub fn default_environment() -> bool {
             concat!("mov {mxcsr:e}, dword ptr [", stack_pointer!(), "]"),
             concat!("add ", stack_pointer!(), ", 8"),
             mxcsr = out(reg) mxcsr,
-            options(preserves_flags),
         );
     }
     mxcsr & (RESULT_FIELDS | MASKS) == MASKS
