@@ -255,14 +255,16 @@ impl<M: Mode, const N: usize> Lanes<Single<M>, N> {
         )
     }
 
-    /// Returns `true` when this build has the host path of the kernels with
-    /// `step`. The answer is a constant for each step: a call of the
-    /// `const fn` at run time stays a call across crates.
+    /// Returns `true` when this processor has the host path of the kernels
+    /// with `step`. The separate kernels take a constant: a call of the
+    /// `const fn` at run time stays a call across crates. The fused kernels
+    /// also run where the processor has a larger instruction set than the
+    /// build, as the check of the processor finds.
     #[inline]
     fn on_host(step: Step) -> bool {
         match step {
             Step::Separate => const { host::packed::available(Host::Single, Kind::Arithmetic) },
-            Step::Fused => const { host::packed::available(Host::Single, Kind::FusedMultiplyAdd) },
+            Step::Fused => host::packed::fused_kernels(),
         }
     }
 

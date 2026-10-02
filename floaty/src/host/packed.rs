@@ -10,18 +10,28 @@
 //! engine. The result of the path then stays in registers. A NaN path that
 //! read the lanes of the result kept them in memory.
 //!
+//! The slice kernels, the elementwise slice operations, and `convert_chunks`
+//! compute in an instruction set, as `isa` states, which `dispatch` selects
+//! once for each call.
+//!
 //! The instructions read the lanes where they are: `Float` has the layout of
 //! its encoding, so an array of binary32 values is an array of `f32`. A copy
 //! of the lanes in smaller parts made each load of a chunk wait for the
 //! stores, which took more time than the arithmetic.
 
 mod bfloat;
+mod dispatch;
 pub mod elementwise;
 mod extended;
 mod half;
+mod isa;
 mod kernel;
 mod order;
 
+pub use self::dispatch::fused_kernels;
+#[cfg(feature = "override-host-level")]
+pub use self::dispatch::{level, levels};
+use self::isa::Build;
 pub use self::kernel::{
     accumulate, accumulate_rows, widen_codes, widen_halves, widen_scaled_codes,
 };
@@ -31,7 +41,7 @@ use core::cmp::Ordering;
 use super::bits::{nan_16, nan_32, nan_64, nan_bfloat};
 use super::environment::{self, packed};
 use super::paths::{ready_for, ready_for_integral};
-use super::{Kind, Operation};
+use super::{Isa, Kind, Operation};
 use crate::env::{Env, Mode};
 use crate::float::Float;
 use crate::format::Standard;
@@ -78,23 +88,22 @@ pub const fn available(host: Host, kind: Kind) -> bool {
 
 /// Returns `true` when the packed paths convert lanes from the host kind
 /// `from` to the host kind `to`: the build has the scalar conversion, and the
-/// packed paths cover the lanes. The answer is a constant. binary32 lanes
-/// round to binary16 in F16C or `FCVTN` where the build has it, and in
-/// integer and binary32 instructions otherwise. binary64 lanes do not round
-/// to binary16 or bfloat16: two roundings through binary32 can differ from
-/// one.
+/// packed paths cover the lanes. The answer is a constant. binary16 lanes
+/// widen, and binary32 lanes round to binary16, in F16C or `FCVTN` where the
+/// instruction set has it, and in integer and binary32 instructions
+/// otherwise. binary64 lanes do not round to binary16 or bfloat16: two
+/// roundings through binary32 can differ from one.
 #[must_use]
 pub const fn convertible(from: Host, to: Host) -> bool {
     if !super::convertible(from, to) {
         return false;
     }
-    match (from, to) {
+    matches!(
+        (from, to),
         (Host::Single, Host::Double | Host::BFloat | Host::Half)
-        | (Host::Double, Host::Single)
-        | (Host::BFloat, Host::Single | Host::Double) => true,
-        (Host::Half, Host::Single | Host::Double) => packed::HALF,
-        _ => false,
-    }
+            | (Host::Double, Host::Single)
+            | (Host::BFloat | Host::Half, Host::Single | Host::Double)
+    )
 }
 
 /// Returns `true` when `test` holds for any item. The fold has no branch,
@@ -242,10 +251,8 @@ fn chunk_mut<T, const N: usize, const C: usize>(values: &mut [T; N], start: usiz
         .expect("the caller asks only for a chunk inside the lanes")
 }
 
-/// Computes the `N` lanes of `lanes`: `WIDE` lanes at a time where the build
-/// has wide registers, then `NARROW` lanes at a time, and then one lane at a
-/// time. Each function takes the index of its first lane. Returns `None`
-/// when a function has no instruction.
+/// Computes the `N` lanes of `lanes` in the instruction set of the build, as
+/// `in_chunks_on` does.
 #[inline]
 fn in_chunks<T: Copy, const N: usize, const WIDE: usize, const NARROW: usize>(
     lanes: &mut [T; N],
@@ -253,10 +260,24 @@ fn in_chunks<T: Copy, const N: usize, const WIDE: usize, const NARROW: usize>(
     narrow: impl Fn(usize) -> Option<[T; NARROW]>,
     lane: impl Fn(usize) -> Option<T>,
 ) -> Option<()> {
-    in_chunks_where(lanes, packed::WIDE.then_some(wide), narrow, lane)
+    in_chunks_on::<Build, T, N, WIDE, NARROW>(lanes, wide, narrow, lane)
 }
 
-/// Computes the `N` lanes of `lanes` as `in_chunks` does, with chunks of
+/// Computes the `N` lanes of `lanes`: `WIDE` lanes at a time where the
+/// instruction set `I` has 256-bit registers, then `NARROW` lanes at a time,
+/// and then one lane at a time. Each function takes the index of its first
+/// lane. Returns `None` when a function has no instruction.
+#[inline]
+fn in_chunks_on<I: Isa, T: Copy, const N: usize, const WIDE: usize, const NARROW: usize>(
+    lanes: &mut [T; N],
+    wide: impl Fn(usize) -> Option<[T; WIDE]>,
+    narrow: impl Fn(usize) -> Option<[T; NARROW]>,
+    lane: impl Fn(usize) -> Option<T>,
+) -> Option<()> {
+    in_chunks_where(lanes, I::WIDE.then_some(wide), narrow, lane)
+}
+
+/// Computes the `N` lanes of `lanes` as `in_chunks_on` does, with chunks of
 /// `WIDE` lanes only where `wide` holds a function.
 #[inline]
 fn in_chunks_where<T: Copy, const N: usize, const WIDE: usize, const NARROW: usize>(
@@ -523,77 +544,74 @@ pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     if !ready_for(to, env, to.precision()) {
         return None;
     }
-    convert_lanes(value, to)
+    convert_lanes::<Build, S, W, M, N>(value, to)
 }
 
 /// Converts the values of `values` to the host kind `to` as `convert` does,
-/// `N` at a time, with one check of the environment for every chunk. Calls
-/// `each` with the index of the first value of each full chunk and its
-/// encodings, or `None` for a chunk that holds a NaN. Returns `None`, and
-/// calls `each` for no chunk, when the path does not apply. The values after
-/// the last full chunk are left to the caller.
+/// `N` at a time, with one check of the environment for the call, in the
+/// instruction set that `dispatch` selects. Calls `each` with the index of
+/// the first value of each full chunk and its encodings, or `None` for a
+/// chunk that holds a NaN. Returns `None`, and calls `each` for no chunk,
+/// when the path does not apply. The values after the last full chunk are
+/// left to the caller.
 #[inline]
 pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     values: &[Float<S, W, M>],
     to: Host,
     env: &Env,
-    mut each: impl FnMut(usize, Option<[u64; N]>),
+    each: impl FnMut(usize, Option<[u64; N]>),
 ) -> Option<()> {
     if !ready_for(to, env, to.precision()) {
         return None;
     }
-    for (index, chunk) in values.as_chunks::<N>().0.iter().enumerate() {
-        each(index * N, convert_lanes(chunk, to));
-    }
+    dispatch::convert_chunks::<S, W, M, N>(values, to, each);
     Some(())
 }
 
-/// Returns the encoding of each lane converted to the host kind `to`, as
-/// `convert` does, in an environment that allows the path.
+/// Calls `each` for each full chunk as `convert_chunks` does, in the
+/// instruction set `I`, in an environment that allows the path.
 #[inline]
-fn convert_lanes<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+fn convert_chunks_on<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    values: &[Float<S, W, M>],
+    to: Host,
+    mut each: impl FnMut(usize, Option<[u64; N]>),
+) {
+    for (index, chunk) in values.as_chunks::<N>().0.iter().enumerate() {
+        each(index * N, convert_lanes::<I, S, W, M, N>(chunk, to));
+    }
+}
+
+/// Returns the encoding of each lane converted to the host kind `to`, as
+/// `convert` does, in the instruction set `I`, in an environment that
+/// allows the path.
+#[inline]
+fn convert_lanes<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
     to: Host,
 ) -> Option<[u64; N]> {
     match (S::HOST, to) {
         (Host::Single, Host::Double) => {
-            let x = singles(value)?;
-            let mut lanes = [0.0; N];
-            in_chunks::<f64, N, 4, 2>(
-                &mut lanes,
-                |start| packed::widen_x4(*chunk(x, start)),
-                |start| Some(packed::widen_x2(*chunk(x, start))),
-                |index| Some(environment::widen_single(x[index])),
-            )?;
-            let lanes = lanes.map(f64::to_bits);
+            let lanes = isa::widen::<I, N>(singles(value)?)?.map(f64::to_bits);
             let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
         }
         (Host::Double, Host::Single) => {
-            let x = doubles(value)?;
-            let mut lanes = [0.0; N];
-            in_chunks::<f32, N, 4, 2>(
-                &mut lanes,
-                |start| packed::narrow_x4(*chunk(x, start)),
-                |start| Some(packed::narrow_x2(*chunk(x, start))),
-                |index| Some(environment::narrow_double(x[index])),
-            )?;
-            let bits = lanes.map(f32::to_bits);
+            let bits = isa::narrow::<I, N>(doubles(value)?)?.map(f32::to_bits);
             let nan = any_lane(bits.iter().copied(), nan_32);
             (!nan).then_some(bits.map(u64::from))
         }
         (Host::Half, Host::Single) => {
-            let bits = half::to_singles(value)?.map(f32::to_bits);
+            let bits = half::to_singles::<I, S, W, M, N>(value)?;
             let nan = any_lane(bits.iter().copied(), nan_32);
             (!nan).then_some(bits.map(u64::from))
         }
         (Host::Half, Host::Double) => {
-            let lanes = half::to_doubles(value)?.map(f64::to_bits);
+            let lanes = half::to_doubles::<I, S, W, M, N>(value)?.map(f64::to_bits);
             let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
         }
         (Host::Single, Host::Half) => {
-            let bits = half::from_singles(value)?;
+            let bits = half::from_singles::<I, S, W, M, N>(value)?;
             let nan = any_lane(bits.iter().copied(), nan_16);
             (!nan).then_some(bits.map(u64::from))
         }
@@ -603,7 +621,7 @@ fn convert_lanes<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             (!nan).then_some(bits.map(u64::from))
         }
         (Host::BFloat, Host::Double) => {
-            let lanes = bfloat::to_doubles(value)?.map(f64::to_bits);
+            let lanes = isa::widen::<I, N>(&bfloat::to_singles(value)?)?.map(f64::to_bits);
             let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
         }

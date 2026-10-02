@@ -18,7 +18,9 @@ use super::super::bits::{min_max_differs, min_max_differs_64};
 use super::super::environment::{self, packed};
 use super::super::paths::{min_max_f32, min_max_f64};
 use super::any_lane;
-use super::{bfloat, chunk, double_lanes, doubles, half, in_chunks, single_lanes, singles};
+use super::{
+    Build, bfloat, chunk, double_lanes, doubles, half, in_chunks, kernel, single_lanes, singles,
+};
 use crate::env::Mode;
 use crate::float::Float;
 use crate::format::Standard;
@@ -26,13 +28,15 @@ use crate::format::internal::MinMax;
 use crate::host::Host;
 
 /// Returns the lanes of a binary16 or bfloat16 array widened exactly to
-/// binary32, or `None` for another format or a build without the widening.
+/// binary32, or `None` for another format.
 #[inline]
 fn widened<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     lanes: &[Float<S, W, M>; N],
 ) -> Option<[f32; N]> {
     match S::HOST {
-        Host::Half => half::to_singles(lanes),
+        Host::Half => Some(kernel::singles(half::to_singles::<Build, S, W, M, N>(
+            lanes,
+        )?)),
         Host::BFloat => bfloat::to_singles(lanes),
         Host::None | Host::Single | Host::Double | Host::Extended | Host::Quad => None,
     }

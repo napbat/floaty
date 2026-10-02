@@ -23,6 +23,9 @@ use crate::format::internal::MinMax;
 /// architecture.
 pub const WIDE: bool = false;
 
+/// `false`: no form uses 512-bit registers on AArch64.
+pub const EXTRA_WIDE: bool = false;
+
 /// `true`: every AArch64 target widens binary16 lanes to binary32 and
 /// rounds binary32 lanes to binary16.
 pub const HALF: bool = super::HALF;
@@ -540,10 +543,11 @@ native!(
 #[cfg(target_feature = "fp16")]
 mod half;
 
-/// Defines a function for a 256-bit chunk, which returns `None`.
+/// Defines a function for a chunk of a 256-bit or a 512-bit register, which
+/// returns `None`.
 macro_rules! no_wide {
     ($name:ident, ($($type:ty),+) -> $result:ty) => {
-        #[doc = "Returns `None`: the base architecture has no 256-bit registers."]
+        #[doc = "Returns `None`: the base architecture has no registers wider than 128 bits."]
         #[inline]
         pub fn $name($(_: $type),+) -> Option<$result> {
             None
@@ -570,6 +574,14 @@ no_wide!(min_max_f64x4, ([f64; 4], [f64; 4], MinMax) -> [f64; 4]);
 no_wide!(to_int_f32x8, ([f32; 8]) -> [i32; 8]);
 no_wide!(to_int_f64x4, ([f64; 4]) -> [i32; 4]);
 no_wide!(from_int_x8, ([i32; 8]) -> [f32; 8]);
+no_wide!(binary_f32x16, ([f32; 16], [f32; 16], Operation) -> [f32; 16]);
+no_wide!(mul_add_f32x16, ([f32; 16], [f32; 16], [f32; 16]) -> [f32; 16]);
+no_wide!(min_max_f32x16, ([f32; 16], [f32; 16], MinMax) -> [f32; 16]);
+no_wide!(round_f32x16, ([f32; 16], Rounding) -> [f32; 16]);
+no_wide!(to_int_f32x16, ([f32; 16]) -> [i32; 16]);
+no_wide!(from_int_x16, ([i32; 16]) -> [f32; 16]);
+no_wide!(widen_halves_x16, ([u16; 16]) -> [f32; 16]);
+no_wide!(narrow_halves_x16, ([f32; 16]) -> [u16; 16]);
 
 /// Returns the integer indefinite in every lane, which sends each lane to
 /// the scalar conversion. AArch64 `FCVTNS` saturates a lane outside the

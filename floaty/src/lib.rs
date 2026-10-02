@@ -39,6 +39,9 @@
 
 #![no_std]
 
+#[cfg(feature = "std")]
+extern crate std;
+
 pub mod env;
 pub mod format;
 
@@ -72,6 +75,28 @@ pub use lanes::{Element, Lanes, LittleEndian, ScaledCodes, Vector, Widen, elemen
 mod sealed {
     /// Prevents implementations of a trait outside the crate.
     pub trait Sealed {}
+}
+
+/// Returns the name of the instruction set that the slice kernels and the
+/// elementwise slice operations of [`Lanes`] run in on this processor:
+/// `build` for the features that the build enables, or `v3` or `v4` for a
+/// larger level of x86-64, which 32-bit x86 takes too. Only the test feature
+/// `override-host-level` has this function.
+#[cfg(feature = "override-host-level")]
+#[doc(hidden)]
+#[must_use]
+pub fn host_level() -> &'static str {
+    host::packed::level()
+}
+
+/// Returns the names of the instruction sets that this processor can run,
+/// as [`host_level`] names them, from the smallest. The environment variable
+/// `FLOATY_HOST_LEVEL` selects one for the process. Only the test feature
+/// `override-host-level` has this function.
+#[cfg(feature = "override-host-level")]
+#[doc(hidden)]
+pub fn host_levels() -> impl Iterator<Item = &'static str> {
+    host::packed::levels()
 }
 
 /// Runs the examples of the README as doctests.

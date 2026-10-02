@@ -37,7 +37,16 @@ crate documentation records each rule of its behavior. The
 - Make a host path give the bits of the engine for every input it accepts.
   Send every other input, and every NaN result, to the engine.
 - Select a host path at compile time with `cfg(target_arch)` and
-  `cfg(target_feature)`. Do not detect the processor at run time.
+  `cfg(target_feature)`. Only the slice kernels, the elementwise slice
+  operations, and `convert_slice` of `Lanes` also select an instruction set
+  at run time, in `host/packed/dispatch`. Keep that check behind the feature
+  `std`, run it once, and keep its answer in an atomic. Do not detect the
+  processor anywhere else.
+- Give each instruction set of `dispatch` the bits of `Build`. Put each copy
+  of an entry point behind `#[target_feature]`, and tie the `SAFETY`
+  comment of each call to the check that found the features. The
+  host-path tests run in each set that the processor has: `levels.rs` runs
+  them again with `FLOATY_HOST_LEVEL`.
 - Use a host path only in an entry point that returns no flags. The `_with`
   methods always run the engine.
 - Pass the oracle tests in a build that enables each host path. Show its gain
@@ -123,7 +132,10 @@ cargo +1.89 clippy -p floaty --all-targets --target s390x-unknown-linux-gnu -- -
   gcc-i686-linux-gnu, libc6-dev-i386-cross, gcc-s390x-linux-gnu, and
   libc6-dev-s390x-cross), and `qemu-i386` and `qemu-s390x` 10.2.1 (package
   qemu-user). `.cargo/config.toml` names the linkers and the QEMU runners.
-- The x86-64-v3 gates need a processor with AVX2 and FMA.
+- The x86-64-v3 gates need a processor with AVX2 and FMA. The default
+  build checks its x86-64-v3 copies on such a processor, and its x86-64-v4
+  copies only on a processor with AVX-512F, BW, CD, DQ, and VL. Run the
+  gates on one before you hand off a change to those copies.
 - `--workspace` includes `floaty-verify`. It builds its C reference
   libraries and its x86 hardware tests only for x86-64. That build runs on
   Linux x86-64 hosts only, and needs the submodules (`git submodule update

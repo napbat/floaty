@@ -1,7 +1,9 @@
-//! The 256-bit forms, in functions that enable their features for their own
-//! code. A caller compiled without AVX, such as a doctest, which does not
-//! take `RUSTFLAGS`, then still compiles the 256-bit register class. Each
-//! function inlines into a caller with the features.
+//! The 256-bit forms, and the VEX forms of the 128-bit chunks, in functions
+//! that enable their features for their own code. A caller compiled without
+//! AVX, such as a doctest, which does not take `RUSTFLAGS`, then still
+//! compiles the 256-bit register class. Each function inlines into a caller
+//! with the features: a build that enables them, or a function of the
+//! module `dispatch` that runs only on a processor that has them.
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::{__m128, __m128i, __m256, __m256d, __m256i};
@@ -9,6 +11,7 @@ use core::arch::x86::{__m128, __m128i, __m256, __m256d, __m256i};
 use core::arch::x86_64::{__m128, __m128i, __m256, __m256d, __m256i};
 use core::mem::transmute;
 
+#[cfg(target_feature = "avx")]
 use super::super::super::packed::Masks;
 use super::Operation;
 use crate::env::Rounding;
@@ -46,6 +49,7 @@ fn double_lanes(value: __m256d) -> [f64; 4] {
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(any(target_feature = "avx", feature = "std"))]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn binary_f32x8(left: [f32; 8], right: [f32; 8], operation: Operation) -> [f32; 8] {
@@ -68,6 +72,7 @@ pub unsafe fn binary_f32x8(left: [f32; 8], right: [f32; 8], operation: Operation
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(target_feature = "avx")]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn binary_f64x4(left: [f64; 4], right: [f64; 4], operation: Operation) -> [f64; 4] {
@@ -90,6 +95,7 @@ pub unsafe fn binary_f64x4(left: [f64; 4], right: [f64; 4], operation: Operation
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(target_feature = "avx")]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn sqrt_f32x8(value: [f32; 8]) -> [f32; 8] {
@@ -101,6 +107,7 @@ pub unsafe fn sqrt_f32x8(value: [f32; 8]) -> [f32; 8] {
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(target_feature = "avx")]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn sqrt_f64x4(value: [f64; 4]) -> [f64; 4] {
@@ -112,6 +119,7 @@ pub unsafe fn sqrt_f64x4(value: [f64; 4]) -> [f64; 4] {
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(any(target_feature = "avx", feature = "std"))]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn round_f32x8(value: [f32; 8], rounding: Rounding) -> Option<[f32; 8]> {
@@ -133,6 +141,7 @@ pub unsafe fn round_f32x8(value: [f32; 8], rounding: Rounding) -> Option<[f32; 8
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(target_feature = "avx")]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn round_f64x4(value: [f64; 4], rounding: Rounding) -> Option<[f64; 4]> {
@@ -154,7 +163,7 @@ pub unsafe fn round_f64x4(value: [f64; 4], rounding: Rounding) -> Option<[f64; 4
 /// # Safety
 ///
 /// The processor must have AVX and FMA.
-#[cfg(target_feature = "fma")]
+#[cfg(any(target_feature = "fma", feature = "std"))]
 #[target_feature(enable = "avx,fma")]
 #[inline]
 pub unsafe fn mul_add_f32x8(left: [f32; 8], right: [f32; 8], addend: [f32; 8]) -> [f32; 8] {
@@ -177,7 +186,199 @@ pub unsafe fn mul_add_f64x4(left: [f64; 4], right: [f64; 4], addend: [f64; 4]) -
 
 /// # Safety
 ///
+/// The processor must have FMA.
+#[cfg(any(target_feature = "fma", feature = "std"))]
+#[target_feature(enable = "avx,fma")]
+#[inline]
+pub unsafe fn mul_add_f32x4(left: [f32; 4], right: [f32; 4], addend: [f32; 4]) -> [f32; 4] {
+    let (mut a, b, c) = (
+        super::singles(left),
+        super::singles(right),
+        super::singles(addend),
+    );
+    fused!(xmm_reg, "vfmadd213ps", a, b, c);
+    super::single_lanes(a)
+}
+
+/// # Safety
+///
+/// The processor must have FMA.
+#[cfg(target_feature = "fma")]
+#[target_feature(enable = "avx,fma")]
+#[inline]
+pub unsafe fn mul_add_f64x2(left: [f64; 2], right: [f64; 2], addend: [f64; 2]) -> [f64; 2] {
+    let (mut a, b, c) = (
+        super::doubles(left),
+        super::doubles(right),
+        super::doubles(addend),
+    );
+    fused!(xmm_reg, "vfmadd213pd", a, b, c);
+    super::double_lanes(a)
+}
+
+/// # Safety
+///
 /// The processor must have AVX.
+#[cfg(feature = "std")]
+#[target_feature(enable = "avx")]
+#[inline]
+pub unsafe fn binary_f32x4(left: [f32; 4], right: [f32; 4], operation: Operation) -> [f32; 4] {
+    let (mut a, b) = (super::singles(left), super::singles(right));
+    arithmetic!(
+        xmm_reg,
+        operation,
+        [
+            "vaddps {a}, {a}, {b}",
+            "vsubps {a}, {a}, {b}",
+            "vmulps {a}, {a}, {b}",
+            "vdivps {a}, {a}, {b}",
+        ],
+        a,
+        b
+    );
+    super::single_lanes(a)
+}
+
+/// # Safety
+///
+/// The processor must have AVX.
+#[cfg(feature = "std")]
+#[target_feature(enable = "avx")]
+#[inline]
+pub unsafe fn round_f32x4(value: [f32; 4], rounding: Rounding) -> Option<[f32; 4]> {
+    let mut a = super::singles(value);
+    round_packed!(
+        xmm_reg,
+        rounding,
+        [
+            "vroundps {a}, {b}, 0",
+            "vroundps {a}, {b}, 1",
+            "vroundps {a}, {b}, 2",
+            "vroundps {a}, {b}, 3",
+        ],
+        a
+    );
+    Some(super::single_lanes(a))
+}
+
+/// # Safety
+///
+/// The processor must have AVX.
+#[cfg(feature = "std")]
+#[target_feature(enable = "avx")]
+#[inline]
+pub unsafe fn min_max_f32x4(left: [f32; 4], right: [f32; 4], operation: MinMax) -> [f32; 4] {
+    let (mut a, b) = (super::singles(left), super::singles(right));
+    if operation.is_minimum() {
+        packed!(xmm_reg, "vminps {a}, {a}, {b}", a, b);
+    } else {
+        packed!(xmm_reg, "vmaxps {a}, {a}, {b}", a, b);
+    }
+    super::single_lanes(a)
+}
+
+/// # Safety
+///
+/// The processor must have AVX.
+#[cfg(feature = "std")]
+#[target_feature(enable = "avx")]
+#[inline]
+pub unsafe fn to_int_f32x4(value: [f32; 4]) -> [i32; 4] {
+    let a = super::singles(value);
+    let result: __m128i;
+    // SAFETY: VCVTPS2DQ reads and writes SSE registers. The caller
+    // guarantees AVX, and the conversion changes only the status flags of
+    // MXCSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "vcvtps2dq {result}, {a}",
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    unsafe { transmute::<__m128i, [i32; 4]>(result) }
+}
+
+/// # Safety
+///
+/// The processor must have AVX.
+#[cfg(feature = "std")]
+#[target_feature(enable = "avx")]
+#[inline]
+pub unsafe fn from_int_x4(value: [i32; 4]) -> [f32; 4] {
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    let a = unsafe { transmute::<[i32; 4], __m128i>(value) };
+    let result: __m128;
+    // SAFETY: as in `to_int_f32x4`, with `VCVTDQ2PS`.
+    unsafe {
+        core::arch::asm!(
+            "vcvtdq2ps {result}, {a}",
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    super::single_lanes(result)
+}
+
+/// # Safety
+///
+/// The processor must have F16C.
+#[cfg(any(target_feature = "f16c", feature = "std"))]
+#[target_feature(enable = "avx,f16c")]
+#[inline]
+pub unsafe fn widen_halves_x4(value: [u16; 4]) -> [f32; 4] {
+    let [a0, a1, a2, a3] = value;
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    let a = unsafe { transmute::<[u16; 8], __m128i>([a0, a1, a2, a3, 0, 0, 0, 0]) };
+    let result: __m128;
+    // SAFETY: VCVTPH2PS reads and writes SSE registers. The caller
+    // guarantees F16C, and the widening is exact, so it changes no state.
+    unsafe {
+        core::arch::asm!(
+            "vcvtph2ps {result}, {a}",
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    super::single_lanes(result)
+}
+
+/// # Safety
+///
+/// The processor must have F16C.
+#[cfg(any(target_feature = "f16c", feature = "std"))]
+#[target_feature(enable = "avx,f16c")]
+#[inline]
+pub unsafe fn narrow_halves_x4(value: [f32; 4]) -> [u16; 4] {
+    let a = super::singles(value);
+    let result: __m128i;
+    // SAFETY: VCVTPS2PH reads and writes SSE registers. The caller
+    // guarantees F16C, and the rounding changes only the status flags of
+    // MXCSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "vcvtps2ph {result}, {a}, 0",
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    // SAFETY: as in `widen_halves_x4`.
+    let [r0, r1, r2, r3, _, _, _, _] = unsafe { transmute::<__m128i, [u16; 8]>(result) };
+    [r0, r1, r2, r3]
+}
+
+/// # Safety
+///
+/// The processor must have AVX.
+#[cfg(any(target_feature = "avx", feature = "std"))]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn widen_x4(value: [f32; 4]) -> [f64; 4] {
@@ -200,6 +401,7 @@ pub unsafe fn widen_x4(value: [f32; 4]) -> [f64; 4] {
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(any(target_feature = "avx", feature = "std"))]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn narrow_x4(value: [f64; 4]) -> [f32; 4] {
@@ -219,8 +421,53 @@ pub unsafe fn narrow_x4(value: [f64; 4]) -> [f32; 4] {
 
 /// # Safety
 ///
+/// The processor must have AVX.
+#[cfg(feature = "std")]
+#[target_feature(enable = "avx")]
+#[inline]
+pub unsafe fn widen_x2(value: [f32; 2]) -> [f64; 2] {
+    let a = super::singles([value[0], value[1], 0.0, 0.0]);
+    let result: super::__m128d;
+    // SAFETY: VCVTPS2PD reads and writes SSE registers. The caller
+    // guarantees AVX, and the conversion changes only the status flags of
+    // MXCSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "vcvtps2pd {result}, {a}",
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    super::double_lanes(result)
+}
+
+/// # Safety
+///
+/// The processor must have AVX.
+#[cfg(feature = "std")]
+#[target_feature(enable = "avx")]
+#[inline]
+pub unsafe fn narrow_x2(value: [f64; 2]) -> [f32; 2] {
+    let a = super::doubles(value);
+    let result: __m128;
+    // SAFETY: as in `widen_x2`, with `VCVTPD2PS`.
+    unsafe {
+        core::arch::asm!(
+            "vcvtpd2ps {result}, {a}",
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    let [low, high, _, _] = super::single_lanes(result);
+    [low, high]
+}
+
+/// # Safety
+///
 /// The processor must have AVX and F16C.
-#[cfg(target_feature = "f16c")]
+#[cfg(any(target_feature = "f16c", feature = "std"))]
 #[target_feature(enable = "avx,f16c")]
 #[inline]
 pub unsafe fn widen_halves_x8(value: [u16; 8]) -> [f32; 8] {
@@ -245,7 +492,7 @@ pub unsafe fn widen_halves_x8(value: [u16; 8]) -> [f32; 8] {
 /// # Safety
 ///
 /// The processor must have AVX and F16C.
-#[cfg(target_feature = "f16c")]
+#[cfg(any(target_feature = "f16c", feature = "std"))]
 #[target_feature(enable = "avx,f16c")]
 #[inline]
 pub unsafe fn narrow_halves_x8(value: [f32; 8]) -> [u16; 8] {
@@ -269,6 +516,7 @@ pub unsafe fn narrow_halves_x8(value: [f32; 8]) -> [u16; 8] {
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(target_feature = "avx")]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn compare_f32x8(left: [f32; 8], right: [f32; 8]) -> Masks<u32, 8> {
@@ -288,6 +536,7 @@ pub unsafe fn compare_f32x8(left: [f32; 8], right: [f32; 8]) -> Masks<u32, 8> {
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(target_feature = "avx")]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn compare_f64x4(left: [f64; 4], right: [f64; 4]) -> Masks<u64, 4> {
@@ -307,6 +556,7 @@ pub unsafe fn compare_f64x4(left: [f64; 4], right: [f64; 4]) -> Masks<u64, 4> {
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(any(target_feature = "avx", feature = "std"))]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn min_max_f32x8(left: [f32; 8], right: [f32; 8], operation: MinMax) -> [f32; 8] {
@@ -322,6 +572,7 @@ pub unsafe fn min_max_f32x8(left: [f32; 8], right: [f32; 8], operation: MinMax) 
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(target_feature = "avx")]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn min_max_f64x4(left: [f64; 4], right: [f64; 4], operation: MinMax) -> [f64; 4] {
@@ -337,6 +588,7 @@ pub unsafe fn min_max_f64x4(left: [f64; 4], right: [f64; 4], operation: MinMax) 
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(any(target_feature = "avx", feature = "std"))]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn to_int_f32x8(value: [f32; 8]) -> [i32; 8] {
@@ -361,6 +613,7 @@ pub unsafe fn to_int_f32x8(value: [f32; 8]) -> [i32; 8] {
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(target_feature = "avx")]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn to_int_f64x4(value: [f64; 4]) -> [i32; 4] {
@@ -384,6 +637,7 @@ pub unsafe fn to_int_f64x4(value: [f64; 4]) -> [i32; 4] {
 /// # Safety
 ///
 /// The processor must have AVX.
+#[cfg(any(target_feature = "avx", feature = "std"))]
 #[target_feature(enable = "avx")]
 #[inline]
 pub unsafe fn from_int_x8(value: [i32; 8]) -> [f32; 8] {

@@ -19,6 +19,8 @@
 //!   and lane count, and the slice conversion.
 //! - [`elementwise`]: the elementwise views, stores, integer conversions,
 //!   and reductions of `Lanes`, and the slice conversion of host values.
+//! - [`levels`]: the runs of these tests in each instruction set that the
+//!   slice paths of `Lanes` can select on the processor.
 //!
 //! [`operands`] gives the operands of every check.
 
@@ -29,5 +31,6 @@ mod double_double;
 mod elementwise;
 mod integral;
 mod kernels;
+mod levels;
 mod operands;
 mod remainder;

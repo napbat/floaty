@@ -10,7 +10,9 @@ repository.workspace = true
 build = "build/main.rs"
 
 [dependencies]
-floaty.workspace = true
+# The host-path tests run the slice paths in each instruction set of the
+# processor, which `FLOATY_HOST_LEVEL` selects.
+floaty = { workspace = true, features = ["override-host-level"] }
 rustc_apfloat.workspace = true
 
 # MPFR builds only for x86-64, with the other references.

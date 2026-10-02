@@ -9,5 +9,16 @@ license.workspace = true
 repository.workspace = true
 readme = "../README.md"
 
+[features]
+# Checks the processor once, at the first call, for a larger instruction set
+# than the build enables, for the slice kernels and the elementwise slice
+# operations of `Lanes`. The check needs the standard library.
+std = []
+# For tests only: the environment variable FLOATY_HOST_LEVEL (build, v3, or
+# v4) selects the largest instruction set of the check, and `host_level` and
+# `host_levels` report the sets. A value that the processor does not have
+# panics.
+override-host-level = ["std"]
+
 [lints]
 workspace = true

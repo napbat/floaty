@@ -1,5 +1,6 @@
 //! The packed instructions of the SSE unit, for the paths of `Lanes`: 128-bit
-//! registers with SSE2, SSE4.1, and FMA, and 256-bit registers with AVX.
+//! registers with SSE2, SSE4.1, and FMA, 256-bit registers with AVX, and
+//! 512-bit registers with AVX-512F.
 //!
 //! Each function computes one chunk of lanes in registers. The block takes
 //! and gives register values, so it touches no memory: the compiler loads and
@@ -24,6 +25,10 @@ use crate::format::internal::MinMax;
 /// `true` when the build has 256-bit registers, which hold eight binary32 or
 /// four binary64 lanes.
 pub const WIDE: bool = cfg!(target_feature = "avx");
+
+/// `true` when the build has 512-bit registers, which hold sixteen binary32
+/// lanes.
+pub const EXTRA_WIDE: bool = cfg!(target_feature = "avx512f");
 
 /// `true`: SSE2 converts binary32 and binary64 lanes to 32-bit integers.
 pub const INTEGERS: bool = true;
@@ -68,10 +73,11 @@ fn double_lanes(value: __m128d) -> [f64; 2] {
 /// class `$class`, and leaves the result in `$a`.
 macro_rules! packed {
     ($class:ident, $instruction:expr, $a:ident, $b:ident) => {
-        // SAFETY: the instruction reads and writes registers of the class,
-        // which the build enables, and `sse!` selects a VEX form only in a
-        // build with AVX. The instruction changes only the status flags of
-        // MXCSR, which floaty does not read.
+        // SAFETY: the instruction reads and writes registers of the class.
+        // The build enables its features, or the function that runs the
+        // block enables them and its caller guarantees them. `sse!` selects
+        // a VEX form only in a build with AVX. The instruction changes only
+        // the status flags of MXCSR, which floaty does not read.
         unsafe {
             core::arch::asm!(
                 $instruction,
@@ -157,7 +163,9 @@ pub fn sqrt_f64x2(value: [f64; 2]) -> [f64; 2] {
 /// immediate of the instruction: 0 to nearest even, 1 toward negative
 /// infinity, 2 toward positive infinity, and 3 toward zero. Returns `None`
 /// from the function for another direction.
-#[cfg(target_feature = "sse4.1")]
+// The SSE4.1 forms of a build without AVX, and every form in `wide` and
+// `avx512`, use it.
+#[cfg(any(target_feature = "sse4.1", feature = "std"))]
 macro_rules! round_packed {
     ($class:ident, $rounding:expr, [$even:expr, $down:expr, $up:expr, $zero:expr $(,)?], $a:ident) => {
         match $rounding {
@@ -230,12 +238,13 @@ pub fn round_f64x2(_value: [f64; 2], _rounding: Rounding) -> Option<[f64; 2]> {
 }
 
 /// Runs a packed fused multiply-add, `$a = $a * $b + $c`, in registers of the
-/// class `$class`.
-#[cfg(target_feature = "fma")]
+/// class `$class`. The forms of a build with FMA, and every form in `wide`
+/// and `avx512`, use it.
+#[cfg(any(target_feature = "fma", feature = "std"))]
 macro_rules! fused {
     ($class:ident, $instruction:literal, $a:ident, $b:ident, $c:ident) => {
-        // SAFETY: as in `packed!`, with a third register. The build enables
-        // FMA.
+        // SAFETY: as in `packed!`, with a third register. The function
+        // enables FMA, and its caller guarantees it.
         unsafe {
             core::arch::asm!(
                 concat!($instruction, " {a}, {b}, {c}"),
@@ -254,9 +263,8 @@ macro_rules! fused {
 #[inline]
 #[allow(clippy::unnecessary_wraps)] // A build without FMA returns `None` from the same signature.
 pub fn mul_add_f32x4(left: [f32; 4], right: [f32; 4], addend: [f32; 4]) -> Option<[f32; 4]> {
-    let (mut a, b, c) = (singles(left), singles(right), singles(addend));
-    fused!(xmm_reg, "vfmadd213ps", a, b, c);
-    Some(single_lanes(a))
+    // SAFETY: the build enables FMA, so the processor that runs it has it.
+    Some(unsafe { wide::mul_add_f32x4(left, right, addend) })
 }
 
 /// Returns `left * right + addend` of two triples of binary64 lanes, each
@@ -265,9 +273,8 @@ pub fn mul_add_f32x4(left: [f32; 4], right: [f32; 4], addend: [f32; 4]) -> Optio
 #[inline]
 #[allow(clippy::unnecessary_wraps)] // A build without FMA returns `None` from the same signature.
 pub fn mul_add_f64x2(left: [f64; 2], right: [f64; 2], addend: [f64; 2]) -> Option<[f64; 2]> {
-    let (mut a, b, c) = (doubles(left), doubles(right), doubles(addend));
-    fused!(xmm_reg, "vfmadd213pd", a, b, c);
-    Some(double_lanes(a))
+    // SAFETY: as in `mul_add_f32x4`.
+    Some(unsafe { wide::mul_add_f64x2(left, right, addend) })
 }
 
 /// Returns `None`: a build without FMA has no packed fused multiply-add.
@@ -395,22 +402,8 @@ pub fn from_int_x4(value: [i32; 4]) -> [f32; 4] {
 #[inline]
 #[allow(clippy::unnecessary_wraps)] // A build without F16C returns `None` from the same signature.
 pub fn widen_halves_x4(value: [u16; 4]) -> Option<[f32; 4]> {
-    let [a0, a1, a2, a3] = value;
-    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
-    // each.
-    let a = unsafe { transmute::<[u16; 8], __m128i>([a0, a1, a2, a3, 0, 0, 0, 0]) };
-    let result: __m128;
-    // SAFETY: VCVTPH2PS reads and writes SSE registers. The build enables
-    // F16C, and the widening is exact, so it changes no state.
-    unsafe {
-        core::arch::asm!(
-            "vcvtph2ps {result}, {a}",
-            a = in(xmm_reg) a,
-            result = lateout(xmm_reg) result,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
-    Some(single_lanes(result))
+    // SAFETY: the build enables F16C, so the processor that runs it has it.
+    Some(unsafe { wide::widen_halves_x4(value) })
 }
 
 /// Returns four binary32 lanes rounded to binary16 to nearest even, by
@@ -419,22 +412,8 @@ pub fn widen_halves_x4(value: [u16; 4]) -> Option<[f32; 4]> {
 #[inline]
 #[allow(clippy::unnecessary_wraps)] // A build without F16C returns `None` from the same signature.
 pub fn narrow_halves_x4(value: [f32; 4]) -> Option<[u16; 4]> {
-    let a = singles(value);
-    let result: __m128i;
-    // SAFETY: VCVTPS2PH reads and writes SSE registers. The build enables
-    // F16C, and the rounding changes only the status flags of MXCSR, which
-    // floaty does not read.
-    unsafe {
-        core::arch::asm!(
-            "vcvtps2ph {result}, {a}, 0",
-            a = in(xmm_reg) a,
-            result = lateout(xmm_reg) result,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
     // SAFETY: as in `widen_halves_x4`.
-    let [r0, r1, r2, r3, _, _, _, _] = unsafe { transmute::<__m128i, [u16; 8]>(result) };
-    Some([r0, r1, r2, r3])
+    Some(unsafe { wide::narrow_halves_x4(value) })
 }
 
 /// Returns `None`: a build without F16C has no packed binary16 path.
@@ -563,38 +542,39 @@ pub fn min_max_f64x2(left: [f64; 2], right: [f64; 2], operation: MinMax) -> [f64
     double_lanes(a)
 }
 
-/// Defines a function for a 256-bit chunk, which runs its form in `wide`
-/// where the build has the features, and returns `None` otherwise.
+/// Defines a function for a chunk of a 256-bit or a 512-bit register, which
+/// runs its form in `wide` or `avx512` where the build has the features, and
+/// returns `None` otherwise.
 macro_rules! wide {
-    ($(#[$doc:meta])* $name:ident, $features:meta, ($($argument:ident: $type:ty),+) -> Option<$result:ty>) => {
+    ($(#[$doc:meta])* $module:ident::$name:ident, $features:meta, ($($argument:ident: $type:ty),+) -> Option<$result:ty>) => {
         $(#[$doc])*
         #[cfg($features)]
         #[inline]
         pub fn $name($($argument: $type),+) -> Option<$result> {
-            // SAFETY: the build enables the features of the 256-bit form, so
-            // the processor that runs it has them.
-            unsafe { wide::$name($($argument),+) }
+            // SAFETY: the build enables the features of the form, so the
+            // processor that runs it has them.
+            unsafe { $module::$name($($argument),+) }
         }
 
-        #[doc = "Returns `None`: the build has no 256-bit form."]
+        #[doc = "Returns `None`: the build has no form of this width."]
         #[cfg(not($features))]
         #[inline]
         pub fn $name($(_: $type),+) -> Option<$result> {
             None
         }
     };
-    ($(#[$doc:meta])* $name:ident, $features:meta, ($($argument:ident: $type:ty),+) -> $result:ty) => {
+    ($(#[$doc:meta])* $module:ident::$name:ident, $features:meta, ($($argument:ident: $type:ty),+) -> $result:ty) => {
         $(#[$doc])*
         #[cfg($features)]
         #[inline]
         #[allow(clippy::unnecessary_wraps)] // A build without the feature returns `None` from the same signature.
         pub fn $name($($argument: $type),+) -> Option<$result> {
-            // SAFETY: the build enables the features of the 256-bit form, so
-            // the processor that runs it has them.
-            Some(unsafe { wide::$name($($argument),+) })
+            // SAFETY: the build enables the features of the form, so the
+            // processor that runs it has them.
+            Some(unsafe { $module::$name($($argument),+) })
         }
 
-        #[doc = "Returns `None`: the build has no 256-bit form."]
+        #[doc = "Returns `None`: the build has no form of this width."]
         #[cfg(not($features))]
         #[inline]
         pub fn $name($(_: $type),+) -> Option<$result> {
@@ -606,97 +586,97 @@ macro_rules! wide {
 wide!(
     /// Returns `operation` of eight pairs of binary32 lanes, by `VADDPS`,
     /// `VSUBPS`, `VMULPS`, or `VDIVPS`.
-    binary_f32x8, target_feature = "avx", (left: [f32; 8], right: [f32; 8], operation: Operation) -> [f32; 8]
+    wide::binary_f32x8, target_feature = "avx", (left: [f32; 8], right: [f32; 8], operation: Operation) -> [f32; 8]
 );
 wide!(
     /// Returns `operation` of four pairs of binary64 lanes, by `VADDPD`,
     /// `VSUBPD`, `VMULPD`, or `VDIVPD`.
-    binary_f64x4, target_feature = "avx", (left: [f64; 4], right: [f64; 4], operation: Operation) -> [f64; 4]
+    wide::binary_f64x4, target_feature = "avx", (left: [f64; 4], right: [f64; 4], operation: Operation) -> [f64; 4]
 );
 wide!(
     /// Returns the square roots of eight binary32 lanes, by `VSQRTPS`.
-    sqrt_f32x8, target_feature = "avx", (value: [f32; 8]) -> [f32; 8]
+    wide::sqrt_f32x8, target_feature = "avx", (value: [f32; 8]) -> [f32; 8]
 );
 wide!(
     /// Returns the square roots of four binary64 lanes, by `VSQRTPD`.
-    sqrt_f64x4, target_feature = "avx", (value: [f64; 4]) -> [f64; 4]
+    wide::sqrt_f64x4, target_feature = "avx", (value: [f64; 4]) -> [f64; 4]
 );
 wide!(
     /// Returns eight binary32 lanes rounded to integral values in the
     /// direction `rounding`, by `VROUNDPS` with the direction in its
     /// immediate, or `None` for a direction that the immediate does not have.
-    round_f32x8, target_feature = "avx", (value: [f32; 8], rounding: Rounding) -> Option<[f32; 8]>
+    wide::round_f32x8, target_feature = "avx", (value: [f32; 8], rounding: Rounding) -> Option<[f32; 8]>
 );
 wide!(
     /// Returns four binary64 lanes rounded to integral values in the
     /// direction `rounding`, by `VROUNDPD` with the direction in its
     /// immediate, or `None` for a direction that the immediate does not have.
-    round_f64x4, target_feature = "avx", (value: [f64; 4], rounding: Rounding) -> Option<[f64; 4]>
+    wide::round_f64x4, target_feature = "avx", (value: [f64; 4], rounding: Rounding) -> Option<[f64; 4]>
 );
 wide!(
     /// Returns `left * right + addend` of eight triples of binary32 lanes,
     /// each rounded once, by `VFMADD213PS`.
-    mul_add_f32x8, all(target_feature = "avx", target_feature = "fma"), (left: [f32; 8], right: [f32; 8], addend: [f32; 8]) -> [f32; 8]
+    wide::mul_add_f32x8, all(target_feature = "avx", target_feature = "fma"), (left: [f32; 8], right: [f32; 8], addend: [f32; 8]) -> [f32; 8]
 );
 wide!(
     /// Returns `left * right + addend` of four triples of binary64 lanes,
     /// each rounded once, by `VFMADD213PD`.
-    mul_add_f64x4, all(target_feature = "avx", target_feature = "fma"), (left: [f64; 4], right: [f64; 4], addend: [f64; 4]) -> [f64; 4]
+    wide::mul_add_f64x4, all(target_feature = "avx", target_feature = "fma"), (left: [f64; 4], right: [f64; 4], addend: [f64; 4]) -> [f64; 4]
 );
 wide!(
     /// Returns four binary32 lanes widened exactly to binary64, by
     /// `VCVTPS2PD`.
-    widen_x4, target_feature = "avx", (value: [f32; 4]) -> [f64; 4]
+    wide::widen_x4, target_feature = "avx", (value: [f32; 4]) -> [f64; 4]
 );
 wide!(
     /// Returns four binary64 lanes rounded to binary32, by `VCVTPD2PS`.
-    narrow_x4, target_feature = "avx", (value: [f64; 4]) -> [f32; 4]
+    wide::narrow_x4, target_feature = "avx", (value: [f64; 4]) -> [f32; 4]
 );
 wide!(
     /// Returns eight binary16 lanes widened exactly to binary32, by
     /// `VCVTPH2PS`.
-    widen_halves_x8, all(target_feature = "avx", target_feature = "f16c"), (value: [u16; 8]) -> [f32; 8]
+    wide::widen_halves_x8, all(target_feature = "avx", target_feature = "f16c"), (value: [u16; 8]) -> [f32; 8]
 );
 wide!(
     /// Returns eight binary32 lanes rounded to binary16 to nearest even, by
     /// `VCVTPS2PH` with the rounding control 0 in its immediate.
-    narrow_halves_x8, all(target_feature = "avx", target_feature = "f16c"), (value: [f32; 8]) -> [u16; 8]
+    wide::narrow_halves_x8, all(target_feature = "avx", target_feature = "f16c"), (value: [f32; 8]) -> [u16; 8]
 );
 wide!(
     /// Returns the masks of a comparison of each pair of eight binary32
     /// lanes, by `VCMPLTPS` and `VCMPUNORDPS`.
-    compare_f32x8, target_feature = "avx", (left: [f32; 8], right: [f32; 8]) -> Masks<u32, 8>
+    wide::compare_f32x8, target_feature = "avx", (left: [f32; 8], right: [f32; 8]) -> Masks<u32, 8>
 );
 wide!(
     /// Returns the masks of a comparison of each pair of four binary64 lanes,
     /// by `VCMPLTPD` and `VCMPUNORDPD`.
-    compare_f64x4, target_feature = "avx", (left: [f64; 4], right: [f64; 4]) -> Masks<u64, 4>
+    wide::compare_f64x4, target_feature = "avx", (left: [f64; 4], right: [f64; 4]) -> Masks<u64, 4>
 );
 wide!(
     /// Returns the smaller or the larger of each pair of eight binary32
     /// lanes, by `VMINPS` or `VMAXPS`.
-    min_max_f32x8, target_feature = "avx", (left: [f32; 8], right: [f32; 8], operation: MinMax) -> [f32; 8]
+    wide::min_max_f32x8, target_feature = "avx", (left: [f32; 8], right: [f32; 8], operation: MinMax) -> [f32; 8]
 );
 wide!(
     /// Returns the smaller or the larger of each pair of four binary64
     /// lanes, by `VMINPD` or `VMAXPD`.
-    min_max_f64x4, target_feature = "avx", (left: [f64; 4], right: [f64; 4], operation: MinMax) -> [f64; 4]
+    wide::min_max_f64x4, target_feature = "avx", (left: [f64; 4], right: [f64; 4], operation: MinMax) -> [f64; 4]
 );
 
 wide!(
     /// Returns eight binary32 lanes rounded to 32-bit integers as
     /// `to_int_f32x4` rounds, by `VCVTPS2DQ`.
-    to_int_f32x8, target_feature = "avx", (value: [f32; 8]) -> [i32; 8]
+    wide::to_int_f32x8, target_feature = "avx", (value: [f32; 8]) -> [i32; 8]
 );
 wide!(
     /// Returns four binary64 lanes rounded to 32-bit integers as
     /// `to_int_f32x4` rounds, by `VCVTPD2DQ`.
-    to_int_f64x4, target_feature = "avx", (value: [f64; 4]) -> [i32; 4]
+    wide::to_int_f64x4, target_feature = "avx", (value: [f64; 4]) -> [i32; 4]
 );
 wide!(
     /// Returns eight 32-bit integers converted to binary32 as `from_int_x4`
     /// converts them, by `VCVTDQ2PS`.
-    from_int_x8, target_feature = "avx", (value: [i32; 8]) -> [f32; 8]
+    wide::from_int_x8, target_feature = "avx", (value: [i32; 8]) -> [f32; 8]
 );
 
 /// Defines a function for eight binary16 lanes in their own precision, which
@@ -718,8 +698,52 @@ no_native!(mul_add_f16x8, ([u16; 8], [u16; 8], [u16; 8]) -> [u16; 8]);
 no_native!(compare_f16x8, ([u16; 8], [u16; 8]) -> Masks<u16, 8>);
 no_native!(min_max_f16x8, ([u16; 8], [u16; 8], MinMax) -> [u16; 8]);
 
-#[cfg(target_feature = "avx")]
-mod wide;
+wide!(
+    /// Returns `operation` of sixteen pairs of binary32 lanes, by `VADDPS`,
+    /// `VSUBPS`, `VMULPS`, or `VDIVPS`.
+    avx512::binary_f32x16, target_feature = "avx512f", (left: [f32; 16], right: [f32; 16], operation: Operation) -> [f32; 16]
+);
+wide!(
+    /// Returns `left * right + addend` of sixteen triples of binary32 lanes,
+    /// each rounded once, by `VFMADD213PS`.
+    avx512::mul_add_f32x16, target_feature = "avx512f", (left: [f32; 16], right: [f32; 16], addend: [f32; 16]) -> [f32; 16]
+);
+wide!(
+    /// Returns the smaller or the larger of each pair of sixteen binary32
+    /// lanes, by `VMINPS` or `VMAXPS`.
+    avx512::min_max_f32x16, target_feature = "avx512f", (left: [f32; 16], right: [f32; 16], operation: MinMax) -> [f32; 16]
+);
+wide!(
+    /// Returns sixteen binary32 lanes rounded to integral values in the
+    /// direction `rounding`, by `VRNDSCALEPS` with the direction in its
+    /// immediate, or `None` for a direction that the immediate does not have.
+    avx512::round_f32x16, target_feature = "avx512f", (value: [f32; 16], rounding: Rounding) -> Option<[f32; 16]>
+);
+wide!(
+    /// Returns sixteen binary32 lanes rounded to 32-bit integers as
+    /// `to_int_f32x4` rounds, by `VCVTPS2DQ`.
+    avx512::to_int_f32x16, target_feature = "avx512f", (value: [f32; 16]) -> [i32; 16]
+);
+wide!(
+    /// Returns sixteen 32-bit integers converted to binary32 as
+    /// `from_int_x4` converts them, by `VCVTDQ2PS`.
+    avx512::from_int_x16, target_feature = "avx512f", (value: [i32; 16]) -> [f32; 16]
+);
+wide!(
+    /// Returns sixteen binary16 lanes widened exactly to binary32, by
+    /// `VCVTPH2PS`.
+    avx512::widen_halves_x16, target_feature = "avx512f", (value: [u16; 16]) -> [f32; 16]
+);
+wide!(
+    /// Returns sixteen binary32 lanes rounded to binary16 to nearest even, by
+    /// `VCVTPS2PH` with the rounding control 0 in its immediate.
+    avx512::narrow_halves_x16, target_feature = "avx512f", (value: [f32; 16]) -> [u16; 16]
+);
+
+#[cfg(any(target_feature = "avx512f", feature = "std"))]
+pub mod avx512;
+#[cfg(any(target_feature = "avx", feature = "std"))]
+pub mod wide;
 
 #[cfg(test)]
 mod tests;

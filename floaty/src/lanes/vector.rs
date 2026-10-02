@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use crate::env::{Behavior, Flags, Mode};
 use crate::float::{F32, Float};
 use crate::format::Binary;
-use crate::host::{self, Load};
+use crate::host::{self, Isa, Load};
 use crate::sealed::Sealed;
 
 /// The binary32 type with the default mode `M`.
@@ -21,10 +21,11 @@ pub trait Widen: Sealed + Copy {
     #[doc(hidden)]
     fn widen_with<M: Mode, B: Behavior>(self, behavior: B) -> (Single<M>, Flags);
 
-    /// Returns the binary32 encodings of `values` from the host unit, or
-    /// `None` when the build has no instruction for the widening.
+    /// Returns the binary32 encodings of `values` from the host unit, in the
+    /// instruction set `H`, or `None` when it has no instruction for the
+    /// widening.
     #[doc(hidden)]
-    fn widen_on_host<const N: usize>(values: &[Self; N]) -> Option<[u32; N]>;
+    fn widen_on_host<H: Isa, const N: usize>(values: &[Self; N]) -> Option<[u32; N]>;
 }
 
 impl<I: Mode> Widen for Float<Binary<8>, 32, I> {
@@ -36,7 +37,7 @@ impl<I: Mode> Widen for Float<Binary<8>, 32, I> {
     }
 
     #[inline]
-    fn widen_on_host<const N: usize>(values: &[Self; N]) -> Option<[u32; N]> {
+    fn widen_on_host<H: Isa, const N: usize>(values: &[Self; N]) -> Option<[u32; N]> {
         Some(encodings(values, 0, Float::to_bits))
     }
 }
@@ -49,7 +50,7 @@ impl<I: Mode> Widen for Float<Binary<8>, 16, I> {
 
     /// A bfloat16 encoding is the high half of a binary32 encoding.
     #[inline]
-    fn widen_on_host<const N: usize>(values: &[Self; N]) -> Option<[u32; N]> {
+    fn widen_on_host<H: Isa, const N: usize>(values: &[Self; N]) -> Option<[u32; N]> {
         Some(encodings(values, 0, |value| {
             u32::from(value.to_bits()) << 16
         }))
@@ -63,8 +64,8 @@ impl<I: Mode> Widen for Float<Binary<5>, 16, I> {
     }
 
     #[inline]
-    fn widen_on_host<const N: usize>(values: &[Self; N]) -> Option<[u32; N]> {
-        host::packed::widen_halves(&encodings(values, 0, Float::to_bits))
+    fn widen_on_host<H: Isa, const N: usize>(values: &[Self; N]) -> Option<[u32; N]> {
+        host::packed::widen_halves::<H, N>(&encodings(values, 0, Float::to_bits))
     }
 }
 
@@ -139,22 +140,22 @@ fn load_rest<E: Copy, const N: usize>(
 }
 
 /// Implements [`Load`] for a slice of `$element`, whose chunks `$widen`
-/// widens.
+/// widens in the instruction set `H`.
 macro_rules! load_slice {
-    ($element:ty, $widen:expr) => {
+    ($element:ty, |$chunk:ident| $widen:expr) => {
         #[inline]
         fn count(self) -> usize {
             self.len()
         }
 
         #[inline]
-        fn load<const N: usize>(self, start: usize) -> Option<[u32; N]> {
-            load_full::<$element, N>(self, start, $widen)
+        fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            load_full::<$element, N>(self, start, |$chunk| $widen)
         }
 
         #[inline]
-        fn load_rest<const N: usize>(self, start: usize) -> Option<[u32; N]> {
-            load_rest::<$element, N>(self, start, $widen)
+        fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            load_rest::<$element, N>(self, start, |$chunk| $widen)
         }
 
         #[inline]
@@ -167,7 +168,7 @@ macro_rules! load_slice {
 impl<T: Widen> Sealed for &[T] {}
 
 impl<T: Widen> Load for &[T] {
-    load_slice!(T, T::widen_on_host);
+    load_slice!(T, |chunk| T::widen_on_host::<H, N>(chunk));
 }
 
 impl<T: Widen> Vector for &[T] {
@@ -193,7 +194,7 @@ impl Vector for &[f32] {
 impl Sealed for &[u8] {}
 
 impl Load for &[u8] {
-    load_slice!(u8, host::packed::widen_codes);
+    load_slice!(u8, |chunk| host::packed::widen_codes::<H, N>(chunk));
 }
 
 impl Vector for &[u8] {
@@ -269,11 +270,11 @@ macro_rules! little_endian {
             }
 
             /// Returns the binary32 encodings of the values of `chunk` from
-            /// the host unit.
+            /// the host unit, in the instruction set `H`.
             #[inline]
-            fn widen<const N: usize>(chunk: &[[u8; $bytes]; N]) -> Option<[u32; N]> {
+            fn widen<H: Isa, const N: usize>(chunk: &[[u8; $bytes]; N]) -> Option<[u32; N]> {
                 let values = encodings(chunk, Self::value([0; $bytes]), Self::value);
-                Widen::widen_on_host(&values)
+                Widen::widen_on_host::<H, N>(&values)
             }
         }
 
@@ -284,13 +285,13 @@ macro_rules! little_endian {
             }
 
             #[inline]
-            fn load<const N: usize>(self, start: usize) -> Option<[u32; N]> {
-                load_full(self.encodings(), start, Self::widen)
+            fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+                load_full(self.encodings(), start, Self::widen::<H, N>)
             }
 
             #[inline]
-            fn load_rest<const N: usize>(self, start: usize) -> Option<[u32; N]> {
-                load_rest(self.encodings(), start, Self::widen)
+            fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+                load_rest(self.encodings(), start, Self::widen::<H, N>)
             }
 
             #[inline]
@@ -347,18 +348,18 @@ impl Load for ScaledCodes<'_> {
     }
 
     #[inline]
-    fn load<const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
         let scale = self.scale.to_bits();
         load_full(self.codes, start, |chunk| {
-            host::packed::widen_scaled_codes(chunk, scale)
+            host::packed::widen_scaled_codes::<H, N>(chunk, scale)
         })
     }
 
     #[inline]
-    fn load_rest<const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
         let scale = self.scale.to_bits();
         load_rest(self.codes, start, |chunk| {
-            host::packed::widen_scaled_codes(chunk, scale)
+            host::packed::widen_scaled_codes::<H, N>(chunk, scale)
         })
     }
 

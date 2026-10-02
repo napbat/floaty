@@ -20,12 +20,13 @@ use super::super::Operation;
 use super::super::bits::{min_max_differs_16, nan_16};
 use super::super::environment::{self, packed};
 use super::super::paths::min_max_f32;
-use super::kernel::narrow_halves;
-use super::{any_lane, chunk, encodings_u16, in_chunks, in_chunks_where, lanes_u16, singles};
+use super::kernel::{narrow_halves, widen_halves};
+use super::{any_lane, chunk, encodings_u16, in_chunks_where, isa, lanes_u16, singles};
 use crate::env::{Mode, Rounding};
 use crate::float::Float;
 use crate::format::Standard;
 use crate::format::internal::MinMax;
+use crate::host::Isa;
 
 /// Computes binary16 lanes as `in_chunks` does. A chunk of eight lanes runs
 /// `eight` in a build with `FEAT_FP16` or with wide registers, and a chunk of
@@ -229,50 +230,38 @@ pub(super) fn min_max<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     })
 }
 
-/// Returns each binary16 lane widened exactly to binary32, or `None` when
-/// the build has no instruction.
+/// Returns the binary32 encoding of each binary16 lane, widened exactly in
+/// the instruction set `I`: in F16C or `FCVTL` where it has them, and in
+/// integer and binary32 instructions otherwise.
 #[inline]
-pub(super) fn to_singles<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+pub(super) fn to_singles<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
-) -> Option<[f32; N]> {
-    let x = encodings_u16(value)?;
-    let mut lanes = [0.0; N];
-    in_chunks::<f32, N, 8, 4>(
-        &mut lanes,
-        |start| packed::widen_halves_x8(*chunk(x, start)),
-        |start| packed::widen_halves_x4(*chunk(x, start)),
-        |index| Some(environment::widen_half(x[index])),
-    )?;
-    Some(lanes)
+) -> Option<[u32; N]> {
+    widen_halves::<I, N>(encodings_u16(value)?)
 }
 
-/// Returns each binary16 lane widened exactly to binary64, or `None` when
-/// the build has no instruction.
+/// Returns each binary16 lane widened exactly to binary64 in the
+/// instruction set `I`, through binary32, which holds each binary16 value.
 #[inline]
-pub(super) fn to_doubles<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+pub(super) fn to_doubles<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
 ) -> Option<[f64; N]> {
-    let x = encodings_u16(value)?;
-    let mut lanes = [0.0; N];
-    in_chunks::<f64, N, 4, 2>(
-        &mut lanes,
-        |start| packed::widen_x4(packed::widen_halves_x4(*chunk(x, start))?),
-        |start| {
-            let [a0, a1] = *chunk(x, start);
-            let [b0, b1, _, _] = packed::widen_halves_x4([a0, a1, 0, 0])?;
-            Some(packed::widen_x2([b0, b1]))
-        },
-        |index| Some(environment::widen_single(environment::widen_half(x[index]))),
-    )?;
-    Some(lanes)
+    let bits = to_singles::<I, S, W, M, N>(value)?;
+    let mut singles = [0.0; N];
+    singles
+        .iter_mut()
+        .zip(bits)
+        .for_each(|(single, bits)| *single = f32::from_bits(bits));
+    isa::widen::<I, N>(&singles)
 }
 
 /// Returns the binary16 encoding of each binary32 lane rounded to nearest
-/// even: in F16C or `FCVTN` where the build has it, and otherwise in integer
-/// and binary32 instructions. A NaN lane gives a NaN.
+/// even in the instruction set `I`: in F16C or `FCVTN` where it has them,
+/// and otherwise in integer and binary32 instructions. A NaN lane gives a
+/// NaN.
 #[inline]
-pub(super) fn from_singles<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+pub(super) fn from_singles<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
 ) -> Option<[u16; N]> {
-    narrow_halves(singles(value)?)
+    narrow_halves::<I, N>(singles(value)?)
 }

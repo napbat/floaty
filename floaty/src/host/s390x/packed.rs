@@ -4,8 +4,8 @@
 //! The base z/Architecture has no vector registers, so each function runs the
 //! scalar instruction of each lane. The packed paths then check the FPC
 //! register once for all lanes, as the x87 extended lanes check the control
-//! word once. Each function for a 256-bit chunk returns `None`, and so does
-//! each function for binary16 lanes.
+//! word once. Each function for a 256-bit or a 512-bit chunk returns `None`,
+//! and so does each function for binary16 lanes.
 
 use core::cmp::Ordering;
 
@@ -16,6 +16,9 @@ use crate::format::internal::MinMax;
 
 /// `false`: s390x has no vector registers in the base z/Architecture.
 pub const WIDE: bool = false;
+
+/// `false`: s390x has no vector registers in the base z/Architecture.
+pub const EXTRA_WIDE: bool = false;
 
 /// `false`: s390x has no binary16 conversion instruction, so binary16 lanes
 /// take the scalar path of each lane.
@@ -191,7 +194,7 @@ pub fn from_int_x4(value: [i32; 4]) -> [f32; 4] {
 }
 
 /// Defines a function that returns `None`, for a chunk that s390x does not
-/// compute: a 256-bit chunk, or eight binary16 lanes.
+/// compute: a 256-bit or a 512-bit chunk, or eight binary16 lanes.
 macro_rules! no_chunk {
     ($doc:literal, $name:ident, ($($type:ty),+) -> $result:ty) => {
         #[doc = $doc]
@@ -202,10 +205,11 @@ macro_rules! no_chunk {
     };
 }
 
-/// Defines the functions of the 256-bit chunks, which return `None`.
+/// Defines the functions of the 256-bit and the 512-bit chunks, which return
+/// `None`.
 macro_rules! no_wide {
     ($($name:ident, ($($type:ty),+) -> $result:ty);+ $(;)?) => {
-        $(no_chunk!("Returns `None`: s390x has no 256-bit registers.", $name, ($($type),+) -> $result);)+
+        $(no_chunk!("Returns `None`: the base z/Architecture has no vector registers.", $name, ($($type),+) -> $result);)+
     };
 }
 
@@ -236,6 +240,14 @@ no_wide!(
     to_int_f32x8, ([f32; 8]) -> [i32; 8];
     to_int_f64x4, ([f64; 4]) -> [i32; 4];
     from_int_x8, ([i32; 8]) -> [f32; 8];
+    binary_f32x16, ([f32; 16], [f32; 16], Operation) -> [f32; 16];
+    mul_add_f32x16, ([f32; 16], [f32; 16], [f32; 16]) -> [f32; 16];
+    min_max_f32x16, ([f32; 16], [f32; 16], MinMax) -> [f32; 16];
+    round_f32x16, ([f32; 16], Rounding) -> [f32; 16];
+    to_int_f32x16, ([f32; 16]) -> [i32; 16];
+    from_int_x16, ([i32; 16]) -> [f32; 16];
+    widen_halves_x16, ([u16; 16]) -> [f32; 16];
+    narrow_halves_x16, ([f32; 16]) -> [u16; 16];
 );
 
 no_native!(

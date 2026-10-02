@@ -140,20 +140,3 @@ pub(super) fn to_singles<S: Standard<W>, const W: usize, M: Mode, const N: usize
         .for_each(|(lane, &bits)| *lane = widen(bits));
     Some(lanes)
 }
-
-/// Returns each bfloat16 lane widened exactly to binary64, or `None` when
-/// the build has no instruction.
-#[inline]
-pub(super) fn to_doubles<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
-    value: &[Float<S, W, M>; N],
-) -> Option<[f64; N]> {
-    let singles = to_singles(value)?;
-    let mut lanes = [0.0; N];
-    in_chunks::<f64, N, 4, 2>(
-        &mut lanes,
-        |start| packed::widen_x4(*chunk(&singles, start)),
-        |start| Some(packed::widen_x2(*chunk(&singles, start))),
-        |index| Some(environment::widen_single(singles[index])),
-    )?;
-    Some(lanes)
-}

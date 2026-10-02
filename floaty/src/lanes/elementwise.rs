@@ -33,7 +33,7 @@ use crate::env::{Behavior, Flags, Mode, Rounding};
 use crate::float::{F32, Float};
 use crate::format::Binary;
 use crate::format::internal::MinMax;
-use crate::host::{self, Load, Operation};
+use crate::host::{self, Isa, Load, Operation};
 use crate::sealed::Sealed;
 
 /// Returns the count of two vectors of one view.
@@ -57,10 +57,10 @@ fn padded<const N: usize>(mut bits: [u32; N], end: usize) -> [u32; N] {
 }
 
 /// Defines a view of one operation of two vectors. `$host` computes a chunk
-/// of encodings on the host unit, and `$engine` computes one value in the
-/// engine.
+/// of encodings on the host unit with the operand `$operand`, and `$engine`
+/// computes one value in the engine.
 macro_rules! binary_view {
-    ($(#[$doc:meta])* $name:ident, $host:expr, $engine:ident) => {
+    ($(#[$doc:meta])* $name:ident, $host:ident($operand:expr), $engine:ident) => {
         $(#[$doc])*
         #[derive(Clone, Copy, Debug)]
         pub struct $name<X, Y>(pub X, pub Y);
@@ -74,15 +74,19 @@ macro_rules! binary_view {
             }
 
             #[inline]
-            fn load<const N: usize>(self, start: usize) -> Option<[u32; N]> {
-                let (x, y) = (self.0.load::<N>(start)?, self.1.load::<N>(start)?);
-                $host(x, y)
+            fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+                let (x, y) = (self.0.load::<H, N>(start)?, self.1.load::<H, N>(start)?);
+                host::packed::elementwise::$host::<H, N>(x, y, $operand)
             }
 
             #[inline]
-            fn load_rest<const N: usize>(self, start: usize) -> Option<[u32; N]> {
-                let (x, y) = (self.0.load_rest::<N>(start)?, self.1.load_rest::<N>(start)?);
-                Some(padded($host(x, y)?, self.count() - start))
+            fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+                let (x, y) = (
+                    self.0.load_rest::<H, N>(start)?,
+                    self.1.load_rest::<H, N>(start)?,
+                );
+                let chunk = host::packed::elementwise::$host::<H, N>(x, y, $operand)?;
+                Some(padded(chunk, self.count() - start))
             }
 
             #[inline]
@@ -110,39 +114,39 @@ macro_rules! binary_view {
 binary_view!(
     /// The sum of two vectors: value `i` is `x[i] + y[i]`, rounded.
     Sum,
-    |x, y| host::packed::elementwise::binary(x, y, Operation::Add),
+    binary(Operation::Add),
     add_with
 );
 binary_view!(
     /// The difference of two vectors: value `i` is `x[i] - y[i]`, rounded.
     Difference,
-    |x, y| host::packed::elementwise::binary(x, y, Operation::Sub),
+    binary(Operation::Sub),
     sub_with
 );
 binary_view!(
     /// The product of two vectors: value `i` is `x[i] * y[i]`, rounded.
     Product,
-    |x, y| host::packed::elementwise::binary(x, y, Operation::Mul),
+    binary(Operation::Mul),
     mul_with
 );
 binary_view!(
     /// The quotient of two vectors: value `i` is `x[i] / y[i]`, rounded.
     Quotient,
-    |x, y| host::packed::elementwise::binary(x, y, Operation::Div),
+    binary(Operation::Div),
     div_with
 );
 binary_view!(
     /// The IEEE 754-2019 `minimum` of two vectors: value `i` is the smaller
     /// of `x[i]` and `y[i]`, -0 below +0, and a NaN when either is a NaN.
     Minimum,
-    |x, y| host::packed::elementwise::min_max(x, y, MinMax::Minimum),
+    min_max(MinMax::Minimum),
     minimum_with
 );
 binary_view!(
     /// The IEEE 754-2019 `maximum` of two vectors: value `i` is the larger
     /// of `x[i]` and `y[i]`, +0 above -0, and a NaN when either is a NaN.
     Maximum,
-    |x, y| host::packed::elementwise::min_max(x, y, MinMax::Maximum),
+    min_max(MinMax::Maximum),
     maximum_with
 );
 binary_view!(
@@ -150,7 +154,7 @@ binary_view!(
     /// smaller of `x[i]` and `y[i]`, -0 below +0, and the other value when
     /// one is a NaN.
     MinimumNumber,
-    |x, y| host::packed::elementwise::min_max(x, y, MinMax::MinimumNumber),
+    min_max(MinMax::MinimumNumber),
     minimum_number_with
 );
 binary_view!(
@@ -158,7 +162,7 @@ binary_view!(
     /// larger of `x[i]` and `y[i]`, +0 above -0, and the other value when
     /// one is a NaN.
     MaximumNumber,
-    |x, y| host::packed::elementwise::min_max(x, y, MinMax::MaximumNumber),
+    min_max(MinMax::MaximumNumber),
     maximum_number_with
 );
 
@@ -189,14 +193,14 @@ impl<T: Widen> Load for Splat<T> {
     }
 
     #[inline]
-    fn load<const N: usize>(self, _start: usize) -> Option<[u32; N]> {
-        T::widen_on_host(&[self.value; N])
+    fn load<H: Isa, const N: usize>(self, _start: usize) -> Option<[u32; N]> {
+        T::widen_on_host::<H, N>(&[self.value; N])
     }
 
     #[inline]
-    fn load_rest<const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
         Some(padded(
-            T::widen_on_host(&[self.value; N])?,
+            T::widen_on_host::<H, N>(&[self.value; N])?,
             self.count - start,
         ))
     }
@@ -236,14 +240,15 @@ impl<X: Vector> Load for RoundToIntegral<X> {
     }
 
     #[inline]
-    fn load<const N: usize>(self, start: usize) -> Option<[u32; N]> {
-        host::packed::elementwise::round_to_integral(self.values.load::<N>(start)?, self.rounding)
+    fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+        let values = self.values.load::<H, N>(start)?;
+        host::packed::elementwise::round_to_integral::<H, N>(values, self.rounding)
     }
 
     #[inline]
-    fn load_rest<const N: usize>(self, start: usize) -> Option<[u32; N]> {
-        let values = self.values.load_rest::<N>(start)?;
-        host::packed::elementwise::round_to_integral(values, self.rounding)
+    fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+        let values = self.values.load_rest::<H, N>(start)?;
+        host::packed::elementwise::round_to_integral::<H, N>(values, self.rounding)
     }
 
     #[inline]
@@ -278,13 +283,13 @@ impl<X: Vector> Load for Abs<X> {
     }
 
     #[inline]
-    fn load<const N: usize>(self, start: usize) -> Option<[u32; N]> {
-        Some(magnitudes(self.0.load::<N>(start)?))
+    fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+        Some(magnitudes(self.0.load::<H, N>(start)?))
     }
 
     #[inline]
-    fn load_rest<const N: usize>(self, start: usize) -> Option<[u32; N]> {
-        Some(magnitudes(self.0.load_rest::<N>(start)?))
+    fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+        Some(magnitudes(self.0.load_rest::<H, N>(start)?))
     }
 
     #[inline]
@@ -355,12 +360,12 @@ macro_rules! cells {
             }
 
             #[inline]
-            fn load<const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
                 Some(cell_encodings(self, start, $encode))
             }
 
             #[inline]
-            fn load_rest<const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
                 Some(cell_encodings_rest(self, start, $encode))
             }
 

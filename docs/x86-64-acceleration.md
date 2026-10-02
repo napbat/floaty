@@ -180,6 +180,11 @@ A mode is a type, so an operation in another mode compiles to the engine.
 
 - 512-bit registers hold 16 binary32 or 8 binary64 lanes (AVX-512F,
   AVX10). A mask register computes the tail lanes without the scalar path.
+- The slice kernels and the elementwise slice operations of `Lanes` have
+  512-bit forms of AVX-512F. A build with `-C target-cpu=x86-64-v4` runs
+  them, and so does a build with the feature `std` on a processor with
+  x86-64-v4. Their tail lanes take the 256-bit and 128-bit forms, not a
+  mask. Their host-path tests run on a Ryzen 9 9950X3D, which has AVX-512.
 - The gates run on a Core i9-9900K, which has no AVX-512. QEMU 10.2.1 does
   not emulate AVX-512: `qemu-x86_64 -cpu SapphireRapids` reports that TCG
   does not support `avx512f`, and under `-cpu max` a binary with `VADDPS`

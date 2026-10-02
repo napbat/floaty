@@ -5,7 +5,9 @@
 //! and its features. One module in `host/` reads the floating-point
 //! environment of each architecture. A build for another architecture, or with
 //! `--cfg floaty_engine_only`, has no host path, and each entry point returns
-//! `None`.
+//! `None`. The slice kernels and the elementwise slice operations of `Lanes`
+//! also take a larger instruction set that the processor has, in a build with
+//! the feature `std`, as `packed::dispatch` states.
 //!
 //! A path serves only entry points that return no flags, in a mode that
 //! `compatible` in `paths` accepts. That function names every field of
@@ -14,9 +16,11 @@
 //! rounding, which its instructions take from their encoding. A NaN result
 //! goes back to the engine, which selects the NaN by the rule of the mode.
 
-use crate::env::Mode;
+use crate::env::{Mode, Rounding};
 use crate::float::Float;
+use crate::format::internal::MinMax;
 use crate::format::{Binary, EncodingKind};
+use crate::sealed::Sealed;
 
 /// Returns host binary32 values as binary32 values of floaty, which have
 /// their layout. Each value keeps its bits.
@@ -228,21 +232,115 @@ pub enum Step {
     Fused,
 }
 
+/// An instruction set that the slice kernels and the elementwise slice
+/// operations of `Lanes` compute in, as a type: the packed forms whose
+/// instructions depend on optional features. Each form returns `None` where
+/// the instruction set does not have it.
+///
+/// The type `Build` of `packed` has the forms of the features that the build
+/// enables. `packed::dispatch` selects a larger instruction set that the
+/// processor has at run time. Each form of each instruction set gives the
+/// bits of the instruction of `Build`: the sets differ in the width of the
+/// registers and in the encodings, not in the result of a lane.
+pub trait Isa: Sealed {
+    /// `true` when the instruction set has 256-bit registers, which hold
+    /// eight binary32 lanes.
+    const WIDE: bool;
+    /// `true` when the instruction set has 512-bit registers, which hold
+    /// sixteen binary32 lanes.
+    const EXTRA_WIDE: bool;
+    /// `true` when the instruction set widens binary16 lanes to binary32 and
+    /// rounds binary32 lanes to binary16.
+    const HALF: bool;
+    /// `true` when the instruction set converts binary32 lanes to 32-bit
+    /// integers, with the integer indefinite `i32::MIN` in a lane that the
+    /// scalar conversion must decide.
+    const INTEGERS: bool;
+
+    /// Returns `operation` of four pairs of binary32 lanes.
+    fn binary_f32x4(left: [f32; 4], right: [f32; 4], operation: Operation) -> Option<[f32; 4]>;
+    /// Returns `operation` of eight pairs of binary32 lanes.
+    fn binary_f32x8(left: [f32; 8], right: [f32; 8], operation: Operation) -> Option<[f32; 8]>;
+    /// Returns `operation` of sixteen pairs of binary32 lanes.
+    fn binary_f32x16(left: [f32; 16], right: [f32; 16], operation: Operation) -> Option<[f32; 16]>;
+    /// Returns `left * right + addend` of four triples of binary32 lanes,
+    /// each rounded once.
+    fn mul_add_f32x4(left: [f32; 4], right: [f32; 4], addend: [f32; 4]) -> Option<[f32; 4]>;
+    /// Returns `left * right + addend` of eight triples of binary32 lanes,
+    /// each rounded once.
+    fn mul_add_f32x8(left: [f32; 8], right: [f32; 8], addend: [f32; 8]) -> Option<[f32; 8]>;
+    /// Returns `left * right + addend` of sixteen triples of binary32 lanes,
+    /// each rounded once.
+    fn mul_add_f32x16(left: [f32; 16], right: [f32; 16], addend: [f32; 16]) -> Option<[f32; 16]>;
+    /// Returns the lane of each of four pairs that the minimum or maximum
+    /// instruction selects: the smaller or the larger value, and the right
+    /// lane when a lane is a NaN or both are zeros.
+    fn min_max_f32x4(left: [f32; 4], right: [f32; 4], operation: MinMax) -> Option<[f32; 4]>;
+    /// Returns the lane of each of eight pairs that the minimum or maximum
+    /// instruction selects, as `min_max_f32x4` does.
+    fn min_max_f32x8(left: [f32; 8], right: [f32; 8], operation: MinMax) -> Option<[f32; 8]>;
+    /// Returns the lane of each of sixteen pairs that the minimum or maximum
+    /// instruction selects, as `min_max_f32x4` does.
+    fn min_max_f32x16(left: [f32; 16], right: [f32; 16], operation: MinMax) -> Option<[f32; 16]>;
+    /// Returns four binary32 lanes rounded to integral values in the
+    /// direction `rounding`, or `None` for a direction that the instruction
+    /// does not have.
+    fn round_f32x4(value: [f32; 4], rounding: Rounding) -> Option<[f32; 4]>;
+    /// Returns eight binary32 lanes rounded as `round_f32x4` rounds them.
+    fn round_f32x8(value: [f32; 8], rounding: Rounding) -> Option<[f32; 8]>;
+    /// Returns sixteen binary32 lanes rounded as `round_f32x4` rounds them.
+    fn round_f32x16(value: [f32; 16], rounding: Rounding) -> Option<[f32; 16]>;
+    /// Returns four binary32 lanes rounded to 32-bit integers to nearest
+    /// even, with the integer indefinite for a NaN and a value out of range.
+    fn to_int_f32x4(value: [f32; 4]) -> Option<[i32; 4]>;
+    /// Returns eight binary32 lanes rounded as `to_int_f32x4` rounds them.
+    fn to_int_f32x8(value: [f32; 8]) -> Option<[i32; 8]>;
+    /// Returns sixteen binary32 lanes rounded as `to_int_f32x4` rounds them.
+    fn to_int_f32x16(value: [f32; 16]) -> Option<[i32; 16]>;
+    /// Returns four 32-bit integers rounded to binary32.
+    fn from_int_x4(value: [i32; 4]) -> Option<[f32; 4]>;
+    /// Returns eight 32-bit integers rounded to binary32.
+    fn from_int_x8(value: [i32; 8]) -> Option<[f32; 8]>;
+    /// Returns sixteen 32-bit integers rounded to binary32.
+    fn from_int_x16(value: [i32; 16]) -> Option<[f32; 16]>;
+    /// Returns four binary16 lanes widened exactly to binary32.
+    fn widen_halves_x4(value: [u16; 4]) -> Option<[f32; 4]>;
+    /// Returns eight binary16 lanes widened exactly to binary32.
+    fn widen_halves_x8(value: [u16; 8]) -> Option<[f32; 8]>;
+    /// Returns sixteen binary16 lanes widened exactly to binary32.
+    fn widen_halves_x16(value: [u16; 16]) -> Option<[f32; 16]>;
+    /// Returns four binary32 lanes rounded to binary16 to nearest even.
+    fn narrow_halves_x4(value: [f32; 4]) -> Option<[u16; 4]>;
+    /// Returns eight binary32 lanes rounded to binary16 to nearest even.
+    fn narrow_halves_x8(value: [f32; 8]) -> Option<[u16; 8]>;
+    /// Returns sixteen binary32 lanes rounded to binary16 to nearest even.
+    fn narrow_halves_x16(value: [f32; 16]) -> Option<[u16; 16]>;
+    /// Returns two binary32 lanes widened exactly to binary64.
+    fn widen_x2(value: [f32; 2]) -> Option<[f64; 2]>;
+    /// Returns four binary32 lanes widened exactly to binary64.
+    fn widen_x4(value: [f32; 4]) -> Option<[f64; 4]>;
+    /// Returns two binary64 lanes rounded to binary32.
+    fn narrow_x2(value: [f64; 2]) -> Option<[f32; 2]>;
+    /// Returns four binary64 lanes rounded to binary32.
+    fn narrow_x4(value: [f64; 4]) -> Option<[f32; 4]>;
+}
+
 /// A vector that a slice kernel of `Lanes` reads on the host unit, as the
-/// binary32 encodings of its values.
+/// binary32 encodings of its values. A load computes in the instruction set
+/// `I`.
 pub trait Load: Copy {
     /// Returns the number of values.
     fn count(self) -> usize;
 
     /// Returns the binary32 encodings of the `N` values from `start`, or
-    /// `None` when the build has no instruction for the conversion. The
-    /// vector holds at least `start + N` values.
-    fn load<const N: usize>(self, start: usize) -> Option<[u32; N]>;
+    /// `None` when the instruction set has no instruction for the
+    /// conversion. The vector holds at least `start + N` values.
+    fn load<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]>;
 
     /// Returns the binary32 encodings of the values from `start`, with +0
     /// in the lanes past the last value, as [`load`](Self::load) does. The
     /// vector holds more than `start` and fewer than `start + N` values.
-    fn load_rest<const N: usize>(self, start: usize) -> Option<[u32; N]>;
+    fn load_rest<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]>;
 
     /// Returns the `count` values from `start` as a vector of the same kind.
     /// The vector holds at least `start + count` values.
@@ -545,12 +643,32 @@ mod none {
         use crate::float::Float;
         use crate::format::Standard;
         use crate::format::internal::MinMax;
-        use crate::host::{Host, Kind, Load, Operation, Step, Term};
+        use crate::host::{Host, Isa, Kind, Load, Operation, Step, Term};
 
         /// Returns `false`: this build has no host path.
         #[must_use]
         pub const fn available(_host: Host, _kind: Kind) -> bool {
             false
+        }
+
+        /// Returns `false`: this build has no host path.
+        #[inline]
+        pub fn fused_kernels() -> bool {
+            false
+        }
+
+        /// Returns `"build"`: this build has no host path, and so no
+        /// instruction set beyond the build.
+        #[cfg(feature = "override-host-level")]
+        #[must_use]
+        pub fn level() -> &'static str {
+            "build"
+        }
+
+        /// Returns `"build"` alone, as `level` does.
+        #[cfg(feature = "override-host-level")]
+        pub fn levels() -> impl Iterator<Item = &'static str> {
+            core::iter::once("build")
         }
 
         /// Returns `None`: this build has no host path.
@@ -677,19 +795,19 @@ mod none {
 
         /// Returns `None`: this build has no host path.
         #[inline]
-        pub fn widen_halves<const N: usize>(_halves: &[u16; N]) -> Option<[u32; N]> {
+        pub fn widen_halves<I: Isa, const N: usize>(_halves: &[u16; N]) -> Option<[u32; N]> {
             None
         }
 
         /// Returns `None`: this build has no host path.
         #[inline]
-        pub fn widen_codes<const N: usize>(_codes: &[u8; N]) -> Option<[u32; N]> {
+        pub fn widen_codes<I: Isa, const N: usize>(_codes: &[u8; N]) -> Option<[u32; N]> {
             None
         }
 
         /// Returns `None`: this build has no host path.
         #[inline]
-        pub fn widen_scaled_codes<const N: usize>(
+        pub fn widen_scaled_codes<I: Isa, const N: usize>(
             _codes: &[i8; N],
             _scale: u32,
         ) -> Option<[u32; N]> {
@@ -701,11 +819,11 @@ mod none {
         pub mod elementwise {
             use crate::env::{Env, Rounding};
             use crate::format::internal::MinMax;
-            use crate::host::{Load, Operation};
+            use crate::host::{Isa, Load, Operation};
 
             /// Returns `None`: this build has no host path.
             #[inline]
-            pub fn binary<const C: usize>(
+            pub fn binary<I: Isa, const C: usize>(
                 _x: [u32; C],
                 _y: [u32; C],
                 _operation: Operation,
@@ -715,7 +833,7 @@ mod none {
 
             /// Returns `None`: this build has no host path.
             #[inline]
-            pub fn min_max<const C: usize>(
+            pub fn min_max<I: Isa, const C: usize>(
                 _x: [u32; C],
                 _y: [u32; C],
                 _operation: MinMax,
@@ -725,7 +843,7 @@ mod none {
 
             /// Returns `None`: this build has no host path.
             #[inline]
-            pub fn round_to_integral<const C: usize>(
+            pub fn round_to_integral<I: Isa, const C: usize>(
                 _x: [u32; C],
                 _rounding: Rounding,
             ) -> Option<[u32; C]> {
