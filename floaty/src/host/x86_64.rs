@@ -27,11 +27,13 @@ pub const HALF: bool = cfg!(target_feature = "f16c");
 pub const ROUNDING: bool = cfg!(target_feature = "sse4.1");
 /// `true`: every x86-64 processor has the x87 unit.
 pub const X87: bool = true;
-/// `false`: no x86-64 path computes a binary16 fused multiply-add.
-pub const HALF_FUSED: bool = false;
-/// `false`: x86-64 rounds binary64 to binary16 only through binary32, and
-/// two roundings can differ from one.
-pub const DOUBLE_TO_HALF: bool = false;
+/// `true`: every x86-64 target computes the binary16 fused multiply-add
+/// through binary64, with integer instructions for the last rounding.
+pub const HALF_FUSED: bool = true;
+/// `true`: integer instructions round binary64 to binary16 once.
+pub const DOUBLE_TO_HALF: bool = true;
+/// `false`: x86-64 has no instruction that rounds to odd.
+pub const ROUND_TO_ODD: bool = false;
 
 /// Returns `true` when the SSE unit rounds to nearest even without FTZ or DAZ,
 /// and masks every exception.
@@ -339,11 +341,17 @@ pub fn narrow_bfloat(value: f32) -> u16 {
     super::narrow::round_to_bfloat(value.to_bits())
 }
 
-/// Returns `None`: x86-64 has no binary16 fused multiply-add below
-/// AVX512-FP16, which no host of the gates has.
+/// Returns `left * right + addend` of binary16 encodings, rounded once. The
+/// operands widen to binary64 exactly, `MULSD` gives the exact product,
+/// `ADDSD` rounds the sum to binary64, and integer instructions round that
+/// sum to binary16. [`Host::Half`](super::Host::Half) states why the two
+/// roundings give the result of one.
 #[inline]
-pub fn mul_add_f16(_left: u16, _right: u16, _addend: u16) -> Option<u16> {
-    None
+pub fn mul_add_f16(left: u16, right: u16, addend: u16) -> u16 {
+    let [a, b, c] = [left, right, addend].map(|bits| widen_single(widen_half(bits)));
+    let product = binary_f64(a, b, Operation::Mul);
+    let sum = binary_f64(product, c, Operation::Add);
+    super::narrow::round_double_to_half(sum.to_bits())
 }
 
 /// Returns a binary64 value rounded to binary32, by `CVTSD2SS` in the rounding
@@ -366,11 +374,18 @@ pub fn narrow_double(value: f64) -> f32 {
     result
 }
 
-/// Returns `None`: x86-64 has no instruction that rounds binary64 to binary16
-/// once.
+/// Returns `None`: x86-64 has no instruction that rounds to odd.
 #[inline]
-pub fn narrow_double_to_half(_value: f64) -> Option<u16> {
+pub fn narrow_double_to_odd(_value: f64) -> Option<f32> {
     None
+}
+
+/// Returns a binary64 value rounded once to binary16, to nearest even, by the
+/// integer rounding of the host paths. x86-64 has no instruction for it below
+/// AVX512-FP16.
+#[inline]
+pub fn narrow_double_to_half(value: f64) -> u16 {
+    super::narrow::round_double_to_half(value.to_bits())
 }
 
 /// Runs one rounding to an integral value on `$value`, with the rounding

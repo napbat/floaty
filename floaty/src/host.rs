@@ -94,6 +94,19 @@ pub enum Host {
     /// host instructions. binary32 holds 2p + 2 bits of binary16, so the
     /// two roundings of add, subtract, multiply, divide, and square root
     /// give the correctly rounded result.
+    ///
+    /// Without `FEAT_FP16`, the fused multiply-add computes in binary64 and
+    /// rounds the binary64 sum to binary16. The product of two binary16
+    /// values is exact in binary64: it has at most 22 bits, and its lowest
+    /// bit weighs at least 2^-48. The addend has at most 11 bits, and its
+    /// lowest bit weighs at least 2^-24. So the binary64 sum is inexact only
+    /// when its bits span more than 53 places, in two cases. In the first,
+    /// the product is below 2^-30 times the addend. The sum then lies within
+    /// 2^-29 times the addend of it, and half a unit of binary16 away from the
+    /// addend is at least 2^-12 times the addend, so both roundings give the
+    /// addend. In the second, the product is at least 2^28, so both
+    /// roundings overflow. Every other binary64 sum is exact, and rounds
+    /// once.
     Half,
     /// x87 extended precision, which computes on the x87 unit of x86-64
     /// at the 64-bit precision.
@@ -188,7 +201,12 @@ pub const fn available(host: Host, kind: Kind) -> bool {
         // bfloat16 values widen to binary32 exactly for it.
         (Host::None, _)
         | (Host::Extended, Kind::FusedMultiplyAdd | Kind::Comparison)
-        | (Host::BFloat, Kind::FusedMultiplyAdd | Kind::FromInt) => false,
+        | (Host::BFloat, Kind::FusedMultiplyAdd) => false,
+        // An integer below 2^53 in magnitude converts to binary64 exactly,
+        // and round to odd to binary32 then keeps the bfloat16 rounding.
+        (Host::BFloat, Kind::FromInt) => unit && environment::ROUND_TO_ODD,
+        // binary64 holds the exact product of two binary16 values, as
+        // `Host::Half` states.
         (Host::Half, Kind::FusedMultiplyAdd) => unit && fp16,
         // A bfloat16 value widens to binary32 by a shift, and a binary32
         // result rounds to bfloat16 in integer instructions, so the bfloat16
@@ -237,6 +255,8 @@ pub const fn convertible(from: Host, to: Host) -> bool {
         | (Host::Double, Host::Single)
         | (Host::BFloat | Host::Half, Host::Single | Host::Double) => unit,
         (Host::Double, Host::Half) => unit && environment::DOUBLE_TO_HALF,
+        // Round to odd to binary32 keeps the rounding to bfloat16.
+        (Host::Double, Host::BFloat) => unit && environment::ROUND_TO_ODD,
         (Host::Single | Host::Double, Host::Extended)
         | (Host::Extended, Host::Single | Host::Double) => unit && x87,
         _ => false,
@@ -285,6 +305,8 @@ mod none {
     pub const HALF_FUSED: bool = false;
     /// `false`: this build has no rounding of binary64 to binary16.
     pub const DOUBLE_TO_HALF: bool = false;
+    /// `false`: this build has no rounding to odd.
+    pub const ROUND_TO_ODD: bool = false;
 
     /// Returns `None`: this build has no host path.
     #[inline]

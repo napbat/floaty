@@ -1,6 +1,7 @@
 //! The integer rounding of the host paths: binary32 results round to
-//! bfloat16, and to binary16 in an x86-64 build without F16C, in integer
-//! instructions where the host has no instruction for the rounding.
+//! bfloat16, and to binary16 in an x86-64 build without F16C, and binary64
+//! results round to binary16 on x86-64, in integer instructions where the
+//! host has no instruction for the rounding.
 //!
 //! The binary16 and bfloat16 paths compute in binary32 and round twice, as
 //! the module `paths` states. These routines are the second rounding. Each
@@ -76,6 +77,54 @@ fn round_to_subnormal_half(magnitude: u32) -> u32 {
     count + u32::from(up)
 }
 
+/// Rounds the bits of a binary64 value to binary16, to nearest even, with
+/// integer instructions. x86-64 has no instruction for this rounding below
+/// AVX512-FP16, and F16C rounds only binary32, which would round twice.
+///
+/// A value at or above 65520, the midpoint between the largest finite value
+/// and 2^16, gives the infinity. A normal result rebiases the exponent and
+/// rounds away the low 42 bits. A NaN gives a quiet NaN, which the caller
+/// sends to the engine.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+pub fn round_double_to_half(bits: u64) -> u16 {
+    let sign = (bits >> 48) & 0x8000;
+    let magnitude = bits & 0x7FFF_FFFF_FFFF_FFFF;
+    let rounded = if magnitude > 0x7FF0_0000_0000_0000 {
+        0x7E00 | ((magnitude >> 42) & 0x3FF)
+    } else if magnitude >= 0x40EF_FE00_0000_0000 {
+        0x7C00
+    } else if magnitude >= 0x3F10_0000_0000_0000 {
+        // The exponent field moves from the bias 1023 to the bias 15.
+        (magnitude - (1008 << 52) + 0x1FF_FFFF_FFFF + ((magnitude >> 42) & 1)) >> 42
+    } else {
+        round_double_to_subnormal_half(magnitude)
+    };
+    u16::try_from(sign | rounded).expect("a binary16 encoding has 16 bits")
+}
+
+/// Rounds a binary64 magnitude below 2^-14 to a count of the binary16
+/// quantum 2^-24, to nearest even. A count of 2^10 is the encoding of the
+/// smallest normal value.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn round_double_to_subnormal_half(magnitude: u64) -> u64 {
+    // The value is `significand * 2^(field - 1075)`, so the count is
+    // `significand * 2^(field - 1051)`. Below 2^-25 the count rounds to zero,
+    // and so does a zero or a subnormal binary64 value.
+    let field = magnitude >> 52;
+    let shift = 1051 - field;
+    if shift > 53 {
+        return 0;
+    }
+    let significand = (magnitude & 0xF_FFFF_FFFF_FFFF) | (1 << 52);
+    let count = significand >> shift;
+    let rest = significand & ((1 << shift) - 1);
+    let half = 1 << (shift - 1);
+    let up = rest > half || (rest == half && count & 1 == 1);
+    count + u64::from(up)
+}
+
 /// Rounds the bits of a binary32 value to bfloat16, to nearest even, with
 /// integer instructions. x86-64 has no instruction for this rounding below
 /// `AVX512_BF16`, and `VCVTNEPS2BF16` reads a subnormal input as zero.
@@ -138,6 +187,40 @@ mod tests {
                 assert!(super::super::bits::nan_32(ours), "{bits:#06x}");
             } else {
                 assert_eq!(ours, engine.to_bits(), "{bits:#06x}");
+            }
+        }
+    }
+
+    /// Checks the rounding of binary64 to binary16 against the engine, for
+    /// every exponent field near the range of binary16 and below it, each
+    /// pattern of the ten fraction bits that binary16 keeps, and low bits
+    /// that make the dropped part zero, a tie, or just around one.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn binary64_to_binary16_rounding_matches_the_engine() {
+        use crate::float::{F16, F64};
+        let lows = [0, 1, (1 << 41) - 1, 1 << 41, (1 << 41) + 1, (1 << 42) - 1];
+        let specials = [
+            0_u64,
+            0x7FF0_0000_0000_0000,
+            0x7FF8_0000_0000_0001,
+            0x7FF0_0000_0000_0001,
+            0x0000_0000_0000_0001,
+            0x40EF_FE00_0000_0000,
+            0x40EF_FDFF_FFFF_FFFF,
+        ];
+        let tops = (980_u64..=1050).flat_map(|field| (0..1024).map(move |high| (field, high)));
+        let near =
+            tops.flat_map(|(field, high)| lows.map(|low| (field << 52) | (high << 42) | low));
+        for magnitude in specials.into_iter().chain(near) {
+            for bits in [magnitude, magnitude | (1 << 63)] {
+                let ours = super::round_double_to_half(bits);
+                let (engine, _) = F64::from_bits(bits).convert_with::<F16>(Env::IEEE);
+                if super::super::bits::nan_64(bits) {
+                    assert!(super::super::bits::nan_16(ours), "{bits:#018x}");
+                } else {
+                    assert_eq!(ours, engine.to_bits(), "{bits:#018x}");
+                }
             }
         }
     }

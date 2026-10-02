@@ -30,6 +30,41 @@ fn with_first_addend<T: Copy>(pairs: impl IntoIterator<Item = (T, T)>) -> Vec<(T
     pairs.into_iter().map(|(a, b)| (a, b, a)).collect()
 }
 
+/// The binary16 fused multiply-add of a host path without `FEAT_FP16`
+/// rounds twice: to binary64, and then to binary16. The binary64 sum is
+/// inexact only for a product far below the addend, or for a product far
+/// above the range of binary16. Each addend meets products far below it, of
+/// both signs, and the largest products meet each addend.
+#[test]
+fn binary16_fused_products_round_once() {
+    use floaty::{Env, F16};
+    // 2^-24, 3 * 2^-24, the largest subnormal, the smallest normal, and 1.
+    let tiny = [0x0001_u16, 0x0003, 0x03FF, 0x0400, 0x3C00];
+    // 65504, 32768, and 255.875.
+    let large = [0x7BFF_u16, 0x7800, 0x5BFF];
+    let factors: Vec<(u16, u16)> = tiny
+        .iter()
+        .flat_map(|&a| tiny.iter().map(move |&b| (a, b)))
+        .chain(
+            large
+                .iter()
+                .flat_map(|&a| large.iter().map(move |&b| (a, b))),
+        )
+        .collect();
+    for addend in (0..=u16::MAX).map(F16::from_bits) {
+        for &(a, b) in &factors {
+            for sign in [0, 0x8000] {
+                let (x, y) = (F16::from_bits(a | sign), F16::from_bits(b));
+                assert_eq!(
+                    x.mul_add(y, addend).to_bits(),
+                    x.mul_add_with(y, addend, Env::IEEE).0.to_bits(),
+                    "{x:?} {y:?} {addend:?}"
+                );
+            }
+        }
+    }
+}
+
 /// The pairs are random and boundary encodings, and every pair of an FP8
 /// format, with the first operand as the addend.
 #[test]

@@ -50,6 +50,25 @@ fn conversions_give_the_default_mode_results() {
         })
         .collect();
     convert_matches!(BF16, near_bfloat.iter().copied());
+    // The halfway points of bfloat16 and binary16 in binary64, with a bit far
+    // below them. A rounding of binary64 to binary32 to nearest even loses
+    // that bit, and round to odd keeps it.
+    // The exponent fields span the subnormal range, the normal range, and
+    // the overflow of each destination.
+    let near_from_double = |dropped: u32, fields: core::ops::Range<u64>| -> Vec<floaty::F64> {
+        let tie = 1_u64 << (dropped - 1);
+        let span = fields.end - fields.start;
+        (0..20_000_u64)
+            .flat_map(|index| {
+                let field = fields.start + index % span;
+                let fraction = index.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 12;
+                let base = (field << 52 | fraction) & !((1 << dropped) - 1);
+                [base | (tie - 1), base | tie, base | tie | 1].map(floaty::F64::from_bits)
+            })
+            .collect()
+    };
+    convert_matches!(BF16, near_from_double(45, 860..1160).iter().copied());
+    convert_matches!(floaty::F16, near_from_double(42, 980..1050).iter().copied());
     convert_matches!(floaty::F32, halves.iter().copied());
     convert_matches!(floaty::F64, halves.iter().copied());
     convert_matches!(floaty::F128, halves.iter().copied());
@@ -63,6 +82,35 @@ fn conversions_give_the_default_mode_results() {
     convert_matches!(F80, doubles.iter().copied());
     convert_matches!(F80, singles.iter().copied());
     convert_matches!(F80, halves.iter().copied());
+}
+
+/// The conversion of binary64 to binary32 in the direction `ToOdd`, which
+/// AArch64 computes in `FCVTXN`. The values hold every pattern of the low
+/// bits that binary32 drops, and the overflow threshold.
+#[test]
+fn conversions_to_odd_give_the_mode_results() {
+    use floaty::mode::direction::ToOdd;
+    use floaty::mode::{Ieee, Rounded};
+    use floaty::{Binary, Float};
+    type Odd = Float<Binary<8>, 32, Rounded<Ieee, ToOdd>>;
+    let mut random = SplitMix64::new(0x0DD5);
+    let doubles = conversion_operands(&mut random);
+    let lows = [0, 1, (1 << 28) - 1, 1 << 28, (1 << 29) - 1];
+    let near: Vec<floaty::F64> = doubles
+        .iter()
+        .flat_map(|value| {
+            lows.map(|low| floaty::F64::from_bits((value.to_bits() & !((1 << 29) - 1)) | low))
+        })
+        .chain(
+            [
+                0x47EF_FFFF_F000_0000_u64,
+                0x47EF_FFFF_FFFF_FFFF,
+                0x47F0_0000_0000_0000,
+            ]
+            .map(floaty::F64::from_bits),
+        )
+        .collect();
+    convert_matches!(Odd, near.iter().copied());
 }
 
 /// Checks that `to_int` gives the result of `to_int_with` under the default
@@ -155,6 +203,11 @@ fn conversions_from_integers_give_the_default_mode_results() {
         65_504,
         65_520,
         1 << 16,
+        // The halfway points of bfloat16 near 2^9, 2^40, and 2^52.
+        257,
+        (257 << 31) + 1,
+        (257 << 43) + 1,
+        (1 << 53) - 1,
     ] {
         integers.extend([bound - 1, bound, bound + 1, -bound]);
     }
@@ -178,6 +231,18 @@ fn conversions_from_integers_give_the_default_mode_results() {
             floaty::F16::from_int_with(integer, env).0.to_bits().into(),
             "binary16",
         );
+        check(
+            BF16::from_int(integer).to_bits().into(),
+            BF16::from_int_with(integer, env).0.to_bits().into(),
+            "bfloat16",
+        );
+        if let Ok(narrow) = i64::try_from(integer) {
+            check(
+                BF16::from_int(narrow).to_bits().into(),
+                BF16::from_int_with(narrow, env).0.to_bits().into(),
+                "bfloat16 from i64",
+            );
+        }
         check(
             F80::from_int(integer).to_bits(),
             F80::from_int_with(integer, env).0.to_bits(),

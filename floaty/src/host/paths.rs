@@ -259,12 +259,13 @@ pub fn mul_add<S: Standard<W>, const W: usize>(
         // Two roundings of a fused multiply-add can differ from one, and the
         // x87 unit has no fused multiply-add.
         Host::None | Host::BFloat | Host::Extended => None,
-        // `FEAT_FP16` rounds the binary16 result once.
+        // `FEAT_FP16` rounds the binary16 result once. The other builds
+        // compute through binary64, as `Host::Half` states.
         Host::Half => {
             let [a, b, c] = [left, right, addend].map(|bits| {
                 u16::try_from(bits.to_limbs().limb(0)).expect("a binary16 encoding has 16 bits")
             });
-            let result = environment::mul_add_f16(a, b, c)?;
+            let result = environment::mul_add_f16(a, b, c);
             encoding::<S, W>(u64::from(result), nan_16(result))
         }
         Host::Single => {
@@ -357,8 +358,16 @@ pub fn from_int<S: Standard<W>, const W: usize>(value: i64, env: &Env) -> Option
         return None;
     }
     match S::HOST {
-        // An integer through binary32 to bfloat16 rounds twice.
-        Host::None | Host::BFloat => None,
+        Host::None => None,
+        // An integer below 2^53 in magnitude converts to binary64 exactly.
+        // Round to odd to binary32 then keeps the rounding to bfloat16.
+        Host::BFloat => {
+            if value.unsigned_abs() >= 1 << 53 {
+                return None;
+            }
+            let odd = environment::narrow_double_to_odd(environment::from_int_f64(value))?;
+            bfloat_encoding::<S, W>(odd)
+        }
         Host::Single => {
             let result = environment::from_int_f32(value);
             encoding::<S, W>(u64::from(result.to_bits()), false)
@@ -568,6 +577,9 @@ pub fn remainder<S: Standard<W>, const W: usize>(
 /// limbs hold the encoding from the low bits up.
 #[inline]
 pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 2]> {
+    if env.rounding == Rounding::ToOdd {
+        return convert_to_odd(from, to, bits, env);
+    }
     // The x87 unit converts to and from x87 extended precision.
     let unit = if matches!(from, Host::Extended) {
         from
@@ -600,7 +612,16 @@ pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 
             if nan_64(low) {
                 return None;
             }
-            environment::narrow_double_to_half(f64::from_bits(low)).map(u64::from)
+            Some(u64::from(environment::narrow_double_to_half(
+                f64::from_bits(low),
+            )))
+        }
+        (Host::Double, Host::BFloat) => {
+            if nan_64(low) {
+                return None;
+            }
+            let odd = environment::narrow_double_to_odd(f64::from_bits(low))?;
+            Some(u64::from(environment::narrow_bfloat(odd)))
         }
         (Host::BFloat, Host::Single) => {
             let bits = bfloat_of(low).to_bits();
@@ -621,6 +642,25 @@ pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 
         _ => None,
     };
     result.map(|low| [low, 0])
+}
+
+/// Returns a binary64 value converted to binary32 with round to odd, by
+/// `FCVTXN`, or `None` when the path does not apply or the value is a NaN.
+/// The instruction takes the direction from its encoding, so the
+/// environment must round to nearest even, and every other field of the mode
+/// must allow a host path.
+#[inline]
+fn convert_to_odd(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 2]> {
+    let nearest = env.with_rounding(Rounding::TiesToEven);
+    if (from, to) != (Host::Double, Host::Single)
+        || !environment::ROUND_TO_ODD
+        || !ready_for(to, &nearest, to.precision())
+        || nan_64(bits[0])
+    {
+        return None;
+    }
+    let result = environment::narrow_double_to_odd(f64::from_bits(bits[0]))?;
+    Some([u64::from(result.to_bits()), 0])
 }
 
 /// Proof that the mode and the floating-point environment of the host allow

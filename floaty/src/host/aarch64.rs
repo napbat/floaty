@@ -19,11 +19,13 @@ pub const HALF: bool = true;
 pub const ROUNDING: bool = true;
 /// `false`: AArch64 has no x87 unit.
 pub const X87: bool = false;
-/// `true` when the build has `FEAT_FP16`, which computes the binary16 fused
-/// multiply-add in its own precision.
-pub const HALF_FUSED: bool = cfg!(target_feature = "fp16");
+/// `true`: `FEAT_FP16` computes the binary16 fused multiply-add in its own
+/// precision, and every other AArch64 target computes it through binary64.
+pub const HALF_FUSED: bool = true;
 /// `true`: `FCVT` rounds binary64 to binary16 once.
 pub const DOUBLE_TO_HALF: bool = true;
+/// `true`: `FCVTXN` rounds binary64 to binary32 with round to odd.
+pub const ROUND_TO_ODD: bool = true;
 
 /// Returns `true` when the floating-point unit rounds to nearest even without
 /// flushing, and enables no exception trap.
@@ -285,11 +287,10 @@ pub fn narrow_bfloat(value: f32) -> u16 {
 /// `FMADD` on half-precision registers.
 #[cfg(target_feature = "fp16")]
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // A build without `FEAT_FP16` returns `None` from the same signature.
-pub fn mul_add_f16(left: u16, right: u16, addend: u16) -> Option<u16> {
+pub fn mul_add_f16(left: u16, right: u16, addend: u16) -> u16 {
     // SAFETY: the build enables `FEAT_FP16`, so the processor that runs it
     // has the feature.
-    Some(unsafe { fmadd_f16(left, right, addend) })
+    unsafe { fmadd_f16(left, right, addend) }
 }
 
 /// Returns `left * right + addend` of binary16 encodings by `FMADD`.
@@ -329,12 +330,42 @@ unsafe fn fmadd_f16(left: u16, right: u16, addend: u16) -> u16 {
     u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits")
 }
 
-/// Returns `None`: a build without `FEAT_FP16` has no binary16 fused
-/// multiply-add path.
+/// Returns `left * right + addend` of binary16 encodings, rounded once, in a
+/// build without `FEAT_FP16`. `FCVT` widens each operand to binary64 exactly,
+/// `FMADD` computes in binary64, and `FCVT` rounds the result to binary16.
+/// [`Host::Half`](super::Host::Half) states why the two roundings give the
+/// result of one.
 #[cfg(not(target_feature = "fp16"))]
 #[inline]
-pub fn mul_add_f16(_left: u16, _right: u16, _addend: u16) -> Option<u16> {
-    None
+pub fn mul_add_f16(left: u16, right: u16, addend: u16) -> u16 {
+    let bits: u32;
+    // SAFETY: FMOV moves each encoding into a SIMD and floating-point
+    // register, FCVT widens it to binary64, FMADD computes `addend + left *
+    // right`, FCVT rounds the result to binary16, and FMOV moves it back.
+    // Every AArch64 target has these instructions, and they change only the
+    // status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "fmov {a:s}, {left:w}",
+            "fcvt {a:d}, {a:h}",
+            "fmov {b:s}, {right:w}",
+            "fcvt {b:d}, {b:h}",
+            "fmov {c:s}, {addend:w}",
+            "fcvt {c:d}, {c:h}",
+            "fmadd {a:d}, {a:d}, {b:d}, {c:d}",
+            "fcvt {a:h}, {a:d}",
+            "fmov {bits:w}, {a:s}",
+            left = in(reg) u32::from(left),
+            right = in(reg) u32::from(right),
+            addend = in(reg) u32::from(addend),
+            a = out(vreg) _,
+            b = out(vreg) _,
+            c = out(vreg) _,
+            bits = lateout(reg) bits,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits")
 }
 
 /// Returns a binary64 value rounded to binary32, by `FCVT` in the rounding
@@ -356,11 +387,35 @@ pub fn narrow_double(value: f64) -> f32 {
     result
 }
 
+/// Returns a binary64 value rounded to binary32 with round to odd, by
+/// `FCVTXN`, whatever the rounding direction of FPCR.
+///
+/// Round to odd keeps at least two bits more than a format of at most 22
+/// bits of precision, so a rounding of the result to such a format, to
+/// nearest even, gives the binary64 value rounded once to that format.
+/// binary32 also has the exponent range of bfloat16.
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, which has no such instruction.
+pub fn narrow_double_to_odd(value: f64) -> Option<f32> {
+    let result: f32;
+    // SAFETY: FCVTXN reads and writes SIMD and floating-point registers.
+    // Every AArch64 target has the instruction, and the rounding changes only
+    // the status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "fcvtxn {result:s}, {value:d}",
+            value = in(vreg) value,
+            result = lateout(vreg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    Some(result)
+}
+
 /// Returns a binary64 value rounded once to binary16, by `FCVT` in the rounding
 /// direction of FPCR.
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, which has no such instruction.
-pub fn narrow_double_to_half(value: f64) -> Option<u16> {
+pub fn narrow_double_to_half(value: f64) -> u16 {
     let bits: u32;
     // SAFETY: FCVT rounds in a SIMD and floating-point register and clears its
     // other bits, and FMOV moves the low 32 bits to a general register. Every
@@ -375,7 +430,7 @@ pub fn narrow_double_to_half(value: f64) -> Option<u16> {
             options(pure, nomem, nostack, preserves_flags),
         );
     }
-    Some(u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits"))
+    u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits")
 }
 
 /// Runs one rounding to an integral value on `$value`, from the instruction

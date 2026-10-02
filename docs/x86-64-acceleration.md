@@ -109,9 +109,9 @@ instructions, in `host/narrow.rs`.
 | Operation | Default build | x86-64-v3 build | x86-64 instructions | Gap |
 | --- | --- | --- | --- | --- |
 | `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral` | Scalar through binary32, with integer widening and rounding: 6.0 to 6.8, and 3.0 for `sqrt`. For each lane: 4.1 to 6.4. `round_to_integral`: engine, 8.9 | Packed F16C: 0.3 | `VCVTPH2PS`, packed binary32, and `VCVTPS2PH` with immediate 0 (F16C). `VADDPH` and the others (AVX512-FP16). | None at F16C. At SSE2, a packed form of the integer widening and rounding. |
-| `mul_add` | Engine: 22.7 | Engine: 21.0 | `VFMADD213PH` rounds once (AVX512-FP16). Through binary32, the two roundings of a fused multiply-add can differ from one. | AVX512-FP16 only |
+| `mul_add` | Scalar through binary64, with integer rounding: 6.7. For each lane: 7.4 | Scalar: 3.8. For each lane: 3.7 | binary64 holds the exact product, so `MULSD` and `ADDSD` round once to binary64, and integer instructions round the sum to binary16. The documentation of `Host::Half` proves that the second rounding cannot change the result. Through binary32, the two roundings can differ from one. `VFMADD213PH` rounds once in binary16 (AVX512-FP16). | A packed form of the binary64 path |
 | `convert` to binary32 and binary64, and from binary32 | Scalar integer widening: 2.4 to binary32, 2.0 to binary64. Integer rounding from binary32: 2.1. For each lane: 2.1 | Packed F16C: 0.4 | `VCVTPH2PS`, `VCVTPS2PH` (F16C) | None at F16C |
-| `convert` from binary64 | Engine. Scalar: 12.3 | Engine. Scalar: 12.4 | `VCVTPD2PH` and `VCVTSD2SH` round once (AVX512-FP16). F16C rounds twice, through binary32. | AVX512-FP16 only. The AArch64 build has this path, with `FCVT`. |
+| `convert` from binary64 | Scalar, integer rounding: 2.1 | Scalar: 2.3 | Integer instructions round binary64 to binary16 once, in `host/narrow.rs`. F16C rounds twice, through binary32. `VCVTPD2PH` and `VCVTSD2SH` round once (AVX512-FP16). | A packed form of the integer rounding |
 | Comparison, minimum, and maximum | Engine for each lane: 2.9 and 3.2. The engine compares faster than the integer widening. | Packed F16C: 1.8 and 2.4 | Packed `VCVTPH2PS`, then `CMPLTPS`, as for binary32. The minimum and maximum take the operand that the comparison selects. `VCMPPH`, `VMINPH` (AVX512-FP16). | None at F16C |
 | `to_int`, `from_int`, `remainder` | Scalar through binary32 for `to_int` and `from_int`: 3.0, 3.1. `remainder` through binary32 by `FPREM1`: 15.4, and 18.0 for distant operands | Scalar: 2.3, 2.6. `remainder`: 13.8, and 16.6 | `to_int` and `from_int` through binary32. A binary16 remainder is a binary16 value, so the x87 `FPREM1` of the widened values gives it exactly. | Packed conversions at F16C |
 
@@ -246,13 +246,17 @@ five more:
 - the remainder of binary16 and bfloat16, by `FPREM1`, and
 - the per-lane cost of `Lanes` of x87 extended.
 
+The work of 2026-10-01 closed the binary16 `mul_add` and the conversion of
+binary64 to binary16 without AVX512-FP16: the `mul_add` computes through
+binary64, and integer instructions round binary64 to binary16.
+
 A packed `from_int` from 32-bit integers measured no faster than the scalar
 path, so the record lists no gap for it.
 
 | Priority | Gap | Instructions | Feature | Cost today | Blocker |
 | --- | --- | --- | --- | --- | --- |
 | 1 | 512-bit chunks, masked tails, directed rounding of the other operations, `scale_b`, conversions of 64-bit integers, `min_num` and `max_num` without the fallback | 512-bit forms, masks, embedded rounding, `VSCALEFPS`, `VCVTPS2QQ`, `VRANGEPS` | AVX-512F, DQ, VL | Engine, or 256-bit paths | No hardware in the gates. |
-| 2 | binary16 `mul_add`, and `convert` from binary64 with one rounding | `VFMADD213PH`, `VCVTPD2PH`, `VCVTSD2SH` | AVX512-FP16 | 21.0 to 22.7 per lane, and 12.3 to 12.4 | No hardware in the gates. Conflict 1. |
+| 2 | binary16 lanes in binary16 instructions, and the binary16 `mul_add` in one instruction | `VADDPH`, `VFMADD213PH`, `VCVTPD2PH` | AVX512-FP16 | 3.7 per lane for `mul_add`, and 0.5 for the others | No hardware in the gates. Conflict 1. |
 | 3 | The IEEE 754-2019 minimum and maximum without the fallback, bfloat16 `mul_add`, FP8 conversions, and saturating integer conversions | `VMINMAXPS`, `VFMADD213BF16`, `VCVTHF82PH`, `VCVTPH2HF8`, `VCVTTPS2DQS` | AVX10.2 | Engine | No hardware in the gates. `avx10.2` is unstable in Rust. Conflict 2. |
 
 ## No x86-64 Instruction

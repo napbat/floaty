@@ -53,8 +53,8 @@ crate documentation records each rule of its behavior. The
 - Round through the one rounding routine of each radix: `exact` for binary
   formats and `decimal::round` for decimal formats. Do not write another
   rounding path. A host path can also round in a host instruction. A host
-  path can also round a binary32 result to binary16 or bfloat16 in
-  `host/narrow.rs`.
+  path can also round a binary32 or binary64 result to binary16, or a
+  binary32 result to bfloat16, in `host/narrow.rs`.
 - Handle special values in the operation. NaNs, infinities, and zeros never
   reach the rounding routine.
 - Test every behavior against an established oracle: TestFloat, MPFR,
