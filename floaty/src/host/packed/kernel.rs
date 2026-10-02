@@ -131,7 +131,7 @@ fn add_vectors<const N: usize, const C: usize>(
 
 /// Returns binary32 encodings as host values.
 #[inline]
-fn singles<const N: usize>(encodings: [u32; N]) -> [f32; N] {
+pub(super) fn singles<const N: usize>(encodings: [u32; N]) -> [f32; N] {
     // A loop, not `array::map`, which LLVM calls out of line.
     let mut lanes = [0.0; N];
     lanes
@@ -143,7 +143,7 @@ fn singles<const N: usize>(encodings: [u32; N]) -> [f32; N] {
 
 /// Returns host values as binary32 encodings.
 #[inline]
-fn encodings<const N: usize>(lanes: [f32; N]) -> [u32; N] {
+pub(super) fn encodings<const N: usize>(lanes: [f32; N]) -> [u32; N] {
     let mut encodings = [0; N];
     encodings
         .iter_mut()

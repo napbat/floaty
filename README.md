@@ -42,6 +42,10 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   accumulated in `N` binary32 lanes in one documented order, with each
   step rounded or fused. The order gives the same bits on every host, and
   the host path runs at the speed of a plain host loop.
+- **Elementwise slice operations.** Views such as `Sum`, `Product`,
+  `MinimumNumber`, and `RoundToIntegral` compute value `i` of a vector from
+  value `i` of their operands. A store, a conversion to integers, a minimum
+  or maximum reduction, or a kernel reads a view in one pass.
 - **Fast where possible.** Where the build targets a floating-point unit
   that gives the same bits, the operations without flags use it.
 - **Small.** `no_std`, no `alloc`, no dependencies, and no `unsafe` code
@@ -506,8 +510,9 @@ two.
 A separate kernel rounds the term and then the sum. A fused kernel adds
 the product in one fused multiply-add. The fused kernels give the same bits
 on a host without FMA, from the engine, as on a host with FMA.
-`Lanes::convert_slice` converts a slice, for example binary32 to
-bfloat16. Each `_with` method runs the engine and returns the flags.
+`Lanes::convert_slice` converts a slice of the lane type, or of host `f32`
+values, for example binary32 to bfloat16. Each `_with` method runs the
+engine and returns the flags.
 
 ```rust
 use floaty::{BF16, F32, Lanes, LittleEndian};
@@ -516,6 +521,40 @@ let query = [1.0_f32, 2.0, 3.0];
 let row = [0x80, 0x3F, 0x00, 0x40, 0x40, 0x40]; // bfloat16 1, 2, 3
 let dot = Lanes::<F32, 32>::dot(LittleEndian::<BF16>::new(&row), &query[..]);
 assert_eq!(dot.to_bits(), 0x4160_0000); // 14
+```
+
+### Elementwise slice operations
+
+The views of `floaty::elementwise` are vectors whose value `i` is one
+operation of value `i` of their operands: `Sum`, `Difference`, `Product`,
+`Quotient`, `Minimum`, `Maximum`, `MinimumNumber`, `MaximumNumber`, `Abs`,
+and `RoundToIntegral` in a fixed direction. `Splat` repeats one value.
+Views nest, and each step rounds. `Lanes<F32, N>` reads a view `N` values
+at a time:
+
+| Operation | Result |
+| --- | --- |
+| `store` | value `i` into element `i` of `&mut [T]`, or of `&[Cell<T>]` for a store into a vector that the view reads |
+| `to_int_slice` | value `i` converted to an integer type, as `Float::to_int` converts it |
+| `minimum_of`, `maximum_of`, `minimum_number_of`, `maximum_number_of` | one value, in the order of the kernels, from +∞ or -∞ in every lane |
+
+A kernel also reads a view, so the norm of a reconstruction needs no buffer.
+
+```rust
+use floaty::elementwise::{Difference, MinimumNumber, Product, RoundToIntegral, Splat};
+use floaty::{F32, Lanes, Rounding, ToInt};
+
+let x = [0.25_f32, 0.5, 2.0];
+let lo = [0.0_f32; 3];
+let levels = Splat::new(F32::from_bits(0x437F_0000), 3); // 255
+let one = Splat::new(F32::from_bits(0x3F80_0000), 3);
+let scaled = RoundToIntegral {
+    values: Product(MinimumNumber(Difference(&x[..], &lo[..]), one), levels),
+    rounding: Rounding::TiesToAway,
+};
+let mut codes = [ToInt::Value(0_u8); 3];
+Lanes::<F32, 32>::to_int_slice(scaled, &mut codes);
+assert_eq!(codes, [64, 128, 255].map(ToInt::Value)); // 63.75, 127.5, 255
 ```
 
 ## Hardware acceleration
@@ -561,6 +600,7 @@ path.
 | Packed AArch64 | AArch64 | As the packed SSE paths, at 128 bits, but without `to_int` and x87 extended lanes | As the packed SSE paths |
 | s390x | s390x | binary32 and binary64: `+`, `-`, `*`, `/`, `sqrt`, `mul_add`, `convert` between them, `to_int`, `from_int`, `round_to_integral` in the five IEEE 754 directions, comparisons, and the minimum and maximum operations. binary16 and bfloat16 through binary32, as on x86-64 without F16C, and binary16 `mul_add` through binary64. binary128 in pairs of floating-point registers: `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral` in the five IEEE 754 directions, `to_int`, `from_int`, comparisons, the minimum and maximum operations, and `convert` to and from binary32 and binary64. `Lanes` of binary32, binary64, and bfloat16: the scalar instruction of each lane after one check of the FPC register | An FPC register with a nonzero binary rounding mode or an IEEE mask; a 64-bit integer at a bound of the conversion; `mul_add` and `remainder` of binary128 |
 | Slice kernels | x86-64 with SSE2, and AVX for 256 bits, or AArch64 | The kernels of `Lanes<F32, N>`: `sum`, `dot`, `distance_square`, `norm`, `dot_rows`, and `distance_square_rows` in the packed binary32 instructions, and the fused kernels with FMA. bfloat16 widens by a shift, binary16 by F16C or `FCVTL` or in integer and binary32 instructions, and codes by `CVTDQ2PS` or `SCVTF`. `convert_slice` takes the packed conversions. One check of the environment serves the call. | A NaN sum sends the call, or its row, to the engine. A chunk of `convert_slice` that holds a NaN converts one value at a time. |
+| Elementwise slice operations | As the slice kernels | The views of `floaty::elementwise` in the packed binary32 instructions: `MINPS` and `MAXPS` or `FMIN` and `FMAX`, with a NaN or two zeros settled in integer instructions; `RoundToIntegral` by `ROUNDPS` with SSE4.1 or `FRINT`, and otherwise by the sum and difference with 2^23 and an exact correction of one in the direction. `store`, `to_int_slice` by `CVTPS2DQ` on x86-64, and the reductions, with one check of the environment for the call. | A chunk of a store that holds a NaN, and a value that `CVTPS2DQ` does not convert, go to the engine. A reduction that gives a NaN goes to the engine. `to_int_slice` on AArch64 runs the engine. |
 | Double-double | The binary64 paths of the build | `+`, `-`, `*`, `/`, and `sqrt` of `Gcc` and `Qd`, with one check of the environment for all steps | |
 
 [docs/x86-64-acceleration.md](docs/x86-64-acceleration.md) lists the x86-64
@@ -676,6 +716,10 @@ step at a time, in every behavior of the operation tests, for binary32,
 bfloat16, and binary16 vectors and codes, with special values among them.
 The host path of each kernel and of `convert_slice` must give the bits of
 the engine in every lane count from 1 to 64.
+The arithmetic, minimum and maximum, rounding, and integer oracles check
+each value of the elementwise views, their nested forms, and the documented
+order of the reductions, in every behavior. The host path of each
+elementwise operation must give the bits of the engine in each lane count.
 A reference that disagrees with IEEE 754 or with the processor has a comment
 beside its test with the evidence and the resolution.
 

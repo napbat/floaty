@@ -128,3 +128,51 @@ pub fn codes(length: usize, random: &mut SplitMix64) -> Vec<u8> {
         })
         .collect()
 }
+
+/// The binary32 encodings that round near an integer boundary: 0.5 less
+/// one unit in the last place, `2^22 + 0.5`, `2^23 - 0.5`, `2^23`, and
+/// `2^23 + 1`, with both signs, and zeros, infinities, NaNs, the smallest
+/// subnormal, and the largest finite value.
+const INTEGRAL_EDGES: [u32; 18] = [
+    0x3EFF_FFFF,
+    0xBEFF_FFFF,
+    0x4A80_0001,
+    0xCA80_0001,
+    0x4AFF_FFFF,
+    0xCAFF_FFFF,
+    0x4B00_0000,
+    0x4B00_0001,
+    0xCB00_0001,
+    0x0000_0000,
+    0x8000_0000,
+    0x7F80_0000,
+    0xFF80_0000,
+    0x7FC0_0001,
+    0x7FA0_0000,
+    0x0000_0001,
+    0x7F7F_FFFF,
+    0xFF7F_FFFF,
+];
+
+/// Returns `length` binary32 encodings for the rounding to an integral
+/// value: quarters from -275 to 275, so that ties of both signs and both
+/// parities occur, with the encodings of `INTEGRAL_EDGES` among them.
+///
+/// # Panics
+///
+/// Never: each random index and quarter fits its type.
+#[must_use]
+pub fn integral_vector(length: usize, random: &mut SplitMix64) -> Vec<u32> {
+    let edge_count = u64::try_from(INTEGRAL_EDGES.len()).expect("the count fits a u64");
+    (0..length)
+        .map(|_| {
+            if random.below(5) == 0 {
+                let index = usize::try_from(random.below(edge_count))
+                    .expect("an index of the edges fits a usize");
+                return INTEGRAL_EDGES[index];
+            }
+            let quarters = i16::try_from(random.below(2201)).expect("below 2201") - 1100;
+            (f32::from(quarters) / 4.0).to_bits()
+        })
+        .collect()
+}

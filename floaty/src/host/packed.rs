@@ -16,6 +16,7 @@
 //! stores, which took more time than the arithmetic.
 
 mod bfloat;
+pub mod elementwise;
 mod extended;
 mod half;
 mod kernel;

@@ -17,6 +17,8 @@
 //! - [`remainder`]: the remainder.
 //! - [`kernels`]: the slice kernels of `Lanes`, in every kind of vector
 //!   and lane count, and the slice conversion.
+//! - [`elementwise`]: the elementwise views, stores, integer conversions,
+//!   and reductions of `Lanes`, and the slice conversion of host values.
 //!
 //! [`operands`] gives the operands of every check.
 
@@ -24,6 +26,7 @@ mod arithmetic;
 mod comparisons;
 mod conversions;
 mod double_double;
+mod elementwise;
 mod integral;
 mod kernels;
 mod operands;

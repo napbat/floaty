@@ -14,7 +14,19 @@
 //! rounding, which its instructions take from their encoding. A NaN result
 //! goes back to the engine, which selects the NaN by the rule of the mode.
 
-use crate::format::EncodingKind;
+use crate::env::Mode;
+use crate::float::Float;
+use crate::format::{Binary, EncodingKind};
+
+/// Returns host binary32 values as binary32 values of floaty, which have
+/// their layout. Each value keeps its bits.
+#[must_use]
+pub fn floats_of_singles<M: Mode>(values: &[f32]) -> &[Float<Binary<8>, 32, M>] {
+    // SAFETY: `Float` is `repr(transparent)` over its encoding, a `u32`,
+    // which has the size and the alignment of an `f32`. Every bit pattern is
+    // a binary32 encoding, and the slice keeps the length and the lifetime.
+    unsafe { core::slice::from_raw_parts(values.as_ptr().cast(), values.len()) }
+}
 
 #[cfg(not(floaty_engine_only))]
 #[cfg(any(
@@ -682,6 +694,73 @@ mod none {
             _scale: u32,
         ) -> Option<[u32; N]> {
             None
+        }
+
+        /// The elementwise entry points of a build without a host path:
+        /// each returns `None`.
+        pub mod elementwise {
+            use crate::env::{Env, Rounding};
+            use crate::format::internal::MinMax;
+            use crate::host::{Load, Operation};
+
+            /// Returns `None`: this build has no host path.
+            #[inline]
+            pub fn binary<const C: usize>(
+                _x: [u32; C],
+                _y: [u32; C],
+                _operation: Operation,
+            ) -> Option<[u32; C]> {
+                None
+            }
+
+            /// Returns `None`: this build has no host path.
+            #[inline]
+            pub fn min_max<const C: usize>(
+                _x: [u32; C],
+                _y: [u32; C],
+                _operation: MinMax,
+            ) -> Option<[u32; C]> {
+                None
+            }
+
+            /// Returns `None`: this build has no host path.
+            #[inline]
+            pub fn round_to_integral<const C: usize>(
+                _x: [u32; C],
+                _rounding: Rounding,
+            ) -> Option<[u32; C]> {
+                None
+            }
+
+            /// Returns `None`: this build has no host path.
+            #[inline]
+            pub fn store<const N: usize>(
+                _values: impl Load,
+                _env: &Env,
+                _each: impl FnMut(usize, Option<[u32; N]>),
+            ) -> Option<()> {
+                None
+            }
+
+            /// Returns `None`: this build has no host path.
+            #[inline]
+            pub fn to_int<const N: usize>(
+                _values: impl Load,
+                _env: &Env,
+                _each: impl FnMut(usize, Option<[i32; N]>),
+            ) -> Option<()> {
+                None
+            }
+
+            /// Returns `None`: this build has no host path.
+            #[inline]
+            pub fn reduce<const N: usize>(
+                _values: impl Load,
+                _operation: MinMax,
+                _env: &Env,
+            ) -> Option<u32> {
+                None
+            }
         }
     }
 }

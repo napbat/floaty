@@ -67,7 +67,7 @@ pub use float::{
 };
 pub use format::{B11Fnuz, Bid, Binary, Decimal, Dpd, Finite, Fnuz, Ieee, NoInf, X87};
 pub use integer::{Int, Integer, ToInt, UInt};
-pub use lanes::{Lanes, LittleEndian, ScaledCodes, Vector, Widen};
+pub use lanes::{Element, Lanes, LittleEndian, ScaledCodes, Vector, Widen, elementwise};
 
 mod sealed {
     /// Prevents implementations of a trait outside the crate.

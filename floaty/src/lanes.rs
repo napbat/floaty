@@ -1,7 +1,9 @@
 //! Values of one float type as the lanes of a vector register.
 
+pub mod elementwise;
 mod kernel;
 mod order;
+mod store;
 mod vector;
 
 pub use self::vector::{LittleEndian, ScaledCodes, Vector, Widen};
@@ -10,9 +12,35 @@ use core::ops;
 
 use crate::env::{Flags, Mode, Override};
 use crate::float::{Class, Float, FloatType, from_host_integer};
-use crate::format::Standard;
+use crate::format::{Binary, Standard};
 use crate::host::{self, Kind, Operation};
 use crate::integer::{Integer, ToInt};
+use crate::sealed::Sealed;
+
+/// An element of a slice that holds the values of the float type `F`: `F`
+/// itself, or `f32` for a binary32 type, whose values it holds by their
+/// bits, as `From` reads them. The trait is sealed.
+pub trait Element<F>: Sealed + Copy {
+    /// Returns the elements as values of `F`.
+    #[doc(hidden)]
+    fn floats(elements: &[Self]) -> &[F];
+}
+
+impl<S: Standard<W>, const W: usize, M: Mode> Element<Self> for Float<S, W, M> {
+    #[inline]
+    fn floats(elements: &[Self]) -> &[Self] {
+        elements
+    }
+}
+
+impl Sealed for f32 {}
+
+impl<M: Mode> Element<Float<Binary<8>, 32, M>> for f32 {
+    #[inline]
+    fn floats(elements: &[Self]) -> &[Float<Binary<8>, 32, M>] {
+        host::floats_of_singles(elements)
+    }
+}
 
 /// `N` values of one float type, as the lanes of a vector register.
 ///
@@ -253,10 +281,12 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
 
     /// Converts each value of `values` to the float type `T` into the same
     /// index of `out`, rounding with the mode of `T`, as
-    /// [`Float::convert`] does. The packed host path converts `N` values at
-    /// a time, with one check of the environment for the call, where the
-    /// build has the path. A chunk that holds a NaN, and the values after the
-    /// last full chunk, convert one at a time.
+    /// [`Float::convert`] does. The values are of the lane type, or host
+    /// `f32` values for binary32 lanes, as [`Element`] states. The packed
+    /// host path converts `N` values at a time, with one check of the
+    /// environment for the call, where the build has the path. A chunk that
+    /// holds a NaN, and the values after the last full chunk, convert one at
+    /// a time.
     ///
     /// ```
     /// use floaty::{BF16, F32, Lanes};
@@ -266,13 +296,18 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     /// Lanes::<F32, 8>::convert_slice(&values, &mut out);
     /// // 1, the tie 1 + 2^-8 to even, and the quiet signaling NaN.
     /// assert_eq!(out.map(BF16::to_bits), [0x3F80, 0x3F80, 0x7FE0]);
+    ///
+    /// // Host values convert by their bits.
+    /// Lanes::<F32, 8>::convert_slice(&[1.0_f32, 2.0, -0.0], &mut out);
+    /// assert_eq!(out.map(BF16::to_bits), [0x3F80, 0x4000, 0x8000]);
     /// ```
     ///
     /// # Panics
     ///
     /// Panics when `values` and `out` have different lengths.
     #[inline]
-    pub fn convert_slice<T: FloatType>(values: &[Float<S, W, M>], out: &mut [T]) {
+    pub fn convert_slice<T: FloatType, E: Element<Float<S, W, M>>>(values: &[E], out: &mut [T]) {
+        let values = E::floats(values);
         assert_eq!(
             values.len(),
             out.len(),
@@ -310,11 +345,12 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     /// # Panics
     ///
     /// Panics when `values` and `out` have different lengths.
-    pub fn convert_slice_with<T: FloatType>(
-        values: &[Float<S, W, M>],
+    pub fn convert_slice_with<T: FloatType, E: Element<Float<S, W, M>>>(
+        values: &[E],
         out: &mut [T],
         behavior: impl Override,
     ) -> Flags {
+        let values = E::floats(values);
         assert_eq!(
             values.len(),
             out.len(),
