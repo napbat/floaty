@@ -45,6 +45,8 @@ pub mod qd;
 pub mod random;
 #[cfg(target_arch = "x86_64")]
 pub mod readtest;
+#[cfg(target_arch = "s390x")]
+pub mod s390x;
 #[cfg(target_arch = "x86_64")]
 pub mod shape;
 #[cfg(target_arch = "x86_64")]

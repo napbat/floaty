@@ -12,7 +12,10 @@
 /// Widens the bits of a binary16 value exactly to binary32 with integer
 /// instructions, for a build without a widening instruction. A subnormal
 /// binary16 value is a normal binary32 value.
-#[cfg(all(target_arch = "x86_64", not(target_feature = "f16c")))]
+#[cfg(any(
+    all(target_arch = "x86_64", not(target_feature = "f16c")),
+    target_arch = "s390x"
+))]
 #[inline]
 pub fn widen_half_bits(bits: u16) -> u32 {
     let sign = u32::from(bits & 0x8000) << 16;
@@ -39,7 +42,10 @@ pub fn widen_half_bits(bits: u16) -> u32 {
 /// and 2^16, gives the infinity. A normal result rebiases the exponent and
 /// rounds away the low 13 bits, as `round_to_bfloat` rounds away 16. A NaN
 /// gives a quiet NaN, which the caller sends to the engine.
-#[cfg(all(target_arch = "x86_64", not(target_feature = "f16c")))]
+#[cfg(any(
+    all(target_arch = "x86_64", not(target_feature = "f16c")),
+    target_arch = "s390x"
+))]
 #[inline]
 pub fn round_to_half(bits: u32) -> u16 {
     let sign = (bits >> 16) & 0x8000;
@@ -59,7 +65,10 @@ pub fn round_to_half(bits: u32) -> u16 {
 /// Rounds a binary32 magnitude below 2^-14 to a count of the binary16
 /// quantum 2^-24, to nearest even. A count of 2^10 is the encoding of the
 /// smallest normal value.
-#[cfg(all(target_arch = "x86_64", not(target_feature = "f16c")))]
+#[cfg(any(
+    all(target_arch = "x86_64", not(target_feature = "f16c")),
+    target_arch = "s390x"
+))]
 #[inline]
 fn round_to_subnormal_half(magnitude: u32) -> u32 {
     // The value is `significand * 2^(field - 150)`, so the count is
@@ -85,7 +94,7 @@ fn round_to_subnormal_half(magnitude: u32) -> u32 {
 /// and 2^16, gives the infinity. A normal result rebiases the exponent and
 /// rounds away the low 42 bits. A NaN gives a quiet NaN, which the caller
 /// sends to the engine.
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "s390x"))]
 #[inline]
 pub fn round_double_to_half(bits: u64) -> u16 {
     let sign = (bits >> 48) & 0x8000;
@@ -106,7 +115,7 @@ pub fn round_double_to_half(bits: u64) -> u16 {
 /// Rounds a binary64 magnitude below 2^-14 to a count of the binary16
 /// quantum 2^-24, to nearest even. A count of 2^10 is the encoding of the
 /// smallest normal value.
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "s390x"))]
 #[inline]
 fn round_double_to_subnormal_half(magnitude: u64) -> u64 {
     // The value is `significand * 2^(field - 1075)`, so the count is
@@ -176,7 +185,10 @@ mod tests {
         }
     }
 
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "f16c")))]
+    #[cfg(any(
+        all(target_arch = "x86_64", not(target_feature = "f16c")),
+        target_arch = "s390x"
+    ))]
     #[test]
     fn binary16_widening_matches_the_engine() {
         use crate::float::F16;
@@ -195,7 +207,7 @@ mod tests {
     /// every exponent field near the range of binary16 and below it, each
     /// pattern of the ten fraction bits that binary16 keeps, and low bits
     /// that make the dropped part zero, a tie, or just around one.
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "s390x"))]
     #[test]
     fn binary64_to_binary16_rounding_matches_the_engine() {
         use crate::float::{F16, F64};
@@ -225,7 +237,10 @@ mod tests {
         }
     }
 
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "f16c")))]
+    #[cfg(any(
+        all(target_arch = "x86_64", not(target_feature = "f16c")),
+        target_arch = "s390x"
+    ))]
     #[test]
     fn binary16_rounding_matches_the_engine() {
         use crate::float::F16;

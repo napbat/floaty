@@ -499,9 +499,10 @@ path.
   takes the other directions that its instructions encode, and on AArch64
   the conversion of binary64 to binary32 also takes `ToOdd`, which `FCVTXN`
   encodes.
-- Each call reads MXCSR, the x87 control word, or FPCR. Another setting, or
-  an unmasked exception, sends the operation to the engine. So does a NaN
-  result: the engine selects the NaN by the rule of the mode.
+- Each call reads MXCSR, the x87 control word, FPCR, or the FPC register of
+  s390x. Another setting, or an unmasked exception, sends the operation to
+  the engine. So does a NaN result: the engine selects the NaN by the rule
+  of the mode.
 - Build with `RUSTFLAGS="--cfg floaty_engine_only"` to remove every host
   path and all `unsafe` code.
 
@@ -520,6 +521,7 @@ path.
 | `FEAT_FP16` | AArch64 with `+fp16` | `mul_add` of binary16 in one instruction. `Lanes` of binary16, eight lanes at a time in binary16: `+`, `-`, `*`, `/`, `sqrt`, `mul_add` by `FMLA`, `round_to_integral` in the five IEEE 754 directions, `compare_quiet`, and the minimum and maximum operations | As the packed SSE paths |
 | `FEAT_BF16` | AArch64 with `+bf16` | The scalar bfloat16 paths round in `BFCVT` | |
 | Packed AArch64 | AArch64 | As the packed SSE paths, at 128 bits, but without `to_int` and x87 extended lanes | As the packed SSE paths |
+| s390x | s390x | binary32 and binary64: `+`, `-`, `*`, `/`, `sqrt`, `mul_add`, `convert` between them, `to_int`, `from_int`, `round_to_integral` in the five IEEE 754 directions, comparisons, and the minimum and maximum operations. binary16 and bfloat16 through binary32, as on x86-64 without F16C, and binary16 `mul_add` through binary64. `Lanes` of binary32, binary64, and bfloat16: the scalar instruction of each lane after one check of the FPC register | An FPC register with a nonzero binary rounding mode or an IEEE mask; a 64-bit integer at a bound of the conversion |
 | Double-double | The binary64 paths of the build | `+`, `-`, `*`, `/`, and `sqrt` of `Gcc` and `Qd`, with one check of the environment for all steps | |
 
 [docs/x86-64-acceleration.md](docs/x86-64-acceleration.md) lists the x86-64
@@ -592,7 +594,7 @@ decNumber.
 | MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, with FTZ, DAZ, and saturation, and with unsupported operands, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, from binary32, binary64, x87 extended, and binary128 to them, and between every binary format and the decimal formats, in every behavior of the conversion tests. The truncated remainder. `hypot`, the reciprocal square root, `pown`, and `rootn`, against `mpfr_hypot`, `mpfr_rec_sqrt`, `mpfr_pow_si`, and `mpfr_rootn_si`, and the rounded steps of `pown` past `|n| = 64`. The augmented operations, whose tail `mpfr_sum` rounds. The sums of the reduction operations, with `mpfr_sum` and `mpfr_dot`, and each step of the scaled products. The NaN payload operations of every binary format, by floaty's rule. The operations of `DoubleDouble` on its exact value, by their rules, with exact rationals. Each binary64 step of the other `DoubleDouble` operations, in the behaviors that libgcc and QD do not define. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, `scale_b`, and `log_b` against `ilogb` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
-| The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 tests run under QEMU 10.2.1. |
+| The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 and s390x tests run under QEMU 10.2.1. |
 | decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations in every direction, with FTZ, DAZ, precision limits, and every NaN rule, in DPD and, through the conversions of the Intel library, in BID. The conversions between the widths in the same behaviors, the conversions to and from every integer type, and the total order of non-canonical encodings. The minimum and maximum operations and the NaN payload operations of IEEE 754-2019, by floaty's rule. The static modes, against their behaviors. |
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |

@@ -175,7 +175,7 @@ fn extended_encoding<S: Standard<W>, const W: usize>(result: [u64; 2]) -> S::Bit
 /// Returns `true` when the mode and the environment of the host unit that
 /// computes the host kind `host` allow a host path for a format of
 /// `precision` bits. The x87 unit computes x87 extended precision, and the
-/// SSE unit or the AArch64 unit computes the other kinds.
+/// SSE unit, the AArch64 unit, or the s390x unit computes the other kinds.
 #[inline]
 pub(super) fn ready_for(host: Host, env: &Env, precision: u32) -> bool {
     let unit = match host {

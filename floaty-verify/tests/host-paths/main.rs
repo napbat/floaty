@@ -3,9 +3,9 @@
 //!
 //! The other tests compare the `_with` methods, which always run the engine,
 //! with the oracles. The engine gives the same bits on every host. So on
-//! AArch64, where the C references do not build, this comparison checks each
-//! host path against those oracles. In a build without a host path, the
-//! entry points take the engine.
+//! AArch64 and s390x, where the C references do not build, this comparison
+//! checks each host path against those oracles. In a build without a host
+//! path, the entry points take the engine.
 //!
 //! - [`arithmetic`]: the operators, `sqrt`, and `mul_add`.
 //! - [`double_double`]: the operators and `sqrt` of the double-double
