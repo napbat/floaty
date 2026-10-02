@@ -3,6 +3,9 @@
 //! take `RUSTFLAGS`, then still compiles the 256-bit register class. Each
 //! function inlines into a caller with the features.
 
+#[cfg(target_arch = "x86")]
+use core::arch::x86::{__m128, __m128i, __m256, __m256d, __m256i};
+#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{__m128, __m128i, __m256, __m256d, __m256i};
 use core::mem::transmute;
 

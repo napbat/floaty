@@ -1,4 +1,4 @@
-//! The x87 unit of x86-64: its control word and the instructions of the x87
+//! The x87 unit of x86: its control word and the instructions of the x87
 //! extended paths.
 
 use super::super::Operation;
@@ -24,10 +24,10 @@ pub fn x87_environment() -> bool {
     // restores the stack pointer. It changes no other state.
     unsafe {
         core::arch::asm!(
-            "sub rsp, 8",
-            "fnstcw word ptr [rsp]",
-            "movzx {control:e}, word ptr [rsp]",
-            "add rsp, 8",
+            concat!("sub ", stack_pointer!(), ", 8"),
+            concat!("fnstcw word ptr [", stack_pointer!(), "]"),
+            concat!("movzx {control:e}, word ptr [", stack_pointer!(), "]"),
+            concat!("add ", stack_pointer!(), ", 8"),
             control = out(reg) control,
             options(preserves_flags),
         );
@@ -51,6 +51,7 @@ fn extended_result(bits: [u64; 2]) -> Option<[u64; 2]> {
 /// The block reads the stored encoding back as 8 and 2 bytes, the parts that
 /// `FSTP` writes. An 8-byte load of the last 2 bytes waited on the store and
 /// tripled the time of an operation.
+#[cfg(target_arch = "x86_64")]
 macro_rules! x87_extended {
     ($($instruction:literal),+; $($name:ident = $pointer:expr),+) => {{
         let mut scratch = [0_u64; 2];
@@ -78,6 +79,29 @@ macro_rules! x87_extended {
             );
         }
         extended_result([low, high])
+    }};
+}
+
+/// Runs x87 instructions that leave one value on the x87 stack, and stores
+/// that value as an 80-bit encoding, as on x86-64. 32-bit x86 has no 64-bit
+/// general register, so the code reads the stored encoding after the block.
+#[cfg(target_arch = "x86")]
+macro_rules! x87_extended {
+    ($($instruction:literal),+; $($name:ident = $pointer:expr),+) => {{
+        let mut scratch = [0_u64; 2];
+        // SAFETY: as in the x86-64 form, without the loads of the result.
+        unsafe {
+            core::arch::asm!(
+                $($instruction,)+
+                "fstp tbyte ptr [{scratch}]",
+                $($name = in(reg) $pointer,)+
+                scratch = in(reg) scratch.as_mut_ptr(),
+                out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+                options(nostack, preserves_flags),
+            );
+        }
+        extended_result(scratch)
     }};
 }
 
@@ -268,6 +292,7 @@ pub fn x87_remainder_double(dividend: u64, divisor: u64) -> Option<u64> {
 /// Returns the IEEE remainder of two 80-bit encodings from the x87 unit, by
 /// `FPREM1`, or `None` for a NaN. The block reads the stored encoding back
 /// as `x87_extended!` does.
+#[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn x87_remainder(dividend: &[u64; 2], divisor: &[u64; 2]) -> Option<[u64; 2]> {
     let mut scratch = [0_u64; 2];
@@ -300,4 +325,35 @@ pub fn x87_remainder(dividend: &[u64; 2], divisor: &[u64; 2]) -> Option<[u64; 2]
         );
     }
     extended_result([low, high])
+}
+
+/// Returns the IEEE remainder of two 80-bit encodings from the x87 unit, by
+/// `FPREM1`, or `None` for a NaN. The code reads the stored encoding after
+/// the block, as the 32-bit form of `x87_extended!` does.
+#[cfg(target_arch = "x86")]
+#[inline]
+pub fn x87_remainder(dividend: &[u64; 2], divisor: &[u64; 2]) -> Option<[u64; 2]> {
+    let mut scratch = [0_u64; 2];
+    // SAFETY: as in the x86-64 form, without the loads of the result.
+    unsafe {
+        core::arch::asm!(
+            "fld tbyte ptr [{divisor}]",
+            "fld tbyte ptr [{dividend}]",
+            "2:",
+            "fprem1",
+            "fnstsw ax",
+            "test ah, 4",
+            "jnz 2b",
+            "fstp st(1)",
+            "fstp tbyte ptr [{scratch}]",
+            dividend = in(reg) dividend.as_ptr(),
+            divisor = in(reg) divisor.as_ptr(),
+            scratch = in(reg) scratch.as_mut_ptr(),
+            out("ax") _,
+            out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+            out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+            options(nostack),
+        );
+    }
+    extended_result(scratch)
 }

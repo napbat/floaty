@@ -9,6 +9,9 @@
 //! from keeping values in registers across it. A function for a feature that
 //! the build does not have returns `None`.
 
+#[cfg(target_arch = "x86")]
+use core::arch::x86::{__m128, __m128d, __m128i};
+#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{__m128, __m128d, __m128i};
 use core::mem::transmute;
 
@@ -29,7 +32,7 @@ pub const INTEGERS: bool = true;
 /// and rounds binary32 lanes to binary16.
 pub const HALF: bool = super::HALF;
 
-/// `false`: the host paths of x86-64 compute binary16 lanes in binary32.
+/// `false`: the host paths of x86 compute binary16 lanes in binary32.
 pub const NATIVE_HALF: bool = false;
 
 /// Returns four binary32 lanes as the value of an SSE register.
@@ -286,8 +289,7 @@ pub fn mul_add_f64x2(_left: [f64; 2], _right: [f64; 2], _addend: [f64; 2]) -> Op
 pub fn widen_x2(value: [f32; 2]) -> [f64; 2] {
     let a = singles([value[0], value[1], 0.0, 0.0]);
     let result: __m128d;
-    // SAFETY: CVTPS2PD reads and writes SSE registers. SSE2 is part of every
-    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // SAFETY: CVTPS2PD reads and writes SSE registers. The build enables SSE2, and `sse!` selects a VEX form only in a build with AVX.
     // The conversion changes only the status flags of MXCSR, which floaty
     // does not read.
     unsafe {
@@ -327,8 +329,7 @@ pub fn narrow_x2(value: [f64; 2]) -> [f32; 2] {
 pub fn to_int_f32x4(value: [f32; 4]) -> [i32; 4] {
     let a = singles(value);
     let result: __m128i;
-    // SAFETY: CVTPS2DQ reads and writes SSE registers. SSE2 is part of every
-    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // SAFETY: CVTPS2DQ reads and writes SSE registers. The build enables SSE2, and `sse!` selects a VEX form only in a build with AVX.
     // The conversion changes only the status flags of MXCSR, which floaty
     // does not read.
     unsafe {
@@ -673,7 +674,7 @@ wide!(
 /// returns `None`.
 macro_rules! no_native {
     ($name:ident, ($($type:ty),+) -> $result:ty) => {
-        #[doc = "Returns `None`: the host paths of x86-64 have no binary16 arithmetic."]
+        #[doc = "Returns `None`: the host paths of x86 have no binary16 arithmetic."]
         #[inline]
         pub fn $name($(_: $type),+) -> Option<$result> {
             None

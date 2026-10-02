@@ -528,7 +528,8 @@ pub fn to_int_f64(value: f64) -> Option<i64> {
 /// Returns a 64-bit integer rounded to binary32, by `SCVTF` in the rounding
 /// direction of FPCR.
 #[inline]
-pub fn from_int_f32(value: i64) -> f32 {
+#[allow(clippy::unnecessary_wraps)] // The signature is that of 32-bit x86, which converts only an `i32`.
+pub fn from_int_f32(value: i64) -> Option<f32> {
     let result: f32;
     // SAFETY: SCVTF reads a general register and writes a SIMD and
     // floating-point register. Every AArch64 target has the instruction, and
@@ -541,13 +542,14 @@ pub fn from_int_f32(value: i64) -> f32 {
             options(pure, nomem, nostack, preserves_flags),
         );
     }
-    result
+    Some(result)
 }
 
 /// Returns a 64-bit integer rounded to binary64, by `SCVTF` in the rounding
 /// direction of FPCR.
 #[inline]
-pub fn from_int_f64(value: i64) -> f64 {
+#[allow(clippy::unnecessary_wraps)] // The signature is that of 32-bit x86, which converts only an `i32`.
+pub fn from_int_f64(value: i64) -> Option<f64> {
     let result: f64;
     // SAFETY: SCVTF reads a general register and writes a SIMD and
     // floating-point register. Every AArch64 target has the instruction, and
@@ -560,7 +562,7 @@ pub fn from_int_f64(value: i64) -> f64 {
             options(pure, nomem, nostack, preserves_flags),
         );
     }
-    result
+    Some(result)
 }
 
 /// Returns `false`: AArch64 has no x87 unit, so no x87 extended path applies.

@@ -18,21 +18,30 @@ use crate::format::EncodingKind;
 
 #[cfg(not(floaty_engine_only))]
 #[cfg(any(
-    all(target_arch = "x86_64", target_feature = "sse2"),
+    all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        target_feature = "sse2"
+    ),
     target_arch = "aarch64",
     target_arch = "s390x"
 ))]
 mod bits;
 #[cfg(not(floaty_engine_only))]
 #[cfg(any(
-    all(target_arch = "x86_64", target_feature = "sse2"),
+    all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        target_feature = "sse2"
+    ),
     target_arch = "aarch64",
     target_arch = "s390x"
 ))]
 mod paths;
 #[cfg(not(floaty_engine_only))]
 #[cfg(any(
-    all(target_arch = "x86_64", target_feature = "sse2"),
+    all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        target_feature = "sse2"
+    ),
     target_arch = "aarch64",
     target_arch = "s390x"
 ))]
@@ -43,7 +52,10 @@ pub use self::paths::{
 
 #[cfg(not(floaty_engine_only))]
 #[cfg(any(
-    all(target_arch = "x86_64", target_feature = "sse2"),
+    all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        target_feature = "sse2"
+    ),
     target_arch = "aarch64",
     target_arch = "s390x"
 ))]
@@ -51,20 +63,23 @@ mod narrow;
 
 #[cfg(not(floaty_engine_only))]
 #[cfg(any(
-    all(target_arch = "x86_64", target_feature = "sse2"),
+    all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        target_feature = "sse2"
+    ),
     target_arch = "aarch64",
     target_arch = "s390x"
 ))]
 pub mod packed;
 
 #[cfg(all(
-    target_arch = "x86_64",
+    any(target_arch = "x86", target_arch = "x86_64"),
     target_feature = "sse2",
     not(floaty_engine_only)
 ))]
 mod x86;
 #[cfg(all(
-    target_arch = "x86_64",
+    any(target_arch = "x86", target_arch = "x86_64"),
     target_feature = "sse2",
     not(floaty_engine_only)
 ))]
@@ -85,7 +100,10 @@ use self::s390x as environment;
 #[cfg(any(
     floaty_engine_only,
     not(any(
-        all(target_arch = "x86_64", target_feature = "sse2"),
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "sse2"
+        ),
         target_arch = "aarch64",
         target_arch = "s390x"
     ))
@@ -297,7 +315,10 @@ pub const fn convertible(from: Host, to: Host) -> bool {
 #[cfg(any(
     floaty_engine_only,
     not(any(
-        all(target_arch = "x86_64", target_feature = "sse2"),
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "sse2"
+        ),
         target_arch = "aarch64",
         target_arch = "s390x"
     ))
@@ -311,7 +332,10 @@ pub use self::none::{
 #[cfg(any(
     floaty_engine_only,
     not(any(
-        all(target_arch = "x86_64", target_feature = "sse2"),
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "sse2"
+        ),
         target_arch = "aarch64",
         target_arch = "s390x"
     ))

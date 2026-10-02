@@ -382,15 +382,17 @@ macro_rules! from_int {
 /// Returns a 64-bit integer rounded to binary32, by `CEGBR` in the rounding
 /// mode of the FPC register.
 #[inline]
-pub fn from_int_f32(value: i64) -> f32 {
-    from_int!("cegbr", value, f32)
+#[allow(clippy::unnecessary_wraps)] // The signature is that of 32-bit x86, which converts only an `i32`.
+pub fn from_int_f32(value: i64) -> Option<f32> {
+    Some(from_int!("cegbr", value, f32))
 }
 
 /// Returns a 64-bit integer rounded to binary64, by `CDGBR` in the rounding
 /// mode of the FPC register.
 #[inline]
-pub fn from_int_f64(value: i64) -> f64 {
-    from_int!("cdgbr", value, f64)
+#[allow(clippy::unnecessary_wraps)] // The signature is that of 32-bit x86, which converts only an `i32`.
+pub fn from_int_f64(value: i64) -> Option<f64> {
+    Some(from_int!("cdgbr", value, f64))
 }
 
 /// Returns `false`: s390x has no x87 unit, so no x87 extended path applies.

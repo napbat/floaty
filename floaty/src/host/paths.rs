@@ -379,18 +379,18 @@ pub fn from_int<S: Standard<W>, const W: usize>(value: i64, env: &Env) -> Option
             if value.unsigned_abs() >= 1 << 53 {
                 return None;
             }
-            let odd = environment::narrow_double_to_odd(environment::from_int_f64(value))?;
+            let odd = environment::narrow_double_to_odd(environment::from_int_f64(value)?)?;
             bfloat_encoding::<S, W>(odd)
         }
         Host::Single => {
-            let result = environment::from_int_f32(value);
+            let result = environment::from_int_f32(value)?;
             encoding::<S, W>(u64::from(result.to_bits()), false)
         }
-        Host::Double => encoding::<S, W>(environment::from_int_f64(value).to_bits(), false),
+        Host::Double => encoding::<S, W>(environment::from_int_f64(value)?.to_bits(), false),
         // An integer below 2^16 in magnitude converts to binary32 exactly. A
         // larger one overflows binary16 after either rounding, so the result
         // rounds once in effect.
-        Host::Half => half_encoding::<S, W>(environment::from_int_f32(value)),
+        Host::Half => half_encoding::<S, W>(environment::from_int_f32(value)?),
         // x87 extended precision holds every 64-bit integer exactly.
         Host::Extended => environment::x87_from_int(value).map(limb_pair_encoding::<S, W>),
         // binary128 holds every 64-bit integer exactly.

@@ -1,10 +1,30 @@
-//! The floating-point environment of x86-64, MXCSR of the SSE unit, and the
-//! scalar SSE instructions of the host paths. `x87` holds the x87 unit.
+//! The floating-point environment of x86 and x86-64, MXCSR of the SSE unit,
+//! and the scalar SSE instructions of the host paths. `x87` holds the x87
+//! unit. The module builds for 32-bit x86 with SSE2 too, where no general
+//! register holds 64 bits: the conversions between floats and 64-bit
+//! integers there take only an integer in the range of `i32`.
 
 use core::cmp::Ordering;
 
 use super::Operation;
 use crate::env::Rounding;
+
+/// Names the stack pointer of the target: `rsp` on x86-64, and `esp` on
+/// 32-bit x86.
+#[cfg(target_arch = "x86_64")]
+macro_rules! stack_pointer {
+    () => {
+        "rsp"
+    };
+}
+
+/// Names the stack pointer of the target, as on x86-64.
+#[cfg(target_arch = "x86")]
+macro_rules! stack_pointer {
+    () => {
+        "esp"
+    };
+}
 
 pub mod packed;
 mod x87;
@@ -25,14 +45,14 @@ pub const FUSED: bool = cfg!(target_feature = "fma");
 pub const HALF: bool = cfg!(target_feature = "f16c");
 /// `true` when the build has SSE4.1, which rounds to an integral value.
 pub const ROUNDING: bool = cfg!(target_feature = "sse4.1");
-/// `true`: every x86-64 processor has the x87 unit.
+/// `true`: every x86 processor has the x87 unit.
 pub const X87: bool = true;
-/// `true`: every x86-64 target computes the binary16 fused multiply-add
+/// `true`: every x86 target with SSE2 computes the binary16 fused multiply-add
 /// through binary64, with integer instructions for the last rounding.
 pub const HALF_FUSED: bool = true;
 /// `true`: integer instructions round binary64 to binary16 once.
 pub const DOUBLE_TO_HALF: bool = true;
-/// `false`: x86-64 has no instruction that rounds to odd.
+/// `false`: x86 has no instruction that rounds to odd.
 pub const ROUND_TO_ODD: bool = false;
 
 /// Returns `true` when the SSE unit rounds to nearest even without FTZ or DAZ,
@@ -56,10 +76,10 @@ pub fn default_environment() -> bool {
     // four-byte store apart from the stack frame of the caller.
     unsafe {
         core::arch::asm!(
-            "sub rsp, 8",
-            "stmxcsr [rsp]",
-            "mov {mxcsr:e}, dword ptr [rsp]",
-            "add rsp, 8",
+            concat!("sub ", stack_pointer!(), ", 8"),
+            concat!("stmxcsr [", stack_pointer!(), "]"),
+            concat!("mov {mxcsr:e}, dword ptr [", stack_pointer!(), "]"),
+            concat!("add ", stack_pointer!(), ", 8"),
             mxcsr = out(reg) mxcsr,
             options(preserves_flags),
         );
@@ -96,8 +116,7 @@ pub(super) use sse;
 /// result in `$left`.
 macro_rules! sse_scalar {
     ($instruction:expr, $left:ident, $right:ident) => {
-        // SAFETY: the instruction reads and writes SSE registers. SSE2 is part
-        // of every x86-64 target, and `sse!` selects a VEX form only in a
+        // SAFETY: the instruction reads and writes SSE registers. The build enables SSE2, and `sse!` selects a VEX form only in a
         // build with AVX. The instruction changes only the status flags of
         // MXCSR, which floaty does not read.
         unsafe {
@@ -173,8 +192,7 @@ pub fn binary_f64(mut left: f64, right: f64, operation: Operation) -> f64 {
 #[inline]
 pub fn widen_single(value: f32) -> f64 {
     let result: f64;
-    // SAFETY: CVTSS2SD reads and writes SSE registers. SSE2 is part of every
-    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // SAFETY: CVTSS2SD reads and writes SSE registers. The build enables SSE2, and `sse!` selects a VEX form only in a build with AVX.
     // The conversion changes only the status flags of MXCSR, which floaty
     // does not read.
     unsafe {
@@ -191,8 +209,7 @@ pub fn widen_single(value: f32) -> f64 {
 /// Returns the square root of a binary32 value, by `SQRTSS`.
 #[inline]
 pub fn sqrt_f32(mut value: f32) -> f32 {
-    // SAFETY: SQRTSS reads and writes one SSE register. SSE2 is part of every
-    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // SAFETY: SQRTSS reads and writes one SSE register. The build enables SSE2, and `sse!` selects a VEX form only in a build with AVX.
     // The instruction changes only the status flags of MXCSR, which floaty
     // does not read.
     unsafe {
@@ -208,8 +225,7 @@ pub fn sqrt_f32(mut value: f32) -> f32 {
 /// Returns the square root of a binary64 value, by `SQRTSD`.
 #[inline]
 pub fn sqrt_f64(mut value: f64) -> f64 {
-    // SAFETY: SQRTSD reads and writes one SSE register. SSE2 is part of every
-    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // SAFETY: SQRTSD reads and writes one SSE register. The build enables SSE2, and `sse!` selects a VEX form only in a build with AVX.
     // The instruction changes only the status flags of MXCSR, which floaty
     // does not read.
     unsafe {
@@ -334,7 +350,7 @@ pub fn narrow_half(value: f32) -> u16 {
 }
 
 /// Returns a binary32 value rounded to bfloat16 to nearest even, by the
-/// integer rounding of the host paths. The bfloat16 conversions of x86-64
+/// integer rounding of the host paths. The bfloat16 conversions of x86
 /// read a subnormal input as zero.
 #[inline]
 pub fn narrow_bfloat(value: f32) -> u16 {
@@ -359,8 +375,7 @@ pub fn mul_add_f16(left: u16, right: u16, addend: u16) -> u16 {
 #[inline]
 pub fn narrow_double(value: f64) -> f32 {
     let result: f32;
-    // SAFETY: CVTSD2SS reads and writes SSE registers. SSE2 is part of every
-    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // SAFETY: CVTSD2SS reads and writes SSE registers. The build enables SSE2, and `sse!` selects a VEX form only in a build with AVX.
     // The rounding changes only the status flags of MXCSR, which floaty does
     // not read.
     unsafe {
@@ -374,14 +389,14 @@ pub fn narrow_double(value: f64) -> f32 {
     result
 }
 
-/// Returns `None`: x86-64 has no instruction that rounds to odd.
+/// Returns `None`: x86 has no instruction that rounds to odd.
 #[inline]
 pub fn narrow_double_to_odd(_value: f64) -> Option<f32> {
     None
 }
 
 /// Returns a binary64 value rounded once to binary16, to nearest even, by the
-/// integer rounding of the host paths. x86-64 has no instruction for it below
+/// integer rounding of the host paths. x86 has no instruction for it below
 /// AVX512-FP16.
 #[inline]
 pub fn narrow_double_to_half(value: f64) -> u16 {
@@ -499,90 +514,188 @@ pub fn round_f64(_value: f64, _rounding: Rounding) -> Option<f64> {
     None
 }
 
+/// Runs the conversion of `$value` to an integer of the type `$type` by
+/// `$instruction`, in the rounding direction of MXCSR, and returns the
+/// integer. The integer indefinite, the smallest value of the type, stands
+/// for a NaN, an infinity, and a value out of range.
+macro_rules! to_int {
+    ($instruction:expr, $value:ident, $type:ty) => {{
+        let result: $type;
+        // SAFETY: the conversion reads an SSE register and writes a general
+        // register. The build enables SSE2, and `sse!` selects a VEX form
+        // only in a build with AVX. The conversion changes only the status
+        // flags of MXCSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                $instruction,
+                value = in(xmm_reg) $value,
+                result = lateout(reg) result,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+        result
+    }};
+}
+
 /// Returns a binary32 value rounded to a 64-bit integer by `CVTSS2SI` in the
 /// rounding direction of MXCSR, or `None` for the integer indefinite, which a
 /// NaN, an infinity, a value out of range, and `-2^63` give.
+#[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn to_int_f32(value: f32) -> Option<i64> {
-    let result: i64;
-    // SAFETY: CVTSS2SI reads an SSE register and writes a general register.
-    // SSE2 is part of every x86-64 target, and `sse!` selects a VEX form only
-    // in a build with AVX. The conversion changes only the status flags of
-    // MXCSR, which floaty does not read.
-    unsafe {
-        core::arch::asm!(
-            sse!("cvtss2si {result}, {value}", "vcvtss2si {result}, {value}"),
-            value = in(xmm_reg) value,
-            result = lateout(reg) result,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
+    let result = to_int!(
+        sse!("cvtss2si {result}, {value}", "vcvtss2si {result}, {value}"),
+        value,
+        i64
+    );
     (result != i64::MIN).then_some(result)
 }
 
 /// Returns a binary64 value rounded to a 64-bit integer by `CVTSD2SI` in the
 /// rounding direction of MXCSR, or `None` for the integer indefinite, which a
 /// NaN, an infinity, a value out of range, and `-2^63` give.
+#[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn to_int_f64(value: f64) -> Option<i64> {
-    let result: i64;
-    // SAFETY: CVTSD2SI reads an SSE register and writes a general register.
-    // SSE2 is part of every x86-64 target, and `sse!` selects a VEX form only
-    // in a build with AVX. The conversion changes only the status flags of
-    // MXCSR, which floaty does not read.
-    unsafe {
-        core::arch::asm!(
-            sse!("cvtsd2si {result}, {value}", "vcvtsd2si {result}, {value}"),
-            value = in(xmm_reg) value,
-            result = lateout(reg) result,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
+    let result = to_int!(
+        sse!("cvtsd2si {result}, {value}", "vcvtsd2si {result}, {value}"),
+        value,
+        i64
+    );
     (result != i64::MIN).then_some(result)
+}
+
+/// Returns a binary32 value rounded to a 32-bit integer by `CVTSS2SI` in the
+/// rounding direction of MXCSR, or `None` for the integer indefinite, which a
+/// NaN, an infinity, a value out of the range of `i32`, and `-2^31` give. The
+/// engine converts those values to a 64-bit integer.
+#[cfg(target_arch = "x86")]
+#[inline]
+pub fn to_int_f32(value: f32) -> Option<i64> {
+    let result = to_int!(
+        sse!("cvtss2si {result}, {value}", "vcvtss2si {result}, {value}"),
+        value,
+        i32
+    );
+    (result != i32::MIN).then_some(i64::from(result))
+}
+
+/// Returns a binary64 value rounded to a 32-bit integer by `CVTSD2SI`, as
+/// [`to_int_f32`] states.
+#[cfg(target_arch = "x86")]
+#[inline]
+pub fn to_int_f64(value: f64) -> Option<i64> {
+    let result = to_int!(
+        sse!("cvtsd2si {result}, {value}", "vcvtsd2si {result}, {value}"),
+        value,
+        i32
+    );
+    (result != i32::MIN).then_some(i64::from(result))
+}
+
+/// Runs the conversion of the integer `$value` to a binary format by
+/// `$instruction`, after `$clear` clears the destination, in the rounding
+/// direction of MXCSR, and returns the result of the type `$type`.
+macro_rules! from_int {
+    ($clear:expr, $instruction:expr, $value:expr, $type:ty) => {{
+        let result: $type;
+        // SAFETY: the clearing instruction clears an SSE register, so the
+        // conversion does not wait on its old value. The conversion writes
+        // the converted value into the low lane. The build enables SSE2, and
+        // `sse!` selects a VEX form only in a build with AVX. The conversion
+        // changes only the status flags of MXCSR, which floaty does not read.
+        unsafe {
+            core::arch::asm!(
+                $clear,
+                $instruction,
+                value = in(reg) $value,
+                result = out(xmm_reg) result,
+                options(pure, nomem, nostack, preserves_flags),
+            );
+        }
+        result
+    }};
 }
 
 /// Returns a 64-bit integer rounded to binary32, by `CVTSI2SS` in the rounding
 /// direction of MXCSR.
+#[cfg(target_arch = "x86_64")]
 #[inline]
-pub fn from_int_f32(value: i64) -> f32 {
-    let result: f32;
-    // SAFETY: XORPS clears an SSE register, so CVTSI2SS does not wait on its
-    // old value. CVTSI2SS writes the converted value into the low lane. SSE2 is
-    // part of every x86-64 target, and `sse!` selects a VEX form only in a
-    // build with AVX. The conversion changes only the status flags of MXCSR,
-    // which floaty does not read.
-    unsafe {
-        core::arch::asm!(
-            sse!("xorps {result}, {result}", "vxorps {result}, {result}, {result}"),
-            sse!("cvtsi2ss {result}, {value}", "vcvtsi2ss {result}, {result}, {value}"),
-            value = in(reg) value,
-            result = out(xmm_reg) result,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
-    result
+#[allow(clippy::unnecessary_wraps)] // The signature is that of 32-bit x86, which converts only an `i32`.
+pub fn from_int_f32(value: i64) -> Option<f32> {
+    Some(from_int!(
+        sse!(
+            "xorps {result}, {result}",
+            "vxorps {result}, {result}, {result}"
+        ),
+        sse!(
+            "cvtsi2ss {result}, {value}",
+            "vcvtsi2ss {result}, {result}, {value}"
+        ),
+        value,
+        f32
+    ))
 }
 
 /// Returns a 64-bit integer rounded to binary64, by `CVTSI2SD` in the rounding
 /// direction of MXCSR.
+#[cfg(target_arch = "x86_64")]
 #[inline]
-pub fn from_int_f64(value: i64) -> f64 {
-    let result: f64;
-    // SAFETY: XORPD clears an SSE register, so CVTSI2SD does not wait on its
-    // old value. CVTSI2SD writes the converted value into the low lane. SSE2 is
-    // part of every x86-64 target, and `sse!` selects a VEX form only in a
-    // build with AVX. The conversion changes only the status flags of MXCSR,
-    // which floaty does not read.
-    unsafe {
-        core::arch::asm!(
-            sse!("xorpd {result}, {result}", "vxorpd {result}, {result}, {result}"),
-            sse!("cvtsi2sd {result}, {value}", "vcvtsi2sd {result}, {result}, {value}"),
-            value = in(reg) value,
-            result = out(xmm_reg) result,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
-    result
+#[allow(clippy::unnecessary_wraps)] // The signature is that of 32-bit x86, which converts only an `i32`.
+pub fn from_int_f64(value: i64) -> Option<f64> {
+    Some(from_int!(
+        sse!(
+            "xorpd {result}, {result}",
+            "vxorpd {result}, {result}, {result}"
+        ),
+        sse!(
+            "cvtsi2sd {result}, {value}",
+            "vcvtsi2sd {result}, {result}, {value}"
+        ),
+        value,
+        f64
+    ))
+}
+
+/// Returns an integer in the range of `i32` rounded to binary32, by
+/// `CVTSI2SS` in the rounding direction of MXCSR, or `None` for another
+/// integer, which no general register of 32-bit x86 holds.
+#[cfg(target_arch = "x86")]
+#[inline]
+pub fn from_int_f32(value: i64) -> Option<f32> {
+    let value = i32::try_from(value).ok()?;
+    Some(from_int!(
+        sse!(
+            "xorps {result}, {result}",
+            "vxorps {result}, {result}, {result}"
+        ),
+        sse!(
+            "cvtsi2ss {result}, {value}",
+            "vcvtsi2ss {result}, {result}, {value}"
+        ),
+        value,
+        f32
+    ))
+}
+
+/// Returns an integer in the range of `i32` converted exactly to binary64,
+/// by `CVTSI2SD`, or `None` for another integer, as [`from_int_f32`] states.
+#[cfg(target_arch = "x86")]
+#[inline]
+pub fn from_int_f64(value: i64) -> Option<f64> {
+    let value = i32::try_from(value).ok()?;
+    Some(from_int!(
+        sse!(
+            "xorpd {result}, {result}",
+            "vxorpd {result}, {result}, {result}"
+        ),
+        sse!(
+            "cvtsi2sd {result}, {value}",
+            "vcvtsi2sd {result}, {result}, {value}"
+        ),
+        value,
+        f64
+    ))
 }
 
 /// Runs one unordered comparison of `$left` with `$right`, `UCOMISS` or
@@ -592,7 +705,7 @@ macro_rules! compare {
         let (unordered, greater, less): (u8, u8, u8);
         // SAFETY: the comparison reads two SSE registers and writes the
         // arithmetic flags, which SETP, SETA, and SETB copy into three byte
-        // registers. SSE2 is part of every x86-64 target, and `sse!` selects a
+        // registers. The build enables SSE2, and `sse!` selects a
         // VEX form only in a build with AVX. The comparison changes only the
         // status flags of MXCSR, which floaty does not read.
         unsafe {
@@ -692,64 +805,64 @@ pub fn max_f64(mut left: f64, right: f64) -> f64 {
     left
 }
 
-/// `false`: x86-64 has no binary128 unit.
+/// `false`: x86 has no binary128 unit.
 pub const QUAD: bool = false;
 
-/// Returns `None`: x86-64 has no binary128 unit.
+/// Returns `None`: x86 has no binary128 unit.
 #[inline]
 pub fn quad_binary(_left: &[u64; 2], _right: &[u64; 2], _operation: Operation) -> Option<[u64; 2]> {
     None
 }
 
-/// Returns `None`: x86-64 has no binary128 unit.
+/// Returns `None`: x86 has no binary128 unit.
 #[inline]
 pub fn quad_sqrt(_value: &[u64; 2]) -> Option<[u64; 2]> {
     None
 }
 
-/// Returns `None`: x86-64 has no binary128 unit.
+/// Returns `None`: x86 has no binary128 unit.
 #[inline]
 pub fn quad_round(_value: &[u64; 2], _rounding: Rounding) -> Option<[u64; 2]> {
     None
 }
 
-/// Returns `None`: x86-64 has no binary128 unit.
+/// Returns `None`: x86 has no binary128 unit.
 #[inline]
 pub fn quad_to_int(_value: &[u64; 2]) -> Option<i64> {
     None
 }
 
-/// Returns `None`: x86-64 has no binary128 unit.
+/// Returns `None`: x86 has no binary128 unit.
 #[inline]
 pub fn quad_from_int(_value: i64) -> Option<[u64; 2]> {
     None
 }
 
-/// Returns `None`: x86-64 has no binary128 unit.
+/// Returns `None`: x86 has no binary128 unit.
 #[inline]
 pub fn quad_compare(_left: &[u64; 2], _right: &[u64; 2]) -> Option<Ordering> {
     None
 }
 
-/// Returns `None`: x86-64 has no binary128 unit.
+/// Returns `None`: x86 has no binary128 unit.
 #[inline]
 pub fn quad_from_single(_bits: u32) -> Option<[u64; 2]> {
     None
 }
 
-/// Returns `None`: x86-64 has no binary128 unit.
+/// Returns `None`: x86 has no binary128 unit.
 #[inline]
 pub fn quad_from_double(_bits: u64) -> Option<[u64; 2]> {
     None
 }
 
-/// Returns `None`: x86-64 has no binary128 unit.
+/// Returns `None`: x86 has no binary128 unit.
 #[inline]
 pub fn quad_to_single(_value: &[u64; 2]) -> Option<u32> {
     None
 }
 
-/// Returns `None`: x86-64 has no binary128 unit.
+/// Returns `None`: x86 has no binary128 unit.
 #[inline]
 pub fn quad_to_double(_value: &[u64; 2]) -> Option<u64> {
     None
