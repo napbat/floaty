@@ -2,8 +2,10 @@
 //! elementwise slice operations, and `convert_chunks`.
 //!
 //! Each entry point runs in `Build` unless the processor has a larger
-//! instruction set than the build enables. It then runs its own copy,
-//! compiled with the features of that set. The check of the processor runs
+//! instruction set than the build enables. It then runs generic over that
+//! set, and `Isa::run` puts each block of the generic code in a function
+//! compiled with the features of the set, so a helper that LLVM does not
+//! inline keeps them too. The check of the processor runs
 //! once, in a build with the feature `std`, and an atomic keeps its answer.
 //! So a call pays one load of the atomic and one branch. A build without
 //! `std`, and a build that enables the features of the largest set, takes

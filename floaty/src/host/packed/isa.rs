@@ -30,6 +30,11 @@ impl Isa for Build {
     const INTEGERS: bool = packed::INTEGERS;
 
     #[inline]
+    fn run<R>(f: impl FnOnce() -> R) -> R {
+        f()
+    }
+
+    #[inline]
     fn binary_f32x4(left: [f32; 4], right: [f32; 4], operation: Operation) -> Option<[f32; 4]> {
         Some(packed::binary_f32x4(left, right, operation))
     }

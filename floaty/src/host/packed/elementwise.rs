@@ -107,39 +107,43 @@ pub fn round_to_integral<I: Isa, const C: usize>(
     x: [u32; C],
     rounding: Rounding,
 ) -> Option<[u32; C]> {
-    if let Some(rounded) = round_in_instructions::<I, C>(x, rounding) {
-        return Some(rounded);
-    }
-    if rounding == Rounding::ToOdd {
-        return None;
-    }
-    let even = match round_in_instructions::<I, C>(x, Rounding::TiesToEven) {
-        Some(even) => even,
-        None => nearest_even::<I, C>(x)?,
-    };
-    if rounding == Rounding::TiesToEven {
-        return Some(even);
-    }
-    // The difference of a value and its nearest integer is exact: it holds
-    // the low bits of the value, or the value itself below 1. An infinity
-    // gives a NaN difference, and a large value a zero difference, so
-    // neither moves.
-    let differences = encodings(isa::binary::<I, C>(
-        &singles(x),
-        &singles(even),
-        Operation::Sub,
-    )?);
-    let mut steps = [0; C];
-    steps
-        .iter_mut()
-        .zip(x.iter().zip(differences))
-        .for_each(|(step, (&value, difference))| *step = correction(value, difference, rounding));
-    let moved = encodings(isa::binary::<I, C>(
-        &singles(even),
-        &singles(steps),
-        Operation::Add,
-    )?);
-    Some(with_signs(x, moved))
+    I::run(move || {
+        if let Some(rounded) = round_in_instructions::<I, C>(x, rounding) {
+            return Some(rounded);
+        }
+        if rounding == Rounding::ToOdd {
+            return None;
+        }
+        let even = match round_in_instructions::<I, C>(x, Rounding::TiesToEven) {
+            Some(even) => even,
+            None => nearest_even::<I, C>(x)?,
+        };
+        if rounding == Rounding::TiesToEven {
+            return Some(even);
+        }
+        // The difference of a value and its nearest integer is exact: it
+        // holds the low bits of the value, or the value itself below 1. An
+        // infinity gives a NaN difference, and a large value a zero
+        // difference, so neither moves.
+        let differences = encodings(isa::binary::<I, C>(
+            &singles(x),
+            &singles(even),
+            Operation::Sub,
+        )?);
+        let mut steps = [0; C];
+        steps
+            .iter_mut()
+            .zip(x.iter().zip(differences))
+            .for_each(|(step, (&value, difference))| {
+                *step = correction(value, difference, rounding);
+            });
+        let moved = encodings(isa::binary::<I, C>(
+            &singles(even),
+            &singles(steps),
+            Operation::Add,
+        )?);
+        Some(with_signs(x, moved))
+    })
 }
 
 /// Returns each binary32 encoding rounded to an integral value by the
@@ -228,10 +232,11 @@ fn integers<I: Isa, const C: usize>(x: [u32; C]) -> Option<[i32; C]> {
 }
 
 /// Returns a chunk of encodings, or `None` when the chunk holds a NaN, which
-/// the engine selects.
+/// the engine selects. The test takes a slice, whose loop stays short until
+/// the function inlines into a loop of chunks of a known length.
 #[inline]
 fn without_nan<const C: usize>(bits: [u32; C]) -> Option<[u32; C]> {
-    (!any_lane(bits.iter().copied(), nan_32)).then_some(bits)
+    (!any_lane(bits[..].iter().copied(), nan_32)).then_some(bits)
 }
 
 /// Computes the values of `values` `N` at a time, with one check of the
@@ -253,13 +258,13 @@ pub fn store<const N: usize>(
 }
 
 /// Calls `each` for each chunk as `store` does, in the instruction set `I`,
-/// in an environment that allows the path.
+/// with its features, in an environment that allows the path.
 #[inline]
 pub(super) fn store_on<I: Isa, const N: usize>(
     values: impl Load,
     each: impl FnMut(usize, usize, Option<&[u32]>),
 ) {
-    in_value_chunks::<I, N, u32>(values, without_nan, each);
+    I::run(move || in_value_chunks::<I, N, u32>(values, without_nan, each));
 }
 
 /// Converts the values of `values` to 32-bit integers to nearest even, `N`
@@ -282,13 +287,13 @@ pub fn to_int<const N: usize>(
 }
 
 /// Calls `each` for each chunk as `to_int` does, in the instruction set `I`,
-/// in an environment that allows the path.
+/// with its features, in an environment that allows the path.
 #[inline]
 pub(super) fn to_int_on<I: Isa, const N: usize>(
     values: impl Load,
     each: impl FnMut(usize, usize, Option<&[i32]>),
 ) {
-    in_value_chunks::<I, N, i32>(values, integers::<I, N>, each);
+    I::run(move || in_value_chunks::<I, N, i32>(values, integers::<I, N>, each));
 }
 
 /// Loads the values of `values` `C` at a time in the instruction set `I`,
@@ -331,38 +336,40 @@ pub fn reduce<const N: usize>(values: impl Load, operation: MinMax, env: &Env) -
     dispatch::reduce::<N>(values, operation)
 }
 
-/// Returns the result of `reduce` in the instruction set `I`, in an
-/// environment that allows the path.
+/// Returns the result of `reduce` in the instruction set `I`, with its
+/// features, in an environment that allows the path.
 #[inline]
 pub(super) fn reduce_on<I: Isa, const N: usize>(
     values: impl Load,
     operation: MinMax,
 ) -> Option<u32> {
-    let identity = if operation.is_minimum() {
-        0x7F80_0000
-    } else {
-        0xFF80_0000
-    };
-    let mut lanes = [identity; N];
-    if I::EXTRA_WIDE && N.is_multiple_of(16) {
-        reduce_into::<I, N, 16>(&mut lanes, values, operation, identity)?;
-    } else if N.is_multiple_of(8) {
-        reduce_into::<I, N, 8>(&mut lanes, values, operation, identity)?;
-    } else if N.is_multiple_of(4) {
-        reduce_into::<I, N, 4>(&mut lanes, values, operation, identity)?;
-    } else {
-        reduce_into::<I, N, 1>(&mut lanes, values, operation, identity)?;
-    }
-    let mut half = N / 2;
-    while half > 0 {
-        let (low, high) = lanes.split_at_mut(half);
-        for (low, &high) in low.iter_mut().zip(&*high) {
-            let [result] = min_max::<I, 1>([*low], [high], operation)?;
-            *low = result;
+    I::run(move || {
+        let identity = if operation.is_minimum() {
+            0x7F80_0000
+        } else {
+            0xFF80_0000
+        };
+        let mut lanes = [identity; N];
+        if I::EXTRA_WIDE && N.is_multiple_of(16) {
+            reduce_into::<I, N, 16>(&mut lanes, values, operation, identity)?;
+        } else if N.is_multiple_of(8) {
+            reduce_into::<I, N, 8>(&mut lanes, values, operation, identity)?;
+        } else if N.is_multiple_of(4) {
+            reduce_into::<I, N, 4>(&mut lanes, values, operation, identity)?;
+        } else {
+            reduce_into::<I, N, 1>(&mut lanes, values, operation, identity)?;
         }
-        half /= 2;
-    }
-    (!nan_32(lanes[0])).then_some(lanes[0])
+        let mut half = N / 2;
+        while half > 0 {
+            let (low, high) = lanes.split_at_mut(half);
+            for (low, &high) in low.iter_mut().zip(&*high) {
+                let [result] = min_max::<I, 1>([*low], [high], operation)?;
+                *low = result;
+            }
+            half /= 2;
+        }
+        (!nan_32(lanes[0])).then_some(lanes[0])
+    })
 }
 
 /// Combines each value of `values` into its lane, `C` lanes at a time. The

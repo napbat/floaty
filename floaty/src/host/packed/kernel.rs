@@ -40,7 +40,8 @@ pub fn accumulate<const N: usize>(
 }
 
 /// Returns the sum of `accumulate` in the instruction set `I`, in an
-/// environment that allows the path.
+/// environment that allows the path. The match comes before `sum_vectors`,
+/// whose loop runs with the features of `I` for one term and step.
 #[inline]
 pub(super) fn accumulate_on<I: Isa, const N: usize>(
     x: impl Load,
@@ -82,7 +83,8 @@ pub fn accumulate_rows<const N: usize>(
 }
 
 /// Calls `each` for each row as `accumulate_rows` does, in the instruction
-/// set `I`, in an environment that allows the path.
+/// set `I`, in an environment that allows the path. The match comes before
+/// `sum_rows`, whose loop runs with the features of `I` for one term.
 #[inline]
 pub(super) fn rows_on<I: Isa, const N: usize>(
     rows: impl Load,
@@ -137,8 +139,9 @@ accumulations! {
 }
 
 /// Calls `each` with the index of each row of `rows` and its sum with
-/// `query`, as `accumulate_rows` states. The environment allows the host
-/// path. Rows of at most [`SHORT`] values take `short_rows`.
+/// `query`, as `accumulate_rows` states, with the features of `I`. The
+/// environment allows the host path. Rows of at most [`SHORT`] values take
+/// `short_rows`.
 #[inline]
 fn sum_rows<I: Isa, const N: usize, A: Accumulation>(
     rows: impl Load,
@@ -146,15 +149,17 @@ fn sum_rows<I: Isa, const N: usize, A: Accumulation>(
     row_count: usize,
     mut each: impl FnMut(usize, Option<u32>),
 ) {
-    let count = query.count();
-    if N >= SHORT && (1..=SHORT).contains(&count) {
-        short_rows::<I, A>(rows, query, row_count, each);
-        return;
-    }
-    for index in 0..row_count {
-        let row = rows.part(index * count, count);
-        each(index, sum_vectors::<I, N, A>(row, query));
-    }
+    I::run(move || {
+        let count = query.count();
+        if N >= SHORT && (1..=SHORT).contains(&count) {
+            short_rows::<I, A>(rows, query, row_count, each);
+            return;
+        }
+        for index in 0..row_count {
+            let row = rows.part(index * count, count);
+            each(index, sum_vectors::<I, N, A>(row, query));
+        }
+    });
 }
 
 /// The most values of a row that `short_rows` computes.
@@ -259,21 +264,24 @@ fn short_terms<I: Isa, A: Accumulation>(
 
 /// Returns the sum of the terms of the pairs of values of `x` and `y` in the
 /// order of the engine, or `None` when a conversion has no instruction and
-/// when the sum is a NaN. The environment allows the host path.
+/// when the sum is a NaN. The environment allows the host path. The loop
+/// runs with the features of `I`.
 #[inline]
 fn sum_vectors<I: Isa, const N: usize, A: Accumulation>(x: impl Load, y: impl Load) -> Option<u32> {
-    let mut lanes = [0.0; N];
-    if I::EXTRA_WIDE && N.is_multiple_of(16) {
-        add_vectors::<I, N, 16, A>(&mut lanes, x, y)?;
-    } else if N.is_multiple_of(8) {
-        add_vectors::<I, N, 8, A>(&mut lanes, x, y)?;
-    } else if N.is_multiple_of(4) {
-        add_vectors::<I, N, 4, A>(&mut lanes, x, y)?;
-    } else {
-        add_vectors::<I, N, 1, A>(&mut lanes, x, y)?;
-    }
-    let sum = sum_by_halves::<I, N>(lanes)?.to_bits();
-    (!nan_32(sum)).then_some(sum)
+    I::run(move || {
+        let mut lanes = [0.0; N];
+        if I::EXTRA_WIDE && N.is_multiple_of(16) {
+            add_vectors::<I, N, 16, A>(&mut lanes, x, y)?;
+        } else if N.is_multiple_of(8) {
+            add_vectors::<I, N, 8, A>(&mut lanes, x, y)?;
+        } else if N.is_multiple_of(4) {
+            add_vectors::<I, N, 4, A>(&mut lanes, x, y)?;
+        } else {
+            add_vectors::<I, N, 1, A>(&mut lanes, x, y)?;
+        }
+        let sum = sum_by_halves::<I, N>(lanes)?.to_bits();
+        (!nan_32(sum)).then_some(sum)
+    })
 }
 
 /// Adds the term of each pair of values of `x` and `y` into its lane, `C`
@@ -352,27 +360,29 @@ fn with_operand<I: Isa, const N: usize>(
 
 /// Returns binary16 encodings widened exactly to binary32: in the packed
 /// widening instructions where the instruction set has them, and in integer
-/// and binary32 instructions otherwise.
+/// and binary32 instructions otherwise, with the features of `I`.
 #[inline]
 pub fn widen_halves<I: Isa, const N: usize>(halves: &[u16; N]) -> Option<[u32; N]> {
-    if I::HALF {
-        return Some(encodings(isa::widen_halves::<I, N>(halves)?));
-    }
-    // The fraction of a subnormal binary16 value times 2^-24 is its
-    // magnitude, a normal binary32 value. The conversion of the fraction and
-    // the product by a power of two are exact.
-    let fractions = from_integers::<I, _, N>(halves, |bits| i32::from(bits & 0x03FF))?;
-    let subnormals = encodings(with_operand::<I, N>(
-        &fractions,
-        f32::from_bits(0x3380_0000),
-        Operation::Mul,
-    )?);
-    let mut widened = [0; N];
-    widened
-        .iter_mut()
-        .zip(halves.iter().zip(subnormals))
-        .for_each(|(lane, (&bits, subnormal))| *lane = widen_half_bits(bits, subnormal));
-    Some(widened)
+    I::run(move || {
+        if I::HALF {
+            return Some(encodings(isa::widen_halves::<I, N>(halves)?));
+        }
+        // The fraction of a subnormal binary16 value times 2^-24 is its
+        // magnitude, a normal binary32 value. The conversion of the fraction
+        // and the product by a power of two are exact.
+        let fractions = from_integers::<I, _, N>(halves, |bits| i32::from(bits & 0x03FF))?;
+        let subnormals = encodings(with_operand::<I, N>(
+            &fractions,
+            f32::from_bits(0x3380_0000),
+            Operation::Mul,
+        )?);
+        let mut widened = [0; N];
+        widened
+            .iter_mut()
+            .zip(halves.iter().zip(subnormals))
+            .for_each(|(lane, (&bits, subnormal))| *lane = widen_half_bits(bits, subnormal));
+        Some(widened)
+    })
 }
 
 /// Returns binary32 values rounded to binary16 to nearest even, as
@@ -437,19 +447,22 @@ fn from_integers<I: Isa, T: Copy, const N: usize>(
     isa::from_int::<I, N>(&integers)
 }
 
-/// Returns unsigned 8-bit integers converted exactly to binary32.
+/// Returns unsigned 8-bit integers converted exactly to binary32, with the
+/// features of `I`.
 #[inline]
 pub fn widen_codes<I: Isa, const N: usize>(codes: &[u8; N]) -> Option<[u32; N]> {
-    Some(encodings(from_integers::<I, _, N>(codes, i32::from)?))
+    I::run(move || Some(encodings(from_integers::<I, _, N>(codes, i32::from)?)))
 }
 
 /// Returns signed 8-bit integers converted exactly to binary32, each then
-/// multiplied by `scale` and rounded.
+/// multiplied by `scale` and rounded, with the features of `I`.
 #[inline]
 pub fn widen_scaled_codes<I: Isa, const N: usize>(codes: &[i8; N], scale: u32) -> Option<[u32; N]> {
-    let values = from_integers::<I, _, N>(codes, i32::from)?;
-    let scaled = with_operand::<I, N>(&values, f32::from_bits(scale), Operation::Mul)?;
-    Some(encodings(scaled))
+    I::run(move || {
+        let values = from_integers::<I, _, N>(codes, i32::from)?;
+        let scaled = with_operand::<I, N>(&values, f32::from_bits(scale), Operation::Mul)?;
+        Some(encodings(scaled))
+    })
 }
 
 /// Adds the term of each pair of `x` and `y` into its lane of `lanes`.
@@ -485,18 +498,20 @@ fn add_terms<I: Isa, const N: usize, A: Accumulation>(
 /// `N` is a power of two.
 #[inline]
 fn sum_by_halves<I: Isa, const N: usize>(mut lanes: [f32; N]) -> Option<f32> {
-    let mut half = N / 2;
-    while half > 0 {
-        let (low, high) = lanes.split_at_mut(half);
-        let (low_chunks, low_rest) = low.as_chunks_mut::<4>();
-        let (high_chunks, high_rest) = high[..half].as_chunks::<4>();
-        for (low, &high) in low_chunks.iter_mut().zip(high_chunks) {
-            *low = I::binary_f32x4(*low, high, Operation::Add)?;
+    I::run(move || {
+        let mut half = N / 2;
+        while half > 0 {
+            let (low, high) = lanes.split_at_mut(half);
+            let (low_chunks, low_rest) = low.as_chunks_mut::<4>();
+            let (high_chunks, high_rest) = high[..half].as_chunks::<4>();
+            for (low, &high) in low_chunks.iter_mut().zip(high_chunks) {
+                *low = I::binary_f32x4(*low, high, Operation::Add)?;
+            }
+            for (low, &high) in low_rest.iter_mut().zip(high_rest) {
+                *low = I::binary_f32x4([*low; 4], [high; 4], Operation::Add)?[0];
+            }
+            half /= 2;
         }
-        for (low, &high) in low_rest.iter_mut().zip(high_rest) {
-            *low = I::binary_f32x4([*low; 4], [high; 4], Operation::Add)?[0];
-        }
-        half /= 2;
-    }
-    Some(lanes[0])
+        Some(lanes[0])
+    })
 }

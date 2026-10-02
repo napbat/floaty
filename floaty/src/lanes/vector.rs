@@ -149,12 +149,12 @@ macro_rules! load_slice {
         }
 
         #[inline]
-        fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+        fn load_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
             load_full::<$element, N>(self, start, |$chunk| $widen)
         }
 
         #[inline]
-        fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+        fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
             load_rest::<$element, N>(self, start, |$chunk| $widen)
         }
 
@@ -285,12 +285,12 @@ macro_rules! little_endian {
             }
 
             #[inline]
-            fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            fn load_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
                 load_full(self.encodings(), start, Self::widen::<H, N>)
             }
 
             #[inline]
-            fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
                 load_rest(self.encodings(), start, Self::widen::<H, N>)
             }
 
@@ -348,7 +348,7 @@ impl Load for ScaledCodes<'_> {
     }
 
     #[inline]
-    fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
         let scale = self.scale.to_bits();
         load_full(self.codes, start, |chunk| {
             host::packed::widen_scaled_codes::<H, N>(chunk, scale)
@@ -356,7 +356,7 @@ impl Load for ScaledCodes<'_> {
     }
 
     #[inline]
-    fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
         let scale = self.scale.to_bits();
         load_rest(self.codes, start, |chunk| {
             host::packed::widen_scaled_codes::<H, N>(chunk, scale)

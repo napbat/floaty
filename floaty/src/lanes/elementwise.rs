@@ -74,13 +74,13 @@ macro_rules! binary_view {
             }
 
             #[inline]
-            fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            fn load_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
                 let (x, y) = (self.0.load::<H, N>(start)?, self.1.load::<H, N>(start)?);
                 host::packed::elementwise::$host::<H, N>(x, y, $operand)
             }
 
             #[inline]
-            fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
                 let (x, y) = (
                     self.0.load_rest::<H, N>(start)?,
                     self.1.load_rest::<H, N>(start)?,
@@ -193,12 +193,12 @@ impl<T: Widen> Load for Splat<T> {
     }
 
     #[inline]
-    fn load<H: Isa, const N: usize>(self, _start: usize) -> Option<[u32; N]> {
+    fn load_on<H: Isa, const N: usize>(self, _start: usize) -> Option<[u32; N]> {
         T::widen_on_host::<H, N>(&[self.value; N])
     }
 
     #[inline]
-    fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
         Some(padded(
             T::widen_on_host::<H, N>(&[self.value; N])?,
             self.count - start,
@@ -240,13 +240,13 @@ impl<X: Vector> Load for RoundToIntegral<X> {
     }
 
     #[inline]
-    fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
         let values = self.values.load::<H, N>(start)?;
         host::packed::elementwise::round_to_integral::<H, N>(values, self.rounding)
     }
 
     #[inline]
-    fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
         let values = self.values.load_rest::<H, N>(start)?;
         host::packed::elementwise::round_to_integral::<H, N>(values, self.rounding)
     }
@@ -283,12 +283,12 @@ impl<X: Vector> Load for Abs<X> {
     }
 
     #[inline]
-    fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
         Some(magnitudes(self.0.load::<H, N>(start)?))
     }
 
     #[inline]
-    fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
         Some(magnitudes(self.0.load_rest::<H, N>(start)?))
     }
 
@@ -360,12 +360,12 @@ macro_rules! cells {
             }
 
             #[inline]
-            fn load<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            fn load_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
                 Some(cell_encodings(self, start, $encode))
             }
 
             #[inline]
-            fn load_rest<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
                 Some(cell_encodings_rest(self, start, $encode))
             }
 

@@ -569,67 +569,100 @@ pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
 }
 
 /// Calls `each` for each full chunk as `convert_chunks` does, in the
-/// instruction set `I`, in an environment that allows the path.
+/// instruction set `I`, in an environment that allows the path. The match
+/// on `to` comes before `in_chunks_with`, so the loop of each kind runs
+/// with the features of `I` and the conversion of its kind alone.
 #[inline]
 fn convert_chunks_on<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     values: &[Float<S, W, M>],
     to: Host,
-    mut each: impl FnMut(usize, Option<[u64; N]>),
+    each: impl FnMut(usize, Option<[u64; N]>),
 ) {
-    for (index, chunk) in values.as_chunks::<N>().0.iter().enumerate() {
-        each(index * N, convert_lanes::<I, S, W, M, N>(chunk, to));
+    match to {
+        Host::Single => in_chunks_with::<I, S, W, M, N>(values, each, |chunk| {
+            convert_lanes::<I, S, W, M, N>(chunk, Host::Single)
+        }),
+        Host::Double => in_chunks_with::<I, S, W, M, N>(values, each, |chunk| {
+            convert_lanes::<I, S, W, M, N>(chunk, Host::Double)
+        }),
+        Host::Half => in_chunks_with::<I, S, W, M, N>(values, each, |chunk| {
+            convert_lanes::<I, S, W, M, N>(chunk, Host::Half)
+        }),
+        Host::BFloat => in_chunks_with::<I, S, W, M, N>(values, each, |chunk| {
+            convert_lanes::<I, S, W, M, N>(chunk, Host::BFloat)
+        }),
+        Host::Extended | Host::Quad | Host::None => {
+            in_chunks_with::<I, S, W, M, N>(values, each, |_| None);
+        }
     }
+}
+
+/// Calls `each` with the index of the first value of each full chunk of
+/// `values` and `convert` of the chunk, with the features of `I`.
+#[inline]
+fn in_chunks_with<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    values: &[Float<S, W, M>],
+    mut each: impl FnMut(usize, Option<[u64; N]>),
+    convert: impl Fn(&[Float<S, W, M>; N]) -> Option<[u64; N]>,
+) {
+    I::run(move || {
+        for (index, chunk) in values.as_chunks::<N>().0.iter().enumerate() {
+            each(index * N, convert(chunk));
+        }
+    });
 }
 
 /// Returns the encoding of each lane converted to the host kind `to`, as
 /// `convert` does, in the instruction set `I`, in an environment that
-/// allows the path.
+/// allows the path. Each conversion runs with the features of `I`, and the
+/// match selects it outside, so a caller with a known kind takes its
+/// conversion alone.
 #[inline]
 fn convert_lanes<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
     to: Host,
 ) -> Option<[u64; N]> {
     match (S::HOST, to) {
-        (Host::Single, Host::Double) => {
+        (Host::Single, Host::Double) => I::run(move || {
             let lanes = isa::widen::<I, N>(singles(value)?)?.map(f64::to_bits);
             let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
-        }
-        (Host::Double, Host::Single) => {
+        }),
+        (Host::Double, Host::Single) => I::run(move || {
             let bits = isa::narrow::<I, N>(doubles(value)?)?.map(f32::to_bits);
             let nan = any_lane(bits.iter().copied(), nan_32);
             (!nan).then_some(bits.map(u64::from))
-        }
-        (Host::Half, Host::Single) => {
+        }),
+        (Host::Half, Host::Single) => I::run(move || {
             let bits = half::to_singles::<I, S, W, M, N>(value)?;
             let nan = any_lane(bits.iter().copied(), nan_32);
             (!nan).then_some(bits.map(u64::from))
-        }
-        (Host::Half, Host::Double) => {
+        }),
+        (Host::Half, Host::Double) => I::run(move || {
             let lanes = half::to_doubles::<I, S, W, M, N>(value)?.map(f64::to_bits);
             let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
-        }
-        (Host::Single, Host::Half) => {
+        }),
+        (Host::Single, Host::Half) => I::run(move || {
             let bits = half::from_singles::<I, S, W, M, N>(value)?;
             let nan = any_lane(bits.iter().copied(), nan_16);
             (!nan).then_some(bits.map(u64::from))
-        }
-        (Host::BFloat, Host::Single) => {
+        }),
+        (Host::BFloat, Host::Single) => I::run(move || {
             let bits = bfloat::to_singles(value)?.map(f32::to_bits);
             let nan = any_lane(bits.iter().copied(), nan_32);
             (!nan).then_some(bits.map(u64::from))
-        }
-        (Host::BFloat, Host::Double) => {
+        }),
+        (Host::BFloat, Host::Double) => I::run(move || {
             let lanes = isa::widen::<I, N>(&bfloat::to_singles(value)?)?.map(f64::to_bits);
             let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
-        }
-        (Host::Single, Host::BFloat) => {
+        }),
+        (Host::Single, Host::BFloat) => I::run(move || {
             let bits = bfloat::from_singles(value)?;
             let nan = any_lane(bits.iter().copied(), nan_bfloat);
             (!nan).then_some(bits.map(u64::from))
-        }
+        }),
         _ => None,
     }
 }

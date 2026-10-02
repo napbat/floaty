@@ -257,6 +257,9 @@ pub trait Isa: Sealed {
     /// scalar conversion must decide.
     const INTEGERS: bool;
 
+    /// Returns `f()`, computed with the features of the instruction set.
+    fn run<R>(f: impl FnOnce() -> R) -> R;
+
     /// Returns `operation` of four pairs of binary32 lanes.
     fn binary_f32x4(left: [f32; 4], right: [f32; 4], operation: Operation) -> Option<[f32; 4]>;
     /// Returns `operation` of eight pairs of binary32 lanes.
@@ -327,7 +330,8 @@ pub trait Isa: Sealed {
 
 /// A vector that a slice kernel of `Lanes` reads on the host unit, as the
 /// binary32 encodings of its values. A load computes in the instruction set
-/// `I`.
+/// `I`, with its features: `load` and `load_rest` run `load_on` and
+/// `load_rest_on` in [`Isa::run`].
 pub trait Load: Copy {
     /// Returns the number of values.
     fn count(self) -> usize;
@@ -335,12 +339,24 @@ pub trait Load: Copy {
     /// Returns the binary32 encodings of the `N` values from `start`, or
     /// `None` when the instruction set has no instruction for the
     /// conversion. The vector holds at least `start + N` values.
-    fn load<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]>;
+    #[inline]
+    fn load<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+        I::run(|| self.load_on::<I, N>(start))
+    }
 
     /// Returns the binary32 encodings of the values from `start`, with +0
     /// in the lanes past the last value, as [`load`](Self::load) does. The
     /// vector holds more than `start` and fewer than `start + N` values.
-    fn load_rest<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]>;
+    #[inline]
+    fn load_rest<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+        I::run(|| self.load_rest_on::<I, N>(start))
+    }
+
+    /// Computes [`load`](Self::load) in the instruction set `I`.
+    fn load_on<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]>;
+
+    /// Computes [`load_rest`](Self::load_rest) in the instruction set `I`.
+    fn load_rest_on<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]>;
 
     /// Returns the `count` values from `start` as a vector of the same kind.
     /// The vector holds at least `start + count` values.

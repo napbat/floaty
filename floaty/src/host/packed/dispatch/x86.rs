@@ -1,5 +1,6 @@
-//! The instruction sets of x86 and x86-64 beyond the build, the check of the
-//! processor, and the copies of the entry points compiled for each set.
+//! The instruction sets of x86 and x86-64 beyond the build, the check of
+//! the processor, and the functions that run code with the features of each
+//! set.
 //!
 //! - `V3` is x86-64-v3: AVX, AVX2, BMI1, BMI2, F16C, FMA, LZCNT, and MOVBE.
 //!   Its forms are the 256-bit forms of `wide` and the VEX forms of the
@@ -8,10 +9,10 @@
 //!   and AVX-512VL. It adds the 512-bit forms of `avx512`.
 //!
 //! The feature lists name the features of the levels of the x86-64 psABI,
-//! so a copy compiles as a build with `-C target-cpu=x86-64-v3` or `v4`
-//! compiles. A set runs only where the processor has every feature, and
-//! only when the build does not enable every one already: such a build has
-//! the forms in `Build`.
+//! so the code of a set compiles as a build with `-C target-cpu=x86-64-v3`
+//! or `v4` compiles. A set runs only where the processor has every feature,
+//! and only when the build does not enable every one already: such a build
+//! has the forms in `Build`.
 //!
 //! 32-bit x86 runs the same two sets. A processor with their features runs
 //! the same instructions there, in eight vector registers.
@@ -19,8 +20,11 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use super::super::super::environment::packed::{avx512, wide};
-use super::super::super::{Isa, Operation};
-use crate::env::Rounding;
+use super::super::super::{Host, Isa, Load, Operation, Step, Term};
+use super::super::{convert_chunks_on, elementwise, kernel};
+use crate::env::{Mode, Rounding};
+use crate::float::Float;
+use crate::format::Standard;
 use crate::format::internal::MinMax;
 use crate::sealed::Sealed;
 
@@ -169,138 +173,37 @@ fn host_level_override() -> Option<u8> {
     None
 }
 
-/// Defines the copies of the entry points for the instruction set `$isa`,
-/// in the module `$module`, compiled with the features `$features`. Each
-/// copy is a function that enables the features for its own code, so the
-/// generic code of the entry point inlines into it with the forms of
-/// `$isa`.
-macro_rules! copies {
-    ($(#[$doc:meta])* $module:ident, $isa:ident, $features:literal) => {
-        $(#[$doc])*
-        mod $module {
-            use super::super::super::super::{Host, Load, Step, Term};
-            use super::super::super::{convert_chunks_on, elementwise, kernel};
-            use super::$isa;
-            use crate::env::Mode;
-            use crate::float::Float;
-            use crate::format::Standard;
-            use crate::format::internal::MinMax;
-
-            /// `accumulate_on` in the instruction set.
-            ///
-            /// # Safety
-            ///
-            /// The processor must have the features of the instruction set.
-            #[target_feature(enable = $features)]
-            #[inline]
-            pub unsafe fn accumulate<const N: usize>(
-                x: impl Load,
-                y: impl Load,
-                term: Term,
-                step: Step,
-            ) -> Option<u32> {
-                kernel::accumulate_on::<$isa, N>(x, y, term, step)
-            }
-
-            /// `rows_on` in the instruction set.
-            ///
-            /// # Safety
-            ///
-            /// The processor must have the features of the instruction set.
-            #[target_feature(enable = $features)]
-            #[inline]
-            pub unsafe fn rows<const N: usize>(
-                rows: impl Load,
-                query: impl Load,
-                row_count: usize,
-                term: Term,
-                each: impl FnMut(usize, Option<u32>),
-            ) {
-                kernel::rows_on::<$isa, N>(rows, query, row_count, term, each);
-            }
-
-            /// `store_on` in the instruction set.
-            ///
-            /// # Safety
-            ///
-            /// The processor must have the features of the instruction set.
-            #[target_feature(enable = $features)]
-            #[inline]
-            pub unsafe fn store<const N: usize>(
-                values: impl Load,
-                each: impl FnMut(usize, usize, Option<&[u32]>),
-            ) {
-                elementwise::store_on::<$isa, N>(values, each);
-            }
-
-            /// `to_int_on` in the instruction set.
-            ///
-            /// # Safety
-            ///
-            /// The processor must have the features of the instruction set.
-            #[target_feature(enable = $features)]
-            #[inline]
-            pub unsafe fn to_int<const N: usize>(
-                values: impl Load,
-                each: impl FnMut(usize, usize, Option<&[i32]>),
-            ) {
-                elementwise::to_int_on::<$isa, N>(values, each);
-            }
-
-            /// `reduce_on` in the instruction set.
-            ///
-            /// # Safety
-            ///
-            /// The processor must have the features of the instruction set.
-            #[target_feature(enable = $features)]
-            #[inline]
-            pub unsafe fn reduce<const N: usize>(
-                values: impl Load,
-                operation: MinMax,
-            ) -> Option<u32> {
-                elementwise::reduce_on::<$isa, N>(values, operation)
-            }
-
-            /// `convert_chunks_on` in the instruction set.
-            ///
-            /// # Safety
-            ///
-            /// The processor must have the features of the instruction set.
-            #[target_feature(enable = $features)]
-            #[inline]
-            pub unsafe fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
-                values: &[Float<S, W, M>],
-                to: Host,
-                each: impl FnMut(usize, Option<[u64; N]>),
-            ) {
-                convert_chunks_on::<$isa, S, W, M, N>(values, to, each);
-            }
-        }
-    };
+/// Returns `f()`, compiled with the features of `V3`.
+///
+/// # Safety
+///
+/// The processor must have the features of `V3`.
+#[target_feature(enable = "avx,avx2,bmi1,bmi2,f16c,fma,lzcnt,movbe")]
+#[inline]
+unsafe fn run_v3<R>(f: impl FnOnce() -> R) -> R {
+    f()
 }
 
-copies!(
-    /// The copies of the entry points in `V3`.
-    v3,
-    V3,
-    "avx,avx2,bmi1,bmi2,f16c,fma,lzcnt,movbe"
-);
-copies!(
-    /// The copies of the entry points in `V4`.
-    v4,
-    V4,
-    "avx,avx2,bmi1,bmi2,f16c,fma,lzcnt,movbe,avx512f,avx512bw,avx512cd,avx512dq,avx512vl"
-);
+/// Returns `f()`, compiled with the features of `V4`.
+///
+/// # Safety
+///
+/// The processor must have the features of `V4`.
+#[target_feature(
+    enable = "avx,avx2,bmi1,bmi2,f16c,fma,lzcnt,movbe,avx512f,avx512bw,avx512cd,avx512dq,avx512vl"
+)]
+#[inline]
+unsafe fn run_v4<R>(f: impl FnOnce() -> R) -> R {
+    f()
+}
 
-/// Runs the copy of `$function` of the instruction set of `$selected`.
-macro_rules! run {
-    ($selected:expr, $function:ident::<$($generic:tt),+>($($argument:expr),*)) => {
+/// Calls the entry point `$function` with the instruction set of
+/// `$selected` as its first generic argument.
+macro_rules! in_selected {
+    ($selected:expr, $($path:ident)::+::<$($generic:tt),+>($($argument:expr),*)) => {
         match $selected.0 {
-            // SAFETY: a `Selected` of `V3` exists only on a processor with
-            // the features of `V3`, as `selected` checked.
-            Level::V3 => unsafe { v3::$function::<$($generic),+>($($argument),*) },
-            // SAFETY: as for `V3`, with the features of `V4`.
-            Level::V4 => unsafe { v4::$function::<$($generic),+>($($argument),*) },
+            Level::V3 => $($path)::+::<V3, $($generic),+>($($argument),*),
+            Level::V4 => $($path)::+::<V4, $($generic),+>($($argument),*),
         }
     };
 }
@@ -319,82 +222,78 @@ impl Selected {
     #[inline]
     pub fn accumulate<const N: usize>(
         self,
-        x: impl super::Load,
-        y: impl super::Load,
-        term: super::Term,
-        step: super::Step,
+        x: impl Load,
+        y: impl Load,
+        term: Term,
+        step: Step,
     ) -> Option<u32> {
-        run!(self, accumulate::<N>(x, y, term, step))
+        in_selected!(self, kernel::accumulate_on::<N>(x, y, term, step))
     }
 
     /// Runs `rows_on` in the instruction set.
     #[inline]
     pub fn rows<const N: usize>(
         self,
-        rows: impl super::Load,
-        query: impl super::Load,
+        rows: impl Load,
+        query: impl Load,
         row_count: usize,
-        term: super::Term,
+        term: Term,
         each: impl FnMut(usize, Option<u32>),
     ) {
-        run!(self, rows::<N>(rows, query, row_count, term, each));
+        in_selected!(
+            self,
+            kernel::rows_on::<N>(rows, query, row_count, term, each)
+        );
     }
 
     /// Runs `store_on` in the instruction set.
     #[inline]
     pub fn store<const N: usize>(
         self,
-        values: impl super::Load,
+        values: impl Load,
         each: impl FnMut(usize, usize, Option<&[u32]>),
     ) {
-        run!(self, store::<N>(values, each));
+        in_selected!(self, elementwise::store_on::<N>(values, each));
     }
 
     /// Runs `to_int_on` in the instruction set.
     #[inline]
     pub fn to_int<const N: usize>(
         self,
-        values: impl super::Load,
+        values: impl Load,
         each: impl FnMut(usize, usize, Option<&[i32]>),
     ) {
-        run!(self, to_int::<N>(values, each));
+        in_selected!(self, elementwise::to_int_on::<N>(values, each));
     }
 
     /// Runs `reduce_on` in the instruction set.
     #[inline]
-    pub fn reduce<const N: usize>(
-        self,
-        values: impl super::Load,
-        operation: MinMax,
-    ) -> Option<u32> {
-        run!(self, reduce::<N>(values, operation))
+    pub fn reduce<const N: usize>(self, values: impl Load, operation: MinMax) -> Option<u32> {
+        in_selected!(self, elementwise::reduce_on::<N>(values, operation))
     }
 
     /// Runs `convert_chunks_on` in the instruction set.
     #[inline]
-    pub fn convert_chunks<
-        S: crate::format::Standard<W>,
-        const W: usize,
-        M: crate::env::Mode,
-        const N: usize,
-    >(
+    pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
         self,
-        values: &[crate::float::Float<S, W, M>],
-        to: super::Host,
+        values: &[Float<S, W, M>],
+        to: Host,
         each: impl FnMut(usize, Option<[u64; N]>),
     ) {
-        run!(self, convert_chunks::<S, W, M, N>(values, to, each));
+        in_selected!(self, convert_chunks_on::<S, W, M, N>(values, to, each));
     }
 }
 
-/// x86-64-v3, as the module states. Only the copies of `v3` and `v4` name
-/// the type, and a copy runs only on a processor with the features of its
-/// set, as `Selected` guarantees. So each form below runs only on a
-/// processor with AVX, AVX2, F16C, and FMA.
+/// x86-64-v3, as the module states. Only the arm of `V3` in the methods of
+/// `Selected` names the type, and the forms of `V4` run its forms. Each
+/// `Selected` exists only on a processor with the features of its set, as
+/// `selected` checked. So each form below, and `run`, runs only on a
+/// processor with the features of `V3`.
 struct V3;
 
-/// x86-64-v4, as the module states. Only the copies of `v4` name the type,
-/// so each form below runs only on a processor with the features of `V4`.
+/// x86-64-v4, as the module states. Only the arm of `V4` in the methods of
+/// `Selected` names the type, so each form below, and `run`, runs only on a
+/// processor with the features of `V4`.
 struct V4;
 
 impl Sealed for V3 {}
@@ -421,6 +320,13 @@ impl Isa for V3 {
     const EXTRA_WIDE: bool = false;
     const HALF: bool = true;
     const INTEGERS: bool = true;
+
+    #[inline]
+    fn run<R>(f: impl FnOnce() -> R) -> R {
+        // SAFETY: the processor has the features of `V3`, as the comment of
+        // the type states.
+        unsafe { run_v3(f) }
+    }
 
     forms!(wide:
         binary_f32x4(left: [f32; 4], right: [f32; 4], operation: Operation) -> [f32; 4];
@@ -514,6 +420,13 @@ impl Isa for V4 {
     const EXTRA_WIDE: bool = true;
     const HALF: bool = true;
     const INTEGERS: bool = true;
+
+    #[inline]
+    fn run<R>(f: impl FnOnce() -> R) -> R {
+        // SAFETY: the processor has the features of `V4`, as the comment of
+        // the type states.
+        unsafe { run_v4(f) }
+    }
 
     forms_of_v3!(
         binary_f32x4(left: [f32; 4], right: [f32; 4], operation: Operation) -> [f32; 4];

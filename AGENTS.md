@@ -42,9 +42,10 @@ crate documentation records each rule of its behavior. The
   at run time, in `host/packed/dispatch`. Keep that check behind the feature
   `std`, run it once, and keep its answer in an atomic. Do not detect the
   processor anywhere else.
-- Give each instruction set of `dispatch` the bits of `Build`. Put each copy
-  of an entry point behind `#[target_feature]`, and tie the `SAFETY`
-  comment of each call to the check that found the features. The
+- Give each instruction set of `dispatch` the bits of `Build`. Run the
+  generic code of a set inside `Isa::run`, which compiles it with the
+  features of the set behind `#[target_feature]`, and tie the `SAFETY`
+  comment of each `run` to the check that found the features. The
   host-path tests run in each set that the processor has: `levels.rs` runs
   them again with `FLOATY_HOST_LEVEL`.
 - Use a host path only in an entry point that returns no flags. The `_with`
