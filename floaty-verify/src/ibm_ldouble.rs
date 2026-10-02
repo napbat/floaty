@@ -89,6 +89,64 @@ pub enum Function {
     Remainder,
     /// `fmal`: `a * b + c`.
     MulAdd,
+    /// `floorl`: the value rounded toward negative infinity to an integral
+    /// value.
+    Floor,
+    /// `ceill`: the value rounded toward positive infinity to an integral
+    /// value.
+    Ceil,
+    /// `truncl`: the value rounded toward zero to an integral value.
+    Trunc,
+    /// `roundl`: the value rounded to the nearest integral value, ties away
+    /// from zero.
+    Round,
+    /// `roundevenl`: the value rounded to the nearest integral value, ties to
+    /// even.
+    RoundEven,
+    /// `rintl`: the value rounded to an integral value in the rounding
+    /// direction, with the inexact flag.
+    Rint,
+    /// `nearbyintl`: the value rounded to an integral value in the rounding
+    /// direction, without the inexact flag.
+    NearbyInt,
+    /// `scalbnl`: the first operand times 2 to the power of the integer that
+    /// the bits of the high half of the second operand hold.
+    ScaleB,
+    /// `ilogbl`: the exponent of the value as an `int`. The program gives the
+    /// bits of the integer as the high half.
+    ILogB,
+    /// `fmaxl`: the IEEE 754-2008 `maxNum`.
+    Fmax,
+    /// `fminl`: the IEEE 754-2008 `minNum`.
+    Fmin,
+    /// `fmaximuml`: the IEEE 754-2019 `maximum`.
+    Fmaximum,
+    /// `fminimuml`: the IEEE 754-2019 `minimum`.
+    Fminimum,
+    /// `fmaximum_numl`: the IEEE 754-2019 `maximumNumber`.
+    FmaximumNumber,
+    /// `fminimum_numl`: the IEEE 754-2019 `minimumNumber`.
+    FminimumNumber,
+    /// `fmaximum_magl`: the IEEE 754-2019 `maximumMagnitude`.
+    FmaximumMagnitude,
+    /// `fminimum_magl`: the IEEE 754-2019 `minimumMagnitude`.
+    FminimumMagnitude,
+    /// `fmaximum_mag_numl`: the IEEE 754-2019 `maximumMagnitudeNumber`.
+    FmaximumMagnitudeNumber,
+    /// `fminimum_mag_numl`: the IEEE 754-2019 `minimumMagnitudeNumber`.
+    FminimumMagnitudeNumber,
+    /// `totalorderl`: 1 when the first operand orders at or below the second
+    /// in the IEEE 754 total order, and 0 otherwise. The program gives the
+    /// bits of the integer as the high half.
+    TotalOrder,
+    /// `totalordermagl`: `totalorderl` of the magnitudes.
+    TotalOrderMagnitude,
+    /// `llrintl`: the value rounded to a `long long` in the rounding
+    /// direction. The program gives the bits of the integer as the high half.
+    LlRint,
+    /// `lroundl`: the value rounded to a `long`, ties away from zero. The
+    /// program gives the bits of the integer as the high half.
+    LRound,
 }
 
 impl Function {
@@ -104,6 +162,29 @@ impl Function {
             Self::Fmod => "fmodl",
             Self::Remainder => "remainderl",
             Self::MulAdd => "fmal",
+            Self::Floor => "floorl",
+            Self::Ceil => "ceill",
+            Self::Trunc => "truncl",
+            Self::Round => "roundl",
+            Self::RoundEven => "roundevenl",
+            Self::Rint => "rintl",
+            Self::NearbyInt => "nearbyintl",
+            Self::ScaleB => "scalbnl",
+            Self::ILogB => "ilogbl",
+            Self::Fmax => "fmaxl",
+            Self::Fmin => "fminl",
+            Self::Fmaximum => "fmaximuml",
+            Self::Fminimum => "fminimuml",
+            Self::FmaximumNumber => "fmaximum_numl",
+            Self::FminimumNumber => "fminimum_numl",
+            Self::FmaximumMagnitude => "fmaximum_magl",
+            Self::FminimumMagnitude => "fminimum_magl",
+            Self::FmaximumMagnitudeNumber => "fmaximum_mag_numl",
+            Self::FminimumMagnitudeNumber => "fminimum_mag_numl",
+            Self::TotalOrder => "totalorderl",
+            Self::TotalOrderMagnitude => "totalordermagl",
+            Self::LlRint => "llrintl",
+            Self::LRound => "lroundl",
         }
     }
 
@@ -111,8 +192,37 @@ impl Function {
     #[must_use]
     pub const fn operand_count(self) -> usize {
         match self {
-            Self::Sqrt | Self::NextUp | Self::NextDown | Self::IsCanonical | Self::LogB => 1,
-            Self::Fmod | Self::Remainder | Self::CopySign => 2,
+            Self::Sqrt
+            | Self::NextUp
+            | Self::NextDown
+            | Self::IsCanonical
+            | Self::LogB
+            | Self::Floor
+            | Self::Ceil
+            | Self::Trunc
+            | Self::Round
+            | Self::RoundEven
+            | Self::Rint
+            | Self::NearbyInt
+            | Self::ILogB
+            | Self::LlRint
+            | Self::LRound => 1,
+            Self::Fmod
+            | Self::Remainder
+            | Self::CopySign
+            | Self::ScaleB
+            | Self::Fmax
+            | Self::Fmin
+            | Self::Fmaximum
+            | Self::Fminimum
+            | Self::FmaximumNumber
+            | Self::FminimumNumber
+            | Self::FmaximumMagnitude
+            | Self::FminimumMagnitude
+            | Self::FmaximumMagnitudeNumber
+            | Self::FminimumMagnitudeNumber
+            | Self::TotalOrder
+            | Self::TotalOrderMagnitude => 2,
             Self::MulAdd => 3,
         }
     }

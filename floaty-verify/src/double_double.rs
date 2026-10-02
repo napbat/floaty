@@ -22,6 +22,7 @@ use rug::float::Round;
 use rug::ops::Pow;
 use rug::{Float as BigFloat, Integer, Rational};
 
+use crate::encodings::Layout;
 use crate::mpfr::{self, Format, Input, Specials, Value};
 use crate::random::SplitMix64;
 use reference::Pair;
@@ -160,6 +161,46 @@ pub fn pair(random: &mut SplitMix64) -> Pair {
         _ => (random.next_u64(), random.next_u64()),
     };
     Pair::new(hi, lo)
+}
+
+/// Returns a random pair for a comparison with a reference: a canonical pair
+/// of any magnitude, a pair near the edges of the range, or a pair of
+/// [`pair`], which holds special and random halves.
+pub fn operand(random: &mut SplitMix64) -> Pair {
+    let negative = random.coin_flip();
+    match random.below(4) {
+        0 | 1 => {
+            let field = match random.below(4) {
+                0 => random.below(120),
+                1 => 2046 - random.below(60),
+                _ => 1 + random.below(2046),
+            };
+            let hi = Layout::BINARY64.encode_u64(negative, field, random.next_u64());
+            if field < 56 || random.below(6) == 0 {
+                return Pair::new(hi, 0);
+            }
+            let low_field = field - 54 - random.below((field - 54).min(70));
+            let lo = Layout::BINARY64.encode_u64(random.coin_flip(), low_field, random.next_u64());
+            Pair::new(hi, lo)
+        }
+        _ => pair(random),
+    }
+}
+
+/// Returns a random pair of `generate` that is canonical: the functions of
+/// glibc that read the halves and the operations of floaty that read the
+/// exact value agree for a canonical pair.
+pub fn canonical(random: &mut SplitMix64, generate: impl Fn(&mut SplitMix64) -> Pair) -> Pair {
+    loop {
+        let candidate = generate(random);
+        let value = floaty::DoubleDouble::<floaty::Gcc>::from_parts(
+            floaty::F64::from_bits(candidate.hi),
+            floaty::F64::from_bits(candidate.lo),
+        );
+        if value.is_canonical() {
+            return candidate;
+        }
+    }
 }
 
 /// Behaviors that use each rounding direction, flush-to-zero with each

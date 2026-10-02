@@ -32,10 +32,12 @@ const LIBGCC_OBJECTS: [(&str, &str); 1] = [(
 const POWERPC_GLIBC_VERSION: &str = "2.43";
 
 /// The members of the libm of the pinned cross C library that floaty's `Gcc`
-/// algorithm follows, with the SHA-256 of each: the IBM `long double`
-/// functions and their wrappers, and the binary64 square root that `sqrtl`
-/// calls. A libm that compiles them differently is another reference.
-const LIBM_OBJECTS: [(&str, &str); 12] = [
+/// algorithm follows or that the tests compare with, with the SHA-256 of
+/// each: the IBM `long double` functions and their wrappers, and the
+/// functions that they call: the binary64 square root of `sqrtl`,
+/// `__ieee754_ilogbl`, `__roundeven`, and `__issignalingl`. A libm that
+/// compiles them differently is another reference.
+const LIBM_OBJECTS: [(&str, &str); 37] = [
     (
         "s_fmal.o",
         "86f2b7a97b10d189a036cbc16aed4ac2b1326c79441d5deb1c7ee65d027790bb",
@@ -84,14 +86,114 @@ const LIBM_OBJECTS: [(&str, &str); 12] = [
         "s_logbl.o",
         "7b7b6eb98fd16da3a261f21fb56865e5f2fd365e3dea67a28b037b74114a6b38",
     ),
+    (
+        "s_floorl.o",
+        "f26bca78e7c1d480ea2d6b8b97c267fcbde06736d71340eea0cf863fe3416c8b",
+    ),
+    (
+        "s_ceill.o",
+        "71189e58256432edd14d7beb9901f66766abd9ccc5b227f45d3437117ec86e22",
+    ),
+    (
+        "s_truncl.o",
+        "f6fa639f374e64a2f96b1d9aafcb4d28fe9d214d3ddbeaa401225f867fd3239d",
+    ),
+    (
+        "s_roundl.o",
+        "b4f2b9af39abf92a9c79c16833b180a5ea94e6a47103a861186c985cf7a7c3f2",
+    ),
+    (
+        "s_roundevenl.o",
+        "2d74a9961bc8851c3b3b7bd74e20eefc3976de4d9e0855e1fc06e340e4c9be9d",
+    ),
+    (
+        "s_roundeven.o",
+        "b13411839c09784079a2f4d7a7d66898f47e9a58c1bf2d7fb772305a5939a45d",
+    ),
+    (
+        "s_rintl.o",
+        "f60850e36ef7184ff05068c7fb6da7c865ef9d96a614a41a1a13d189c1ebcd49",
+    ),
+    (
+        "s_nearbyintl.o",
+        "5c4828b2b69801e4284c49f1beeb748673e27e57f703f4a91b8dd6542186951d",
+    ),
+    (
+        "w_ilogbl.o",
+        "f0a35a08c4288a370a57b94caa9354298f94e51b5bab669b00f70dad89ce8b18",
+    ),
+    (
+        "e_ilogbl.o",
+        "2f5f54f9551853b00d9a62df8cbbc4d98dd920ef60e4fca5bb4a899eb6dde960",
+    ),
+    (
+        "s_fmaxl.o",
+        "fb19d3aa42364c074469a1a5f5ba76a78cd0bfbb6e94737324ddacf62ebeac4f",
+    ),
+    (
+        "s_fminl.o",
+        "8ace4980f56bc8d931123d5cc51ea72be684d4b9366ab37bcd2d8e6ca3baa37b",
+    ),
+    (
+        "s_fmaximuml.o",
+        "ed86efec25c514ddb2b253d90ce7b635e3b5f06312b5dcd266143787cdc2c595",
+    ),
+    (
+        "s_fminimuml.o",
+        "ee77622a8a01c3d93b7312baa5a925ab9b8eeaf647931863c6878ee1afb0bed3",
+    ),
+    (
+        "s_fmaximum_numl.o",
+        "31b6300601576dd4ea41ede3219dc487a2e8164a7e51334a8e736ef6c7d0191d",
+    ),
+    (
+        "s_fminimum_numl.o",
+        "dde145c8e8751f37ffe4efc9b87a111f77c8747f05400d21cc1b266078072fd6",
+    ),
+    (
+        "s_fmaximum_magl.o",
+        "2d25b11d0c13cb77103bb0c966e9c36ad3e026aaf07c7cb5dc004d672d619aac",
+    ),
+    (
+        "s_fminimum_magl.o",
+        "18dac34a7e3136aba33a908ba6cdfc17b9989218daefe0aab3c4c422dcd69ac5",
+    ),
+    (
+        "s_fmaximum_mag_numl.o",
+        "0db6db3aac1b1503105e07e794cdd17cc6edc2cc0efe3a2d3fb2f91e3a832175",
+    ),
+    (
+        "s_fminimum_mag_numl.o",
+        "8ad6efcb6dada173fd18ebfd1e85cbf4bda23ffeff9488b3b6b6ea8920117cf7",
+    ),
+    (
+        "s_issignalingl.o",
+        "00279a808057ee7461772f805ce21eb7221087d68022ed0a061838d6aa8421fe",
+    ),
+    (
+        "s_totalorderl.o",
+        "30b02da1080f576f83ac414a36f3166cde3a2f56e2a37d65d1a2ddceed4d0367",
+    ),
+    (
+        "s_totalordermagl.o",
+        "5114638e7887a49455a2855f405a0c29e3fc5fc1c454c73e49b40a19904f8154",
+    ),
+    (
+        "s_llrintl.o",
+        "20a0895fd8a2122e71af63822f0067ea06cb1aeca35d6509046fe619236f043f",
+    ),
+    (
+        "s_lroundl.o",
+        "e2c9201f74d9ad9107e6370abc72d73fe8e9852243ba8bf7dce228e06e43fcd1",
+    ),
 ];
 
 /// The members of the static C library of the pinned cross C library that
 /// the reference uses, with the SHA-256 of each: `__frexp`, `__scalbn`, and
 /// `qsort`, which `fmal` calls, and whose merge sort decides the order of
-/// the partial products, and `copysignl`, which glibc builds into the C
-/// library.
-const LIBC_OBJECTS: [(&str, &str); 4] = [
+/// the partial products, and `copysignl` and `scalbnl`, which glibc builds
+/// into the C library.
+const LIBC_OBJECTS: [(&str, &str); 5] = [
     (
         "s_frexp.o",
         "70e35774763ee598004b6519a81f13d23d3b488df034e68c6d5704c9e0389ae2",
@@ -107,6 +209,10 @@ const LIBC_OBJECTS: [(&str, &str); 4] = [
     (
         "s_copysignl.o",
         "3943d3488f6e7f96824930b35de16868bafb0af39333fd485b07fa945367869d",
+    ),
+    (
+        "s_scalbnl.o",
+        "5dc21726e5a005f45e831b780cd295a007f856e01f7c077aa3ea1cf3b60f5b59",
     ),
 ];
 

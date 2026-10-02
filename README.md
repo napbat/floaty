@@ -431,14 +431,24 @@ returns the flags of every step.
 | `+`, `-`, `*`, `/` | libgcc `__gcc_qadd` and the others | `dd_real` operators |
 | `sqrt`, `remainder`, `%` | glibc 2.43 `sqrtl`, `remainderl`, `fmodl` | QD `sqrt`, `drem`, `fmod` |
 | `mul_add`, `next_up`, `next_down` | glibc 2.43 `fmal`, `nextupl`, `nextdownl` | none: QD has no such function |
-| Conversions, integer conversions, `scale_b`, `log_b`, `round_to_integral`, `copy_sign`, classification, total order, minimum and maximum | the exact value `hi + lo`, by floaty's rule. For a canonical pair, `log_b` and `copy_sign` give the results of glibc 2.43 `logbl` and `copysignl`. | the same |
+| Conversions, integer conversions, `scale_b`, `log_b`, `round_to_integral`, `copy_sign`, classification, total order, minimum and maximum | the exact value `hi + lo`, by floaty's rule. For a canonical pair, glibc 2.43 gives the same results but in the cases that the next paragraph lists. | the same |
 
-The operations on the exact value have no reference implementation, so
-`floaty-verify` checks their rule with MPFR. An exact value rounds to a pair
-in two steps: the high half is the value rounded to nearest even, and the
-low half is the rest rounded in the direction of the behavior. The sum of
-the halves then splits into its canonical pair, so a value that a canonical
-pair holds gives that pair in every direction.
+`floaty-verify` checks the rule of the operations on the exact value with
+exact rationals and MPFR. It also compares them with the IBM `long double`
+functions of glibc 2.43 on canonical pairs: `logbl`, `copysignl`, `ilogbl`,
+`floorl`, `ceill`, `truncl`, `roundl`, `roundevenl`, `rintl`, `nearbyintl`,
+`scalbnl`, `llrintl`, `lroundl`, the ten minimum and maximum functions,
+`totalorderl`, and `totalordermagl`. glibc reads the halves, so it differs
+from floaty in five cases, which the tests record: the sign of a zero low
+half, the low half of a NaN or an infinity, the order of two pairs of one
+value, a scaled value outside the normal range, and an extra inexact flag
+of `rintl`, and of `llrintl` and `lroundl` out of range.
+
+An exact value rounds to a pair in two steps: the high half is the value
+rounded to nearest even, and the low half is the rest rounded in the
+direction of the behavior. The sum of the halves then splits into its
+canonical pair, so a value that a canonical pair holds gives that pair in
+every direction.
 
 ```rust
 use floaty::{DoubleDouble, F64, Gcc};
@@ -586,7 +596,7 @@ decNumber.
 | decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations in every direction, with FTZ, DAZ, precision limits, and every NaN rule, in DPD and, through the conversions of the Intel library, in BID. The conversions between the widths in the same behaviors, the conversions to and from every integer type, and the total order of non-canonical encodings. The minimum and maximum operations and the NaN payload operations of IEEE 754-2019, by floaty's rule. The static modes, against their behaviors. |
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
-| glibc 2.43 libm of the powerpc64le cross C library, under QEMU | `sqrt`, `remainder`, `%`, `mul_add`, `next_up`, `next_down`, and `is_canonical` of `DoubleDouble<Gcc>`, and `log_b` and `copy_sign` of canonical pairs |
+| glibc 2.43 libm of the powerpc64le cross C library, under QEMU | `sqrt`, `remainder`, `%`, `mul_add`, `next_up`, `next_down`, and `is_canonical` of `DoubleDouble<Gcc>`, and its operations on the exact value of canonical pairs: `log_b`, `copy_sign`, `round_to_integral` in each direction, `scale_b`, `to_int`, the minimum and maximum operations, and the total order |
 | glibc 2.43 libm of the host | The NaN payload operations of binary32, binary64, x87 extended, and binary128 |
 | QD 2.3.24 | `DoubleDouble<Qd>`, also under the FTZ and DAZ bits of MXCSR |
 | Mesa 25.2.0, `format_r11g11b10f.h` | The R11G11B10 recipe: every rounding case of both channels, and every channel code |

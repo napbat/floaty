@@ -3,8 +3,10 @@
 //! `scale_b`, `log_b`, and the minimum and maximum operations.
 //!
 //! No reference implements these operations for both algorithms, so each
-//! one follows the rule that its documentation states. They read the exact
-//! value `hi + lo`, so denormals-are-zero does not apply, and they report no
+//! one follows the rule that its documentation states. For a canonical pair,
+//! glibc 2.43 gives the results of these rules but in the cases that the
+//! tests of `floaty-verify` record. The operations read the exact value
+//! `hi + lo`, so denormals-are-zero does not apply, and they report no
 //! `DENORMAL_INPUT`.
 
 use core::cmp::Ordering;

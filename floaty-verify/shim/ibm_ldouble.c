@@ -13,13 +13,22 @@
  * The operation is `add`, `sub`, `mul`, or `div`. The function is a libm
  * function on one, two, or three IBM long double operands: `sqrtl`,
  * `nextupl`, `nextdownl`, `iscanonicall`, `logbl`, `copysignl`, `fmodl`,
- * `remainderl`, or `fmal`.
- * `iscanonicall` gives its integer result as the high half, and a zero low
- * half. The instruction is `fmadd` or `fmsub`, which compute `a * c + b` and
- * `a * c - b` with the operands in the order FRA, FRC, FRB. The rounding
- * direction is `nearest`, `zero`, `up`, or `down`. Each operand is a
- * binary64 bit pattern in exactly 16 hexadecimal digits. For each case the
- * program writes one line:
+ * `remainderl`, `fmal`, a rounding to an integral value (`floorl`, `ceill`,
+ * `truncl`, `roundl`, `roundevenl`, `rintl`, or `nearbyintl`), `scalbnl`,
+ * `ilogbl`, a minimum or maximum operation (`fmaxl`, `fminl`, `fmaximuml`,
+ * `fminimuml`, `fmaximum_numl`, `fminimum_numl`, `fmaximum_magl`,
+ * `fminimum_magl`, `fmaximum_mag_numl`, or `fminimum_mag_numl`),
+ * `totalorderl`, `totalordermagl`, `llrintl`, or `lroundl`.
+ * `iscanonicall` gives its integer result as the value of the high half, and
+ * a zero low half. `ilogbl`, `totalorderl`, `totalordermagl`, `llrintl`, and
+ * `lroundl` give the bits of their integer result, sign-extended to 64 bits,
+ * as the high half, and a zero low half. `scalbnl` reads its exponent from
+ * the bits of the high half of its second operand, a 64-bit two's complement
+ * integer in the range of `int`. The instruction is `fmadd` or `fmsub`,
+ * which compute `a * c + b` and `a * c - b` with the operands in the order
+ * FRA, FRC, FRB. The rounding direction is `nearest`, `zero`, `up`, or
+ * `down`. Each operand is a binary64 bit pattern in exactly 16 hexadecimal
+ * digits. For each case the program writes one line:
  *
  *     <result_hi> <result_lo> <flags>
  *     <result> <flags>
@@ -67,6 +76,59 @@ __ibm128 glibc_copysignl(__ibm128 x, __ibm128 y) __asm__("__copysignl");
 __ibm128 glibc_fmodl(__ibm128 x, __ibm128 y) __asm__("__fmodl");
 __ibm128 glibc_remainderl(__ibm128 x, __ibm128 y) __asm__("__remainderl");
 __ibm128 glibc_fmal(__ibm128 x, __ibm128 y, __ibm128 z) __asm__("__fmal");
+__ibm128 glibc_floorl(__ibm128 x) __asm__("__floorl");
+__ibm128 glibc_ceill(__ibm128 x) __asm__("__ceill");
+__ibm128 glibc_truncl(__ibm128 x) __asm__("__truncl");
+__ibm128 glibc_roundl(__ibm128 x) __asm__("__roundl");
+__ibm128 glibc_roundevenl(__ibm128 x) __asm__("__roundevenl");
+__ibm128 glibc_rintl(__ibm128 x) __asm__("__rintl");
+__ibm128 glibc_nearbyintl(__ibm128 x) __asm__("__nearbyintl");
+__ibm128 glibc_scalbnl(__ibm128 x, int n) __asm__("__scalbnl");
+int glibc_ilogbl(__ibm128 x) __asm__("__ilogbl");
+__ibm128 glibc_fmaxl(__ibm128 x, __ibm128 y) __asm__("__fmaxl");
+__ibm128 glibc_fminl(__ibm128 x, __ibm128 y) __asm__("__fminl");
+__ibm128 glibc_fmaximuml(__ibm128 x, __ibm128 y) __asm__("__fmaximuml");
+__ibm128 glibc_fminimuml(__ibm128 x, __ibm128 y) __asm__("__fminimuml");
+__ibm128 glibc_fmaximum_numl(__ibm128 x, __ibm128 y) __asm__("__fmaximum_numl");
+__ibm128 glibc_fminimum_numl(__ibm128 x, __ibm128 y) __asm__("__fminimum_numl");
+__ibm128 glibc_fmaximum_magl(__ibm128 x, __ibm128 y) __asm__("__fmaximum_magl");
+__ibm128 glibc_fminimum_magl(__ibm128 x, __ibm128 y) __asm__("__fminimum_magl");
+__ibm128 glibc_fmaximum_mag_numl(__ibm128 x, __ibm128 y) __asm__("__fmaximum_mag_numl");
+__ibm128 glibc_fminimum_mag_numl(__ibm128 x, __ibm128 y) __asm__("__fminimum_mag_numl");
+int glibc_totalorderl(const __ibm128 *x, const __ibm128 *y) __asm__("__totalorderl");
+int glibc_totalordermagl(const __ibm128 *x, const __ibm128 *y) __asm__("__totalordermagl");
+long long glibc_llrintl(__ibm128 x) __asm__("__llrintl");
+long glibc_lroundl(__ibm128 x) __asm__("__lroundl");
+
+/*
+ * Returns a long double whose high half holds the bits of `value`, and whose
+ * low half is zero. The integer operations give no floating-point flags.
+ */
+static __ibm128 integer_result(long long value) {
+  uint64_t bits = (uint64_t)value;
+  double high;
+  memcpy(&high, &bits, sizeof high);
+  return __builtin_pack_ibm128(high, 0.0);
+}
+
+/* Returns the integer that the bits of the high half of `x` hold. */
+static int integer_operand(__ibm128 x) {
+  double high = __builtin_unpack_ibm128(x, 0);
+  int64_t bits;
+  memcpy(&bits, &high, sizeof bits);
+  return (int)bits;
+}
+
+static __ibm128 scale(__ibm128 x, __ibm128 n) { return glibc_scalbnl(x, integer_operand(n)); }
+static __ibm128 exponent(__ibm128 x) { return integer_result(glibc_ilogbl(x)); }
+static __ibm128 total_order(__ibm128 x, __ibm128 y) {
+  return integer_result(glibc_totalorderl(&x, &y));
+}
+static __ibm128 total_order_magnitude(__ibm128 x, __ibm128 y) {
+  return integer_result(glibc_totalordermagl(&x, &y));
+}
+static __ibm128 rint_integer(__ibm128 x) { return integer_result(glibc_llrintl(x)); }
+static __ibm128 round_integer(__ibm128 x) { return integer_result(glibc_lroundl(x)); }
 
 /* Returns `iscanonicall` as a long double, for the one-operand table. */
 static __ibm128 canonical(__ibm128 x) {
@@ -96,6 +158,29 @@ static const struct library_function FUNCTIONS[] = {
     {"fmodl", 2, NULL, glibc_fmodl, NULL},
     {"remainderl", 2, NULL, glibc_remainderl, NULL},
     {"fmal", 3, NULL, NULL, glibc_fmal},
+    {"floorl", 1, glibc_floorl, NULL, NULL},
+    {"ceill", 1, glibc_ceill, NULL, NULL},
+    {"truncl", 1, glibc_truncl, NULL, NULL},
+    {"roundl", 1, glibc_roundl, NULL, NULL},
+    {"roundevenl", 1, glibc_roundevenl, NULL, NULL},
+    {"rintl", 1, glibc_rintl, NULL, NULL},
+    {"nearbyintl", 1, glibc_nearbyintl, NULL, NULL},
+    {"scalbnl", 2, NULL, scale, NULL},
+    {"ilogbl", 1, exponent, NULL, NULL},
+    {"fmaxl", 2, NULL, glibc_fmaxl, NULL},
+    {"fminl", 2, NULL, glibc_fminl, NULL},
+    {"fmaximuml", 2, NULL, glibc_fmaximuml, NULL},
+    {"fminimuml", 2, NULL, glibc_fminimuml, NULL},
+    {"fmaximum_numl", 2, NULL, glibc_fmaximum_numl, NULL},
+    {"fminimum_numl", 2, NULL, glibc_fminimum_numl, NULL},
+    {"fmaximum_magl", 2, NULL, glibc_fmaximum_magl, NULL},
+    {"fminimum_magl", 2, NULL, glibc_fminimum_magl, NULL},
+    {"fmaximum_mag_numl", 2, NULL, glibc_fmaximum_mag_numl, NULL},
+    {"fminimum_mag_numl", 2, NULL, glibc_fminimum_mag_numl, NULL},
+    {"totalorderl", 2, NULL, total_order, NULL},
+    {"totalordermagl", 2, NULL, total_order_magnitude, NULL},
+    {"llrintl", 1, rint_integer, NULL, NULL},
+    {"lroundl", 1, round_integer, NULL, NULL},
 };
 
 /*
