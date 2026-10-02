@@ -35,7 +35,14 @@ pub fn accumulate<const N: usize>(
     if !ready_for(Host::Single, env, Host::Single.precision()) {
         return None;
     }
-    sum_vectors::<N>(x, y, term, step)
+    // A sum of values has no product, so its step has no effect.
+    match (term, step) {
+        (Term::Value, _) => sum_vectors::<N, Sum>(x, y),
+        (Term::Product, Step::Separate) => sum_vectors::<N, Product>(x, y),
+        (Term::Product, Step::Fused) => sum_vectors::<N, FusedProduct>(x, y),
+        (Term::SquareDifference, Step::Separate) => sum_vectors::<N, SquareDifference>(x, y),
+        (Term::SquareDifference, Step::Fused) => sum_vectors::<N, FusedSquareDifference>(x, y),
+    }
 }
 
 /// Computes the sum of the terms of each row of `rows` and `query`, as
@@ -52,31 +59,86 @@ pub fn accumulate_rows<const N: usize>(
     row_count: usize,
     term: Term,
     env: &Env,
-    mut each: impl FnMut(usize, Option<u32>),
+    each: impl FnMut(usize, Option<u32>),
 ) -> Option<()> {
     if !ready_for(Host::Single, env, Host::Single.precision()) {
         return None;
     }
+    match term {
+        Term::Value => sum_rows::<N, Sum>(rows, query, row_count, each),
+        Term::Product => sum_rows::<N, Product>(rows, query, row_count, each),
+        Term::SquareDifference => sum_rows::<N, SquareDifference>(rows, query, row_count, each),
+    }
+    Some(())
+}
+
+/// A term and a step as a type. Each type has its own copy of the loop of
+/// the kernel, so the loop does not test the term or the step.
+trait Accumulation {
+    /// The term of each pair of values.
+    const TERM: Term;
+    /// How the term adds into its lane.
+    const STEP: Step;
+}
+
+/// Defines the type of each pair of a term and a step.
+macro_rules! accumulations {
+    ($($(#[$doc:meta])* $name:ident = ($term:ident, $step:ident);)+) => {
+        $(
+            $(#[$doc])*
+            struct $name;
+
+            impl Accumulation for $name {
+                const TERM: Term = Term::$term;
+                const STEP: Step = Step::$step;
+            }
+        )+
+    };
+}
+
+accumulations! {
+    /// The sum of the values of the first vector.
+    Sum = (Value, Separate);
+    /// The dot product, with the product and the sum rounded apart.
+    Product = (Product, Separate);
+    /// The dot product, with a fused multiply-add.
+    FusedProduct = (Product, Fused);
+    /// The square of the distance, with the product and the sum rounded
+    /// apart.
+    SquareDifference = (SquareDifference, Separate);
+    /// The square of the distance, with a fused multiply-add.
+    FusedSquareDifference = (SquareDifference, Fused);
+}
+
+/// Calls `each` with the index of each row of `rows` and its sum with
+/// `query`, as `accumulate_rows` states. The environment allows the host
+/// path.
+#[inline]
+fn sum_rows<const N: usize, A: Accumulation>(
+    rows: impl Load,
+    query: impl Load,
+    row_count: usize,
+    mut each: impl FnMut(usize, Option<u32>),
+) {
     let count = query.count();
     for index in 0..row_count {
         let row = rows.part(index * count, count);
-        each(index, sum_vectors::<N>(row, query, term, Step::Separate));
+        each(index, sum_vectors::<N, A>(row, query));
     }
-    Some(())
 }
 
 /// Returns the sum of the terms of the pairs of values of `x` and `y` in the
 /// order of the engine, or `None` when a conversion has no instruction and
 /// when the sum is a NaN. The environment allows the host path.
 #[inline]
-fn sum_vectors<const N: usize>(x: impl Load, y: impl Load, term: Term, step: Step) -> Option<u32> {
+fn sum_vectors<const N: usize, A: Accumulation>(x: impl Load, y: impl Load) -> Option<u32> {
     let mut lanes = [0.0; N];
     if N.is_multiple_of(8) {
-        add_vectors::<N, 8>(&mut lanes, x, y, term, step)?;
+        add_vectors::<N, 8, A>(&mut lanes, x, y)?;
     } else if N.is_multiple_of(4) {
-        add_vectors::<N, 4>(&mut lanes, x, y, term, step)?;
+        add_vectors::<N, 4, A>(&mut lanes, x, y)?;
     } else {
-        add_vectors::<N, 1>(&mut lanes, x, y, term, step)?;
+        add_vectors::<N, 1, A>(&mut lanes, x, y)?;
     }
     let sum = sum_by_halves(lanes).to_bits();
     (!nan_32(sum)).then_some(sum)
@@ -86,45 +148,39 @@ fn sum_vectors<const N: usize>(x: impl Load, y: impl Load, term: Term, step: Ste
 /// lanes at a time. A load of `C` values at a time keeps the values beside
 /// the lanes in registers, where a load of `N` values spilled them.
 #[inline]
-fn add_vectors<const N: usize, const C: usize>(
+fn add_vectors<const N: usize, const C: usize, A: Accumulation>(
     lanes: &mut [f32; N],
     x: impl Load,
     y: impl Load,
-    term: Term,
-    step: Step,
 ) -> Option<()> {
     let count = x.count();
     let full = count - count % N;
     for start in (0..full).step_by(N) {
+        // The compiler knows the count of a part of `N` values. So one check
+        // of the bounds for each part serves every load from the part.
+        let (x_part, y_part) = (x.part(start, N), y.part(start, N));
         for offset in (0..N).step_by(C) {
-            let (a, b) = (x.load::<C>(start + offset)?, y.load::<C>(start + offset)?);
-            add_terms(
-                chunk_mut(lanes, offset),
-                &singles(a),
-                &singles(b),
-                term,
-                step,
-            )?;
+            let (a, b) = (x_part.load::<C>(offset)?, y_part.load::<C>(offset)?);
+            add_terms::<C, A>(chunk_mut(lanes, offset), &singles(a), &singles(b))?;
         }
     }
-    // Value `full + i` adds into lane `i`. A padding value past the last
-    // value adds the term +0 or -0, and a lane plus a zero is the lane: a
-    // lane starts at +0 and becomes -0 only from -0 plus -0, so no lane is
-    // -0. So a chunk of padding alone changes no lane, and the loop skips it.
+    // Value `full + i` adds into lane `i`.
     for offset in (0..count - full).step_by(C) {
         let start = full + offset;
-        let (a, b) = if start + C <= count {
-            (x.load::<C>(start)?, y.load::<C>(start)?)
+        let lanes = chunk_mut(lanes, offset);
+        if start + C <= count {
+            let (a, b) = (x.load::<C>(start)?, y.load::<C>(start)?);
+            add_terms::<C, A>(lanes, &singles(a), &singles(b))?;
         } else {
-            (x.load_rest::<C>(start)?, y.load_rest::<C>(start)?)
-        };
-        add_terms(
-            chunk_mut(lanes, offset),
-            &singles(a),
-            &singles(b),
-            term,
-            step,
-        )?;
+            // The lanes past the last value must keep their values. A
+            // padding term of +0 can change a lane: a fused step can make a
+            // lane -0, and -0 plus +0 is +0.
+            let old = *lanes;
+            let (a, b) = (x.load_rest::<C>(start)?, y.load_rest::<C>(start)?);
+            add_terms::<C, A>(lanes, &singles(a), &singles(b))?;
+            let rest = count - start;
+            lanes[rest..].copy_from_slice(&old[rest..]);
+        }
     }
     Some(())
 }
@@ -269,45 +325,37 @@ pub fn widen_scaled_codes<const N: usize>(codes: &[i8; N], scale: u32) -> Option
 /// lanes at a time where the build has wide registers, then four, and then
 /// one.
 #[inline]
-fn add_terms<const N: usize>(
+fn add_terms<const N: usize, A: Accumulation>(
     lanes: &mut [f32; N],
     x: &[f32; N],
     y: &[f32; N],
-    term: Term,
-    step: Step,
 ) -> Option<()> {
     let old = *lanes;
     in_chunks::<f32, N, 8, 4>(
         lanes,
         |start| {
-            add_chunk(
+            add_chunk::<8, A>(
                 *chunk(&old, start),
                 *chunk(x, start),
                 *chunk(y, start),
-                term,
-                step,
                 packed::binary_f32x8,
                 packed::mul_add_f32x8,
             )
         },
         |start| {
-            add_chunk(
+            add_chunk::<4, A>(
                 *chunk(&old, start),
                 *chunk(x, start),
                 *chunk(y, start),
-                term,
-                step,
                 |a, b, operation| Some(packed::binary_f32x4(a, b, operation)),
                 packed::mul_add_f32x4,
             )
         },
         |index| {
-            let [lane] = add_chunk(
+            let [lane] = add_chunk::<1, A>(
                 [old[index]],
                 [x[index]],
                 [y[index]],
-                term,
-                step,
                 |[a], [b], operation| Some([environment::binary_f32(a, b, operation)]),
                 |[a], [b], [c]| environment::mul_add_f32(a, b, c).map(|value| [value]),
             )?;
@@ -320,16 +368,14 @@ fn add_terms<const N: usize>(
 /// in. `binary` and `fused` are the instructions for the chunk width, and
 /// give `None` where the build has no instruction.
 #[inline]
-fn add_chunk<const C: usize>(
+fn add_chunk<const C: usize, A: Accumulation>(
     lanes: [f32; C],
     x: [f32; C],
     y: [f32; C],
-    term: Term,
-    step: Step,
     binary: impl Fn([f32; C], [f32; C], Operation) -> Option<[f32; C]>,
     fused: impl Fn([f32; C], [f32; C], [f32; C]) -> Option<[f32; C]>,
 ) -> Option<[f32; C]> {
-    let (left, right) = match term {
+    let (left, right) = match A::TERM {
         Term::Value => return binary(lanes, x, Operation::Add),
         Term::Product => (x, y),
         Term::SquareDifference => {
@@ -337,7 +383,7 @@ fn add_chunk<const C: usize>(
             (difference, difference)
         }
     };
-    match step {
+    match A::STEP {
         Step::Separate => binary(lanes, binary(left, right, Operation::Mul)?, Operation::Add),
         Step::Fused => fused(left, right, lanes),
     }
