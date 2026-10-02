@@ -607,6 +607,31 @@ host path where the build has one. A `Lanes` figure is per lane.
 | `Lanes<F16, 8>` `+` | 15.8 | 6.4 | 0.3 | |
 | `Lanes<BF16, 8>` `+` | 16.5 | 1.9 | 1.6 | |
 
+The slice kernels in nanoseconds per vector, on an AMD Ryzen 9 9950X3D.
+Each cell gives the default build, then the x86-64-v3 build. The host
+loop keeps 8 `f32` accumulators in the order of the kernels, and calls
+`f32::mul_add` for the fused row. `_with` runs the engine.
+
+| Kernel | Host loop, 8 accumulators | `Lanes<F32, 8>` | `Lanes<F32, 32>` | `_with`, 32 lanes |
+| --- | --- | --- | --- | --- |
+| `dot`, 1,024 values | 63 / 44 | 74 / 70 | 64 / 62 | 17,622 / 15,667 |
+| `dot_fused`, 1,024 | 1,622 / 57 | 16,610 / 85 | 15,508 / 63 | 15,858 / 14,929 |
+| `distance_square`, 1,024 | 64 / 46 | 117 / 53 | 111 / 53 | 32,585 / 27,402 |
+| `norm`, 1,024 | 54 / 39 | 69 / 71 | 62 / 62 | 18,643 / 16,449 |
+| `dot`, 2,560 | 142 / 119 | 152 / 152 | 156 / 139 | 49,085 / 44,738 |
+| `dot_fused`, 2,560 | 3,919 / 195 | 45,568 / 224 | 44,486 / 144 | 44,418 / 43,961 |
+| `distance_square`, 2,560 | 138 / 118 | 251 / 127 | 169 / 127 | 81,855 / 73,886 |
+| `norm`, 2,560 | 135 / 103 | 149 / 155 | 136 / 138 | 47,622 / 42,661 |
+| `dot` of `&[BF16]` and `&[f32]`, 1,280 | 69 / 62 | 128 / 67 | 76 / 53 | 32,620 / 28,636 |
+| `dot` of `LittleEndian<BF16>`, 1,280 | 73 / 59 | 74 / 67 | 71 / 50 | 32,738 / 28,639 |
+| `dot` of `&[F16]`, 1,280 | | 389 / 68 | 390 / 51 | 30,682 / 28,487 |
+| `dot` of `&[u8]` codes, 1,280 | 86 / 62 | 98 / 69 | 95 / 50 | 31,925 / 28,953 |
+| `dot` of `ScaledCodes`, 1,280 | 255 / 64 | 132 / 70 | 131 / 55 | 40,584 / 36,752 |
+| `dot`, 8 values | 1.8 / 7.0 | 6.3 / 11.4 | 8.3 / 14.1 | 329 / 310 |
+| `dot_rows`, 8 values, per row | | 1.9 / 2.2 | 4.7 / 4.6 | 341 / 311 |
+
+A build without FMA computes the fused kernels in the engine.
+
 The decimal formats against the Intel Decimal Floating-Point Math Library
 for BID, and against the `decDouble` and `decQuad` functions of decNumber
 for DPD, on the same operands. Each cell gives floaty, then the reference.
