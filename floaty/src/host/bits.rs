@@ -49,6 +49,19 @@ pub(super) fn min_max_differs_16(left: u16, right: u16) -> bool {
     nan | zeros
 }
 
+/// Returns `true` for two binary128 encodings, low limb first, where the
+/// selection of an operand by the comparison differs from the minimum and
+/// maximum operations: a NaN operand, or two zeros, which compare equal.
+#[inline]
+pub(super) fn min_max_differs_128(left: [u64; 2], right: [u64; 2]) -> bool {
+    let nan = |bits: [u64; 2]| {
+        let high = bits[1] & 0x7FFF_FFFF_FFFF_FFFF;
+        high > 0x7FFF_0000_0000_0000 || (high == 0x7FFF_0000_0000_0000 && bits[0] != 0)
+    };
+    let zero = |bits: [u64; 2]| (bits[1] << 1) | bits[0] == 0;
+    nan(left) | nan(right) | (zero(left) & zero(right))
+}
+
 /// Returns `true` for two binary64 encodings where the minimum and maximum
 /// instructions of the host differ from the operations, as
 /// `min_max_differs` does for binary32.

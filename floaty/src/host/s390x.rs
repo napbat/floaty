@@ -4,8 +4,9 @@
 //! The instructions are those of the base z/Architecture: z/Architecture
 //! Principles of Operation, SA22-7832-13, chapter 19, "Binary-Floating-Point
 //! Instructions". binary16 and bfloat16 widen and round in integer
-//! instructions, as on x86-64 without F16C. Many of the instructions set the
-//! condition code, so no block preserves the flags.
+//! instructions, as on x86-64 without F16C. `quad` holds the binary128
+//! instructions. Many of the instructions set the condition code, so no block
+//! preserves the flags.
 
 use core::cmp::Ordering;
 
@@ -13,6 +14,12 @@ use super::Operation;
 use crate::env::Rounding;
 
 pub mod packed;
+mod quad;
+
+pub use self::quad::{
+    quad_binary, quad_compare, quad_from_double, quad_from_int, quad_from_single, quad_round,
+    quad_sqrt, quad_to_double, quad_to_int, quad_to_single,
+};
 
 /// `true`: the build has the floating-point unit.
 pub const UNIT: bool = true;
@@ -35,6 +42,9 @@ pub const DOUBLE_TO_HALF: bool = true;
 /// The floating-point-extension facility adds one, and the default target
 /// does not have it.
 pub const ROUND_TO_ODD: bool = false;
+/// `true`: every z/Architecture processor computes binary128 in pairs of
+/// floating-point registers.
+pub const QUAD: bool = true;
 
 /// Returns `true` when the floating-point unit rounds binary results to
 /// nearest even and enables no exception trap.

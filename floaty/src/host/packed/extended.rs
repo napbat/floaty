@@ -4,7 +4,7 @@
 
 use super::super::Operation;
 use super::super::environment;
-use super::super::paths::extended;
+use super::super::paths::limb_pair;
 use crate::env::Mode;
 use crate::float::{Float, FloatType};
 use crate::format::Standard;
@@ -19,8 +19,8 @@ pub(super) fn binary<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     let mut lanes = *left;
     for (lane, other) in lanes.iter_mut().zip(right) {
         let (x, y) = (
-            extended::<S, W>(lane.to_bits()),
-            extended::<S, W>(other.to_bits()),
+            limb_pair::<S, W>(lane.to_bits()),
+            limb_pair::<S, W>(other.to_bits()),
         );
         *lane = Float::from_host(environment::x87_binary(&x, &y, operation)?);
     }
@@ -34,7 +34,7 @@ pub(super) fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
 ) -> Option<[Float<S, W, M>; N]> {
     let mut lanes = *value;
     for lane in &mut lanes {
-        let x = extended::<S, W>(lane.to_bits());
+        let x = limb_pair::<S, W>(lane.to_bits());
         *lane = Float::from_host(environment::x87_sqrt(&x)?);
     }
     Some(lanes)

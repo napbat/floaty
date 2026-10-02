@@ -34,7 +34,7 @@ fn widened<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     match S::HOST {
         Host::Half => half::to_singles(lanes),
         Host::BFloat => bfloat::to_singles(lanes),
-        Host::None | Host::Single | Host::Double | Host::Extended => None,
+        Host::None | Host::Single | Host::Double | Host::Extended | Host::Quad => None,
     }
 }
 
@@ -76,7 +76,7 @@ pub(super) fn compare<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 |index| Some(environment::compare_f64(x[index], y[index])),
             )?;
         }
-        Host::None | Host::Extended => return None,
+        Host::None | Host::Extended | Host::Quad => return None,
     }
     Some(orders)
 }
@@ -163,6 +163,6 @@ pub(super) fn min_max<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             }
             Some(lanes)
         }
-        Host::None | Host::Extended => None,
+        Host::None | Host::Extended | Host::Quad => None,
     }
 }

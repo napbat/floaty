@@ -3,7 +3,7 @@
 use floaty::{BF16, F64, F80};
 use floaty_verify::random::SplitMix64;
 
-use super::operands::{conversion_operands, extended_operands};
+use super::operands::{conversion_operands, extended_operands, quad_operands};
 
 #[test]
 fn rounding_to_integral_gives_the_default_mode_result() {
@@ -49,6 +49,13 @@ fn rounding_to_integral_gives_the_default_mode_result() {
         assert_eq!(
             value.round_to_integral().to_bits(),
             value.round_to_integral_with(F80::ENV).0.to_bits(),
+            "{value:?}"
+        );
+    }
+    for value in quad_operands(&mut random) {
+        assert_eq!(
+            value.round_to_integral().to_bits(),
+            value.round_to_integral_with(floaty::F128::ENV).0.to_bits(),
             "{value:?}"
         );
     }
@@ -134,4 +141,9 @@ fn rounding_to_integral_in_each_direction_gives_the_mode_result() {
         80,
         extended.iter().copied()
     );
+    let quads: Vec<u128> = quad_operands(&mut random)
+        .iter()
+        .map(|value| value.to_bits())
+        .collect();
+    every_direction_matches!(floaty::Binary<15>, 128, quads.iter().copied());
 }

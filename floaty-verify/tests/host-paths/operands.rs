@@ -2,7 +2,7 @@
 //! the halfway points of the narrower formats and near the bounds of the
 //! integer types, and every pair of 16-bit encodings.
 
-use floaty::{F64, F80};
+use floaty::{F64, F80, F128};
 use floaty_verify::encodings::{IntegerBit, Layout, boundary_encodings_u128};
 use floaty_verify::random::SplitMix64;
 
@@ -200,4 +200,42 @@ pub(super) fn close_pairs(
             (encoding(random, exponent), encoding(random, divisor))
         })
         .collect()
+}
+
+/// Returns binary128 operands: boundary and random encodings, values near the
+/// halfway points of binary64 and binary32, and integers and halves near 1,
+/// near the bounds of 32- and 64-bit integers, and near the precisions of
+/// binary64 and binary128.
+pub(super) fn quad_operands(random: &mut SplitMix64) -> Vec<F128> {
+    let mut bits = boundary_encodings_u128(Layout::BINARY128);
+    bits.extend((0..20_000).map(|_| random.next_u128()));
+    // A binary128 significand holds 60 bits below binary64 and 89 below
+    // binary32: the halfway point, and one unit on each side of it, at
+    // exponents near 1.0 and near the bounds of 64-bit integers.
+    for shift in [59, 88] {
+        for _ in 0..5_000 {
+            let exponent = u128::from(0x3FFF - 70 + random.below(140));
+            let fraction = (random.next_u128() & ((1 << 112) - 1)) & !((1 << (shift + 1)) - 1);
+            let half = fraction | 1 << shift;
+            bits.extend([half - 1, half, half + 1].map(|fraction| exponent << 112 | fraction));
+        }
+    }
+    let mut values: Vec<F128> = bits.into_iter().map(F128::from_bits).collect();
+    let one = F128::from_bits(0x3FFF << 112);
+    let half = F128::from_bits(0x3FFE << 112);
+    for exponent in [0, 1, 31, 32, 52, 53, 63, 64, 112, 113] {
+        let bound = one.scale_b(exponent);
+        for value in [
+            bound,
+            -bound,
+            bound.next_up(),
+            bound.next_down(),
+            -bound.next_down(),
+        ] {
+            values.push(value);
+            values.push(value.add_with(half, floaty::Env::IEEE).0);
+            values.push(value.sub_with(half, floaty::Env::IEEE).0);
+        }
+    }
+    values
 }

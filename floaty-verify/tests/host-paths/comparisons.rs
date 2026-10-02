@@ -42,4 +42,14 @@ fn comparisons_give_the_default_mode_results() {
         })
         .collect();
     comparisons_match!(floaty::F32, &equal);
+    let mut quads = boundary_pairs::<u128>(Layout::BINARY128);
+    quads.extend(random_pairs::<u128>(&mut random, Layout::BINARY128, 20_000));
+    let equal_quads: Vec<(u128, u128)> = (0..2_000)
+        .map(|_| {
+            let bits = random.next_u128();
+            (bits, bits)
+        })
+        .collect();
+    comparisons_match!(floaty::F128, &quads);
+    comparisons_match!(floaty::F128, &equal_quads);
 }

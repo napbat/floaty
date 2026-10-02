@@ -23,7 +23,9 @@
 use core::cmp::Ordering;
 
 use super::Operation;
-use super::bits::{min_max_differs, min_max_differs_64, nan_16, nan_32, nan_64};
+use super::bits::{
+    min_max_differs, min_max_differs_64, min_max_differs_128, nan_16, nan_32, nan_64,
+};
 use super::environment::{self, default_environment};
 use crate::env::{Env, Rounding};
 use crate::format::Standard;
@@ -160,15 +162,16 @@ pub(super) fn double_encoding<S: Standard<W>, const W: usize>(result: f64) -> Op
     encoding::<S, W>(bits, nan_64(bits))
 }
 
-/// Returns the limbs of an x87 extended encoding.
+/// Returns the two limbs of an x87 extended or binary128 encoding, low limb
+/// first.
 #[inline]
-pub(super) fn extended<S: Standard<W>, const W: usize>(bits: S::Bits) -> [u64; 2] {
+pub(super) fn limb_pair<S: Standard<W>, const W: usize>(bits: S::Bits) -> [u64; 2] {
     bits.to_limbs().resize()
 }
 
-/// Returns the encoding of an x87 extended result.
+/// Returns the encoding of an x87 extended or binary128 result.
 #[inline]
-fn extended_encoding<S: Standard<W>, const W: usize>(result: [u64; 2]) -> S::Bits {
+fn limb_pair_encoding<S: Standard<W>, const W: usize>(result: [u64; 2]) -> S::Bits {
     S::Bits::from_limbs(result.resize())
 }
 
@@ -180,7 +183,7 @@ fn extended_encoding<S: Standard<W>, const W: usize>(result: [u64; 2]) -> S::Bit
 pub(super) fn ready_for(host: Host, env: &Env, precision: u32) -> bool {
     let unit = match host {
         Host::Extended => environment::x87_environment(),
-        Host::None | Host::Half | Host::BFloat | Host::Single | Host::Double => {
+        Host::None | Host::Half | Host::BFloat | Host::Single | Host::Double | Host::Quad => {
             default_environment()
         }
     };
@@ -218,8 +221,12 @@ pub fn binary<S: Standard<W>, const W: usize>(
             bfloat_encoding::<S, W>(environment::binary_f32(left, right, operation))
         }
         Host::Extended => {
-            let (left, right) = (extended::<S, W>(left), extended::<S, W>(right));
-            environment::x87_binary(&left, &right, operation).map(extended_encoding::<S, W>)
+            let (left, right) = (limb_pair::<S, W>(left), limb_pair::<S, W>(right));
+            environment::x87_binary(&left, &right, operation).map(limb_pair_encoding::<S, W>)
+        }
+        Host::Quad => {
+            let (left, right) = (limb_pair::<S, W>(left), limb_pair::<S, W>(right));
+            environment::quad_binary(&left, &right, operation).map(limb_pair_encoding::<S, W>)
         }
     }
 }
@@ -238,7 +245,10 @@ pub fn sqrt<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Option
         Host::Half => half_encoding::<S, W>(environment::sqrt_f32(half::<S, W>(value))),
         Host::BFloat => bfloat_encoding::<S, W>(environment::sqrt_f32(bfloat::<S, W>(value))),
         Host::Extended => {
-            environment::x87_sqrt(&extended::<S, W>(value)).map(extended_encoding::<S, W>)
+            environment::x87_sqrt(&limb_pair::<S, W>(value)).map(limb_pair_encoding::<S, W>)
+        }
+        Host::Quad => {
+            environment::quad_sqrt(&limb_pair::<S, W>(value)).map(limb_pair_encoding::<S, W>)
         }
     }
 }
@@ -256,9 +266,10 @@ pub fn mul_add<S: Standard<W>, const W: usize>(
         return None;
     }
     match S::HOST {
-        // Two roundings of a fused multiply-add can differ from one, and the
-        // x87 unit has no fused multiply-add.
-        Host::None | Host::BFloat | Host::Extended => None,
+        // Two roundings of a fused multiply-add can differ from one, and
+        // neither the x87 unit nor the binary128 unit of s390x has a fused
+        // multiply-add.
+        Host::None | Host::BFloat | Host::Extended | Host::Quad => None,
         // `FEAT_FP16` rounds the binary16 result once. The other builds
         // compute through binary64, as `Host::Half` states.
         Host::Half => {
@@ -327,8 +338,10 @@ pub fn round_to_integral<S: Standard<W>, const W: usize>(
             if !matches!(rounding, Rounding::TiesToEven) {
                 return None;
             }
-            environment::x87_round(&extended::<S, W>(value)).map(extended_encoding::<S, W>)
+            environment::x87_round(&limb_pair::<S, W>(value)).map(limb_pair_encoding::<S, W>)
         }
+        Host::Quad => environment::quad_round(&limb_pair::<S, W>(value), rounding)
+            .map(limb_pair_encoding::<S, W>),
     }
 }
 
@@ -346,7 +359,8 @@ pub fn to_int<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Opti
         Host::Double => environment::to_int_f64(double::<S, W>(value)),
         Host::Half => environment::to_int_f32(half::<S, W>(value)),
         Host::BFloat => environment::to_int_f32(bfloat::<S, W>(value)),
-        Host::Extended => environment::x87_to_int(&extended::<S, W>(value)),
+        Host::Extended => environment::x87_to_int(&limb_pair::<S, W>(value)),
+        Host::Quad => environment::quad_to_int(&limb_pair::<S, W>(value)),
     }
 }
 
@@ -378,7 +392,9 @@ pub fn from_int<S: Standard<W>, const W: usize>(value: i64, env: &Env) -> Option
         // rounds once in effect.
         Host::Half => half_encoding::<S, W>(environment::from_int_f32(value)),
         // x87 extended precision holds every 64-bit integer exactly.
-        Host::Extended => environment::x87_from_int(value).map(extended_encoding::<S, W>),
+        Host::Extended => environment::x87_from_int(value).map(limb_pair_encoding::<S, W>),
+        // binary128 holds every 64-bit integer exactly.
+        Host::Quad => environment::quad_from_int(value).map(limb_pair_encoding::<S, W>),
     }
 }
 
@@ -402,6 +418,9 @@ pub fn compare<S: Standard<W>, const W: usize>(
         // The widenings are exact, so the order is the order of the values.
         Host::Half => environment::compare_f32(half::<S, W>(left), half::<S, W>(right)),
         Host::BFloat => environment::compare_f32(bfloat::<S, W>(left), bfloat::<S, W>(right)),
+        Host::Quad => {
+            environment::quad_compare(&limb_pair::<S, W>(left), &limb_pair::<S, W>(right))
+        }
     }
 }
 
@@ -469,6 +488,21 @@ pub fn min_max<S: Standard<W>, const W: usize>(
         }
         Host::Half => select(half::<S, W>(left), half::<S, W>(right)),
         Host::BFloat => select(bfloat::<S, W>(left), bfloat::<S, W>(right)),
+        // The binary128 unit has no minimum or maximum instruction, so the
+        // comparison selects the operand.
+        Host::Quad => {
+            let (a, b) = (limb_pair::<S, W>(left), limb_pair::<S, W>(right));
+            if min_max_differs_128(a, b) {
+                return None;
+            }
+            let order = environment::quad_compare(&a, &b)?;
+            let take = if operation.is_minimum() {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+            Some(if order == take { right } else { left })
+        }
     }
 }
 
@@ -532,7 +566,7 @@ pub fn remainder<S: Standard<W>, const W: usize>(
     }
     let (x, y) = (dividend.to_limbs().limb(0), divisor.to_limbs().limb(0));
     match S::HOST {
-        Host::None => None,
+        Host::None | Host::Quad => None,
         Host::Half => {
             // F16C widens and rounds in instructions that read MXCSR.
             if !default_environment() {
@@ -562,11 +596,11 @@ pub fn remainder<S: Standard<W>, const W: usize>(
             encoding::<S, W>(environment::x87_remainder_double(x, y)?, false)
         }
         Host::Extended => {
-            let (x, y) = (extended::<S, W>(dividend), extended::<S, W>(divisor));
+            let (x, y) = (limb_pair::<S, W>(dividend), limb_pair::<S, W>(divisor));
             if !remainder_fits(x[1] & 0x7FFF, y[1] & 0x7FFF, S::PRECISION, REMAINDER_REACH) {
                 return None;
             }
-            environment::x87_remainder(&x, &y).map(extended_encoding::<S, W>)
+            environment::x87_remainder(&x, &y).map(limb_pair_encoding::<S, W>)
         }
     }
 }
@@ -639,6 +673,13 @@ pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 
         (Host::Double, Host::Extended) => return environment::x87_from_double(low),
         (Host::Extended, Host::Single) => environment::x87_to_single(&bits).map(u64::from),
         (Host::Extended, Host::Double) => environment::x87_to_double(&bits),
+        (Host::Single, Host::Quad) => {
+            let encoding = u32::try_from(low).expect("a binary32 encoding");
+            return environment::quad_from_single(encoding);
+        }
+        (Host::Double, Host::Quad) => return environment::quad_from_double(low),
+        (Host::Quad, Host::Single) => environment::quad_to_single(&bits).map(u64::from),
+        (Host::Quad, Host::Double) => environment::quad_to_double(&bits),
         _ => None,
     };
     result.map(|low| [low, 0])

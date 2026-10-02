@@ -3,7 +3,7 @@
 use floaty::{BF16, F80};
 use floaty_verify::random::SplitMix64;
 
-use super::operands::{conversion_operands, extended_operands};
+use super::operands::{conversion_operands, extended_operands, quad_operands};
 
 /// Checks that `convert` gives the result of `convert_with` under the mode of
 /// the destination.
@@ -82,6 +82,13 @@ fn conversions_give_the_default_mode_results() {
     convert_matches!(F80, doubles.iter().copied());
     convert_matches!(F80, singles.iter().copied());
     convert_matches!(F80, halves.iter().copied());
+    // s390x widens binary32 and binary64 to binary128, and rounds binary128
+    // to them, in one instruction.
+    convert_matches!(floaty::F128, doubles.iter().copied());
+    convert_matches!(floaty::F128, singles.iter().copied());
+    let quads = quad_operands(&mut random);
+    convert_matches!(floaty::F64, quads.iter().copied());
+    convert_matches!(floaty::F32, quads.iter().copied());
 }
 
 /// The conversion of binary64 to binary32 in the direction `ToOdd`, which
@@ -175,6 +182,16 @@ fn conversions_to_integers_give_the_default_mode_results() {
         u128,
         Int<24>
     );
+    to_int_matches!(
+        quad_operands(&mut random).into_iter(),
+        i8,
+        i32,
+        i64,
+        i128,
+        u32,
+        u64,
+        u128
+    );
 }
 
 #[test]
@@ -247,6 +264,11 @@ fn conversions_from_integers_give_the_default_mode_results() {
             F80::from_int(integer).to_bits(),
             F80::from_int_with(integer, env).0.to_bits(),
             "x87 extended",
+        );
+        check(
+            floaty::F128::from_int(integer).to_bits(),
+            floaty::F128::from_int_with(integer, env).0.to_bits(),
+            "binary128",
         );
         if let Ok(narrow) = i64::try_from(integer) {
             check(

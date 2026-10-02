@@ -367,7 +367,7 @@ pub fn binary<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
         Host::Half => half::binary(left, right, operation),
         Host::BFloat => bfloat::binary(left, right, operation),
         Host::Extended => extended::binary(left, right, operation),
-        Host::None => None,
+        Host::None | Host::Quad => None,
     }
 }
 
@@ -406,7 +406,7 @@ pub fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
         Host::Half => half::sqrt(value),
         Host::BFloat => bfloat::sqrt(value),
         Host::Extended => extended::sqrt(value),
-        Host::None => None,
+        Host::None | Host::Quad => None,
     }
 }
 
@@ -446,7 +446,7 @@ pub fn round_to_integral<S: Standard<W>, const W: usize, M: Mode, const N: usize
         }
         Host::Half => half::round_to_integral(value, rounding),
         Host::BFloat => bfloat::round_to_integral(value, rounding),
-        Host::None | Host::Extended => None,
+        Host::None | Host::Extended | Host::Quad => None,
     }
 }
 
@@ -496,7 +496,7 @@ pub fn mul_add<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
         Host::Half if packed::NATIVE_HALF => half::mul_add(left, right, addend),
         // Two roundings of a fused multiply-add through binary32 can differ
         // from one.
-        Host::None | Host::Half | Host::BFloat | Host::Extended => None,
+        Host::None | Host::Half | Host::BFloat | Host::Extended | Host::Quad => None,
     }
 }
 
@@ -619,7 +619,7 @@ pub fn to_int_i32<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 |index| Some(indefinite_unless_i32(environment::to_int_f64(x[index]))),
             )?;
         }
-        Host::None | Host::Half | Host::BFloat | Host::Extended => return None,
+        Host::None | Host::Half | Host::BFloat | Host::Extended | Host::Quad => return None,
     }
     Some(lanes.map(|integer| (integer != i32::MIN).then_some(integer)))
 }

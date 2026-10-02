@@ -122,6 +122,9 @@ pub enum Host {
     /// x87 extended precision, which computes on the x87 unit of x86-64
     /// at the 64-bit precision.
     Extended,
+    /// IEEE 754 binary128, which computes on the binary floating-point unit
+    /// of s390x in pairs of floating-point registers.
+    Quad,
     /// bfloat16, which computes in the host `f32` and rounds in a host
     /// instruction. binary32 holds 2p + 2 bits of bfloat16, so the two
     /// roundings of add, subtract, multiply, divide, and square root give
@@ -141,6 +144,7 @@ impl Host {
             Self::Single => 24,
             Self::Double => 53,
             Self::Extended => 64,
+            Self::Quad => 113,
         }
     }
 
@@ -154,6 +158,7 @@ impl Host {
             (8, 32, EncodingKind::Ieee) => Self::Single,
             (11, 64, EncodingKind::Ieee) => Self::Double,
             (15, 80, EncodingKind::X87) => Self::Extended,
+            (15, 128, EncodingKind::Ieee) => Self::Quad,
             _ => Self::None,
         }
     }
@@ -204,15 +209,27 @@ pub const fn available(host: Host, kind: Kind) -> bool {
     let rounding = environment::ROUNDING;
     let x87 = environment::X87;
     let fp16 = environment::HALF_FUSED;
+    let quad = environment::QUAD;
     match (host, kind) {
         // The x87 unit has no fused multiply-add. Two roundings of a bfloat16
         // fused multiply-add, or of an integer, through binary32 can differ
         // from one. Only the x87 unit has a remainder instruction, and it
         // loads binary32, binary64, and x87 extended values. binary16 and
-        // bfloat16 values widen to binary32 exactly for it.
+        // bfloat16 values widen to binary32 exactly for it. The binary128
+        // unit of s390x has neither a fused multiply-add nor a remainder.
         (Host::None, _)
         | (Host::Extended, Kind::FusedMultiplyAdd | Kind::Comparison)
-        | (Host::BFloat, Kind::FusedMultiplyAdd) => false,
+        | (Host::BFloat, Kind::FusedMultiplyAdd)
+        | (Host::Quad, Kind::FusedMultiplyAdd | Kind::Remainder) => false,
+        (
+            Host::Quad,
+            Kind::Arithmetic
+            | Kind::SquareRoot
+            | Kind::RoundToIntegral
+            | Kind::ToInt
+            | Kind::FromInt
+            | Kind::Comparison,
+        ) => unit && quad,
         // An integer below 2^53 in magnitude converts to binary64 exactly,
         // and round to odd to binary32 then keeps the bfloat16 rounding.
         (Host::BFloat, Kind::FromInt) => unit && environment::ROUND_TO_ODD,
@@ -270,6 +287,9 @@ pub const fn convertible(from: Host, to: Host) -> bool {
         (Host::Double, Host::BFloat) => unit && environment::ROUND_TO_ODD,
         (Host::Single | Host::Double, Host::Extended)
         | (Host::Extended, Host::Single | Host::Double) => unit && x87,
+        (Host::Single | Host::Double, Host::Quad) | (Host::Quad, Host::Single | Host::Double) => {
+            unit && environment::QUAD
+        }
         _ => false,
     }
 }
@@ -320,6 +340,8 @@ mod none {
     pub const DOUBLE_TO_HALF: bool = false;
     /// `false`: this build has no rounding to odd.
     pub const ROUND_TO_ODD: bool = false;
+    /// `false`: this build has no binary128 unit.
+    pub const QUAD: bool = false;
 
     /// Returns `None`: this build has no host path.
     #[inline]
@@ -550,12 +572,13 @@ mod tests {
     use crate::limbs::Limbs;
 
     /// The host kinds, as conversion destinations.
-    const HOSTS: [Host; 5] = [
+    const HOSTS: [Host; 6] = [
         Host::Half,
         Host::BFloat,
         Host::Single,
         Host::Double,
         Host::Extended,
+        Host::Quad,
     ];
 
     /// Asserts that each host path of the format `S` that `available`,
@@ -660,5 +683,6 @@ mod tests {
         claimed_paths_give_results::<Binary<8>, 32>();
         claimed_paths_give_results::<Binary<11>, 64>();
         claimed_paths_give_results::<Binary<15, X87>, 80>();
+        claimed_paths_give_results::<Binary<15>, 128>();
     }
 }

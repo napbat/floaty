@@ -30,6 +30,32 @@ fn with_first_addend<T: Copy>(pairs: impl IntoIterator<Item = (T, T)>) -> Vec<(T
     pairs.into_iter().map(|(a, b)| (a, b, a)).collect()
 }
 
+/// A host path sends a NaN result to the engine, which selects the NaN by
+/// the rule of the mode. The default NaN differs from the operand NaN that
+/// each host unit returns, so each path must decline a NaN result.
+#[test]
+fn nan_results_take_the_rule_of_the_mode() {
+    use floaty::mode::propagation::DefaultNan;
+    use floaty::mode::{Ieee, Propagation};
+    use floaty::{Binary, Float};
+    type Single = Float<Binary<8>, 32, Propagation<Ieee, DefaultNan>>;
+    type Double = Float<Binary<11>, 64, Propagation<Ieee, DefaultNan>>;
+    type Quad = Float<Binary<15>, 128, Propagation<Ieee, DefaultNan>>;
+    let mut random = SplitMix64::new(0x4A4A);
+    arithmetic_matches!(
+        Single,
+        with_first_addend(random_pairs::<u32>(&mut random, Layout::BINARY32, 20_000))
+    );
+    arithmetic_matches!(
+        Double,
+        with_first_addend(random_pairs::<u64>(&mut random, Layout::BINARY64, 20_000))
+    );
+    arithmetic_matches!(
+        Quad,
+        with_first_addend(random_pairs::<u128>(&mut random, Layout::BINARY128, 20_000))
+    );
+}
+
 /// The binary16 fused multiply-add of a host path without `FEAT_FP16`
 /// rounds twice: to binary64, and then to binary16. The binary64 sum is
 /// inexact only for a product far below the addend, or for a product far

@@ -5,7 +5,7 @@
 #![cfg(target_arch = "s390x")]
 
 use floaty::format::Standard;
-use floaty::{BF16, Binary, F16, F32, F64};
+use floaty::{BF16, Binary, F16, F32, F64, F128};
 use floaty_verify::encodings::{Layout, boundary_encodings_u128};
 use floaty_verify::entry_points::{
     assert_arithmetic_under, assert_comparisons_under, assert_conversions_under,
@@ -40,7 +40,7 @@ macro_rules! scalars_under {
             );
             assert_arithmetic_under([x, y, x], &setting, under_fpc($control));
             assert_comparisons_under([x, y], &setting, under_fpc($control));
-            let bits = u64::try_from(a).expect("the encoding fits");
+            let bits = u64::try_from(a & u128::from(u64::MAX)).expect("the mask keeps 64 bits");
             let integer = i64::from_ne_bytes(bits.to_ne_bytes()) >> (bits % 64);
             assert_conversions_under(x, integer, &setting, under_fpc($control));
         }
@@ -57,11 +57,13 @@ fn operators_read_fpc_before_the_host_unit() {
     let single = pairs(&mut random, Layout::BINARY32);
     let double = pairs(&mut random, Layout::BINARY64);
     let bfloat = pairs(&mut random, Layout::BFLOAT16);
+    let quad = pairs(&mut random, Layout::BINARY128);
     for control in core::iter::once(0).chain(FPC_SETTINGS) {
         scalars_under!(F16, u16, control, &half);
         scalars_under!(BF16, u16, control, &bfloat);
         scalars_under!(F32, u32, control, &single);
         scalars_under!(F64, u64, control, &double);
+        scalars_under!(F128, u128, control, &quad);
     }
 }
 

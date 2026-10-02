@@ -691,3 +691,66 @@ pub fn max_f64(mut left: f64, right: f64) -> f64 {
     );
     left
 }
+
+/// `false`: x86-64 has no binary128 unit.
+pub const QUAD: bool = false;
+
+/// Returns `None`: x86-64 has no binary128 unit.
+#[inline]
+pub fn quad_binary(_left: &[u64; 2], _right: &[u64; 2], _operation: Operation) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: x86-64 has no binary128 unit.
+#[inline]
+pub fn quad_sqrt(_value: &[u64; 2]) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: x86-64 has no binary128 unit.
+#[inline]
+pub fn quad_round(_value: &[u64; 2], _rounding: Rounding) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: x86-64 has no binary128 unit.
+#[inline]
+pub fn quad_to_int(_value: &[u64; 2]) -> Option<i64> {
+    None
+}
+
+/// Returns `None`: x86-64 has no binary128 unit.
+#[inline]
+pub fn quad_from_int(_value: i64) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: x86-64 has no binary128 unit.
+#[inline]
+pub fn quad_compare(_left: &[u64; 2], _right: &[u64; 2]) -> Option<Ordering> {
+    None
+}
+
+/// Returns `None`: x86-64 has no binary128 unit.
+#[inline]
+pub fn quad_from_single(_bits: u32) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: x86-64 has no binary128 unit.
+#[inline]
+pub fn quad_from_double(_bits: u64) -> Option<[u64; 2]> {
+    None
+}
+
+/// Returns `None`: x86-64 has no binary128 unit.
+#[inline]
+pub fn quad_to_single(_value: &[u64; 2]) -> Option<u32> {
+    None
+}
+
+/// Returns `None`: x86-64 has no binary128 unit.
+#[inline]
+pub fn quad_to_double(_value: &[u64; 2]) -> Option<u64> {
+    None
+}
