@@ -316,6 +316,29 @@ pub fn narrow_x2(value: [f64; 2]) -> [f32; 2] {
     unsafe { transmute::<float32x2_t, [f32; 2]>(result) }
 }
 
+/// Returns four 32-bit integers converted to binary32 in the rounding
+/// direction of FPCR, by `SCVTF`. The conversion is exact for an integer
+/// below `2^24` in magnitude.
+#[inline]
+pub fn from_int_x4(value: [i32; 4]) -> [f32; 4] {
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    let a = unsafe { transmute::<[i32; 4], uint32x4_t>(value) };
+    let result: float32x4_t;
+    // SAFETY: SCVTF reads and writes SIMD and floating-point registers.
+    // Every AArch64 target has it, and the conversion changes only the
+    // status flags of FPSR, which floaty does not read.
+    unsafe {
+        core::arch::asm!(
+            "scvtf {result:v}.4s, {a:v}.4s",
+            a = in(vreg) a,
+            result = lateout(vreg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    single_lanes(result)
+}
+
 /// Returns four binary16 lanes widened exactly to binary32, by `FCVTL`.
 #[inline]
 #[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack F16C.
@@ -546,6 +569,7 @@ no_wide!(min_max_f32x8, ([f32; 8], [f32; 8], MinMax) -> [f32; 8]);
 no_wide!(min_max_f64x4, ([f64; 4], [f64; 4], MinMax) -> [f64; 4]);
 no_wide!(to_int_f32x8, ([f32; 8]) -> [i32; 8]);
 no_wide!(to_int_f64x4, ([f64; 4]) -> [i32; 4]);
+no_wide!(from_int_x8, ([i32; 8]) -> [f32; 8]);
 
 /// Returns the integer indefinite in every lane, which sends each lane to
 /// the scalar conversion. AArch64 `FCVTNS` saturates a lane outside the

@@ -195,6 +195,49 @@ pub enum Operation {
     Div,
 }
 
+/// The term that a slice kernel of `Lanes` adds into a lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Term {
+    /// The value `x` of the first vector alone, which adds into the lane in
+    /// one rounded addition.
+    Value,
+    /// The product `x * y`.
+    Product,
+    /// The square of the difference: `d * d` with `d = x - y`.
+    SquareDifference,
+}
+
+/// How a slice kernel of `Lanes` adds a term into a lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// The product rounds, and then the sum rounds.
+    Separate,
+    /// A fused multiply-add rounds once.
+    Fused,
+}
+
+/// A vector that a slice kernel of `Lanes` reads on the host unit, as the
+/// binary32 encodings of its values.
+pub trait Load: Copy {
+    /// Returns the number of values.
+    fn count(self) -> usize;
+
+    /// Returns the binary32 encodings of the `N` values from `start`, or
+    /// `None` when the build has no instruction for the conversion. The
+    /// vector holds at least `start + N` values.
+    fn load<const N: usize>(self, start: usize) -> Option<[u32; N]>;
+
+    /// Returns the binary32 encodings of the values from `start`, with +0
+    /// in the lanes past the last value, as [`load`](Self::load) does. The
+    /// vector holds more than `start` and fewer than `start + N` values.
+    fn load_rest<const N: usize>(self, start: usize) -> Option<[u32; N]>;
+
+    /// Returns the `count` values from `start` as a vector of the same kind.
+    /// The vector holds at least `start + count` values.
+    #[must_use]
+    fn part(self, start: usize, count: usize) -> Self;
+}
+
 /// The kind of a host path, for [`available`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -490,7 +533,7 @@ mod none {
         use crate::float::Float;
         use crate::format::Standard;
         use crate::format::internal::MinMax;
-        use crate::host::{Host, Kind, Operation};
+        use crate::host::{Host, Kind, Load, Operation, Step, Term};
 
         /// Returns `false`: this build has no host path.
         #[must_use]
@@ -577,10 +620,67 @@ mod none {
 
         /// Returns `None`: this build has no host path.
         #[inline]
+        pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+            _values: &[Float<S, W, M>],
+            _to: Host,
+            _env: &Env,
+            _each: impl FnMut(usize, Option<[u64; N]>),
+        ) -> Option<()> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
         pub fn to_int_i32<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
             _value: &[Float<S, W, M>; N],
             _env: &Env,
         ) -> Option<[Option<i32>; N]> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn accumulate<const N: usize>(
+            _x: impl Load,
+            _y: impl Load,
+            _term: Term,
+            _step: Step,
+            _env: &Env,
+        ) -> Option<u32> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn accumulate_rows<const N: usize>(
+            _rows: impl Load,
+            _query: impl Load,
+            _row_count: usize,
+            _term: Term,
+            _env: &Env,
+            _each: impl FnMut(usize, Option<u32>),
+        ) -> Option<()> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn widen_halves<const N: usize>(_halves: &[u16; N]) -> Option<[u32; N]> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn widen_codes<const N: usize>(_codes: &[u8; N]) -> Option<[u32; N]> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn widen_scaled_codes<const N: usize>(
+            _codes: &[i8; N],
+            _scale: u32,
+        ) -> Option<[u32; N]> {
             None
         }
     }

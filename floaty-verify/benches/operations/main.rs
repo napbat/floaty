@@ -17,9 +17,12 @@
 //! binary32, binary16, x87 extended, and decimal64 and from `i64`, additions
 //! of subnormal operands and of a zero, and the comparison and the minimum of
 //! two operands. A third table measures the double-double types, and a
-//! fourth the operations of `Lanes` in nanoseconds per lane. On x86-64, a
-//! fifth table compares the decimal formats with the Intel decimal library
-//! for BID and with decNumber for DPD.
+//! fourth the operations of `Lanes` in nanoseconds per lane. A fifth table,
+//! in [`kernels`], measures the slice kernels of `Lanes` in nanoseconds per
+//! vector. On x86-64, a sixth table compares the decimal formats with the
+//! Intel decimal library for BID and with decNumber for DPD.
+
+mod kernels;
 
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -827,6 +830,7 @@ fn main() {
     lanes_row::<Binary<5>, 16, 8, _>("F16 x 8", 55, Lanes::convert::<F32>);
     lanes_row::<Binary<8>, 16, 8, _>("BF16 x 8", 56, Lanes::convert::<F32>);
     lanes_row::<Binary<15, X87>, 80, 2, _>("F80 x 2", 57, Lanes::convert::<F64>);
+    kernels::table();
     #[cfg(target_arch = "x86_64")]
     decimal_table();
 }

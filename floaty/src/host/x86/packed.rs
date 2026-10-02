@@ -366,6 +366,30 @@ pub fn to_int_f64x2(value: [f64; 2]) -> [i32; 2] {
     [low, high]
 }
 
+/// Returns four 32-bit integers converted to binary32 in the rounding
+/// direction of MXCSR, by `CVTDQ2PS`. The conversion is exact for an integer
+/// below `2^24` in magnitude.
+#[inline]
+pub fn from_int_x4(value: [i32; 4]) -> [f32; 4] {
+    // SAFETY: both types hold 16 bytes, and every bit pattern is a value of
+    // each.
+    let a = unsafe { transmute::<[i32; 4], __m128i>(value) };
+    let result: __m128;
+    // SAFETY: CVTDQ2PS reads and writes SSE registers. SSE2 is part of every
+    // x86-64 target, and `sse!` selects a VEX form only in a build with AVX.
+    // The conversion changes only the status flags of MXCSR, which floaty
+    // does not read.
+    unsafe {
+        core::arch::asm!(
+            sse!("cvtdq2ps {result}, {a}", "vcvtdq2ps {result}, {a}"),
+            a = in(xmm_reg) a,
+            result = lateout(xmm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    single_lanes(result)
+}
+
 /// Returns four binary16 lanes widened exactly to binary32, by `VCVTPH2PS`.
 #[cfg(target_feature = "f16c")]
 #[inline]
@@ -668,6 +692,11 @@ wide!(
     /// Returns four binary64 lanes rounded to 32-bit integers as
     /// `to_int_f32x4` rounds, by `VCVTPD2DQ`.
     to_int_f64x4, target_feature = "avx", (value: [f64; 4]) -> [i32; 4]
+);
+wide!(
+    /// Returns eight 32-bit integers converted to binary32 as `from_int_x4`
+    /// converts them, by `VCVTDQ2PS`.
+    from_int_x8, target_feature = "avx", (value: [i32; 8]) -> [f32; 8]
 );
 
 /// Defines a function for eight binary16 lanes in their own precision, which

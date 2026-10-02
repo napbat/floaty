@@ -18,7 +18,12 @@
 mod bfloat;
 mod extended;
 mod half;
+mod kernel;
 mod order;
+
+pub use self::kernel::{
+    accumulate, accumulate_rows, widen_codes, widen_halves, widen_scaled_codes,
+};
 
 use core::cmp::Ordering;
 
@@ -515,6 +520,38 @@ pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     if !ready_for(to, env, to.precision()) {
         return None;
     }
+    convert_lanes(value, to)
+}
+
+/// Converts the values of `values` to the host kind `to` as `convert` does,
+/// `N` at a time, with one check of the environment for every chunk. Calls
+/// `each` with the index of the first value of each full chunk and its
+/// encodings, or `None` for a chunk that holds a NaN. Returns `None`, and
+/// calls `each` for no chunk, when the path does not apply. The values after
+/// the last full chunk are left to the caller.
+#[inline]
+pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    values: &[Float<S, W, M>],
+    to: Host,
+    env: &Env,
+    mut each: impl FnMut(usize, Option<[u64; N]>),
+) -> Option<()> {
+    if !ready_for(to, env, to.precision()) {
+        return None;
+    }
+    for (index, chunk) in values.as_chunks::<N>().0.iter().enumerate() {
+        each(index * N, convert_lanes(chunk, to));
+    }
+    Some(())
+}
+
+/// Returns the encoding of each lane converted to the host kind `to`, as
+/// `convert` does, in an environment that allows the path.
+#[inline]
+fn convert_lanes<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    value: &[Float<S, W, M>; N],
+    to: Host,
+) -> Option<[u64; N]> {
     match (S::HOST, to) {
         (Host::Single, Host::Double) => {
             let x = singles(value)?;

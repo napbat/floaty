@@ -15,6 +15,8 @@
 //!   rounding direction.
 //! - [`comparisons`]: the comparison, the minimum, and the maximum.
 //! - [`remainder`]: the remainder.
+//! - [`kernels`]: the slice kernels of `Lanes`, in every kind of vector
+//!   and lane count, and the slice conversion.
 //!
 //! [`operands`] gives the operands of every check.
 
@@ -23,5 +25,6 @@ mod comparisons;
 mod conversions;
 mod double_double;
 mod integral;
+mod kernels;
 mod operands;
 mod remainder;

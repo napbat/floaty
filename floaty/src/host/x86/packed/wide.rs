@@ -380,3 +380,25 @@ pub unsafe fn to_int_f64x4(value: [f64; 4]) -> [i32; 4] {
     // each.
     unsafe { transmute::<__m128i, [i32; 4]>(result) }
 }
+
+/// # Safety
+///
+/// The processor must have AVX.
+#[target_feature(enable = "avx")]
+#[inline]
+pub unsafe fn from_int_x8(value: [i32; 8]) -> [f32; 8] {
+    // SAFETY: both types hold 32 bytes, and every bit pattern is a value of
+    // each.
+    let a = unsafe { transmute::<[i32; 8], __m256i>(value) };
+    let result: __m256;
+    // SAFETY: as in `to_int_f32x8`, with `VCVTDQ2PS`.
+    unsafe {
+        core::arch::asm!(
+            "vcvtdq2ps {result}, {a}",
+            a = in(ymm_reg) a,
+            result = lateout(ymm_reg) result,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    single_lanes(result)
+}

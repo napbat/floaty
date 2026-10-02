@@ -37,6 +37,11 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   `DENORMAL_INPUT`, which emulators need.
 - **Vector lanes.** `Lanes<T, N>` applies each operation to the lanes of a
   vector register and returns the union of the flags of the lanes.
+- **Slice kernels.** Sums, dot products, squares of distances, and norms
+  of whole vectors of binary32, bfloat16, binary16, and integer codes,
+  accumulated in `N` binary32 lanes in one documented order, with each
+  step rounded or fused. The order gives the same bits on every host, and
+  the host path runs at the speed of a plain host loop.
 - **Fast where possible.** Where the build targets a floating-point unit
   that gives the same bits, the operations without flags use it.
 - **Small.** `no_std`, no `alloc`, no dependencies, and no `unsafe` code
@@ -480,6 +485,39 @@ assert_eq!(sum.to_bits(), [0x3F80_0000, 0x7F80_0000, 0x4080_0000, 0x40C0_0000]);
 assert_eq!(flags, Flags::OVERFLOW | Flags::INEXACT | Flags::ROUNDED_UP);
 ```
 
+### Slice kernels
+
+The slice kernels of `Lanes<F32, N>` read whole vectors: `&[F32]`,
+`&[f32]`, `&[BF16]`, `&[F16]`, `&[u8]` codes, `LittleEndian` encodings in
+bytes at any alignment, and `ScaledCodes`. Each value widens exactly to
+binary32, or a code converts and multiplies by its scale. Value `i` adds its
+term into lane `i % N`, every lane starts at +0, and the lanes then add by
+halves: lane `j` plus lane `j + N/2`, down to one lane. `N` is a power of
+two.
+
+| Kernel | Term of value `i` |
+| --- | --- |
+| `sum` | `x` |
+| `dot`, `dot_fused` | `x * y` |
+| `distance_square`, `distance_square_fused` | `d * d` with `d = x - y` rounded |
+| `norm`, `norm_fused` | the square root of `dot` of `x` with itself |
+| `dot_rows`, `distance_square_rows` | `dot` or `distance_square` of each row of a matrix with a query |
+
+A separate kernel rounds the term and then the sum. A fused kernel adds
+the product in one fused multiply-add. The fused kernels give the same bits
+on a host without FMA, from the engine, as on a host with FMA.
+`Lanes::convert_slice` converts a slice, for example binary32 to
+bfloat16. Each `_with` method runs the engine and returns the flags.
+
+```rust
+use floaty::{BF16, F32, Lanes, LittleEndian};
+
+let query = [1.0_f32, 2.0, 3.0];
+let row = [0x80, 0x3F, 0x00, 0x40, 0x40, 0x40]; // bfloat16 1, 2, 3
+let dot = Lanes::<F32, 32>::dot(LittleEndian::<BF16>::new(&row), &query[..]);
+assert_eq!(dot.to_bits(), 0x4160_0000); // 14
+```
+
 ## Hardware acceleration
 
 The engine computes every result in integer arithmetic. A host path
@@ -522,6 +560,7 @@ path.
 | `FEAT_BF16` | AArch64 with `+bf16` | The scalar bfloat16 paths round in `BFCVT` | |
 | Packed AArch64 | AArch64 | As the packed SSE paths, at 128 bits, but without `to_int` and x87 extended lanes | As the packed SSE paths |
 | s390x | s390x | binary32 and binary64: `+`, `-`, `*`, `/`, `sqrt`, `mul_add`, `convert` between them, `to_int`, `from_int`, `round_to_integral` in the five IEEE 754 directions, comparisons, and the minimum and maximum operations. binary16 and bfloat16 through binary32, as on x86-64 without F16C, and binary16 `mul_add` through binary64. binary128 in pairs of floating-point registers: `+`, `-`, `*`, `/`, `sqrt`, `round_to_integral` in the five IEEE 754 directions, `to_int`, `from_int`, comparisons, the minimum and maximum operations, and `convert` to and from binary32 and binary64. `Lanes` of binary32, binary64, and bfloat16: the scalar instruction of each lane after one check of the FPC register | An FPC register with a nonzero binary rounding mode or an IEEE mask; a 64-bit integer at a bound of the conversion; `mul_add` and `remainder` of binary128 |
+| Slice kernels | x86-64 with SSE2, and AVX for 256 bits, or AArch64 | The kernels of `Lanes<F32, N>`: `sum`, `dot`, `distance_square`, `norm`, `dot_rows`, and `distance_square_rows` in the packed binary32 instructions, and the fused kernels with FMA. bfloat16 widens by a shift, binary16 by F16C or `FCVTL` or in integer and binary32 instructions, and codes by `CVTDQ2PS` or `SCVTF`. `convert_slice` takes the packed conversions. One check of the environment serves the call. | A NaN sum sends the call, or its row, to the engine. A chunk of `convert_slice` that holds a NaN converts one value at a time. |
 | Double-double | The binary64 paths of the build | `+`, `-`, `*`, `/`, and `sqrt` of `Gcc` and `Qd`, with one check of the environment for all steps | |
 
 [docs/x86-64-acceleration.md](docs/x86-64-acceleration.md) lists the x86-64
@@ -607,6 +646,11 @@ The normal test run tests every FP8, FP6, and FP4 operand pair of every
 operation. Ignored sweeps test every binary16 and bfloat16 operand pair of
 the host paths, every binary32 encoding, and all 318 million TestFloat
 `mulAdd` cases.
+MPFR computes the documented order of the slice kernels of `Lanes` one
+step at a time, in every behavior of the operation tests, for binary32,
+bfloat16, and binary16 vectors and codes, with special values among them.
+The host path of each kernel and of `convert_slice` must give the bits of
+the engine in every lane count from 1 to 64.
 A reference that disagrees with IEEE 754 or with the processor has a comment
 beside its test with the evidence and the resolution.
 

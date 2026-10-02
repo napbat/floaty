@@ -30,6 +30,7 @@ pub mod formats;
 pub mod ibm_ldouble;
 #[cfg(target_arch = "x86_64")]
 pub mod intel_decimal;
+pub mod kernels;
 #[cfg(target_arch = "x86_64")]
 pub mod libm;
 #[cfg(target_arch = "x86_64")]

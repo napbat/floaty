@@ -180,6 +180,16 @@ pub fn to_int_f64x2(_value: [f64; 2]) -> [i32; 2] {
     [i32::MIN; 2]
 }
 
+/// Returns four 32-bit integers converted to binary32 in the rounding mode
+/// of the FPC register, each by `CEGBR`. The conversion is exact for an
+/// integer below `2^24` in magnitude.
+#[inline]
+pub fn from_int_x4(value: [i32; 4]) -> [f32; 4] {
+    value.map(|lane| {
+        super::from_int_f32(i64::from(lane)).expect("CEGBR converts every 64-bit integer")
+    })
+}
+
 /// Defines a function that returns `None`, for a chunk that s390x does not
 /// compute: a 256-bit chunk, or eight binary16 lanes.
 macro_rules! no_chunk {
@@ -225,6 +235,7 @@ no_wide!(
     min_max_f64x4, ([f64; 4], [f64; 4], MinMax) -> [f64; 4];
     to_int_f32x8, ([f32; 8]) -> [i32; 8];
     to_int_f64x4, ([f64; 4]) -> [i32; 4];
+    from_int_x8, ([i32; 8]) -> [f32; 8];
 );
 
 no_native!(

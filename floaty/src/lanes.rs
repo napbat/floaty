@@ -1,6 +1,10 @@
 //! Values of one float type as the lanes of a vector register.
 
+mod kernel;
 mod order;
+mod vector;
+
+pub use self::vector::{LittleEndian, ScaledCodes, Vector, Widen};
 
 use core::ops;
 
@@ -245,6 +249,86 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         let behavior = behavior.apply::<T::Mode>();
         let (lanes, flags) = self.each_with(|lane| lane.convert_with::<T>(behavior));
         (Lanes::new(lanes), flags)
+    }
+
+    /// Converts each value of `values` to the float type `T` into the same
+    /// index of `out`, rounding with the mode of `T`, as
+    /// [`Float::convert`] does. The packed host path converts `N` values at
+    /// a time, with one check of the environment for the call, where the
+    /// build has the path. A chunk that holds a NaN, and the values after the
+    /// last full chunk, convert one at a time.
+    ///
+    /// ```
+    /// use floaty::{BF16, F32, Lanes};
+    ///
+    /// let values = [0x3F80_0000, 0x3F80_8000, 0x7FA0_0000].map(F32::from_bits);
+    /// let mut out = [BF16::from_bits(0); 3];
+    /// Lanes::<F32, 8>::convert_slice(&values, &mut out);
+    /// // 1, the tie 1 + 2^-8 to even, and the quiet signaling NaN.
+    /// assert_eq!(out.map(BF16::to_bits), [0x3F80, 0x3F80, 0x7FE0]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics when `values` and `out` have different lengths.
+    #[inline]
+    pub fn convert_slice<T: FloatType>(values: &[Float<S, W, M>], out: &mut [T]) {
+        assert_eq!(
+            values.len(),
+            out.len(),
+            "the slices of a conversion have one length"
+        );
+        if const { host::packed::convertible(S::HOST, T::HOST) } {
+            let done = host::packed::convert_chunks::<S, W, M, N>(
+                values,
+                T::HOST,
+                &<T::Mode as Mode>::ENV,
+                |start, bits| {
+                    let chunk = &mut out[start..start + N];
+                    match bits {
+                        Some(bits) => chunk
+                            .iter_mut()
+                            .zip(bits)
+                            .for_each(|(result, bits)| *result = T::from_host([bits, 0])),
+                        None => convert_each(&values[start..start + N], chunk),
+                    }
+                },
+            );
+            if done.is_some() {
+                let rest = values.len() - values.len() % N;
+                convert_each(&values[rest..], &mut out[rest..]);
+                return;
+            }
+        }
+        convert_each(values, out);
+    }
+
+    /// Converts each value of `values` to the float type `T` into the same
+    /// index of `out`, with an override of the behavior of `T`, and returns
+    /// the union of the flags.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `values` and `out` have different lengths.
+    pub fn convert_slice_with<T: FloatType>(
+        values: &[Float<S, W, M>],
+        out: &mut [T],
+        behavior: impl Override,
+    ) -> Flags {
+        assert_eq!(
+            values.len(),
+            out.len(),
+            "the slices of a conversion have one length"
+        );
+        let behavior = behavior.apply::<T::Mode>();
+        values
+            .iter()
+            .zip(out)
+            .fold(Flags::NONE, |flags, (value, result)| {
+                let (converted, value_flags) = value.convert_with::<T>(behavior);
+                *result = converted;
+                flags | value_flags
+            })
     }
 }
 
@@ -557,6 +641,20 @@ fn convert_out_of_line<S: Standard<W>, const W: usize, M: Mode, const N: usize, 
     lanes: Lanes<Float<S, W, M>, N>,
 ) -> Lanes<T, N> {
     Lanes::new(lanes.lanes.map(Float::convert::<T>))
+}
+
+/// Converts each value to the float type `T` into the same index of `out`,
+/// with the mode of `T`, one value at a time: for a build without the
+/// packed path, for a chunk that holds a NaN, and for the values after the
+/// last full chunk.
+fn convert_each<S: Standard<W>, const W: usize, M: Mode, T: FloatType>(
+    values: &[Float<S, W, M>],
+    out: &mut [T],
+) {
+    values
+        .iter()
+        .zip(out)
+        .for_each(|(value, result)| *result = value.convert());
 }
 
 /// Applies `operation`, which returns a result and flags, to each item, and
