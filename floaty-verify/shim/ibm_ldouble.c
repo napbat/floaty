@@ -12,7 +12,8 @@
  *
  * The operation is `add`, `sub`, `mul`, or `div`. The function is a libm
  * function on one, two, or three IBM long double operands: `sqrtl`,
- * `nextupl`, `nextdownl`, `iscanonicall`, `fmodl`, `remainderl`, or `fmal`.
+ * `nextupl`, `nextdownl`, `iscanonicall`, `logbl`, `copysignl`, `fmodl`,
+ * `remainderl`, or `fmal`.
  * `iscanonicall` gives its integer result as the high half, and a zero low
  * half. The instruction is `fmadd` or `fmsub`, which compute `a * c + b` and
  * `a * c - b` with the operands in the order FRA, FRC, FRB. The rounding
@@ -61,6 +62,8 @@ __ibm128 glibc_sqrtl(__ibm128 x) __asm__("__sqrtl");
 __ibm128 glibc_nextupl(__ibm128 x) __asm__("__nextupl");
 __ibm128 glibc_nextdownl(__ibm128 x) __asm__("__nextdownl");
 int glibc_iscanonicall(__ibm128 x) __asm__("__iscanonicall");
+__ibm128 glibc_logbl(__ibm128 x) __asm__("__logbl");
+__ibm128 glibc_copysignl(__ibm128 x, __ibm128 y) __asm__("__copysignl");
 __ibm128 glibc_fmodl(__ibm128 x, __ibm128 y) __asm__("__fmodl");
 __ibm128 glibc_remainderl(__ibm128 x, __ibm128 y) __asm__("__remainderl");
 __ibm128 glibc_fmal(__ibm128 x, __ibm128 y, __ibm128 z) __asm__("__fmal");
@@ -88,6 +91,8 @@ static const struct library_function FUNCTIONS[] = {
     {"nextupl", 1, glibc_nextupl, NULL, NULL},
     {"nextdownl", 1, glibc_nextdownl, NULL, NULL},
     {"iscanonicall", 1, canonical, NULL, NULL},
+    {"logbl", 1, glibc_logbl, NULL, NULL},
+    {"copysignl", 2, NULL, glibc_copysignl, NULL},
     {"fmodl", 2, NULL, glibc_fmodl, NULL},
     {"remainderl", 2, NULL, glibc_remainderl, NULL},
     {"fmal", 3, NULL, NULL, glibc_fmal},

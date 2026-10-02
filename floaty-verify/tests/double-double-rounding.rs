@@ -2,7 +2,9 @@
 //! with floaty's rule, evaluated with exact rationals and MPFR in
 //! [`floaty_verify::double_double::round_pair`]: the conversions into a pair
 //! from binary, decimal, and double-double values and from integers,
-//! `scale_b`, rounding to an integral value, and the conversion to integers.
+//! `scale_b`, `log_b`, rounding to an integral value, and the conversion to
+//! integers. It also checks `copy_sign`, which reads the sign of the exact
+//! value.
 //!
 //! No reference library rounds to a pair by one documented rule, so the
 //! oracle evaluates the rule of `DoubleDouble`. Each test runs both
@@ -461,6 +463,83 @@ fn scale_b_rounds_the_scaled_value() {
             let (qd, qd_flags) = qd.scale_b_with(scale, env);
             assert_eq!((bits(qd), qd_flags), (bits(ours), flags), "{context}: Qd");
         }
+    }
+}
+
+/// Returns the exponent `e` of a nonzero rational, with
+/// `2^e <= |value| < 2^(e + 1)`.
+fn exponent(value: &Rational) -> i64 {
+    let magnitude = value.clone().abs();
+    let bits = |integer: &Integer| i64::from(integer.significant_bits());
+    let estimate = bits(magnitude.numer()) - bits(magnitude.denom());
+    let power = |exponent: i64| {
+        let shift = u32::try_from(exponent.unsigned_abs()).expect("an exponent fits a u32");
+        let power = Rational::from(Integer::from(1) << shift);
+        if exponent >= 0 { power } else { power.recip() }
+    };
+    if power(estimate) > magnitude {
+        estimate - 1
+    } else {
+        estimate
+    }
+}
+
+#[test]
+fn log_b_gives_the_exponent_of_the_exact_value() {
+    let mut random = SplitMix64::new(0xDD_10B8);
+    for _ in 0..20_000 {
+        let Pair { hi, lo } = pair(&mut random);
+        let value = DoubleDouble::<Gcc>::from_parts(F64::from_bits(hi), F64::from_bits(lo));
+        for env in behaviors() {
+            let (ours, flags) = value.log_b_with(env);
+            let want = match exact(Pair::new(hi, lo)) {
+                Exact::Number(number) => {
+                    let e = exponent(&number.to_rational().expect("the value is finite"));
+                    round_pair(&Rational::from(e), e < 0, &env)
+                }
+                Exact::Zero { .. } => {
+                    let mut infinite = infinity(true, &env);
+                    infinite.flags |= Flags::DIVIDE_BY_ZERO;
+                    infinite
+                }
+                Exact::Infinity { .. } => infinity(false, &env),
+                nan @ Exact::Nan(_) => expected(&special_decoded(&nan), 2, &env),
+            };
+            let context = format!("{hi:#x} {lo:#x} {env:?}");
+            assert_eq!(rounded((ours, flags)), want, "{context}");
+            let qd = DoubleDouble::<Qd>::from_parts(F64::from_bits(hi), F64::from_bits(lo));
+            let (qd, qd_flags) = qd.log_b_with(env);
+            assert_eq!((bits(qd), qd_flags), (bits(ours), flags), "{context}: Qd");
+        }
+    }
+}
+
+/// Returns the sign of an exact value: the sign of the number, of the zero,
+/// of the infinity, or of the NaN half.
+fn exact_sign(value: &Exact) -> bool {
+    match value {
+        Exact::Number(number) => number.is_sign_negative(),
+        Exact::Zero { negative } | Exact::Infinity { negative } => *negative,
+        Exact::Nan(bits) => bits >> 63 == 1,
+    }
+}
+
+#[test]
+fn copy_sign_negates_both_halves_when_the_signs_differ() {
+    let mut random = SplitMix64::new(0xDD_C0B5);
+    for _ in 0..20_000 {
+        let (x, y) = (pair(&mut random), pair(&mut random));
+        let negate = exact_sign(&exact(x)) != exact_sign(&exact(y));
+        let sign = if negate { 1 << 63 } else { 0 };
+        let want = (x.hi ^ sign, x.lo ^ sign);
+        let value = |pair: Pair| (F64::from_bits(pair.hi), F64::from_bits(pair.lo));
+        let ((xh, xl), (yh, yl)) = (value(x), value(y));
+        let ours = DoubleDouble::<Gcc>::from_parts(xh, xl)
+            .copy_sign(DoubleDouble::<Gcc>::from_parts(yh, yl));
+        assert_eq!(bits(ours), want, "{x:?} {y:?}");
+        let qd = DoubleDouble::<Qd>::from_parts(xh, xl)
+            .copy_sign(DoubleDouble::<Qd>::from_parts(yh, yl));
+        assert_eq!(bits(qd), want, "{x:?} {y:?}: Qd");
     }
 }
 

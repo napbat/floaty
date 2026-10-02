@@ -1,7 +1,8 @@
 //! Compares floaty's double-double functions with their references: the IBM
 //! `long double` functions of the libm of glibc 2.43 under QEMU for `Gcc`
-//! (`sqrtl`, `nextupl`, `nextdownl`, `fmodl`, `remainderl`, `fmal`, and
-//! `iscanonicall`), and QD's `drem` and `fmod` for `Qd`.
+//! (`sqrtl`, `nextupl`, `nextdownl`, `fmodl`, `remainderl`, `fmal`,
+//! `iscanonicall`, and, for canonical pairs, `logbl` and `copysignl`), and
+//! QD's `drem` and `fmod` for `Qd`.
 //!
 //! Each case compares both halves of the result bit for bit, with the sign
 //! and payload of a NaN half, and the five IEEE flags, in each of the four
@@ -121,6 +122,8 @@ fn compare(cases: &[FunctionCase]) -> usize {
                 let c = value(case.operands[2]);
                 outcome(a.mul_add_with(b, c, env))
             }
+            Function::LogB => outcome(a.log_b_with(env)),
+            Function::CopySign => outcome((a.copy_sign(b), Flags::NONE)),
         };
         if ours != theirs && failures.len() < 40 {
             failures.push(format!(
@@ -138,6 +141,8 @@ fn compare(cases: &[FunctionCase]) -> usize {
             Function::Fmod => Some(a % b),
             Function::Remainder => Some(a.remainder(b)),
             Function::MulAdd => Some(a.mul_add(b, value(case.operands[2]))),
+            Function::LogB => Some(a.log_b()),
+            Function::CopySign => Some(a.copy_sign(b)),
             Function::IsCanonical => None,
         };
         if let Some(result) = default {
@@ -201,6 +206,60 @@ fn sqrt_next_up_and_next_down_match_glibc() {
         .collect();
     count += compare(&unary(Function::Sqrt, &positive));
     assert_eq!(count, 4 * 4 * 22_008);
+}
+
+/// Returns a canonical operand: `logbl` and `copysignl` read the high half
+/// alone where floaty reads the exact value, and the two agree for a
+/// canonical pair.
+fn canonical(random: &mut SplitMix64) -> Pair {
+    loop {
+        let candidate = operand(random);
+        if value(candidate).is_canonical() {
+            return candidate;
+        }
+    }
+}
+
+#[test]
+fn log_b_and_copy_sign_match_glibc_for_canonical_pairs() {
+    let mut random = SplitMix64::new(0x6_10B8);
+    // Zeros, infinities, NaNs, a subnormal high half, and powers of two with
+    // a low half of each sign, which moves the exponent of the value.
+    let edges = [
+        Pair::new(0, 0),
+        Pair::new(1 << 63, 0),
+        Pair::new(0x7FF0_0000_0000_0000, 0),
+        Pair::new(0xFFF0_0000_0000_0000, 0),
+        Pair::new(0x7FF8_0000_0000_0001, 0),
+        Pair::new(0xFFF4_0000_0000_0000, 0),
+        Pair::new(0x0000_0000_0000_0001, 0),
+        Pair::new(0x000F_FFFF_FFFF_FFFF, 0),
+        Pair::new(0x3FF0_0000_0000_0000, 0xBC30_0000_0000_0000),
+        Pair::new(0x3FF0_0000_0000_0000, 0x3C30_0000_0000_0000),
+        Pair::new(0xC000_0000_0000_0000, 0x3C40_0000_0000_0000),
+        Pair::new(0x7FE0_0000_0000_0000, 0xFC80_0000_0000_0000),
+    ];
+    let operands: Vec<Pair> = edges
+        .into_iter()
+        .chain((0..20_000).map(|_| canonical(&mut random)))
+        .collect();
+    let mut count = compare(&unary(Function::LogB, &operands));
+    let cases: Vec<FunctionCase> = operands
+        .iter()
+        .flat_map(|&x| {
+            let y = operands[usize::try_from(
+                random.below(u64::try_from(operands.len()).expect("a length fits a u64")),
+            )
+            .expect("fits")];
+            Rounding::ALL.map(move |rounding| FunctionCase {
+                function: Function::CopySign,
+                rounding,
+                operands: [x, y, Pair::default()],
+            })
+        })
+        .collect();
+    count += compare(&cases);
+    assert_eq!(count, 2 * 4 * 20_012);
 }
 
 /// Returns a pair whose low half is about 1,075 exponents below its high

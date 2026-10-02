@@ -79,6 +79,10 @@ pub enum Function {
     /// `iscanonicall`. The program gives its result, 1 or 0, as the high
     /// half of the result.
     IsCanonical,
+    /// `logbl`: the exponent of the value.
+    LogB,
+    /// `copysignl`: the first operand with the sign of the second.
+    CopySign,
     /// `fmodl`: the remainder of the truncated quotient.
     Fmod,
     /// `remainderl`: the IEEE 754 remainder.
@@ -95,6 +99,8 @@ impl Function {
             Self::NextUp => "nextupl",
             Self::NextDown => "nextdownl",
             Self::IsCanonical => "iscanonicall",
+            Self::LogB => "logbl",
+            Self::CopySign => "copysignl",
             Self::Fmod => "fmodl",
             Self::Remainder => "remainderl",
             Self::MulAdd => "fmal",
@@ -105,8 +111,8 @@ impl Function {
     #[must_use]
     pub const fn operand_count(self) -> usize {
         match self {
-            Self::Sqrt | Self::NextUp | Self::NextDown | Self::IsCanonical => 1,
-            Self::Fmod | Self::Remainder => 2,
+            Self::Sqrt | Self::NextUp | Self::NextDown | Self::IsCanonical | Self::LogB => 1,
+            Self::Fmod | Self::Remainder | Self::CopySign => 2,
             Self::MulAdd => 3,
         }
     }

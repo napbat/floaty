@@ -33,6 +33,20 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         if self.is_sign_negative() { -self } else { self }
     }
 
+    /// Returns the value with the sign of `sign`, as IEEE 754 `copySign`
+    /// does: both halves negated when the exact values have different signs.
+    /// The operation signals nothing. For a canonical pair, the result is
+    /// that of glibc 2.43 `copysignl`, which reads the sign of each high
+    /// half.
+    #[must_use]
+    pub fn copy_sign(self, sign: Self) -> Self {
+        if self.is_sign_negative() == sign.is_sign_negative() {
+            self
+        } else {
+            -self
+        }
+    }
+
     /// Returns the exact value `hi + lo`.
     ///
     /// A NaN or an infinite high half gives that value. With a finite high
@@ -470,6 +484,26 @@ mod tests {
             (negative_zero, ONE)
         );
         assert_eq!(bits(gcc(negative_zero, 0).abs()), (0, negative_zero));
+    }
+
+    #[test]
+    fn copy_sign_reads_the_sign_of_each_exact_value() {
+        let negative_zero = 0x8000_0000_0000_0000;
+        let minus_one = gcc(ONE | negative_zero, 0);
+        // (+0, -1) is -1, so it already has the sign of -1.
+        let pair = gcc(0, ONE | negative_zero);
+        assert_eq!(bits(pair.copy_sign(minus_one)), bits(pair));
+        // (-0, 1) is 1: the sign of -1 negates both halves.
+        assert_eq!(
+            bits(gcc(negative_zero, ONE).copy_sign(minus_one)),
+            (0, ONE | negative_zero)
+        );
+        // A NaN takes the sign of its NaN half, and signals nothing.
+        let nan = gcc(0xFFF8_0000_0000_0000, 0);
+        assert_eq!(
+            bits(gcc(ONE, 0).copy_sign(nan)),
+            (ONE | negative_zero, negative_zero)
+        );
     }
 
     #[test]

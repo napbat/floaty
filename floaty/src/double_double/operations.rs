@@ -1,6 +1,6 @@
 //! The operations of a double-double on its exact value that round or select
 //! a value: the conversion to an integer, rounding to an integral value,
-//! `scale_b`, and the minimum and maximum operations.
+//! `scale_b`, `log_b`, and the minimum and maximum operations.
 //!
 //! No reference implements these operations for both algorithms, so each
 //! one follows the rule that its documentation states. They read the exact
@@ -192,6 +192,58 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
             other => other,
         };
         Self::from_exact(value, behavior.apply::<M>())
+    }
+
+    /// Returns the exponent of the exact value, with the default mode.
+    #[must_use]
+    pub fn log_b(self) -> Self {
+        self.log_b_with(M::default()).0
+    }
+
+    /// Returns the exponent of the exact value `hi + lo`, as IEEE 754-2019
+    /// `logB` does: the integer `e` with `2^e <= |hi + lo| < 2^(e + 1)`, as a
+    /// pair, and the flags. A zero gives -inf and signals divide-by-zero, and
+    /// an infinity gives +inf. A NaN converts to binary64 with a `+0` low
+    /// half. For a canonical pair, the result is that of glibc 2.43 `logbl`,
+    /// which reads the low half when the high half is a power of two.
+    ///
+    /// ```
+    /// use floaty::{DoubleDouble, Env, F64, Gcc};
+    ///
+    /// // 2 - 2^-60 lies below 2, so its exponent is 0.
+    /// let value = DoubleDouble::<Gcc>::from_parts(
+    ///     F64::from_bits(0x4000_0000_0000_0000),
+    ///     F64::from_bits(0xBC30_0000_0000_0000),
+    /// );
+    /// let (exponent, _) = value.log_b_with(Env::IEEE);
+    /// assert_eq!(exponent.hi().to_bits(), 0);
+    /// ```
+    #[must_use]
+    pub fn log_b_with(self, behavior: impl Override) -> (Self, Flags) {
+        let (value, flags) = match self.exact() {
+            Unpacked::Zero { .. } => (Unpacked::Infinity { negative: true }, Flags::DIVIDE_BY_ZERO),
+            Unpacked::Infinity { .. } => (Unpacked::Infinity { negative: false }, Flags::NONE),
+            Unpacked::Finite {
+                exponent,
+                significand,
+                ..
+            } => {
+                let top = i64::from(exponent) + i64::from(significand.bit_length()) - 1;
+                let value = if top == 0 {
+                    Unpacked::zero(false)
+                } else {
+                    Unpacked::Finite {
+                        negative: top < 0,
+                        exponent: 0,
+                        significand: Magnitude::ZERO.with_limb(0, top.unsigned_abs()),
+                    }
+                };
+                (value, Flags::NONE)
+            }
+            nan => (nan, Flags::NONE),
+        };
+        let (pair, round_flags) = Self::from_exact(value, behavior.apply::<M>());
+        (pair, flags | round_flags)
     }
 
     /// Returns the minimum or the maximum of one family.

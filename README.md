@@ -431,7 +431,7 @@ returns the flags of every step.
 | `+`, `-`, `*`, `/` | libgcc `__gcc_qadd` and the others | `dd_real` operators |
 | `sqrt`, `remainder`, `%` | glibc 2.43 `sqrtl`, `remainderl`, `fmodl` | QD `sqrt`, `drem`, `fmod` |
 | `mul_add`, `next_up`, `next_down` | glibc 2.43 `fmal`, `nextupl`, `nextdownl` | none: QD has no such function |
-| Conversions, integer conversions, `scale_b`, `round_to_integral`, classification, total order, minimum and maximum | the exact value `hi + lo`, by floaty's rule | the same |
+| Conversions, integer conversions, `scale_b`, `log_b`, `round_to_integral`, `copy_sign`, classification, total order, minimum and maximum | the exact value `hi + lo`, by floaty's rule. For a canonical pair, `log_b` and `copy_sign` give the results of glibc 2.43 `logbl` and `copysignl`. | the same |
 
 The operations on the exact value have no reference implementation, so
 `floaty-verify` checks their rule with MPFR. An exact value rounds to a pair
@@ -584,7 +584,7 @@ decNumber.
 | decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations in every direction, with FTZ, DAZ, precision limits, and every NaN rule, in DPD and, through the conversions of the Intel library, in BID. The conversions between the widths in the same behaviors, the conversions to and from every integer type, and the total order of non-canonical encodings. The minimum and maximum operations and the NaN payload operations of IEEE 754-2019, by floaty's rule. The static modes, against their behaviors. |
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
-| glibc 2.43 libm of the powerpc64le cross C library, under QEMU | `sqrt`, `remainder`, `%`, `mul_add`, `next_up`, `next_down`, and `is_canonical` of `DoubleDouble<Gcc>` |
+| glibc 2.43 libm of the powerpc64le cross C library, under QEMU | `sqrt`, `remainder`, `%`, `mul_add`, `next_up`, `next_down`, and `is_canonical` of `DoubleDouble<Gcc>`, and `log_b` and `copy_sign` of canonical pairs |
 | glibc 2.43 libm of the host | The NaN payload operations of binary32, binary64, x87 extended, and binary128 |
 | QD 2.3.24 | `DoubleDouble<Qd>`, also under the FTZ and DAZ bits of MXCSR |
 | Mesa 25.2.0, `format_r11g11b10f.h` | The R11G11B10 recipe: every rounding case of both channels, and every channel code |

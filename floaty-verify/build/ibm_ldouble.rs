@@ -35,7 +35,7 @@ const POWERPC_GLIBC_VERSION: &str = "2.43";
 /// algorithm follows, with the SHA-256 of each: the IBM `long double`
 /// functions and their wrappers, and the binary64 square root that `sqrtl`
 /// calls. A libm that compiles them differently is another reference.
-const LIBM_OBJECTS: [(&str, &str); 11] = [
+const LIBM_OBJECTS: [(&str, &str); 12] = [
     (
         "s_fmal.o",
         "86f2b7a97b10d189a036cbc16aed4ac2b1326c79441d5deb1c7ee65d027790bb",
@@ -80,12 +80,18 @@ const LIBM_OBJECTS: [(&str, &str); 11] = [
         "s_iscanonicall.o",
         "6999e392e8489a1266bfb704537b7270b56dfeded4fbca11626f6d71586f1c41",
     ),
+    (
+        "s_logbl.o",
+        "7b7b6eb98fd16da3a261f21fb56865e5f2fd365e3dea67a28b037b74114a6b38",
+    ),
 ];
 
 /// The members of the static C library of the pinned cross C library that
-/// `fmal` calls, with the SHA-256 of each: `__frexp`, `__scalbn`, and
-/// `qsort`, whose merge sort decides the order of the partial products.
-const LIBC_OBJECTS: [(&str, &str); 3] = [
+/// the reference uses, with the SHA-256 of each: `__frexp`, `__scalbn`, and
+/// `qsort`, which `fmal` calls, and whose merge sort decides the order of
+/// the partial products, and `copysignl`, which glibc builds into the C
+/// library.
+const LIBC_OBJECTS: [(&str, &str); 4] = [
     (
         "s_frexp.o",
         "70e35774763ee598004b6519a81f13d23d3b488df034e68c6d5704c9e0389ae2",
@@ -97,6 +103,10 @@ const LIBC_OBJECTS: [(&str, &str); 3] = [
     (
         "qsort.o",
         "db6193fca885d8dd3cc8165f61cab7c13aea384825b632ee32978f53b74258f7",
+    ),
+    (
+        "s_copysignl.o",
+        "3943d3488f6e7f96824930b35de16868bafb0af39333fd485b07fa945367869d",
     ),
 ];
 
