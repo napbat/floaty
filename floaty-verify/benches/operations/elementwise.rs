@@ -9,10 +9,10 @@ use std::cell::Cell;
 use std::hint::black_box;
 
 use floaty::elementwise::{
-    Abs, Difference, Maximum, MinimumNumber, Minimum, Product, Quotient, RoundToIntegral, Splat,
+    Abs, Difference, Maximum, Minimum, MinimumNumber, Product, Quotient, RoundToIntegral, Splat,
     Sum,
 };
-use floaty::{BF16, F32, Lanes, Rounding, ToInt, mode};
+use floaty::{BF16, F32, Lanes, Rounding, ToInt, Vector, mode};
 use floaty_verify::random::SplitMix64;
 
 use super::{Table, measure};
@@ -59,9 +59,12 @@ fn per_vector(vectors: &[Vec<f32>], mut operation: impl FnMut(&[f32])) -> f64 {
     })
 }
 
+/// One measured operation on a vector.
+type Operation<'a> = &'a mut dyn FnMut(&[f32]);
+
 /// Measures one row: the host loop, the operation, its `_with` method, and
 /// the scalar loop.
-fn row(name: &str, vectors: &[Vec<f32>], cells: [&mut dyn FnMut(&[f32]); 4]) {
+fn row(name: &str, vectors: &[Vec<f32>], cells: [Operation<'_>; 4]) {
     let [host, lanes, with, scalar] = cells;
     COLUMNS.row(
         name,
@@ -117,6 +120,26 @@ fn update_row(vectors: &[Vec<f32>]) {
     );
 }
 
+/// Returns the view of the scaled positions of `x`: `(x - low) / range`
+/// clamped to `[0, 1]`, times 255, rounded to an integral value, a tie away
+/// from zero.
+fn quantized<'a>(x: &'a [f32], lows: &'a [f32], ranges: &'a [f32]) -> impl Vector + 'a {
+    let (zero, one, levels) = (
+        F32::from_bits(0),
+        F32::from_bits(0x3F80_0000),
+        F32::from_bits(0x437F_0000),
+    );
+    let position = Quotient(Difference(x, lows), ranges);
+    let unit = Minimum(
+        Maximum(position, Splat::new(zero, DIMENSION)),
+        Splat::new(one, DIMENSION),
+    );
+    RoundToIntegral {
+        values: Product(unit, Splat::new(levels, DIMENSION)),
+        rounding: Rounding::TiesToAway,
+    }
+}
+
 /// Measures the scalar quantization of a vector to 8-bit codes.
 fn quantize_row(vectors: &[Vec<f32>]) {
     let lows = vec![-16.0_f32; DIMENSION];
@@ -135,24 +158,13 @@ fn quantize_row(vectors: &[Vec<f32>]) {
         black_box(&codes);
     };
     let mut scaled = vec![ToInt::Value(0_u8); DIMENSION];
-    let view = |x: &[f32]| {
-        let position = Quotient(Difference(x, &lows[..]), &ranges[..]);
-        let unit = Minimum(
-            Maximum(position, Splat::new(zero, DIMENSION)),
-            Splat::new(one, DIMENSION),
-        );
-        RoundToIntegral {
-            values: Product(unit, Splat::new(levels, DIMENSION)),
-            rounding: Rounding::TiesToAway,
-        }
-    };
     let mut lanes = |x: &[f32]| {
-        Single::to_int_slice(view(x), &mut scaled);
+        Single::to_int_slice(quantized(x, &lows, &ranges), &mut scaled);
         black_box(&scaled);
     };
     let mut with_scaled = vec![ToInt::Value(0_u8); DIMENSION];
     let mut with = |x: &[f32]| {
-        Single::to_int_slice_with(view(x), &mut with_scaled, mode::Ieee);
+        Single::to_int_slice_with(quantized(x, &lows, &ranges), &mut with_scaled, mode::Ieee);
         black_box(&with_scaled);
     };
     let mut scalar_codes = vec![0_u8; DIMENSION];

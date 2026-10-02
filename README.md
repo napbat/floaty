@@ -672,6 +672,18 @@ loop keeps 8 `f32` accumulators in the order of the kernels, and calls
 
 A build without FMA computes the fused kernels in the engine.
 
+The elementwise slice operations in nanoseconds per vector of 1,280
+values, default build, on the same host. The scalar column runs the
+operations of `F32` one value at a time.
+
+| Operation | Host loop | `Lanes<F32, 32>` | `_with` | Scalar `F32` |
+| --- | --- | --- | --- | --- |
+| `store` of `x * keep + y * eta` into cells | 100 | 242 | 33,329 | 17,166 |
+| `to_int_slice` of a quantization to codes | 1,625 | 2,436 | 56,421 | 37,177 |
+| `store` of `MinimumNumber` into cells | 108 | 398 | 6,021 | 5,717 |
+| `maximum_of` `Abs` | 179 | 986 | 2,430 | 5,783 |
+| `convert_slice` of `f32` to bfloat16 | | 1,200 | 8,218 | 5,527 |
+
 The decimal formats against the Intel Decimal Floating-Point Math Library
 for BID, and against the `decDouble` and `decQuad` functions of decNumber
 for DPD, on the same operands. Each cell gives floaty, then the reference.
