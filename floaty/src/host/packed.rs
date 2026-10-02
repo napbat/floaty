@@ -612,6 +612,21 @@ fn in_chunks_with<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usiz
     });
 }
 
+/// Returns `f` of each lane: a loop, not `array::map`, which LLVM calls out
+/// of line, through memory, in the convert loop of an instruction set.
+#[inline]
+fn each_lane<T: Copy, R: Copy + Default, const N: usize>(
+    lanes: [T; N],
+    f: impl Fn(T) -> R,
+) -> [R; N] {
+    let mut results = [R::default(); N];
+    results
+        .iter_mut()
+        .zip(lanes)
+        .for_each(|(result, lane)| *result = f(lane));
+    results
+}
+
 /// Returns the encoding of each lane converted to the host kind `to`, as
 /// `convert` does, in the instruction set `I`, in an environment that
 /// allows the path. Each conversion runs with the features of `I`, and the
@@ -624,44 +639,47 @@ fn convert_lanes<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize
 ) -> Option<[u64; N]> {
     match (S::HOST, to) {
         (Host::Single, Host::Double) => I::run(move || {
-            let lanes = isa::widen::<I, N>(singles(value)?)?.map(f64::to_bits);
+            let lanes = each_lane(isa::widen::<I, N>(singles(value)?)?, f64::to_bits);
             let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
         }),
         (Host::Double, Host::Single) => I::run(move || {
-            let bits = isa::narrow::<I, N>(doubles(value)?)?.map(f32::to_bits);
+            let bits = each_lane(isa::narrow::<I, N>(doubles(value)?)?, f32::to_bits);
             let nan = any_lane(bits.iter().copied(), nan_32);
-            (!nan).then_some(bits.map(u64::from))
+            (!nan).then(|| each_lane(bits, u64::from))
         }),
         (Host::Half, Host::Single) => I::run(move || {
             let bits = half::to_singles::<I, S, W, M, N>(value)?;
             let nan = any_lane(bits.iter().copied(), nan_32);
-            (!nan).then_some(bits.map(u64::from))
+            (!nan).then(|| each_lane(bits, u64::from))
         }),
         (Host::Half, Host::Double) => I::run(move || {
-            let lanes = half::to_doubles::<I, S, W, M, N>(value)?.map(f64::to_bits);
+            let lanes = each_lane(half::to_doubles::<I, S, W, M, N>(value)?, f64::to_bits);
             let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
         }),
         (Host::Single, Host::Half) => I::run(move || {
             let bits = half::from_singles::<I, S, W, M, N>(value)?;
             let nan = any_lane(bits.iter().copied(), nan_16);
-            (!nan).then_some(bits.map(u64::from))
+            (!nan).then(|| each_lane(bits, u64::from))
         }),
         (Host::BFloat, Host::Single) => I::run(move || {
-            let bits = bfloat::to_singles(value)?.map(f32::to_bits);
+            let bits = each_lane(bfloat::to_singles(value)?, f32::to_bits);
             let nan = any_lane(bits.iter().copied(), nan_32);
-            (!nan).then_some(bits.map(u64::from))
+            (!nan).then(|| each_lane(bits, u64::from))
         }),
         (Host::BFloat, Host::Double) => I::run(move || {
-            let lanes = isa::widen::<I, N>(&bfloat::to_singles(value)?)?.map(f64::to_bits);
+            let lanes = each_lane(
+                isa::widen::<I, N>(&bfloat::to_singles(value)?)?,
+                f64::to_bits,
+            );
             let nan = any_lane(lanes.iter().copied(), nan_64);
             (!nan).then_some(lanes)
         }),
         (Host::Single, Host::BFloat) => I::run(move || {
             let bits = bfloat::from_singles(value)?;
             let nan = any_lane(bits.iter().copied(), nan_bfloat);
-            (!nan).then_some(bits.map(u64::from))
+            (!nan).then(|| each_lane(bits, u64::from))
         }),
         _ => None,
     }

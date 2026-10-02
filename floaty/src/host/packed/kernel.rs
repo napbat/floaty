@@ -365,7 +365,7 @@ fn with_operand<I: Isa, const N: usize>(
 pub fn widen_halves<I: Isa, const N: usize>(halves: &[u16; N]) -> Option<[u32; N]> {
     I::run(move || {
         if I::HALF {
-            return Some(encodings(isa::widen_halves::<I, N>(halves)?));
+            return isa::widen_halves::<I, N>(halves);
         }
         // The fraction of a subnormal binary16 value times 2^-24 is its
         // magnitude, a normal binary32 value. The conversion of the fraction

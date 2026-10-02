@@ -12,6 +12,7 @@
 
 use super::super::environment::packed;
 use super::super::{Isa, Operation};
+use super::kernel::encodings;
 use super::{chunk, chunk_mut, in_chunks_on};
 use crate::env::Rounding;
 use crate::format::internal::MinMax;
@@ -308,17 +309,19 @@ pub fn from_int<I: Isa, const N: usize>(x: &[i32; N]) -> Option<[f32; N]> {
     Some(lanes)
 }
 
-/// Returns each binary16 encoding widened exactly to binary32, or `None`
-/// where the instruction set has no widening instruction.
+/// Returns the binary32 encoding of each binary16 encoding widened exactly,
+/// or `None` where the instruction set has no widening instruction. Each
+/// chunk becomes encodings as it leaves its instruction, so the lanes stay
+/// in vectors up to the store of the caller.
 #[inline]
-pub fn widen_halves<I: Isa, const N: usize>(x: &[u16; N]) -> Option<[f32; N]> {
-    let mut lanes = [0.0; N];
-    in_single_chunks::<I, f32, N>(
+pub fn widen_halves<I: Isa, const N: usize>(x: &[u16; N]) -> Option<[u32; N]> {
+    let mut lanes = [0; N];
+    in_single_chunks::<I, u32, N>(
         &mut lanes,
-        |start| I::widen_halves_x16(*chunk(x, start)),
-        |start| I::widen_halves_x8(*chunk(x, start)),
-        |start| I::widen_halves_x4(*chunk(x, start)),
-        |index| Some(I::widen_halves_x4([x[index]; 4])?[0]),
+        |start| I::widen_halves_x16(*chunk(x, start)).map(encodings),
+        |start| I::widen_halves_x8(*chunk(x, start)).map(encodings),
+        |start| I::widen_halves_x4(*chunk(x, start)).map(encodings),
+        |index| Some(I::widen_halves_x4([x[index]; 4])?[0].to_bits()),
     )?;
     Some(lanes)
 }

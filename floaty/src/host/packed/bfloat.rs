@@ -92,7 +92,13 @@ pub(super) fn sqrt<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
 pub(super) fn from_singles<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
 ) -> Option<[u16; N]> {
-    Some(singles(value)?.map(narrow))
+    let x = singles(value)?;
+    let mut halves = [0; N];
+    halves
+        .iter_mut()
+        .zip(x)
+        .for_each(|(half, &lane)| *half = narrow(lane));
+    Some(halves)
 }
 
 /// Returns each bfloat16 lane rounded to an integral value in the direction
