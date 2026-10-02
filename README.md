@@ -537,7 +537,8 @@ operation of value `i` of their operands: `Sum`, `Difference`, `Product`,
 `Quotient`, `Minimum`, `Maximum`, `MinimumNumber`, `MaximumNumber`, `Abs`,
 and `RoundToIntegral` in a fixed direction. `Splat` repeats one value.
 Views nest, and each step rounds. `Lanes<F32, N>` reads a view `N` values
-at a time:
+at a time, and `store` and `to_int_slice` read the values past the last
+chunk of `N` eight at a time:
 
 | Operation | Result |
 | --- | --- |

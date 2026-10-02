@@ -29,9 +29,10 @@ use crate::integer::{Integer, ToInt};
 ///
 /// The methods without flags take the packed host path where the build has
 /// one. The path checks the mode and the environment once for the call and
-/// computes `N` values at a time. The engine computes a chunk that holds a
-/// NaN. A `_with` method always runs the engine, and returns the union of
-/// the flags of every step.
+/// computes `N` values at a time. A store and `to_int_slice` compute the
+/// values past the last chunk of `N` eight at a time. The engine computes a
+/// chunk that holds a NaN. A `_with` method always runs the engine, and
+/// returns the union of the flags of every step.
 ///
 /// ```
 /// use floaty::elementwise::{Product, RoundToIntegral, Splat};

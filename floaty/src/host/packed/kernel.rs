@@ -15,6 +15,7 @@
 //! instruction set that `dispatch` selects.
 
 use super::super::bits::nan_32;
+use super::super::environment::packed;
 use super::super::narrow::{SUBNORMAL_BIAS, round_to_half_lanes};
 use super::super::paths::ready_for;
 use super::{chunk, chunk_mut, dispatch, isa};
@@ -179,10 +180,28 @@ fn short_rows<I: Isa, A: Accumulation>(
     rows: impl Load,
     query: impl Load,
     row_count: usize,
+    each: impl FnMut(usize, Option<u32>),
+) {
+    // The test of the count comes before the loop, so the loop of rows of
+    // `SHORT` values loads each row whole and calls no function.
+    if query.count() == SHORT {
+        rows_of_count::<I, A, true>(rows, query, row_count, each);
+    } else {
+        rows_of_count::<I, A, false>(rows, query, row_count, each);
+    }
+}
+
+/// Calls `each` as `short_rows` does, for rows of [`SHORT`] values when
+/// `WHOLE` holds, and of fewer otherwise.
+#[inline]
+fn rows_of_count<I: Isa, A: Accumulation, const WHOLE: bool>(
+    rows: impl Load,
+    query: impl Load,
+    row_count: usize,
     mut each: impl FnMut(usize, Option<u32>),
 ) {
     let count = query.count();
-    let query = load_short::<I>(query, count);
+    let query = load_short::<I, WHOLE>(query);
     let last = row_count.saturating_sub(1);
     for first in (0..row_count).step_by(4) {
         // A group past the last row repeats the last row.
@@ -191,7 +210,7 @@ fn short_rows<I: Isa, A: Accumulation>(
             .iter_mut()
             .enumerate()
             .for_each(|(offset, index)| *index = (first + offset).min(last));
-        let sums = query.and_then(|query| four_rows::<I, A>(rows, &query, indices, count));
+        let sums = query.and_then(|query| four_rows::<I, A, WHOLE>(rows, &query, indices, count));
         for offset in 0..(row_count - first).min(4) {
             let sum = sums.map(|sums| sums[offset]).filter(|&sum| !nan_32(sum));
             each(first + offset, sum);
@@ -199,11 +218,12 @@ fn short_rows<I: Isa, A: Accumulation>(
     }
 }
 
-/// Returns the values of a vector of `count` values, at most [`SHORT`], as
-/// [`SHORT`] binary32 values with +0 past the last value.
+/// Returns the values of a vector of [`SHORT`] values when `WHOLE` holds,
+/// and of fewer otherwise, as [`SHORT`] binary32 values with +0 past the
+/// last value.
 #[inline]
-fn load_short<I: Isa>(vector: impl Load, count: usize) -> Option<[f32; SHORT]> {
-    let bits = if count == SHORT {
+fn load_short<I: Isa, const WHOLE: bool>(vector: impl Load) -> Option<[f32; SHORT]> {
+    let bits = if WHOLE {
         vector.load::<I, SHORT>(0)?
     } else {
         vector.load_rest::<I, SHORT>(0)?
@@ -213,10 +233,11 @@ fn load_short<I: Isa>(vector: impl Load, count: usize) -> Option<[f32; SHORT]> {
 
 /// Returns the sums of four rows of `count` values with `query`, as
 /// `short_rows` states. Each row adds the halves of its eight terms in one
-/// packed sum. The four results then move so that one packed sum adds lane
-/// `j` of each row to its lane `j + 2`, and another adds the two lanes left.
+/// packed sum. One packed sum for each two rows then adds lanes 0 and 1 of
+/// each row to its lanes 2 and 3, and one more adds the two lanes left of
+/// each of the four rows.
 #[inline]
-fn four_rows<I: Isa, A: Accumulation>(
+fn four_rows<I: Isa, A: Accumulation, const WHOLE: bool>(
     rows: impl Load,
     query: &[f32; SHORT],
     indices: [usize; 4],
@@ -224,21 +245,20 @@ fn four_rows<I: Isa, A: Accumulation>(
 ) -> Option<[u32; 4]> {
     let mut quarters = [[0.0; 4]; 4];
     for (quarter, index) in quarters.iter_mut().zip(indices) {
-        let row = load_short::<I>(rows.part(index * count, count), count)?;
+        let row = load_short::<I, WHOLE>(rows.part(index * count, count))?;
         let terms = short_terms::<I, A>(&row, query)?;
         *quarter = I::binary_f32x4(*chunk(&terms, 0), *chunk(&terms, 4), Operation::Add)?;
     }
-    let column = |lane: usize| {
-        [
-            quarters[0][lane],
-            quarters[1][lane],
-            quarters[2][lane],
-            quarters[3][lane],
-        ]
+    // Whole quarters move into the operands of each sum, as `halves_f32x4`
+    // states.
+    let pair = |first, second| {
+        let (low, high) = packed::halves_f32x4(first, second);
+        I::binary_f32x4(low, high, Operation::Add)
     };
-    let low = I::binary_f32x4(column(0), column(2), Operation::Add)?;
-    let high = I::binary_f32x4(column(1), column(3), Operation::Add)?;
-    let mut sums = encodings(I::binary_f32x4(low, high, Operation::Add)?);
+    let front = pair(quarters[0], quarters[1])?;
+    let back = pair(quarters[2], quarters[3])?;
+    let (evens, odds) = packed::evens_odds_f32x4(front, back);
+    let mut sums = encodings(I::binary_f32x4(evens, odds, Operation::Add)?);
     // A -0 sum is +0, as the lanes give it.
     for sum in &mut sums {
         *sum &= 0u32.wrapping_sub(u32::from(*sum != 0x8000_0000));

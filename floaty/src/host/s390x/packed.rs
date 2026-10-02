@@ -54,6 +54,23 @@ pub fn sqrt_f64x2(value: [f64; 2]) -> [f64; 2] {
     value.map(super::sqrt_f64)
 }
 
+/// Returns lanes 0 and 1 of `first` and then of `second`, and lanes 2 and 3
+/// of `first` and then of `second`. A move of lanes is no floating-point
+/// operation.
+#[inline]
+pub fn halves_f32x4(first: [f32; 4], second: [f32; 4]) -> ([f32; 4], [f32; 4]) {
+    let ([a0, a1, a2, a3], [b0, b1, b2, b3]) = (first, second);
+    ([a0, a1, b0, b1], [a2, a3, b2, b3])
+}
+
+/// Returns lanes 0 and 2 of `first` and then of `second`, and lanes 1 and 3
+/// of `first` and then of `second`, as `halves_f32x4` states.
+#[inline]
+pub fn evens_odds_f32x4(first: [f32; 4], second: [f32; 4]) -> ([f32; 4], [f32; 4]) {
+    let ([a0, a1, a2, a3], [b0, b1, b2, b3]) = (first, second);
+    ([a0, a2, b0, b2], [a1, a3, b1, b3])
+}
+
 /// Returns four binary32 lanes rounded to integral values in the direction
 /// `rounding`, or `None` for a direction that no instruction encodes.
 #[inline]

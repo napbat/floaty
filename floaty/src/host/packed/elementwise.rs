@@ -239,11 +239,12 @@ fn without_nan<const C: usize>(bits: [u32; C]) -> Option<[u32; C]> {
     (!any_lane(bits[..].iter().copied(), nan_32)).then_some(bits)
 }
 
-/// Computes the values of `values` `N` at a time, with one check of the
-/// environment for the call. Calls `each` with the index of the first value
-/// of each chunk, the index past its last value, and its encodings, or
-/// `None` for a chunk that holds a NaN or has no instruction. Returns
-/// `None`, and calls `each` for no chunk, when the path does not apply.
+/// Computes the values of `values` `N` at a time, and the values past the
+/// last chunk of `N` [`PART`] at a time, with one check of the environment
+/// for the call. Calls `each` with the index of the first value of each
+/// chunk, the index past its last value, and its encodings, or `None` for a
+/// chunk that holds a NaN or has no instruction. Returns `None`, and calls
+/// `each` for no chunk, when the path does not apply.
 #[inline]
 pub fn store<const N: usize>(
     values: impl Load,
@@ -264,15 +265,16 @@ pub(super) fn store_on<I: Isa, const N: usize>(
     values: impl Load,
     each: impl FnMut(usize, usize, Option<&[u32]>),
 ) {
-    I::run(move || in_value_chunks::<I, N, u32>(values, without_nan, each));
+    I::run(move || in_value_chunks::<I, N, u32>(values, without_nan, without_nan, each));
 }
 
-/// Converts the values of `values` to 32-bit integers to nearest even, `N`
-/// at a time, with one check of the environment for the call. Calls `each`
-/// with the index of the first value of each chunk, the index past its last
-/// value, and its integers, or `None` for a chunk without an instruction. A
-/// lane that the scalar conversion must decide holds `i32::MIN`. Returns
-/// `None`, and calls `each` for no chunk, when the path does not apply.
+/// Converts the values of `values` to 32-bit integers to nearest even, in
+/// the chunks of `store`, with one check of the environment for the call.
+/// Calls `each` with the index of the first value of each chunk, the index
+/// past its last value, and its integers, or `None` for a chunk without an
+/// instruction. A lane that the scalar conversion must decide holds
+/// `i32::MIN`. Returns `None`, and calls `each` for no chunk, when the path
+/// does not apply.
 #[inline]
 pub fn to_int<const N: usize>(
     values: impl Load,
@@ -293,18 +295,27 @@ pub(super) fn to_int_on<I: Isa, const N: usize>(
     values: impl Load,
     each: impl FnMut(usize, usize, Option<&[i32]>),
 ) {
-    I::run(move || in_value_chunks::<I, N, i32>(values, integers::<I, N>, each));
+    I::run(move || {
+        in_value_chunks::<I, N, i32>(values, integers::<I, N>, integers::<I, PART>, each);
+    });
 }
 
+/// The lanes of each chunk past the last chunk of `N` values, where `N` is
+/// larger. The kernels add their last values in chunks of eight lanes too.
+/// A short vector then loads and computes its own values, not a chunk of
+/// `N` lanes that it pads.
+const PART: usize = 8;
+
 /// Loads the values of `values` `C` at a time in the instruction set `I`,
-/// with +0 past the last value in the last chunk, and calls `each` with the
-/// index of the first value of each chunk, the index past its last value,
-/// and `compute` of its encodings, or `None` where a load or `compute` gives
-/// `None`.
+/// and calls `each` with the index of the first value of each chunk, the
+/// index past its last value, and `compute` of its encodings, or `None`
+/// where a load or `compute` gives `None`. The values past the last chunk
+/// of `C` take chunks of [`PART`] and `compute_part` when `C` is larger.
 #[inline]
 fn in_value_chunks<I: Isa, const C: usize, T>(
     values: impl Load,
     compute: impl Fn([u32; C]) -> Option<[T; C]>,
+    compute_part: impl Fn([u32; PART]) -> Option<[T; PART]>,
     mut each: impl FnMut(usize, usize, Option<&[T]>),
 ) {
     let count = values.count();
@@ -313,12 +324,36 @@ fn in_value_chunks<I: Isa, const C: usize, T>(
         let chunk = values.load::<I, C>(start).and_then(&compute);
         each(start, start + C, chunk.as_ref().map(|chunk| &chunk[..]));
     }
-    if full < count {
-        let chunk = values.load_rest::<I, C>(full).and_then(&compute);
+    if C > PART {
+        in_rest::<I, PART, T>(values, full, compute_part, each);
+    } else {
+        in_rest::<I, C, T>(values, full, compute, each);
+    }
+}
+
+/// Calls `each` for the values of `values` from `start` as
+/// `in_value_chunks` does, `W` at a time, with +0 past the last value in
+/// the last chunk.
+#[inline]
+fn in_rest<I: Isa, const W: usize, T>(
+    values: impl Load,
+    start: usize,
+    compute: impl Fn([u32; W]) -> Option<[T; W]>,
+    mut each: impl FnMut(usize, usize, Option<&[T]>),
+) {
+    let count = values.count();
+    for first in (start..count).step_by(W) {
+        let end = count.min(first + W);
+        let chunk = if end - first == W {
+            values.load::<I, W>(first)
+        } else {
+            values.load_rest::<I, W>(first)
+        };
+        let chunk = chunk.and_then(&compute);
         each(
-            full,
-            count,
-            chunk.as_ref().map(|chunk| &chunk[..count - full]),
+            first,
+            end,
+            chunk.as_ref().map(|chunk| &chunk[..end - first]),
         );
     }
 }

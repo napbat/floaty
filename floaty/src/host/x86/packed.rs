@@ -11,9 +11,9 @@
 //! the build does not have returns `None`.
 
 #[cfg(target_arch = "x86")]
-use core::arch::x86::{__m128, __m128d, __m128i};
+use core::arch::x86::{__m128, __m128d, __m128i, _mm_movehl_ps, _mm_movelh_ps, _mm_shuffle_ps};
 #[cfg(target_arch = "x86_64")]
-use core::arch::x86_64::{__m128, __m128d, __m128i};
+use core::arch::x86_64::{__m128, __m128d, __m128i, _mm_movehl_ps, _mm_movelh_ps, _mm_shuffle_ps};
 use core::mem::transmute;
 
 use super::super::Operation;
@@ -156,6 +156,38 @@ pub fn sqrt_f64x2(value: [f64; 2]) -> [f64; 2] {
     let mut a = doubles(value);
     packed!(xmm_reg, sse!("sqrtpd {a}, {b}", "vsqrtpd {a}, {b}"), a, a);
     double_lanes(a)
+}
+
+/// Returns lanes 0 and 1 of `first` and then of `second`, and lanes 2 and 3
+/// of `first` and then of `second`, by `MOVLHPS` and `MOVHLPS`.
+///
+/// A move of lanes is no floating-point operation, so the intrinsics serve,
+/// and their instructions take the encoding of the function that runs them.
+/// Each takes and gives whole registers. LLVM read lanes that Rust moved one
+/// at a time from the stack, in loads that spanned two stores, and each load
+/// waited for its stores to complete.
+#[inline]
+pub fn halves_f32x4(first: [f32; 4], second: [f32; 4]) -> ([f32; 4], [f32; 4]) {
+    let (a, b) = (singles(first), singles(second));
+    // SAFETY: the instructions need SSE, which every build of this module
+    // has: the module needs SSE2.
+    let (low, high) = unsafe { (_mm_movelh_ps(a, b), _mm_movehl_ps(b, a)) };
+    (single_lanes(low), single_lanes(high))
+}
+
+/// Returns lanes 0 and 2 of `first` and then of `second`, and lanes 1 and 3
+/// of `first` and then of `second`, by `SHUFPS`, as `halves_f32x4` states.
+#[inline]
+pub fn evens_odds_f32x4(first: [f32; 4], second: [f32; 4]) -> ([f32; 4], [f32; 4]) {
+    let (a, b) = (singles(first), singles(second));
+    // SAFETY: as in `halves_f32x4`.
+    let (evens, odds) = unsafe {
+        (
+            _mm_shuffle_ps::<0b10_00_10_00>(a, b),
+            _mm_shuffle_ps::<0b11_01_11_01>(a, b),
+        )
+    };
+    (single_lanes(evens), single_lanes(odds))
 }
 
 /// Runs one packed rounding to an integral value on `$a`, in registers of

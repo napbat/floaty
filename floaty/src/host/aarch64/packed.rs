@@ -10,7 +10,8 @@
 //! without `FEAT_FP16`.
 
 use core::arch::aarch64::{
-    float32x2_t, float32x4_t, float64x2_t, uint16x4_t, uint32x4_t, uint64x2_t,
+    float32x2_t, float32x4_t, float64x2_t, uint16x4_t, uint32x4_t, uint64x2_t, vcombine_f32,
+    vget_high_f32, vget_low_f32, vuzp1q_f32, vuzp2q_f32,
 };
 use core::mem::transmute;
 
@@ -159,6 +160,37 @@ pub fn binary_f64x2(left: [f64; 2], right: [f64; 2], operation: Operation) -> [f
     let (mut a, b) = (doubles(left), doubles(right));
     arithmetic!(operation, ".2d", a, b);
     double_lanes(a)
+}
+
+/// Returns lanes 0 and 1 of `first` and then of `second`, and lanes 2 and 3
+/// of `first` and then of `second`.
+///
+/// A move of lanes is no floating-point operation, so the intrinsics serve.
+/// Each takes and gives whole registers. LLVM read lanes that Rust moved one
+/// at a time from the stack, in loads that spanned two stores, and each load
+/// waited for its stores to complete.
+#[inline]
+pub fn halves_f32x4(first: [f32; 4], second: [f32; 4]) -> ([f32; 4], [f32; 4]) {
+    let (a, b) = (singles(first), singles(second));
+    // SAFETY: the instructions need NEON, which every AArch64 target has.
+    let (low, high) = unsafe {
+        (
+            vcombine_f32(vget_low_f32(a), vget_low_f32(b)),
+            vcombine_f32(vget_high_f32(a), vget_high_f32(b)),
+        )
+    };
+    (single_lanes(low), single_lanes(high))
+}
+
+/// Returns lanes 0 and 2 of `first` and then of `second`, and lanes 1 and 3
+/// of `first` and then of `second`, by `UZP1` and `UZP2`, as
+/// `halves_f32x4` states.
+#[inline]
+pub fn evens_odds_f32x4(first: [f32; 4], second: [f32; 4]) -> ([f32; 4], [f32; 4]) {
+    let (a, b) = (singles(first), singles(second));
+    // SAFETY: as in `halves_f32x4`.
+    let (evens, odds) = unsafe { (vuzp1q_f32(a, b), vuzp2q_f32(a, b)) };
+    (single_lanes(evens), single_lanes(odds))
 }
 
 /// Returns the square roots of four binary32 lanes, by `FSQRT`.
