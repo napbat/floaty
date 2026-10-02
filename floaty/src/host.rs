@@ -62,13 +62,13 @@ pub mod packed;
     target_feature = "sse2",
     not(floaty_engine_only)
 ))]
-mod x86_64;
+mod x86;
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "sse2",
     not(floaty_engine_only)
 ))]
-use self::x86_64 as environment;
+use self::x86 as environment;
 
 #[cfg(all(target_arch = "aarch64", not(floaty_engine_only)))]
 mod aarch64;
