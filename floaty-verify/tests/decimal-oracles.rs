@@ -182,7 +182,7 @@ fn run_dectest<F: Format>(
 fn dectest_decsingle() {
     let tally = run_dectest::<Single>("ds", |_, _| None);
     tally.report("decTest ds, decSingle");
-    assert!(tally.failures.is_empty());
+    assert_eq!(tally.failures, Vec::<String>::new());
     // The archive is pinned, so the counts are exact.
     assert_eq!(tally.passed, 1177);
     assert!(tally.skipped.is_empty());
@@ -192,7 +192,7 @@ fn dectest_decsingle() {
 fn dectest_decdouble() {
     let tally = run_dectest::<Double>("dd", compute::<Double>);
     tally.report("decTest dd, decDouble");
-    assert!(tally.failures.is_empty());
+    assert_eq!(tally.failures, Vec::<String>::new());
     assert_eq!(tally.passed, 14_387);
     assert_eq!(tally.skipped.values().sum::<usize>(), 43);
 }
@@ -201,7 +201,7 @@ fn dectest_decdouble() {
 fn dectest_decquad() {
     let tally = run_dectest::<Quad>("dq", compute::<Quad>);
     tally.report("decTest dq, decQuad");
-    assert!(tally.failures.is_empty());
+    assert_eq!(tally.failures, Vec::<String>::new());
     assert_eq!(tally.passed, 14_757);
     assert_eq!(tally.skipped.values().sum::<usize>(), 43);
 }
@@ -689,7 +689,7 @@ mod intel {
         }
         tally.report("readtest.in, Intel library");
         println!("  {underflow_before_only} passing lines need tininess before rounding");
-        assert!(tally.failures.is_empty());
+        assert_eq!(tally.failures, Vec::<String>::new());
         // The archive is pinned, so the counts are exact.
         assert_eq!(tally.passed, 99_467);
         assert_eq!(underflow_before_only, 165);
