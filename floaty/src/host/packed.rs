@@ -35,11 +35,12 @@ use crate::host::Host;
 /// Returns `true` when the packed paths compute the operations of `kind` on
 /// lanes of the host kind `host`: the build has the scalar path, and the
 /// packed paths cover the lanes. binary16 lanes compute in binary32 where
-/// the build widens and narrows them, and bfloat16 lanes compute in binary32
-/// in every build. Neither has the fused multiply-add: two roundings of it
-/// through binary32 can differ from one. x87 extended lanes run the scalar
-/// instructions after one check of the control word. The answer is a
-/// constant.
+/// the build widens and narrows them, and in their own precision with
+/// `FEAT_FP16`. bfloat16 lanes compute in binary32 in every build. Two
+/// roundings of a fused multiply-add through binary32 can differ from one,
+/// so only binary16 lanes with `FEAT_FP16` have it. x87 extended lanes run
+/// the scalar instructions after one check of the control word. The answer
+/// is a constant.
 #[must_use]
 pub const fn available(host: Host, kind: Kind) -> bool {
     if !super::available(host, kind) {
@@ -60,6 +61,7 @@ pub const fn available(host: Host, kind: Kind) -> bool {
         )
         | (Host::Extended, Kind::Arithmetic | Kind::SquareRoot) => true,
         (Host::Single | Host::Double, Kind::ToInt) => packed::INTEGERS,
+        (Host::Half, Kind::FusedMultiplyAdd) => packed::NATIVE_HALF,
         (
             Host::Half,
             Kind::Arithmetic | Kind::SquareRoot | Kind::RoundToIntegral | Kind::Comparison,
@@ -243,11 +245,26 @@ fn in_chunks<T: Copy, const N: usize, const WIDE: usize, const NARROW: usize>(
     narrow: impl Fn(usize) -> Option<[T; NARROW]>,
     lane: impl Fn(usize) -> Option<T>,
 ) -> Option<()> {
-    let wide_end = if packed::WIDE { N - N % WIDE } else { 0 };
-    let narrow_end = N - (N - wide_end) % NARROW;
-    for start in (0..wide_end).step_by(WIDE) {
-        *chunk_mut(lanes, start) = wide(start)?;
+    in_chunks_where(lanes, packed::WIDE.then_some(wide), narrow, lane)
+}
+
+/// Computes the `N` lanes of `lanes` as `in_chunks` does, with chunks of
+/// `WIDE` lanes only where `wide` holds a function.
+#[inline]
+fn in_chunks_where<T: Copy, const N: usize, const WIDE: usize, const NARROW: usize>(
+    lanes: &mut [T; N],
+    wide: Option<impl Fn(usize) -> Option<[T; WIDE]>>,
+    narrow: impl Fn(usize) -> Option<[T; NARROW]>,
+    lane: impl Fn(usize) -> Option<T>,
+) -> Option<()> {
+    let mut wide_end = 0;
+    if let Some(wide) = wide {
+        wide_end = N - N % WIDE;
+        for start in (0..wide_end).step_by(WIDE) {
+            *chunk_mut(lanes, start) = wide(start)?;
+        }
     }
+    let narrow_end = N - (N - wide_end) % NARROW;
     for start in (wide_end..narrow_end).step_by(NARROW) {
         *chunk_mut(lanes, start) = narrow(start)?;
     }
@@ -476,6 +493,7 @@ pub fn mul_add<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 )
             })
         }
+        Host::Half if packed::NATIVE_HALF => half::mul_add(left, right, addend),
         // Two roundings of a fused multiply-add through binary32 can differ
         // from one.
         Host::None | Host::Half | Host::BFloat | Host::Extended => None,

@@ -39,6 +39,16 @@ pub(super) fn min_max_differs(left: u32, right: u32) -> bool {
     nan | zeros
 }
 
+/// Returns `true` for two binary16 encodings where the minimum and maximum
+/// instructions of the host differ from the operations, as
+/// `min_max_differs` does for binary32.
+#[inline]
+pub(super) fn min_max_differs_16(left: u16, right: u16) -> bool {
+    let nan = (left & 0x7FFF).max(right & 0x7FFF) > 0x7C00;
+    let zeros = (left | right) << 1 == 0;
+    nan | zeros
+}
+
 /// Returns `true` for two binary64 encodings where the minimum and maximum
 /// instructions of the host differ from the operations, as
 /// `min_max_differs` does for binary32.

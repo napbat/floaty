@@ -29,6 +29,9 @@ pub const INTEGERS: bool = true;
 /// and rounds binary32 lanes to binary16.
 pub const HALF: bool = super::HALF;
 
+/// `false`: the host paths of x86-64 compute binary16 lanes in binary32.
+pub const NATIVE_HALF: bool = false;
+
 /// Returns four binary32 lanes as the value of an SSE register.
 #[inline]
 fn singles(lanes: [f32; 4]) -> __m128 {
@@ -665,6 +668,25 @@ wide!(
     /// `to_int_f32x4` rounds, by `VCVTPD2DQ`.
     to_int_f64x4, target_feature = "avx", (value: [f64; 4]) -> [i32; 4]
 );
+
+/// Defines a function for eight binary16 lanes in their own precision, which
+/// returns `None`.
+macro_rules! no_native {
+    ($name:ident, ($($type:ty),+) -> $result:ty) => {
+        #[doc = "Returns `None`: the host paths of x86-64 have no binary16 arithmetic."]
+        #[inline]
+        pub fn $name($(_: $type),+) -> Option<$result> {
+            None
+        }
+    };
+}
+
+no_native!(binary_f16x8, ([u16; 8], [u16; 8], Operation) -> [u16; 8]);
+no_native!(sqrt_f16x8, ([u16; 8]) -> [u16; 8]);
+no_native!(round_f16x8, ([u16; 8], Rounding) -> [u16; 8]);
+no_native!(mul_add_f16x8, ([u16; 8], [u16; 8], [u16; 8]) -> [u16; 8]);
+no_native!(compare_f16x8, ([u16; 8], [u16; 8]) -> Masks<u16, 8>);
+no_native!(min_max_f16x8, ([u16; 8], [u16; 8], MinMax) -> [u16; 8]);
 
 #[cfg(target_feature = "avx")]
 mod wide;

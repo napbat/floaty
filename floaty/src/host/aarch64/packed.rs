@@ -1,11 +1,13 @@
 //! The vector instructions of the AArch64 floating-point unit, for the paths
-//! of `Lanes`: 128-bit registers of four binary32 or two binary64 lanes.
+//! of `Lanes`: 128-bit registers of four binary32 or two binary64 lanes, and
+//! of eight binary16 lanes with `FEAT_FP16`.
 //!
 //! Each function computes one chunk of lanes in registers. The block takes
 //! and gives register values, so it touches no memory: the compiler loads and
 //! stores the lanes, and keeps them in registers between operations. The base
 //! architecture has no wider registers, so each function for a 256-bit chunk
-//! returns `None`.
+//! returns `None`. Each function for binary16 lanes returns `None` in a build
+//! without `FEAT_FP16`.
 
 use core::arch::aarch64::{
     float32x2_t, float32x4_t, float64x2_t, uint16x4_t, uint32x4_t, uint64x2_t,
@@ -27,6 +29,10 @@ pub const HALF: bool = super::HALF;
 
 /// `false`: no packed path converts lanes to integers on AArch64.
 pub const INTEGERS: bool = false;
+
+/// `true` in a build with `FEAT_FP16`: the vector instructions compute eight
+/// binary16 lanes in their own precision.
+pub const NATIVE_HALF: bool = cfg!(target_feature = "fp16");
 
 /// Returns four binary32 lanes as the value of a vector register.
 #[inline]
@@ -62,8 +68,10 @@ fn double_lanes(value: float64x2_t) -> [f64; 2] {
 macro_rules! vector {
     ($instruction:expr, $a:ident, $b:ident) => {
         // SAFETY: the instruction reads and writes SIMD and floating-point
-        // registers. Every AArch64 target has it, and it changes only the
-        // status flags of FPSR, which floaty does not read.
+        // registers. Every AArch64 target has it on binary32 and binary64
+        // lanes, and a function on binary16 lanes runs only with
+        // `FEAT_FP16`. The instruction changes only the status flags of FPSR,
+        // which floaty does not read.
         unsafe {
             core::arch::asm!(
                 $instruction,
@@ -358,9 +366,7 @@ pub fn narrow_halves_x4(value: [f32; 4]) -> Option<[u16; 4]> {
 macro_rules! compare_vector {
     ($arrangement:literal, $mask:ty, $x:ident, $y:ident) => {{
         let (less, greater, ordered): ($mask, $mask, $mask);
-        // SAFETY: the instructions read and write SIMD and floating-point
-        // registers. Every AArch64 target has them, and they change only the
-        // status flags of FPSR, which floaty does not read.
+        // SAFETY: as in `vector!`, with five instructions.
         unsafe {
             core::arch::asm!(
                 concat!("fcmgt {greater:v}", $arrangement, ", {x:v}", $arrangement, ", {y:v}", $arrangement),
@@ -435,6 +441,81 @@ pub fn min_max_f64x2(left: [f64; 2], right: [f64; 2], operation: MinMax) -> [f64
     }
     double_lanes(a)
 }
+
+/// Defines a function for eight binary16 lanes, which runs its form in
+/// `half` where the build has `FEAT_FP16`, and returns `None` otherwise.
+macro_rules! native {
+    ($(#[$doc:meta])* $name:ident, ($($argument:ident: $type:ty),+) -> Option<$result:ty>) => {
+        $(#[$doc])*
+        #[cfg(target_feature = "fp16")]
+        #[inline]
+        pub fn $name($($argument: $type),+) -> Option<$result> {
+            // SAFETY: the build enables `FEAT_FP16`, so the processor that
+            // runs it has the feature.
+            unsafe { half::$name($($argument),+) }
+        }
+
+        #[doc = "Returns `None`: the build has no `FEAT_FP16`."]
+        #[cfg(not(target_feature = "fp16"))]
+        #[inline]
+        pub fn $name($(_: $type),+) -> Option<$result> {
+            None
+        }
+    };
+    ($(#[$doc:meta])* $name:ident, ($($argument:ident: $type:ty),+) -> $result:ty) => {
+        $(#[$doc])*
+        #[cfg(target_feature = "fp16")]
+        #[inline]
+        #[allow(clippy::unnecessary_wraps)] // A build without the feature returns `None` from the same signature.
+        pub fn $name($($argument: $type),+) -> Option<$result> {
+            // SAFETY: the build enables `FEAT_FP16`, so the processor that
+            // runs it has the feature.
+            Some(unsafe { half::$name($($argument),+) })
+        }
+
+        #[doc = "Returns `None`: the build has no `FEAT_FP16`."]
+        #[cfg(not(target_feature = "fp16"))]
+        #[inline]
+        pub fn $name($(_: $type),+) -> Option<$result> {
+            None
+        }
+    };
+}
+
+native!(
+    /// Returns `operation` of eight pairs of binary16 lanes, by `FADD`,
+    /// `FSUB`, `FMUL`, or `FDIV` on `.8H`.
+    binary_f16x8, (left: [u16; 8], right: [u16; 8], operation: Operation) -> [u16; 8]
+);
+native!(
+    /// Returns the square roots of eight binary16 lanes, by `FSQRT` on
+    /// `.8H`.
+    sqrt_f16x8, (value: [u16; 8]) -> [u16; 8]
+);
+native!(
+    /// Returns eight binary16 lanes rounded to integral values in the
+    /// direction `rounding`, by `FRINTN`, `FRINTA`, `FRINTM`, `FRINTP`, or
+    /// `FRINTZ` on `.8H`, or `None` for a direction that no instruction has.
+    round_f16x8, (value: [u16; 8], rounding: Rounding) -> Option<[u16; 8]>
+);
+native!(
+    /// Returns `left * right + addend` of eight triples of binary16 lanes,
+    /// each rounded once, by `FMLA` on `.8H`.
+    mul_add_f16x8, (left: [u16; 8], right: [u16; 8], addend: [u16; 8]) -> [u16; 8]
+);
+native!(
+    /// Returns the masks of a comparison of each pair of eight binary16
+    /// lanes, by `FCMGT` and `FCMEQ` on `.8H`.
+    compare_f16x8, (left: [u16; 8], right: [u16; 8]) -> Masks<u16, 8>
+);
+native!(
+    /// Returns the smaller or the larger of each pair of eight binary16
+    /// lanes, as `operation` selects, by `FMIN` or `FMAX` on `.8H`.
+    min_max_f16x8, (left: [u16; 8], right: [u16; 8], operation: MinMax) -> [u16; 8]
+);
+
+#[cfg(target_feature = "fp16")]
+mod half;
 
 /// Defines a function for a 256-bit chunk, which returns `None`.
 macro_rules! no_wide {

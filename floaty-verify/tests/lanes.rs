@@ -278,6 +278,7 @@ fn lanes_round_in_the_direction_of_their_mode() {
     type Away = Float<floaty::Binary<11>, 64, Rounded<Ieee, TiesToAway>>;
     type Chopped = Float<floaty::Binary<8>, 16, Rounded<Ieee, TowardZero>>;
     type Odd = Float<floaty::Binary<8>, 32, Rounded<Ieee, ToOdd>>;
+    type Half<R> = Float<floaty::Binary<5>, 16, Rounded<Ieee, R>>;
     let mut random = SplitMix64::new(0x1A4E_D1E0);
     // Values an exact half above an integer, of both signs, are the ties of
     // the rounding to integral values.
@@ -322,6 +323,13 @@ fn lanes_round_in_the_direction_of_their_mode() {
     lanes_match!(Double<AwayFromZero>, u64, 2, &doubles, [Env::IEEE]);
     lanes_match!(Double<AwayFromZero>, u64, 4, &doubles, [Env::IEEE]);
     lanes_match!(Chopped, u16, 13, &bfloats, [Env::IEEE]);
+    // Eight binary16 lanes take one chunk, which rounds in `FRINT` on `.8H`
+    // in the AArch64 FP16 build, and declines the last two directions.
+    lanes_match!(Half<TowardPositive>, u16, 8, &halves, [Env::IEEE]);
+    lanes_match!(Half<TowardZero>, u16, 8, &halves, [Env::IEEE]);
+    lanes_match!(Half<TiesToAway>, u16, 8, &halves, [Env::IEEE]);
+    lanes_match!(Half<TiesTowardZero>, u16, 8, &halves, [Env::IEEE]);
+    lanes_match!(Half<AwayFromZero>, u16, 8, &halves, [Env::IEEE]);
 }
 
 #[test]
@@ -737,13 +745,9 @@ fn the_other_methods_of_lanes_give_the_scalar_results() {
     let doubles = encodings(&mut random, Layout::BINARY64);
     methods_match!(F64, u64, 2, &doubles, Env::IEEE);
     methods_match!(F64, u64, 7, &doubles, behavior);
-    methods_match!(
-        F16,
-        u16,
-        8,
-        &encodings(&mut random, Layout::BINARY16),
-        Env::IEEE
-    );
+    let halves = encodings(&mut random, Layout::BINARY16);
+    methods_match!(F16, u16, 8, &halves, Env::IEEE);
+    methods_match!(F16, u16, 13, &halves, Env::IEEE);
     methods_match!(
         BF16,
         u16,
@@ -904,5 +908,58 @@ fn every_pair_of_boundary_values_orders_as_the_scalar_operations() {
                 core::array::from_fn(|lane| left[lane].partial_cmp(&right[lane]));
             assert_eq!(x.compare_quiet(y), orders, "{a:#x} {pair:x?}");
         }
+    }
+}
+
+/// Eight binary16 lanes: one chunk of the packed paths.
+type HalfLanes = Lanes<F16, 8>;
+
+/// A minimum or maximum operation of binary16: its name, the scalar method,
+/// and the method of `Lanes`.
+type HalfMinMax = (
+    &'static str,
+    fn(F16, F16) -> F16,
+    fn(HalfLanes, HalfLanes) -> HalfLanes,
+);
+
+#[test]
+fn every_pair_of_binary16_boundary_values_orders_as_the_scalar_operations() {
+    // The binary16 pairs fill chunks of eight lanes, which compare and
+    // select in binary16 in the AArch64 FP16 build.
+    let halves: Vec<u16> = boundary_encodings_u128(Layout::BINARY16)
+        .iter()
+        .map(|&bits| u16::try_from(bits).expect("16 bits"))
+        .collect();
+    let pairs: Vec<(u16, u16)> = halves
+        .iter()
+        .flat_map(|&a| halves.iter().map(move |&b| (a, b)))
+        .collect();
+    let operations: [HalfMinMax; 6] = [
+        ("minimum", F16::minimum, HalfLanes::minimum),
+        ("maximum", F16::maximum, HalfLanes::maximum),
+        (
+            "minimum_number",
+            F16::minimum_number,
+            HalfLanes::minimum_number,
+        ),
+        (
+            "maximum_number",
+            F16::maximum_number,
+            HalfLanes::maximum_number,
+        ),
+        ("min_num", F16::min_num, HalfLanes::min_num),
+        ("max_num", F16::max_num, HalfLanes::max_num),
+    ];
+    for chunk in pairs.as_chunks::<8>().0 {
+        let x = HalfLanes::from_bits(core::array::from_fn(|lane| chunk[lane].0));
+        let y = HalfLanes::from_bits(core::array::from_fn(|lane| chunk[lane].1));
+        let (a, b) = (x.into_array(), y.into_array());
+        for (name, scalar, lanes) in operations {
+            let each: [u16; 8] = core::array::from_fn(|lane| scalar(a[lane], b[lane]).to_bits());
+            assert_eq!(lanes(x, y).to_bits(), each, "{chunk:x?}: {name}");
+        }
+        let orders: [Option<core::cmp::Ordering>; 8] =
+            core::array::from_fn(|lane| a[lane].partial_cmp(&b[lane]));
+        assert_eq!(x.compare_quiet(y), orders, "{chunk:x?}: compare_quiet");
     }
 }

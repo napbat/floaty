@@ -1,6 +1,7 @@
 //! The packed paths of the comparison and of the minimum and maximum
 //! operations, for binary32 and binary64 lanes, and for binary16 and bfloat16
-//! lanes widened exactly to binary32.
+//! lanes widened exactly to binary32. With `FEAT_FP16`, binary16 lanes take
+//! the paths of `half`, which compute in binary16.
 //!
 //! A comparison gives no NaN, so each lane gives the order of the quiet
 //! predicates, and an unordered lane gives `None`. `MINPS` and `MAXPS` give
@@ -62,6 +63,7 @@ pub(super) fn compare<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     let mut orders = [None; N];
     match S::HOST {
         Host::Single => compare_singles(singles(left)?, singles(right)?, &mut orders)?,
+        Host::Half if packed::NATIVE_HALF => half::compare(left, right, &mut orders)?,
         Host::Half | Host::BFloat => {
             compare_singles(&widened(left)?, &widened(right)?, &mut orders)?;
         }
@@ -135,6 +137,7 @@ pub(super) fn min_max<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
                 )
             })
         }
+        Host::Half if packed::NATIVE_HALF => half::min_max(left, right, operation),
         Host::Half | Host::BFloat => {
             let (x, y) = (widened(left)?, widened(right)?);
             let differs = any_lane(x.iter().zip(&y), |(a, b)| {
