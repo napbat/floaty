@@ -115,7 +115,8 @@ assert_eq!(largest, Decoded::Finite { negative: false, exponent: 4, significand:
 
 An overflow in a format without an infinity gives the NaN when the format
 has one, with the sign of the result. A saturating behavior gives the
-largest finite value instead, in every binary format. The MX formats have
+largest finite value instead, in every binary format, and so does every
+other infinite result, such as an infinite operand. The MX formats have
 neither an infinity nor a NaN, so they always saturate, and an invalid
 operation gives `+0` with `INVALID`:
 
@@ -140,6 +141,24 @@ assert_eq!(six.add_with(six, F4E2M1Fn::ENV).0.to_bits(), 0x7);
 assert_eq!(zero.div_with(zero, F4E2M1Fn::ENV), (zero, Flags::INVALID));
 ```
 
+MX 1.0 leaves the conversion of a NaN to FP4 or FP6 to the implementation.
+floaty gives `+0` with `INVALID`, as `ml_dtypes` does. PTX `cvt` with
+`.satfinite` gives the largest positive value instead (PTX ISA 9.4). A
+conversion that follows PTX tests for a NaN first:
+
+```rust
+use floaty::{F32, F4E2M1Fn};
+
+/// Converts binary32 to FP4 E2M1 as PTX `cvt` with `.satfinite` does.
+fn to_fp4(value: F32) -> F4E2M1Fn {
+    if value.is_nan() { F4E2M1Fn::from_bits(0x7) } else { value.convert() }
+}
+
+assert_eq!(to_fp4(F32::from_bits(0xFFC0_0000)).to_bits(), 0x7); // -NaN gives +6
+assert_eq!(to_fp4(F32::from_bits(0x7F80_0000)).to_bits(), 0x7); // +inf gives +6
+assert_eq!(to_fp4(F32::from_bits(0x3FC0_0000)).to_bits(), 0x3); // 1.5
+```
+
 ### Unsigned floats of R11G11B10
 
 The packed format R11G11B10 of Direct3D, Vulkan, and OpenGL holds unsigned
@@ -147,7 +166,8 @@ floats of 11 and 10 bits, with 5 exponent bits and no sign bit. Their values
 are the non-negative values of `Float<Binary<5>, 12>` and
 `Float<Binary<5>, 11>`, so floaty builds them from those formats. The
 example follows GL_EXT_packed_float as Mesa implements it: round to nearest
-even, saturate, map a negative value to zero, and give one NaN.
+even, saturate a finite value, keep positive infinity, map a negative value
+to zero, and give one NaN.
 `floaty-verify` checks it against Mesa for every rounding case.
 
 ```rust
@@ -157,6 +177,10 @@ type Eleven = Float<Binary<5>, 12>;
 
 /// Returns the 11-bit channel of a binary32 value.
 fn to_channel(value: F32) -> u16 {
+    // Saturation also clamps an infinity, and GL keeps positive infinity.
+    if value.is_infinite() && !value.is_sign_negative() {
+        return 0x7C0;
+    }
     let (signed, _) = value.convert_with::<Eleven>(Env::IEEE.with_saturate(true));
     if signed.is_nan() {
         0x7C1
@@ -170,6 +194,7 @@ fn to_channel(value: F32) -> u16 {
 assert_eq!(to_channel(F32::from_bits(0x3F80_0000)), 0x3C0); // 1.0
 assert_eq!(to_channel(F32::from_bits(0xBF80_0000)), 0); // -1.0 gives zero
 assert_eq!(to_channel(F32::from_bits(0x4E6E_6B28)), 0x7BF); // 1e9 gives 65024
+assert_eq!(to_channel(F32::from_bits(0x7F80_0000)), 0x7C0); // +inf stays infinite
 let one: F32 = Eleven::from_bits(0x3C0).convert();
 assert_eq!(one.to_bits(), 0x3F80_0000);
 ```
@@ -241,7 +266,7 @@ assert_eq!(from_scale(0).to_bits(), 0x0040_0000); // 2^-127, subnormal in binary
 | `tininess` | Tininess detection before or after rounding. |
 | `nan` | The NaN that an operation returns: the propagation rule, the sign of the default NaN, and the fused multiply-add rules. |
 | `precision` | A precision limit below the format precision, as x87 precision control gives it. |
-| `saturate` | A finite result that overflows gives the largest finite value instead of an infinity or a NaN, as OCP FP8 saturation does. Double-double arithmetic ignores it, because libgcc and QD do not saturate. |
+| `saturate` | Every infinite result gives the largest finite value of its sign instead of an infinity or a NaN: an overflow, an infinite operand, and an exact infinity such as `1 / 0`, as OCP FP8 saturation and PTX `.satfinite` do. The flags do not change. Double-double arithmetic ignores it, because libgcc and QD do not saturate. |
 | `total_order` | How `total_cmp` orders two encodings of one value. |
 
 `Env::IEEE` is the IEEE 754 default. `Env::X86_SSE` and `Env::X87` give the

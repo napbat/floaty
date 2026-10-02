@@ -499,6 +499,27 @@ where
         }
     }
 
+    /// Returns `bits`, or the largest finite value of their sign when the
+    /// behavior saturates and `bits` encode an infinity. With saturation,
+    /// every infinite result gives the largest finite value: an overflow, an
+    /// infinite operand, and an exact infinity such as `1 / 0` alike. The
+    /// flags do not change. The precision limit of `env` applies, as it does
+    /// to a saturated overflow.
+    #[inline]
+    pub(crate) fn saturated<L: Limbs>(bits: L, env: &Env) -> L {
+        if !env.saturate || !Self::TARGET.has_infinity {
+            return bits;
+        }
+        match Self::decode(bits) {
+            Unpacked::Infinity { negative } => Self::encode(exact::largest(
+                negative,
+                env.precision_within(Self::TARGET.precision),
+                &Self::TARGET,
+            )),
+            _ => bits,
+        }
+    }
+
     /// Places the sign, the exponent field, and the fraction in an encoding.
     #[inline]
     fn assemble<L: Limbs>(negative: bool, field: u64, fraction: L) -> L {
@@ -576,7 +597,9 @@ where
         source: Source,
         behavior: B,
     ) -> (Self::Bits, Flags) {
+        let env = behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::convert_from(value, source, behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
@@ -587,26 +610,34 @@ where
         subtract: bool,
         behavior: B,
     ) -> (Self::Bits, Flags) {
+        let env = behavior.env();
         let (bits, flags) =
             Layout::<E, Enc, W>::add(left.to_limbs(), right.to_limbs(), subtract, behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
     #[inline]
     fn mul<B: Behavior>(left: Self::Bits, right: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::mul(left.to_limbs(), right.to_limbs(), behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
     #[inline]
     fn div<B: Behavior>(left: Self::Bits, right: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::div(left.to_limbs(), right.to_limbs(), behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
     #[inline]
     fn sqrt<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::sqrt(value.to_limbs(), behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
@@ -617,12 +648,14 @@ where
         addend: Self::Bits,
         behavior: B,
     ) -> (Self::Bits, Flags) {
+        let env = behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::mul_add(
             left.to_limbs(),
             right.to_limbs(),
             addend.to_limbs(),
             behavior,
         );
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
         (Self::Bits::from_limbs(bits), flags)
     }
 
@@ -660,6 +693,10 @@ where
     fn round_to_integral<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
         let env = &behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::round_to_integral(value.to_limbs(), env);
+        // The integer is exact at the full precision, so the saturated value
+        // is the largest finite value of the full precision, as for an
+        // overflow.
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env.for_exact_result());
         (Self::Bits::from_limbs(bits), flags)
     }
 
@@ -683,6 +720,7 @@ where
     fn scale_b<B: Behavior>(value: Self::Bits, scale: i32, behavior: B) -> (Self::Bits, Flags) {
         let env = &behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::scale_b(value.to_limbs(), scale, env);
+        let bits = Layout::<E, Enc, W>::saturated(bits, env);
         (Self::Bits::from_limbs(bits), flags)
     }
 

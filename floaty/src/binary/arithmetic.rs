@@ -630,16 +630,22 @@ mod tests {
         // A format without an infinity gives its NaN for a division by zero.
         let (nan, flags) = F8E4M3Fn::from_bits(0x38).div_with(F8E4M3Fn::from_bits(0), Env::IEEE);
         assert_eq!((nan.to_bits(), flags), (0x7F, Flags::DIVIDE_BY_ZERO));
-        // An exact infinity is no overflow, so saturation keeps it.
+        // Saturation also clamps an exact infinity and an infinite operand,
+        // and the flags do not change.
         let saturate = Env::IEEE.with_saturate(true);
-        let (quotient, flags) = F32::from_bits(0x3F80_0000).div_with(F32::from_bits(0), saturate);
+        let (quotient, flags) = F32::from_bits(0xBF80_0000).div_with(F32::from_bits(0), saturate);
         assert_eq!(
             (quotient.to_bits(), flags),
-            (0x7F80_0000, Flags::DIVIDE_BY_ZERO)
+            (0xFF7F_FFFF, Flags::DIVIDE_BY_ZERO)
         );
         let infinity = F32::from_bits(0x7F80_0000);
         let (sum, flags) = infinity.add_with(F32::from_bits(0x3F80_0000), saturate);
-        assert_eq!((sum.to_bits(), flags), (0x7F80_0000, Flags::NONE));
+        assert_eq!((sum.to_bits(), flags), (0x7F7F_FFFF, Flags::NONE));
+        // The precision limit applies to the clamped value, as to an
+        // overflow: the largest value of 2 bits is 1.5 * 2^127.
+        let limited = saturate.with_precision(core::num::NonZeroU32::new(2));
+        let (sum, _) = infinity.add_with(F32::from_bits(0x3F80_0000), limited);
+        assert_eq!(sum.to_bits(), 0x7F40_0000);
     }
 
     #[test]

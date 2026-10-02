@@ -311,6 +311,23 @@ pub fn round_pair(value: &Rational, negative: bool, env: &Env) -> Rounded {
 /// binary64 overflow result of the behavior as the high half, with a `+0`
 /// low half after an infinity, or the largest value at the precision below
 /// half an ulp of the largest high half.
+/// Returns the pair of an infinite source: the infinity with a `+0` low
+/// half, or with saturation the largest finite pair. Neither signals.
+#[must_use]
+pub fn infinity(negative: bool, env: &Env) -> Rounded {
+    if !env.saturate {
+        return Rounded {
+            hi: Value::Infinity { negative },
+            lo: NO_REST,
+            flags: Flags::NONE,
+        };
+    }
+    Rounded {
+        flags: Flags::NONE,
+        ..overflow(negative, env)
+    }
+}
+
 fn overflow(negative: bool, env: &Env) -> Rounded {
     let huge = Input {
         negative,

@@ -43,8 +43,9 @@ type Signed = (bool, Fixed);
 /// the pair and the flags.
 ///
 /// A zero gives the zero of its sign with a `+0` low half. An infinity
-/// gives the infinity with a `+0` low half. A NaN converts to binary64, by
-/// the rules of a conversion, and takes a `+0` low half.
+/// gives the infinity with a `+0` low half, or with saturation the largest
+/// finite pair, as binary64 saturates an infinity. A NaN converts to
+/// binary64, by the rules of a conversion, and takes a `+0` low half.
 fn round_value<L: Limbs, B: Behavior>(
     value: Unpacked<L>,
     source: Source,
@@ -53,6 +54,7 @@ fn round_value<L: Limbs, B: Behavior>(
     let env = behavior.env();
     match value {
         Unpacked::Zero { negative, .. } => ((zero(negative), zero(false)), Flags::NONE),
+        Unpacked::Infinity { negative } if env.saturate => (largest(negative, &env), Flags::NONE),
         Unpacked::Infinity { negative } => ((infinity(negative), zero(false)), Flags::NONE),
         Unpacked::Nan { .. } | Unpacked::Unsupported => {
             let (high, flags) = <F64 as FloatType>::convert_from(value, source, env);
@@ -230,6 +232,16 @@ fn sum(left: &Signed, right: &Signed) -> Signed {
 /// Returns the result of an overflow of the sign `negative`: an infinity with
 /// a `+0` low half, or the largest finite pair when the direction or
 /// saturation gives the largest finite binary64 value.
+fn overflow(negative: bool, env: &Env) -> (Pair, Flags) {
+    let flags = Flags::OVERFLOW | Flags::INEXACT;
+    if exact::overflow_is_infinite(env, negative) {
+        return ((infinity(negative), zero(false)), flags | Flags::ROUNDED_UP);
+    }
+    (largest(negative, env), flags)
+}
+
+/// Returns the largest finite pair of the sign `negative` at the precision
+/// of `env`.
 ///
 /// The largest finite pair at precision `p` is the largest binary64 value
 /// at `p` bits, plus the largest value at `p` bits below half of its ulp:
@@ -237,11 +249,7 @@ fn sum(left: &Signed, right: &Signed) -> Signed {
 /// to it, so every larger value must round to it too. At 53 bits, the pair
 /// is `2^1024 - 2^970 - 2^917`. The `LDBL_MAX` of GCC is `2^1024 - 2^970 -
 /// 2^918`, because GCC counts 106 bits in the IBM `long double`.
-fn overflow(negative: bool, env: &Env) -> (Pair, Flags) {
-    let flags = Flags::OVERFLOW | Flags::INEXACT;
-    if exact::overflow_is_infinite(env, negative) {
-        return ((infinity(negative), zero(false)), flags | Flags::ROUNDED_UP);
-    }
+fn largest(negative: bool, env: &Env) -> Pair {
     let precision = env.precision_within(<Binary<11> as Standard<64>>::PRECISION);
     let ones = [(1_u64 << precision) - 1];
     let bits = i32::try_from(precision).expect("a precision fits an i32");
@@ -254,7 +262,7 @@ fn overflow(negative: bool, env: &Env) -> (Pair, Flags) {
         };
         F64::round(exact, *env).0
     };
-    ((part(1024 - bits), part(1023 - 2 * bits)), flags)
+    (part(1024 - bits), part(1023 - 2 * bits))
 }
 
 /// Returns the zero of the sign `negative`. A pair without a rest has the

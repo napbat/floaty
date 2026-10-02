@@ -3,7 +3,7 @@
 
 use super::Float;
 use crate::binary::{Factor, Layout, Summand};
-use crate::env::{Behavior, Flags, Mode, Override};
+use crate::env::{Behavior, Env, Flags, Mode, Override};
 use crate::format::internal::LimbConversion;
 use crate::format::{Binary, Encoding, Standard, Storage, Width};
 
@@ -164,8 +164,9 @@ where
         let limbs = pairs
             .into_iter()
             .map(|(x, y)| (x.bits.to_limbs(), y.bits.to_limbs()));
-        let (bits, flags) = Layout::<E, Enc, W>::dot(limbs, &behavior.apply::<M>().env());
-        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+        let env = behavior.apply::<M>().env();
+        let (bits, flags) = Layout::<E, Enc, W>::dot(limbs, &env);
+        (Self::saturated_result(bits, &env), flags)
     }
 
     /// Returns the product of `values` with a scale, with the default mode.
@@ -193,9 +194,9 @@ where
     ) -> (Scaled<Self>, Flags) {
         let values = values.into_iter().map(|value| value.bits.to_limbs());
         let factors = values.clone().map(Factor::Value);
-        let (bits, scale, flags) =
-            Layout::<E, Enc, W>::scaled_product(factors, values, &behavior.apply::<M>().env());
-        (Self::scaled(bits, scale), flags)
+        let env = behavior.apply::<M>().env();
+        let (bits, scale, flags) = Layout::<E, Enc, W>::scaled_product(factors, values, &env);
+        (Self::scaled(bits, scale, &env), flags)
     }
 
     /// Returns the product of the sums of `pairs` with a scale, with the
@@ -244,10 +245,10 @@ where
         summand: Summand,
         behavior: impl Override,
     ) -> (Self, Flags) {
+        let env = behavior.apply::<M>().env();
         let limbs = values.into_iter().map(|value| value.bits.to_limbs());
-        let (bits, flags) =
-            Layout::<E, Enc, W>::reduce(limbs, summand, &behavior.apply::<M>().env());
-        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+        let (bits, flags) = Layout::<E, Enc, W>::reduce(limbs, summand, &env);
+        (Self::saturated_result(bits, &env), flags)
     }
 
     /// Runs a scaled product of the factors that `factor` makes from pairs.
@@ -261,15 +262,16 @@ where
             .map(|(x, y)| (x.bits.to_limbs(), y.bits.to_limbs()));
         let factors = pairs.clone().map(move |(x, y)| factor(x, y));
         let operands = pairs.flat_map(|(x, y)| [x, y]);
-        let (bits, scale, flags) =
-            Layout::<E, Enc, W>::scaled_product(factors, operands, &behavior.apply::<M>().env());
-        (Self::scaled(bits, scale), flags)
+        let env = behavior.apply::<M>().env();
+        let (bits, scale, flags) = Layout::<E, Enc, W>::scaled_product(factors, operands, &env);
+        (Self::scaled(bits, scale, &env), flags)
     }
 
-    /// Returns a scaled product from its limbs.
-    fn scaled(bits: StorageLimbs<W>, scale: i64) -> Scaled<Self> {
+    /// Returns a scaled product from its limbs. With saturation, an infinite
+    /// product gives the largest finite value of its sign.
+    fn scaled(bits: StorageLimbs<W>, scale: i64, env: &Env) -> Scaled<Self> {
         Scaled {
-            value: Self::from_masked(LimbConversion::from_limbs(bits)),
+            value: Self::saturated_result(bits, env),
             scale,
         }
     }

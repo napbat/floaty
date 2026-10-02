@@ -98,6 +98,14 @@ pub fn round_to_integral<const N: usize>(
     let [Read::Number(value)] = &operands else {
         unreachable!("every special operand has a result");
     };
+    if value.is_infinite() {
+        // The integer is exact at the full precision, so a saturated
+        // infinity gives the largest finite value of the full precision, as
+        // an overflow does.
+        let full_precision = Env::IEEE.with_saturate(env.saturate);
+        let infinity = format.infinity(value.is_sign_negative(), &full_precision);
+        return (Outcome::from_value(infinity), flags);
+    }
     if !value.is_normal() {
         return (number(value, format), flags);
     }

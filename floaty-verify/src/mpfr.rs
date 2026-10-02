@@ -137,20 +137,21 @@ impl Format {
         Value::Finite(if negative { -largest } else { largest })
     }
 
-    /// Returns the value of an infinity with the sign `negative` in `env`. An
-    /// IEEE format keeps the infinity. A format without an infinity gives its
-    /// NaN, by [`Format::nan`]. It gives the largest finite value of the
-    /// precision of `env` when the behavior saturates or the format has no
-    /// NaN.
+    /// Returns the value of an infinite result with the sign `negative` in
+    /// `env`. A saturating behavior gives the largest finite value of the
+    /// precision of `env`, in every format, as OCP FP8 saturation and PTX
+    /// `.satfinite` do. Otherwise an IEEE format keeps the infinity, a format
+    /// without an infinity gives its NaN, by [`Format::nan`], and a format
+    /// with neither gives the largest finite value.
     #[must_use]
     pub fn infinity(&self, negative: bool, env: &Env) -> Value {
+        if env.saturate || self.specials == Specials::Finite {
+            return self.signed_largest(negative, self.precision_in(env));
+        }
         if self.specials == Specials::Ieee {
             return Value::Infinity { negative };
         }
-        if !env.saturate && self.specials != Specials::Finite {
-            return self.nan(negative);
-        }
-        self.signed_largest(negative, self.precision_in(env))
+        self.nan(negative)
     }
 }
 

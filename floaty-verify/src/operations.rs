@@ -382,6 +382,12 @@ pub fn scale_b<const N: usize>(
     let [Read::Number(value)] = &operands else {
         unreachable!("every special operand has a result");
     };
+    if value.is_infinite() {
+        return (
+            Outcome::from_value(format.infinity(value.is_sign_negative(), env)),
+            flags,
+        );
+    }
     if !value.is_normal() {
         return (number(value, format), flags);
     }
@@ -462,11 +468,10 @@ pub enum Direction {
 /// plus or minus a tiny amount toward the direction, with the rounding
 /// oracle. The amount is far below the spacing of the values near `x`, so
 /// the rounded value is the neighbor. An infinity reads as a value past the
-/// largest finite value. In a format without an infinity, the value past the
-/// largest finite value is the NaN, or with `saturate` set the largest
-/// finite value itself. In a format with an infinity, it is the infinity
-/// with or without `saturate`. Only a signaling NaN or an unsupported encoding
-/// signals.
+/// largest finite value. The value past the largest finite value is the
+/// infinity, or in a format without one the NaN. With `saturate` set, or in a
+/// format with neither, it is the largest finite value itself. Only a
+/// signaling NaN or an unsupported encoding signals.
 ///
 /// # Panics
 ///
@@ -523,12 +528,10 @@ pub fn next<const N: usize>(
     };
     // The step does not round, so the precision limit does not apply. A
     // neighbor has the full precision of the format, and so does the largest
-    // finite value that a saturated step past it gives. The step overflows
-    // nothing, so saturation applies only where no value lies past the
-    // largest finite value: an infinity is the neighbor in IEEE 754.
+    // finite value that a saturated step past it gives.
     let neighbor = Env::IEEE
         .with_rounding(rounding)
-        .with_saturate(env.saturate && format.specials != Specials::Ieee);
+        .with_saturate(env.saturate);
     let (result, _) = mpfr::round(&input, format, &neighbor);
     (Outcome::from_value(result), flags)
 }

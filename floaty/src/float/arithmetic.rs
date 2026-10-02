@@ -37,9 +37,10 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
 
     /// Divides by `other`. Returns the quotient and the flags.
     ///
-    /// A division by zero in a format without an infinity gives the NaN with
-    /// the sign of the quotient, or the largest finite value when the behavior
-    /// saturates or the format has no NaN, and signals divide-by-zero.
+    /// A division by zero gives an infinity with the sign of the quotient, or
+    /// in a format without an infinity the NaN. A saturating behavior, or a
+    /// format with neither, gives the largest finite value. The division
+    /// signals divide-by-zero.
     #[must_use]
     pub fn div_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) = S::div(self.bits, other.bits, behavior.apply::<M>());
@@ -234,10 +235,10 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// the flags.
     ///
     /// The next value above a zero of either sign is the smallest positive
-    /// subnormal value. In a format without an infinity, the value above the
-    /// largest finite value is the NaN, or the largest finite value itself
-    /// when the behavior saturates or the format has no NaN. In a format with
-    /// an infinity, it is the infinity: the step overflows nothing. The step does not round, so the
+    /// subnormal value. The value above the largest finite value is the
+    /// infinity, or in a format without an infinity the NaN. A saturating
+    /// behavior, or a format with neither, gives the largest finite value
+    /// itself, also for the step above an infinity. The step does not round, so the
     /// precision limit and flush-to-zero do not apply, and a subnormal result
     /// reports no [`Flags::TINY`]. Only a signaling NaN or an unsupported
     /// encoding signals invalid. A subnormal input reports

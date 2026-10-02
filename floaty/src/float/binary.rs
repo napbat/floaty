@@ -4,7 +4,7 @@
 
 use super::Float;
 use crate::binary::Layout;
-use crate::env::{Behavior, Flags, Mode, Override};
+use crate::env::{Behavior, Env, Flags, Mode, Override};
 use crate::format::internal::LimbConversion;
 use crate::format::{Binary, Encoding, Standard, Storage, Width};
 
@@ -82,9 +82,9 @@ where
     /// ```
     #[must_use]
     pub fn log_b_with(self, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) =
-            Layout::<E, Enc, W>::log_b(self.bits.to_limbs(), &behavior.apply::<M>().env());
-        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+        let env = behavior.apply::<M>().env();
+        let (bits, flags) = Layout::<E, Enc, W>::log_b(self.bits.to_limbs(), &env);
+        (Self::saturated_result(bits, &env), flags)
     }
 
     /// Returns `sqrt(self^2 + other^2)`, with the default mode.
@@ -114,12 +114,10 @@ where
     /// ```
     #[must_use]
     pub fn hypot_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) = Layout::<E, Enc, W>::hypot(
-            self.bits.to_limbs(),
-            other.bits.to_limbs(),
-            &behavior.apply::<M>().env(),
-        );
-        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+        let env = behavior.apply::<M>().env();
+        let (bits, flags) =
+            Layout::<E, Enc, W>::hypot(self.bits.to_limbs(), other.bits.to_limbs(), &env);
+        (Self::saturated_result(bits, &env), flags)
     }
 
     /// Returns `1 / sqrt(self)`, with the default mode.
@@ -147,11 +145,9 @@ where
     /// ```
     #[must_use]
     pub fn reciprocal_sqrt_with(self, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) = Layout::<E, Enc, W>::reciprocal_sqrt(
-            self.bits.to_limbs(),
-            &behavior.apply::<M>().env(),
-        );
-        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+        let env = behavior.apply::<M>().env();
+        let (bits, flags) = Layout::<E, Enc, W>::reciprocal_sqrt(self.bits.to_limbs(), &env);
+        (Self::saturated_result(bits, &env), flags)
     }
 
     /// Returns `self^n`, with the default mode.
@@ -190,9 +186,9 @@ where
     /// ```
     #[must_use]
     pub fn pown_with(self, n: i64, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) =
-            Layout::<E, Enc, W>::pown(self.bits.to_limbs(), n, &behavior.apply::<M>().env());
-        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+        let env = behavior.apply::<M>().env();
+        let (bits, flags) = Layout::<E, Enc, W>::pown(self.bits.to_limbs(), n, &env);
+        (Self::saturated_result(bits, &env), flags)
     }
 
     /// Returns `self^(1/n)`, with the default mode.
@@ -225,9 +221,9 @@ where
     /// ```
     #[must_use]
     pub fn rootn_with(self, n: i64, behavior: impl Override) -> (Self, Flags) {
-        let (bits, flags) =
-            Layout::<E, Enc, W>::rootn(self.bits.to_limbs(), n, &behavior.apply::<M>().env());
-        (Self::from_masked(LimbConversion::from_limbs(bits)), flags)
+        let env = behavior.apply::<M>().env();
+        let (bits, flags) = Layout::<E, Enc, W>::rootn(self.bits.to_limbs(), n, &env);
+        (Self::saturated_result(bits, &env), flags)
     }
 
     /// Returns `self + other` as a head and a tail, with the default mode.
@@ -257,13 +253,14 @@ where
         other: Self,
         behavior: impl Override,
     ) -> (Augmented<Self>, Flags) {
+        let env = behavior.apply::<M>().env();
         let (head, tail, flags) = Layout::<E, Enc, W>::augmented_add(
             self.bits.to_limbs(),
             other.bits.to_limbs(),
             false,
-            &behavior.apply::<M>().env(),
+            &env,
         );
-        (Self::augmented(head, tail), flags)
+        (Self::augmented(head, tail, &env), flags)
     }
 
     /// Returns `self - other` as a head and a tail, with the default mode.
@@ -281,13 +278,14 @@ where
         other: Self,
         behavior: impl Override,
     ) -> (Augmented<Self>, Flags) {
+        let env = behavior.apply::<M>().env();
         let (head, tail, flags) = Layout::<E, Enc, W>::augmented_add(
             self.bits.to_limbs(),
             other.bits.to_limbs(),
             true,
-            &behavior.apply::<M>().env(),
+            &env,
         );
-        (Self::augmented(head, tail), flags)
+        (Self::augmented(head, tail, &env), flags)
     }
 
     /// Returns `self * other` as a head and a tail, with the default mode.
@@ -322,12 +320,10 @@ where
         other: Self,
         behavior: impl Override,
     ) -> (Augmented<Self>, Flags) {
-        let (head, tail, flags) = Layout::<E, Enc, W>::augmented_mul(
-            self.bits.to_limbs(),
-            other.bits.to_limbs(),
-            &behavior.apply::<M>().env(),
-        );
-        (Self::augmented(head, tail), flags)
+        let env = behavior.apply::<M>().env();
+        let (head, tail, flags) =
+            Layout::<E, Enc, W>::augmented_mul(self.bits.to_limbs(), other.bits.to_limbs(), &env);
+        (Self::augmented(head, tail, &env), flags)
     }
 
     /// Returns the payload of a NaN, as IEEE 754-2019 `getPayload` does.
@@ -396,10 +392,22 @@ where
     fn augmented(
         head: <<Width<W> as Storage>::Bits as LimbConversion>::Limbs,
         tail: <<Width<W> as Storage>::Bits as LimbConversion>::Limbs,
+        env: &Env,
     ) -> Augmented<Self> {
         Augmented {
-            head: Self::from_masked(LimbConversion::from_limbs(head)),
-            tail: Self::from_masked(LimbConversion::from_limbs(tail)),
+            head: Self::saturated_result(head, env),
+            tail: Self::saturated_result(tail, env),
         }
+    }
+
+    /// Returns the value of the limbs of a result. With saturation, an
+    /// infinity gives the largest finite value of its sign.
+    pub(super) fn saturated_result(
+        bits: <<Width<W> as Storage>::Bits as LimbConversion>::Limbs,
+        env: &Env,
+    ) -> Self {
+        Self::from_masked(LimbConversion::from_limbs(Layout::<E, Enc, W>::saturated(
+            bits, env,
+        )))
     }
 }

@@ -246,11 +246,14 @@ pub struct Env {
     /// `None` uses the precision of the format. A value above the format
     /// precision has no effect.
     pub precision: Option<NonZeroU32>,
-    /// A finite result that overflows gives the largest finite value of its
-    /// sign, in every rounding direction, instead of an infinity or a NaN.
-    /// OCP FP8 conversions call this saturation. An infinite operand and an
-    /// exact infinite result, such as `1 / 0`, stay infinite in a format that
-    /// has an infinity. The field applies to the binary formats. Double-double
+    /// Every infinite result gives the largest finite value of its sign, in
+    /// every rounding direction, instead of an infinity or a NaN: an
+    /// overflow, an infinite operand, and an exact infinite result such as
+    /// `1 / 0` alike. OCP FP8 conversions and PTX `.satfinite` saturate so.
+    /// The flags do not change: an overflow still signals overflow, and
+    /// `1 / 0` still signals divide-by-zero. The sign operations and the
+    /// minimum and maximum operations return an operand, so they keep an
+    /// infinity. The field applies to the binary formats. Double-double
     /// arithmetic ignores the field, because its references do not saturate.
     pub saturate: bool,
     /// How `total_cmp` orders two encodings of one datum.

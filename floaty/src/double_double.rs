@@ -125,7 +125,8 @@ impl Algorithm for Qd {
 ///
 /// The arithmetic ignores [`Env::saturate`], because neither reference
 /// saturates. [`convert_with`](Self::convert_with) applies saturation to a
-/// binary destination format.
+/// binary destination format. A conversion into a pair saturates an overflow
+/// and an infinity to the largest finite pair.
 ///
 /// # Rounding to a pair
 ///

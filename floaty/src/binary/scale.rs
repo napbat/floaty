@@ -87,11 +87,11 @@ where
     /// do.
     ///
     /// The step does not round, so the precision limit and flush-to-zero do
-    /// not apply. In a format without an infinity, the value past the largest
-    /// finite value is the NaN. When the behavior saturates, or the format has
-    /// no NaN, it is the largest finite value itself. Only a signaling NaN or
-    /// an unsupported operand signals invalid. A subnormal operand reports
-    /// `DENORMAL_INPUT`.
+    /// not apply. The value past the largest finite value is the infinity, or
+    /// in a format without an infinity the NaN. When the behavior saturates,
+    /// or the format has neither, it is the largest finite value of the full
+    /// precision. Only a signaling NaN or an unsupported operand signals
+    /// invalid. A subnormal operand reports `DENORMAL_INPUT`.
     pub fn next<L: Limbs>(bits: L, step: Step, env: &Env) -> (L, Flags) {
         let mut flags = Flags::NONE;
         let value = Self::operand(bits, env, &mut flags);
@@ -99,7 +99,7 @@ where
             return Self::exact(nan, flags | special);
         }
         let past_largest = |negative| {
-            if (env.saturate || !Self::TARGET.has_nan) && !Self::TARGET.has_infinity {
+            if env.saturate || !(Self::TARGET.has_nan || Self::TARGET.has_infinity) {
                 exact::largest(negative, Self::PRECISION, &Self::TARGET)
             } else {
                 Self::infinity(negative, env)
@@ -110,6 +110,15 @@ where
             Step::Down => {
                 Self::successor(value.negate()).map_or_else(|| past_largest(true), Unpacked::negate)
             }
+        };
+        // The step above +inf, or below -inf, is the infinity itself, which a
+        // saturating behavior clamps as it clamps the step past the largest
+        // value.
+        let result = match result {
+            Unpacked::Infinity { negative } if env.saturate => {
+                exact::largest(negative, Self::PRECISION, &Self::TARGET)
+            }
+            other => other,
         };
         Self::exact(result, flags)
     }
@@ -234,12 +243,20 @@ mod tests {
             0x7E
         );
         assert_eq!(F8E4M3Fn::from_bits(0xFE).next_down().to_bits(), 0xFF);
-        // A format with an infinity steps to it, also when saturating.
+        // A format with an infinity steps to it, and a saturating behavior
+        // to the largest finite value, also from the infinity.
         let saturate = Env::IEEE.with_saturate(true);
         let largest_single = F32::from_bits(0x7F7F_FFFF);
+        assert_eq!(largest_single.next_up().to_bits(), 0x7F80_0000);
         assert_eq!(
             largest_single.next_up_with(saturate).0.to_bits(),
-            0x7F80_0000
+            0x7F7F_FFFF
+        );
+        let infinity = F32::from_bits(0x7F80_0000);
+        assert_eq!(infinity.next_up_with(saturate).0.to_bits(), 0x7F7F_FFFF);
+        assert_eq!(
+            (-infinity).next_down_with(saturate).0.to_bits(),
+            0xFF7F_FFFF
         );
         // The precision limit does not shrink the largest value.
         let limited = Env::IEEE

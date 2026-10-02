@@ -17,7 +17,7 @@ use floaty::{
 };
 use floaty_verify::double_double::reference::Pair;
 use floaty_verify::double_double::{
-    BINARY64, Exact, Rounded, behaviors, exact, pair, rational, round_pair,
+    BINARY64, Exact, Rounded, behaviors, exact, infinity, pair, rational, round_pair,
 };
 use floaty_verify::mpfr::{self, Operand, Value};
 use floaty_verify::random::SplitMix64;
@@ -63,11 +63,7 @@ fn expected<const N: usize>(decoded: &Decoded<N>, radix: u32, env: &Env) -> Roun
             negative,
             env,
         ),
-        Decoded::Infinity { negative } => Rounded {
-            hi: Value::Infinity { negative },
-            lo: no_rest,
-            flags: Flags::NONE,
-        },
+        Decoded::Infinity { negative } => infinity(negative, env),
         Decoded::Nan {
             negative,
             signaling,

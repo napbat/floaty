@@ -148,10 +148,12 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     ///
     /// A subnormal input sets [`Flags::DENORMAL_INPUT`], and reads as a zero
     /// when the behavior has denormals-are-zero set. A signaling NaN input
-    /// signals invalid. A destination without an infinity converts an infinity
-    /// to a NaN, or to the largest finite value when the behavior saturates or
-    /// the destination has no NaN, and signals invalid. An unsupported x87
-    /// input signals invalid and gives the default NaN.
+    /// signals invalid. A saturating behavior converts an infinity to the
+    /// largest finite value of its sign. Otherwise a destination without an
+    /// infinity converts an infinity to a NaN, or to the largest finite value
+    /// when the destination has no NaN. A destination without an infinity
+    /// signals invalid for an infinity. An unsupported x87 input signals
+    /// invalid and gives the default NaN.
     ///
     /// A NaN converts by the NaN rule of the behavior.
     /// [`DefaultNan`](crate::env::NanPropagation::DefaultNan) gives the
