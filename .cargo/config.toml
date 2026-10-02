@@ -2,9 +2,12 @@
 # under QEMU 10.2.1. The packages gcc-aarch64-linux-gnu and
 # libc6-dev-arm64-cross give the linker and the C library that QEMU loads.
 # The CPU `max` has FEAT_FP16 and FEAT_BF16 for the AArch64 FP16 build.
+#
+# Each runner also sets FLOATY_RUNNER to its own command, since the
+# host-path test `levels::every_level` runs its binary again under it.
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
-runner = ["qemu-aarch64", "-cpu", "max", "-L", "/usr/aarch64-linux-gnu"]
+runner = ["env", "FLOATY_RUNNER=qemu-aarch64 -cpu max -L /usr/aarch64-linux-gnu", "qemu-aarch64", "-cpu", "max", "-L", "/usr/aarch64-linux-gnu"]
 
 # The i686 and s390x gates of AGENTS.md test a 32-bit target and a big-endian
 # target under QEMU 10.2.1. The packages gcc-i686-linux-gnu,
@@ -12,8 +15,8 @@ runner = ["qemu-aarch64", "-cpu", "max", "-L", "/usr/aarch64-linux-gnu"]
 # the linkers and the C libraries that QEMU loads.
 [target.i686-unknown-linux-gnu]
 linker = "i686-linux-gnu-gcc"
-runner = ["qemu-i386", "-L", "/usr/i686-linux-gnu"]
+runner = ["env", "FLOATY_RUNNER=qemu-i386 -L /usr/i686-linux-gnu", "qemu-i386", "-L", "/usr/i686-linux-gnu"]
 
 [target.s390x-unknown-linux-gnu]
 linker = "s390x-linux-gnu-gcc"
-runner = ["qemu-s390x", "-L", "/usr/s390x-linux-gnu"]
+runner = ["env", "FLOATY_RUNNER=qemu-s390x -L /usr/s390x-linux-gnu", "qemu-s390x", "-L", "/usr/s390x-linux-gnu"]
