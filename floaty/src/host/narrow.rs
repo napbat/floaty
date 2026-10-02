@@ -1,7 +1,9 @@
 //! The integer rounding of the host paths: binary32 results round to
 //! bfloat16, and to binary16 in an x86-64 build without F16C, and binary64
 //! results round to binary16 on x86-64, in integer instructions where the
-//! host has no instruction for the rounding.
+//! host has no instruction for the rounding. The packed paths of a build
+//! without a rounding instruction round binary32 lanes to binary16 in
+//! integer instructions and one binary32 sum.
 //!
 //! The binary16 and bfloat16 paths compute in binary32 and round twice, as
 //! the module `paths` states. These routines are the second rounding. Each
@@ -143,6 +145,41 @@ fn round_double_to_subnormal_half(magnitude: u64) -> u64 {
     count + u64::from(up)
 }
 
+/// The encoding of 0.5, whose unit in the last place is 2^-24, the quantum
+/// of the binary16 subnormal values.
+pub const SUBNORMAL_BIAS: u32 = 0x3F00_0000;
+
+/// Rounds the bits of a binary32 value to binary16, to nearest even, in
+/// masks without a branch, which LLVM vectorizes, for the packed paths of a
+/// build without a rounding instruction. It gives the bits of
+/// `round_to_half` for every value but a NaN, which gives a quiet NaN.
+///
+/// `subnormal` is the encoding of the binary32 sum of the magnitude of the
+/// value and 0.5 ([`SUBNORMAL_BIAS`]), rounded to nearest even by the host.
+/// Below 2^-14 the sum is less than 0.5 + 2^-14, and the unit of its last
+/// place is 2^-24, so the sum rounds the magnitude to a count of 2^-24, to
+/// nearest even, and the count is the difference of the encodings. A count
+/// of 2^10 is the encoding of the smallest normal value. The other cases are
+/// those of `round_to_half`.
+#[inline]
+pub fn round_to_half_lanes(bits: u32, subnormal: u32) -> u16 {
+    let sign = (bits >> 16) & 0x8000;
+    let magnitude = bits & 0x7FFF_FFFF;
+    let mask = |condition: bool| 0u32.wrapping_sub(u32::from(condition));
+    // Each mask selects one case; the cases do not overlap.
+    let tiny = mask(magnitude < 0x3880_0000);
+    let normal = mask((0x3880_0000..0x477F_F000).contains(&magnitude));
+    let infinite = mask((0x477F_F000..=0x7F80_0000).contains(&magnitude));
+    let nan = mask(magnitude > 0x7F80_0000);
+    let count = subnormal.wrapping_sub(SUBNORMAL_BIAS);
+    let rounded = (magnitude.wrapping_sub(0x3800_0000) + 0xFFF + ((magnitude >> 13) & 1)) >> 13;
+    let quiet = 0x7E00 | ((magnitude >> 13) & 0x3FF);
+    let result = sign | (tiny & count) | (normal & rounded) | (infinite & 0x7C00) | (nan & quiet);
+    // The result has 16 bits: the low two bytes hold it on every host.
+    let [low, high, _, _] = result.to_le_bytes();
+    u16::from_le_bytes([low, high])
+}
+
 /// Rounds the bits of a binary32 value to bfloat16, to nearest even, with
 /// integer instructions. x86-64 has no instruction for this rounding below
 /// `AVX512_BF16`, and `VCVTNEPS2BF16` reads a subnormal input as zero.
@@ -261,6 +298,25 @@ mod tests {
         use crate::float::F16;
         for bits in encodings() {
             let ours = super::round_to_half(bits);
+            let (engine, _) = F32::from_bits(bits).convert_with::<F16>(Env::IEEE);
+            if super::super::bits::nan_32(bits) {
+                assert!(super::super::bits::nan_16(ours), "{bits:#010x}");
+            } else {
+                assert_eq!(ours, engine.to_bits(), "{bits:#010x}");
+            }
+        }
+    }
+
+    /// The sum of each magnitude and 0.5 comes from the engine, which the
+    /// host sum gives in the packed paths.
+    #[test]
+    fn binary16_lane_rounding_matches_the_engine() {
+        use crate::float::F16;
+        let half = F32::from_bits(super::SUBNORMAL_BIAS);
+        for bits in encodings() {
+            let magnitude = F32::from_bits(bits & 0x7FFF_FFFF);
+            let (sum, _) = magnitude.add_with(half, Env::IEEE);
+            let ours = super::round_to_half_lanes(bits, sum.to_bits());
             let (engine, _) = F32::from_bits(bits).convert_with::<F16>(Env::IEEE);
             if super::super::bits::nan_32(bits) {
                 assert!(super::super::bits::nan_16(ours), "{bits:#010x}");

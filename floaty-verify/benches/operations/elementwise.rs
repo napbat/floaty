@@ -12,7 +12,7 @@ use floaty::elementwise::{
     Abs, Difference, Maximum, Minimum, MinimumNumber, Product, Quotient, RoundToIntegral, Splat,
     Sum,
 };
-use floaty::{BF16, F32, Lanes, Rounding, ToInt, Vector, mode};
+use floaty::{BF16, F16, F32, FloatType, Lanes, Rounding, ToInt, Vector, mode};
 use floaty_verify::random::SplitMix64;
 
 use super::{Table, measure};
@@ -246,19 +246,20 @@ fn magnitude_row(vectors: &[Vec<f32>]) {
     );
 }
 
-/// Measures the conversion of host values to bfloat16.
-fn conversion_row(vectors: &[Vec<f32>]) {
-    let mut out = vec![BF16::from_bits(0); DIMENSION];
+/// Measures the conversion of host values to the 16-bit type `T`, named
+/// `name`, whose +0 is `zero`.
+fn conversion_row<T: FloatType>(name: &str, zero: T, vectors: &[Vec<f32>]) {
+    let mut out = vec![zero; DIMENSION];
     let mut lanes = |x: &[f32]| {
         Single::convert_slice(x, &mut out);
         black_box(&out);
     };
-    let mut with_out = vec![BF16::from_bits(0); DIMENSION];
+    let mut with_out = vec![zero; DIMENSION];
     let mut with = |x: &[f32]| {
         Single::convert_slice_with(x, &mut with_out, mode::Ieee);
         black_box(&with_out);
     };
-    let mut scalar_out = vec![BF16::from_bits(0); DIMENSION];
+    let mut scalar_out = vec![zero; DIMENSION];
     let mut scalar = |x: &[f32]| {
         for (out, &x) in scalar_out.iter_mut().zip(x) {
             *out = F32::from(x).convert();
@@ -266,7 +267,7 @@ fn conversion_row(vectors: &[Vec<f32>]) {
         black_box(&scalar_out);
     };
     COLUMNS.row(
-        "convert_slice f32 to BF16",
+        &format!("convert_slice f32 to {name}"),
         [
             None,
             Some(per_vector(vectors, &mut lanes)),
@@ -287,5 +288,6 @@ pub fn table() {
     quantize_row(&vectors);
     minimum_row(&vectors);
     magnitude_row(&vectors);
-    conversion_row(&vectors);
+    conversion_row("BF16", BF16::from_bits(0), &vectors);
+    conversion_row("F16", F16::from_bits(0), &vectors);
 }

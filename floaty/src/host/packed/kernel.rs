@@ -15,6 +15,7 @@
 
 use super::super::bits::nan_32;
 use super::super::environment::{self, packed};
+use super::super::narrow::{SUBNORMAL_BIAS, round_to_half_lanes};
 use super::super::paths::ready_for;
 use super::{chunk, chunk_mut, in_chunks};
 use crate::env::Env;
@@ -112,7 +113,7 @@ accumulations! {
 
 /// Calls `each` with the index of each row of `rows` and its sum with
 /// `query`, as `accumulate_rows` states. The environment allows the host
-/// path.
+/// path. Rows of at most [`SHORT`] values take `short_rows`.
 #[inline]
 fn sum_rows<const N: usize, A: Accumulation>(
     rows: impl Load,
@@ -121,9 +122,137 @@ fn sum_rows<const N: usize, A: Accumulation>(
     mut each: impl FnMut(usize, Option<u32>),
 ) {
     let count = query.count();
+    if N >= SHORT && (1..=SHORT).contains(&count) {
+        short_rows::<A>(rows, query, row_count, each);
+        return;
+    }
     for index in 0..row_count {
         let row = rows.part(index * count, count);
         each(index, sum_vectors::<N, A>(row, query));
+    }
+}
+
+/// The most values of a row that `short_rows` computes.
+const SHORT: usize = 8;
+
+/// Calls `each` with the index of each row of at most [`SHORT`] values and
+/// its sum with `query`, four rows at a time, for at least [`SHORT`] lanes
+/// and a separate step. Value `i` of a row then adds into lane `i`, once,
+/// and the other lanes stay +0. A lane of +0 plus a term is the term with a
+/// -0 made +0, and to make each -0 +0 commutes with a sum rounded to nearest
+/// even. A lane that is not -0 plus a lane of +0 is the lane. So the levels
+/// of the sum by halves above eight lanes change nothing, and the sum is the
+/// sum by halves of the eight terms with a -0 made +0. The terms past the
+/// last value are +0, as the lanes past it are.
+#[inline]
+fn short_rows<A: Accumulation>(
+    rows: impl Load,
+    query: impl Load,
+    row_count: usize,
+    mut each: impl FnMut(usize, Option<u32>),
+) {
+    let count = query.count();
+    let query = load_short(query, count);
+    let last = row_count.saturating_sub(1);
+    for first in (0..row_count).step_by(4) {
+        // A group past the last row repeats the last row.
+        let mut indices = [0; 4];
+        indices
+            .iter_mut()
+            .enumerate()
+            .for_each(|(offset, index)| *index = (first + offset).min(last));
+        let sums = query.and_then(|query| four_rows::<A>(rows, &query, indices, count));
+        for offset in 0..(row_count - first).min(4) {
+            let sum = sums.map(|sums| sums[offset]).filter(|&sum| !nan_32(sum));
+            each(first + offset, sum);
+        }
+    }
+}
+
+/// Returns the values of a vector of `count` values, at most [`SHORT`], as
+/// [`SHORT`] binary32 values with +0 past the last value.
+#[inline]
+fn load_short(vector: impl Load, count: usize) -> Option<[f32; SHORT]> {
+    let bits = if count == SHORT {
+        vector.load::<SHORT>(0)?
+    } else {
+        vector.load_rest::<SHORT>(0)?
+    };
+    Some(singles(bits))
+}
+
+/// Returns the sums of four rows of `count` values with `query`, as
+/// `short_rows` states. Each row adds the halves of its eight terms in one
+/// packed sum. The four results then move so that one packed sum adds lane
+/// `j` of each row to its lane `j + 2`, and another adds the two lanes left.
+#[inline]
+fn four_rows<A: Accumulation>(
+    rows: impl Load,
+    query: &[f32; SHORT],
+    indices: [usize; 4],
+    count: usize,
+) -> Option<[u32; 4]> {
+    let mut quarters = [[0.0; 4]; 4];
+    for (quarter, index) in quarters.iter_mut().zip(indices) {
+        let terms = short_terms::<A>(&load_short(rows.part(index * count, count), count)?, query)?;
+        *quarter = packed::binary_f32x4(*chunk(&terms, 0), *chunk(&terms, 4), Operation::Add);
+    }
+    let column = |lane: usize| {
+        [
+            quarters[0][lane],
+            quarters[1][lane],
+            quarters[2][lane],
+            quarters[3][lane],
+        ]
+    };
+    let low = packed::binary_f32x4(column(0), column(2), Operation::Add);
+    let high = packed::binary_f32x4(column(1), column(3), Operation::Add);
+    let mut sums = encodings(packed::binary_f32x4(low, high, Operation::Add));
+    // A -0 sum is +0, as the lanes give it.
+    for sum in &mut sums {
+        *sum &= 0u32.wrapping_sub(u32::from(*sum != 0x8000_0000));
+    }
+    Some(sums)
+}
+
+/// Returns the term of each pair of values of `x` and `y`, rounded once:
+/// eight at a time where the build has wide registers, and four otherwise.
+#[inline]
+fn short_terms<A: Accumulation>(x: &[f32; SHORT], y: &[f32; SHORT]) -> Option<[f32; SHORT]> {
+    let mut terms = [0.0; SHORT];
+    in_chunks::<f32, SHORT, 8, 4>(
+        &mut terms,
+        |start| term_chunk::<8, A>(*chunk(x, start), *chunk(y, start), packed::binary_f32x8),
+        |start| {
+            term_chunk::<4, A>(*chunk(x, start), *chunk(y, start), |a, b, operation| {
+                Some(packed::binary_f32x4(a, b, operation))
+            })
+        },
+        |index| {
+            let [term] = term_chunk::<1, A>([x[index]], [y[index]], |[a], [b], operation| {
+                Some([environment::binary_f32(a, b, operation)])
+            })?;
+            Some(term)
+        },
+    )?;
+    Some(terms)
+}
+
+/// Returns the term of each pair of `x` and `y`. `binary` is the instruction
+/// for the chunk width, and gives `None` where the build has none.
+#[inline]
+fn term_chunk<const C: usize, A: Accumulation>(
+    x: [f32; C],
+    y: [f32; C],
+    binary: impl Fn([f32; C], [f32; C], Operation) -> Option<[f32; C]>,
+) -> Option<[f32; C]> {
+    match A::TERM {
+        Term::Value => Some(x),
+        Term::Product => binary(x, y, Operation::Mul),
+        Term::SquareDifference => {
+            let difference = binary(x, y, Operation::Sub)?;
+            binary(difference, difference, Operation::Mul)
+        }
     }
 }
 
@@ -262,6 +391,39 @@ pub fn widen_halves<const N: usize>(halves: &[u16; N]) -> Option<[u32; N]> {
         .zip(halves.iter().zip(subnormals))
         .for_each(|(lane, (&bits, subnormal))| *lane = widen_half_bits(bits, subnormal));
     Some(widened)
+}
+
+/// Returns binary32 values rounded to binary16 to nearest even, as
+/// encodings: in the packed rounding instructions where the build has them,
+/// and otherwise in integer instructions and one binary32 sum of each
+/// magnitude and 0.5, as `round_to_half_lanes` states. A NaN gives a NaN.
+#[inline]
+pub fn narrow_halves<const N: usize>(singles: &[f32; N]) -> Option<[u16; N]> {
+    let mut halves = [0; N];
+    if packed::HALF {
+        in_chunks::<u16, N, 8, 4>(
+            &mut halves,
+            |start| packed::narrow_halves_x8(*chunk(singles, start)),
+            |start| packed::narrow_halves_x4(*chunk(singles, start)),
+            |index| Some(environment::narrow_half(singles[index])),
+        )?;
+        return Some(halves);
+    }
+    let mut magnitudes = [0.0; N];
+    magnitudes
+        .iter_mut()
+        .zip(singles)
+        .for_each(|(magnitude, value)| *magnitude = f32::from_bits(value.to_bits() & 0x7FFF_FFFF));
+    let sums = encodings(with_operand(
+        magnitudes,
+        f32::from_bits(SUBNORMAL_BIAS),
+        Operation::Add,
+    )?);
+    halves
+        .iter_mut()
+        .zip(singles.iter().zip(sums))
+        .for_each(|(half, (value, sum))| *half = round_to_half_lanes(value.to_bits(), sum));
+    Some(halves)
 }
 
 /// Returns the binary32 encoding of a binary16 encoding, in masks without a

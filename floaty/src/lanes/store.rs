@@ -60,18 +60,17 @@ impl<M: Mode, const N: usize> Lanes<Single<M>, N> {
     pub fn store<T: From<Single<M>>>(values: impl Vector, mut out: impl Output<T>) {
         let count = Self::check_destination(values, out.count());
         if Self::stores_on_host() {
-            let done = host::packed::elementwise::store::<N>(values, &M::ENV, |start, bits| {
-                let end = count.min(start + N);
-                match bits {
+            let done = host::packed::elementwise::store::<N>(
+                values,
+                &M::ENV,
+                |start, end, bits| match bits {
                     Some(bits) => out.write(
                         start,
-                        bits[..end - start]
-                            .iter()
-                            .map(|&bits| Single::from_bits(bits).into()),
+                        bits.iter().map(|&bits| Single::from_bits(bits).into()),
                     ),
                     None => Self::store_out_of_line(values, &mut out, start, end),
-                }
-            });
+                },
+            );
             if done.is_some() {
                 return;
             }
@@ -95,16 +94,21 @@ impl<M: Mode, const N: usize> Lanes<Single<M>, N> {
     /// [`Float::to_int`](crate::Float::to_int) converts it.
     #[inline]
     pub fn to_int_slice<I: Integer>(values: impl Vector, out: &mut [ToInt<I>]) {
-        let count = Self::check_destination(values, out.len());
+        Self::check_destination(values, out.len());
         if const { host::packed::available(Host::Single, Kind::ToInt) } {
             let done =
-                host::packed::elementwise::to_int::<N>(values, &M::ENV, |start, integers| {
-                    let end = count.min(start + N);
-                    for (offset, result) in out[start..end].iter_mut().enumerate() {
+                host::packed::elementwise::to_int::<N>(values, &M::ENV, |start, end, integers| {
+                    let results = &mut out[start..end];
+                    let Some(integers) = integers else {
+                        for (index, result) in (start..end).zip(results) {
+                            *result = Self::to_int_out_of_line(values, index);
+                        }
+                        return;
+                    };
+                    for ((index, result), &integer) in (start..end).zip(results).zip(integers) {
                         // `i32::MIN` marks a value that the engine converts.
-                        let integer = integers.map_or(i32::MIN, |integers| integers[offset]);
                         *result = if integer == i32::MIN {
-                            Self::to_int_out_of_line(values, start + offset)
+                            Self::to_int_out_of_line(values, index)
                         } else {
                             from_host_integer(i64::from(integer))
                         };

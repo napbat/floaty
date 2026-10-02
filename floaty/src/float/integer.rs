@@ -94,7 +94,12 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
 /// decides it.
 #[inline]
 pub(crate) fn from_host_integer<I: Integer>(integer: i64) -> ToInt<I> {
-    ToInt::fitted(integer < 0, &[integer.unsigned_abs()])
+    match I::from_i64(integer) {
+        Some(value) => ToInt::Value(value),
+        None => ToInt::OutOfRange {
+            negative: integer < 0,
+        },
+    }
 }
 
 /// Returns an integer as an `i64`, or `None` when it does not fit.

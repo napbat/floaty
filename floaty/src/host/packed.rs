@@ -78,19 +78,21 @@ pub const fn available(host: Host, kind: Kind) -> bool {
 
 /// Returns `true` when the packed paths convert lanes from the host kind
 /// `from` to the host kind `to`: the build has the scalar conversion, and the
-/// packed paths cover the lanes. The answer is a constant. binary64 lanes do
-/// not round to binary16 or bfloat16: two roundings through binary32 can
-/// differ from one.
+/// packed paths cover the lanes. The answer is a constant. binary32 lanes
+/// round to binary16 in F16C or `FCVTN` where the build has it, and in
+/// integer and binary32 instructions otherwise. binary64 lanes do not round
+/// to binary16 or bfloat16: two roundings through binary32 can differ from
+/// one.
 #[must_use]
 pub const fn convertible(from: Host, to: Host) -> bool {
     if !super::convertible(from, to) {
         return false;
     }
     match (from, to) {
-        (Host::Single, Host::Double | Host::BFloat)
+        (Host::Single, Host::Double | Host::BFloat | Host::Half)
         | (Host::Double, Host::Single)
         | (Host::BFloat, Host::Single | Host::Double) => true,
-        (Host::Half, Host::Single | Host::Double) | (Host::Single, Host::Half) => packed::HALF,
+        (Host::Half, Host::Single | Host::Double) => packed::HALF,
         _ => false,
     }
 }

@@ -271,6 +271,24 @@ fn rows_give_the_kernel_of_each_row() {
     }
 }
 
+/// Rows of at most eight values take a path of their own. A row of -0
+/// products sums to +0 in the lanes, and every count of rows leaves a
+/// different count after the last group of four.
+#[test]
+fn short_rows_of_negative_zero_products_give_positive_zero() {
+    let negative_zero = F32::from_bits(0x8000_0000);
+    let one = F32::from_bits(0x3F80_0000);
+    for length in 1..=8 {
+        for count in 1..=9 {
+            let rows = vec![negative_zero; length * count];
+            let query = vec![one; length];
+            let context = || format!("query {length} rows {count}");
+            check_rows::<8>(&rows, &query, &context);
+            check_rows::<32>(&rows, &query, &context);
+        }
+    }
+}
+
 /// Checks `convert_slice` with `$lanes` lanes from `$from` to `$to` on
 /// `$values`: each value gives the conversion of its own value, and
 /// `convert_slice_with` gives the same values.
@@ -325,4 +343,21 @@ fn slice_conversions_give_the_conversion_of_each_value() {
         &mut random,
     ));
     check_conversions!(F16, F32, &binary16);
+}
+
+/// The binary32 encodings with every high half and the low halves around
+/// each rounding case of binary16: the ties at bits 12 to 15, and the bits
+/// just above and below them. The high halves hold the ties of the
+/// subnormal results, the overflow to the infinity, and the NaNs.
+#[test]
+fn binary16_slice_conversion_rounds_each_case() {
+    const LOWS: [u32; 22] = [
+        0x0000, 0x1000, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000, 0x7000, 0x8000, 0x9000, 0xA000,
+        0xB000, 0xC000, 0xD000, 0xE000, 0xF000, 0x0001, 0x0FFF, 0x1001, 0x7FFF, 0x8001, 0xFFFF,
+    ];
+    let singles: Vec<F32> = (0..=u32::from(u16::MAX))
+        .flat_map(|high| LOWS.map(|low| F32::from_bits((high << 16) | low)))
+        .collect();
+    check_conversion!(F32, F16, &singles, 8);
+    check_conversion!(F32, F16, &singles, 32);
 }

@@ -20,6 +20,7 @@ use super::super::Operation;
 use super::super::bits::{min_max_differs_16, nan_16};
 use super::super::environment::{self, packed};
 use super::super::paths::min_max_f32;
+use super::kernel::narrow_halves;
 use super::{any_lane, chunk, encodings_u16, in_chunks, in_chunks_where, lanes_u16, singles};
 use crate::env::{Mode, Rounding};
 use crate::float::Float;
@@ -267,18 +268,11 @@ pub(super) fn to_doubles<S: Standard<W>, const W: usize, M: Mode, const N: usize
 }
 
 /// Returns the binary16 encoding of each binary32 lane rounded to nearest
-/// even, or `None` when the build has no instruction.
+/// even: in F16C or `FCVTN` where the build has it, and otherwise in integer
+/// and binary32 instructions. A NaN lane gives a NaN.
 #[inline]
 pub(super) fn from_singles<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     value: &[Float<S, W, M>; N],
 ) -> Option<[u16; N]> {
-    let x = singles(value)?;
-    let mut lanes = [0; N];
-    in_chunks::<u16, N, 8, 4>(
-        &mut lanes,
-        |start| packed::narrow_halves_x8(*chunk(x, start)),
-        |start| packed::narrow_halves_x4(*chunk(x, start)),
-        |index| Some(environment::narrow_half(x[index])),
-    )?;
-    Some(lanes)
+    narrow_halves(singles(value)?)
 }

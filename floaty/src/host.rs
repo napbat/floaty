@@ -737,7 +737,7 @@ mod none {
             pub fn store<const N: usize>(
                 _values: impl Load,
                 _env: &Env,
-                _each: impl FnMut(usize, Option<[u32; N]>),
+                _each: impl FnMut(usize, usize, Option<&[u32]>),
             ) -> Option<()> {
                 None
             }
@@ -747,7 +747,7 @@ mod none {
             pub fn to_int<const N: usize>(
                 _values: impl Load,
                 _env: &Env,
-                _each: impl FnMut(usize, Option<[i32; N]>),
+                _each: impl FnMut(usize, usize, Option<&[i32]>),
             ) -> Option<()> {
                 None
             }

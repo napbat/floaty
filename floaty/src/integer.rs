@@ -139,6 +139,16 @@ pub trait Integer: Sealed + Copy {
     /// Makes a value from a sign and a magnitude that fit the type.
     #[doc(hidden)]
     fn from_parts(parts: Parts) -> Self;
+
+    /// Returns `integer` as a value of the type, or `None` when it is
+    /// outside the range of the type.
+    #[doc(hidden)]
+    #[must_use]
+    #[inline]
+    fn from_i64(integer: i64) -> Option<Self> {
+        let parts = fit::<Self, _>(integer < 0, &[integer.unsigned_abs()])?;
+        Some(Self::from_parts(parts))
+    }
 }
 
 /// Returns the magnitude of a `u128` as limbs.
@@ -180,6 +190,11 @@ macro_rules! unsigned {
                     debug_assert!(!parts.negative, "an unsigned value is not negative");
                     Self::try_from(limbs_u128(parts.magnitude)).expect("the magnitude fits the type")
                 }
+
+                #[inline]
+                fn from_i64(integer: i64) -> Option<Self> {
+                    Self::try_from(integer).ok()
+                }
             }
         )*
     };
@@ -213,6 +228,11 @@ macro_rules! signed {
                     value
                         .and_then(|value| Self::try_from(value).ok())
                         .expect("the magnitude fits the type")
+                }
+
+                #[inline]
+                fn from_i64(integer: i64) -> Option<Self> {
+                    Self::try_from(integer).ok()
                 }
             }
         )*

@@ -251,63 +251,74 @@ fn integers<const C: usize>(x: [u32; C]) -> Option<[i32; C]> {
     Some(lanes)
 }
 
-/// Returns a chunk of encodings, or `None` when the chunk is `None` or holds
-/// a NaN, which the engine selects.
+/// Returns a chunk of encodings, or `None` when the chunk holds a NaN, which
+/// the engine selects.
 #[inline]
-fn without_nan<const N: usize>(bits: Option<[u32; N]>) -> Option<[u32; N]> {
-    bits.filter(|bits| !any_lane(bits.iter().copied(), nan_32))
+fn without_nan<const C: usize>(bits: [u32; C]) -> Option<[u32; C]> {
+    (!any_lane(bits.iter().copied(), nan_32)).then_some(bits)
 }
 
 /// Computes the values of `values` `N` at a time, with one check of the
-/// environment for every chunk. Calls `each` with the index of the first
-/// value of each chunk and its encodings, or `None` for a chunk that holds a
-/// NaN or has no instruction. The last chunk holds +0 past the last value.
-/// Returns `None`, and calls `each` for no chunk, when the path does not
-/// apply.
+/// environment for the call. Calls `each` with the index of the first value
+/// of each chunk, the index past its last value, and its encodings, or
+/// `None` for a chunk that holds a NaN or has no instruction. Returns
+/// `None`, and calls `each` for no chunk, when the path does not apply.
 #[inline]
 pub fn store<const N: usize>(
     values: impl Load,
     env: &Env,
-    mut each: impl FnMut(usize, Option<[u32; N]>),
+    each: impl FnMut(usize, usize, Option<&[u32]>),
 ) -> Option<()> {
     if !ready(env) {
         return None;
     }
-    let count = values.count();
-    let full = count - count % N;
-    for start in (0..full).step_by(N) {
-        each(start, without_nan(values.load::<N>(start)));
-    }
-    if full < count {
-        each(full, without_nan(values.load_rest::<N>(full)));
-    }
+    in_value_chunks::<N, u32>(values, without_nan, each);
     Some(())
 }
 
 /// Converts the values of `values` to 32-bit integers to nearest even, `N`
-/// at a time, with one check of the environment for every chunk. Calls
-/// `each` with the index of the first value of each chunk and its integers,
-/// or `None` for a chunk without an instruction. A lane that the scalar
-/// conversion must decide holds `i32::MIN`. Returns `None`, and calls `each`
-/// for no chunk, when the path does not apply.
+/// at a time, with one check of the environment for the call. Calls `each`
+/// with the index of the first value of each chunk, the index past its last
+/// value, and its integers, or `None` for a chunk without an instruction. A
+/// lane that the scalar conversion must decide holds `i32::MIN`. Returns
+/// `None`, and calls `each` for no chunk, when the path does not apply.
 #[inline]
 pub fn to_int<const N: usize>(
     values: impl Load,
     env: &Env,
-    mut each: impl FnMut(usize, Option<[i32; N]>),
+    each: impl FnMut(usize, usize, Option<&[i32]>),
 ) -> Option<()> {
     if !packed::INTEGERS || !ready(env) {
         return None;
     }
+    in_value_chunks::<N, i32>(values, integers, each);
+    Some(())
+}
+
+/// Loads the values of `values` `C` at a time, with +0 past the last value
+/// in the last chunk, and calls `each` with the index of the first value of
+/// each chunk, the index past its last value, and `compute` of its
+/// encodings, or `None` where a load or `compute` gives `None`.
+#[inline]
+fn in_value_chunks<const C: usize, T>(
+    values: impl Load,
+    compute: impl Fn([u32; C]) -> Option<[T; C]>,
+    mut each: impl FnMut(usize, usize, Option<&[T]>),
+) {
     let count = values.count();
-    let full = count - count % N;
-    for start in (0..full).step_by(N) {
-        each(start, values.load::<N>(start).and_then(integers));
+    let full = count - count % C;
+    for start in (0..full).step_by(C) {
+        let chunk = values.load::<C>(start).and_then(&compute);
+        each(start, start + C, chunk.as_ref().map(|chunk| &chunk[..]));
     }
     if full < count {
-        each(full, values.load_rest::<N>(full).and_then(integers));
+        let chunk = values.load_rest::<C>(full).and_then(&compute);
+        each(
+            full,
+            count,
+            chunk.as_ref().map(|chunk| &chunk[..count - full]),
+        );
     }
-    Some(())
 }
 
 /// Returns the minimum or maximum operation `operation` of the values of
