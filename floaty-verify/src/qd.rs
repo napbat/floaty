@@ -130,6 +130,11 @@ type BinaryFunction = unsafe extern "C" fn(*const u64, *const u64, c_int, *mut u
 /// flags.
 type UnaryFunction = unsafe extern "C" fn(*const u64, c_int, *mut u64) -> c_uint;
 
+/// The C shape of the integer powers of the unary shim: the halves of `a`,
+/// the exponent, the rounding direction, and the halves of the result. It
+/// returns the raised flags.
+type PowerFunction = unsafe extern "C" fn(*const u64, c_int, c_int, *mut u64) -> c_uint;
+
 unsafe extern "C" {
     static floaty_qd_radix: c_uint;
     static floaty_qd_precision: c_uint;
@@ -142,6 +147,13 @@ unsafe extern "C" {
     fn floaty_qd_sqrt(a: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     fn floaty_qd_sqr(a: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     fn floaty_qd_inv(a: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
+    fn floaty_qd_npwr(a: *const u64, n: c_int, rounding: c_int, result: *mut u64) -> c_uint;
+    fn floaty_qd_npwr_magnitude(
+        a: *const u64,
+        n: c_int,
+        rounding: c_int,
+        result: *mut u64,
+    ) -> c_uint;
     /// The C library `fma`, which QD calls for the error of a product.
     fn fma(x: f64, y: f64, z: f64) -> f64;
 }
@@ -198,6 +210,40 @@ pub fn sqr(a: Pair, rounding: Rounding) -> Outcome {
 #[must_use]
 pub fn inv(a: Pair, rounding: Rounding) -> Outcome {
     unary(floaty_qd_inv, a, rounding)
+}
+
+/// Returns `npwr(a, n)` of `dd_real` in `rounding`.
+///
+/// # Panics
+///
+/// Panics when `n` is `i32::MIN`. QD's `npwr` never returns for that
+/// exponent; [`npwr_magnitude`] computes it.
+#[must_use]
+pub fn npwr(a: Pair, n: i32, rounding: Rounding) -> Outcome {
+    assert_ne!(n, i32::MIN, "QD's npwr never returns for INT_MIN");
+    power(floaty_qd_npwr, a, n, rounding)
+}
+
+/// Returns QD's `npwr` source loop on `a` with the magnitude of `n` as an
+/// unsigned integer, in `rounding`. For `i32::MIN` the magnitude is 2^31.
+/// The shim compiles the loop with the inline operators of QD.
+///
+/// The function differs from [`npwr`] for an exponent of 0: it then returns
+/// `a`.
+#[must_use]
+pub fn npwr_magnitude(a: Pair, n: i32, rounding: Rounding) -> Outcome {
+    power(floaty_qd_npwr_magnitude, a, n, rounding)
+}
+
+/// Calls an integer power of the shim.
+fn power(function: PowerFunction, a: Pair, n: i32, rounding: Rounding) -> Outcome {
+    let a = [a.hi, a.lo];
+    let mut result = [0; 2];
+    // SAFETY: the function reads the two halves of `a` and writes the two
+    // halves of `result`. Both arrays live until it returns. It restores
+    // the floating-point environment of this thread before it returns.
+    let bits = unsafe { function(a.as_ptr(), n, code(rounding), result.as_mut_ptr()) };
+    outcome(result, bits)
 }
 
 /// Calls a unary operation of the shim.

@@ -513,6 +513,40 @@ impl<M: Mode> DoubleDouble<Qd, M> {
     pub fn inv_with(self, behavior: impl Override) -> (Self, Flags) {
         self.apply_one(Steps::new(behavior.apply::<M>()), qd::inv)
     }
+
+    /// Returns QD's integer power `npwr(self, n)` with the default mode.
+    /// The steps take the host paths of binary64 where the build has them.
+    ///
+    /// See [`npwr_with`](Self::npwr_with) for the rule.
+    #[must_use]
+    pub fn npwr(self, n: i32) -> Self {
+        self.power(n, Steps::without_flags(M::default())).0
+    }
+
+    /// Returns QD's integer power `npwr(self, n)`, and the flags of every
+    /// binary64 step.
+    ///
+    /// An exponent of 0 gives `(1, +0)`, or QD's NaN in both halves when
+    /// the high half compares quietly equal to zero. An exponent of 1 gives
+    /// the pair unchanged. For a larger magnitude, QD multiplies `(1, +0)`
+    /// by repeated squares of the value. A negative exponent then takes
+    /// [`inv_with`](Self::inv_with) of the power. Each step uses the
+    /// behavior of the call. The operation does not round the exact power
+    /// once.
+    ///
+    /// QD takes `std::abs(n)`, which is undefined for `i32::MIN`. Its
+    /// compiled loop never returns for that exponent. floaty takes the
+    /// magnitude 2^31, as the source of QD intends.
+    #[must_use]
+    pub fn npwr_with(self, n: i32, behavior: impl Override) -> (Self, Flags) {
+        self.power(n, Steps::new(behavior.apply::<M>()))
+    }
+
+    /// Runs QD's integer power in `steps`.
+    fn power<B: Behavior>(self, n: i32, mut steps: Steps<B>) -> (Self, Flags) {
+        let (hi, lo) = qd::npwr(&mut steps, (self.hi, self.lo), n);
+        (Self::new(hi, lo), steps.flags())
+    }
 }
 
 /// Returns the algorithm of `Alg` among the algorithms `[gcc, qd]` of an

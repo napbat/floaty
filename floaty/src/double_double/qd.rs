@@ -9,8 +9,9 @@
 //! in `dd_real::accurate_div`, the remainder `drem` as the shim inlines it in
 //! `run_remainder`, and the square root in `sqrt(const dd_real&)` and the
 //! truncated remainder in `fmod(const dd_real&, const dd_real&)` of
-//! `dd_real.o` in `libqd.a`. `sqr` and `inv` follow `qd_unary.cpp`.
-//! The comments give the instruction offsets.
+//! `dd_real.o` in `libqd.a`. `sqr` and `inv` follow `qd_unary.cpp`, and the
+//! integer power follows `npwr(const dd_real&, int)` of `dd_real.o`. The
+//! comments give the instruction offsets.
 //!
 //! The compiler keeps the arithmetic of the source, but it swaps the operands
 //! of some additions, and x86 returns the NaN of the first operand. A comment
@@ -119,18 +120,97 @@ pub fn mul<B: Behavior>(steps: &mut Steps<B>, (a0, a1): Pair, (b0, b1): Pair) ->
     (high, steps.sub(p2, bb)) // 0x18e
 }
 
+/// The terms of a square, in the order of the machine code: the product `p`
+/// of the high half, and `p2`, its error plus the cross product. The square
+/// of the low half comes last, because `sqr` and `npwr` add it in different
+/// orders.
+fn square_terms<B: Behavior>(steps: &mut Steps<B>, (a0, a1): Pair) -> (F64, F64, F64) {
+    let p = steps.mul(a0, a0); // sqr 0xcc, npwr 0x936
+    let e = steps.fused_add(a0, a0, -p); // xorpd 0xd9, 0x94a; call fma 0xe7, 0x958
+    let doubled = steps.add(a0, a0); // 0x102, 0x96f: 2.0 * a0, compiled as a0 + a0
+    let cross = steps.mul(doubled, a1); // 0x106, 0x973
+    let low_square = steps.mul(a1, a1); // 0x10a, 0x977
+    (p, steps.add(cross, e), low_square) // 0x10e, 0x97b, swapped: p2 += cross
+}
+
+/// `quick_two_sum(p, p2)` of a square, with the sum swapped: `p + p2`.
+fn square_sum<B: Behavior>(steps: &mut Steps<B>, p: F64, p2: F64) -> Pair {
+    let high = steps.add(p2, p); // sqr 0x11a, npwr 0x987
+    let bb = steps.sub(high, p); // 0x128, 0x98f
+    (high, steps.sub(p2, bb)) // 0x12c, 0x993
+}
+
 /// `sqr(dd_real)` as `floaty_qd_sqr` inlines it in `qd_unary.cpp`.
-pub fn sqr<B: Behavior>(steps: &mut Steps<B>, (a0, a1): Pair) -> Pair {
-    let p = steps.mul(a0, a0); // 0xcc
-    let e = steps.fused_add(a0, a0, -p); // 0xd9 xorpd; 0xe7 call fma
-    let doubled = steps.add(a0, a0); // 0x102: 2.0 * a0, compiled as a0 + a0
-    let cross = steps.mul(doubled, a1); // 0x106
-    let low_square = steps.mul(a1, a1); // 0x10a
-    let p2 = steps.add(cross, e); // 0x10e, swapped: p2 += cross
+pub fn sqr<B: Behavior>(steps: &mut Steps<B>, a: Pair) -> Pair {
+    let (p, p2, low_square) = square_terms(steps, a); // 0xcc to 0x10e
     let p2 = steps.add(p2, low_square); // 0x112
-    let high = steps.add(p2, p); // 0x11a, swapped: p + p2
-    let bb = steps.sub(high, p); // 0x128
-    (high, steps.sub(p2, bb)) // 0x12c
+    square_sum(steps, p, p2) // 0x11a to 0x12c
+}
+
+/// `sqr(dd_real)` as `npwr` inlines it (0x928 to 0x993). It adds the
+/// square of the low half first.
+fn square_in_power<B: Behavior>(steps: &mut Steps<B>, a: Pair) -> Pair {
+    let (p, p2, low_square) = square_terms(steps, a); // 0x936 to 0x97b
+    let p2 = steps.add(low_square, p2); // 0x97f, swapped: p2 += a1 * a1
+    square_sum(steps, p, p2) // 0x987 to 0x993
+}
+
+/// `s *= r` as `npwr` inlines it (0x99c to 0xa12): `p2 += r1 * s0`, then
+/// `p2 += r0 * s1`.
+fn mul_in_place<B: Behavior>(steps: &mut Steps<B>, (s0, s1): Pair, (r0, r1): Pair) -> Pair {
+    let p = steps.mul(s0, r0); // 0x9b6
+    let e = steps.fused_add(s0, r0, -p); // 0x9be xorpd; 0x9cc call fma(r0, s0, -p)
+    let first = steps.mul(s0, r1); // 0x9e8, swapped: r1 * s0
+    let p2 = steps.add(first, e); // 0x9f0, swapped: p2 += first
+    let second = steps.mul(s1, r0); // 0x9f9, swapped: r0 * s1
+    let p2 = steps.add(p2, second); // 0x9fd
+    let high = steps.add(p, p2); // 0xa01
+    let bb = steps.sub(high, p); // 0xa0e
+    (high, steps.sub(p2, bb)) // 0xa12
+}
+
+/// `npwr(const dd_real&, int)` of `dd_real.o` (from 0x890).
+///
+/// An exponent of 0 compares the high half quietly with 0. Equality gives
+/// QD's NaN in both halves, and QD writes an error. Otherwise the result is
+/// `(1, +0)`. Binary exponentiation then starts from `(1, +0)`, unless the
+/// magnitude is 1. A negative exponent takes the reciprocal at the end.
+///
+/// The source takes `std::abs(n)`, which is undefined for `INT_MIN`. The
+/// compiled loop never ends there, because `sar` keeps the count at -1. This
+/// function takes the magnitude 2^31, as the source intends.
+pub fn npwr<B: Behavior>(steps: &mut Steps<B>, a: Pair, n: i32) -> Pair {
+    let one = F64::from_bits(ONE);
+    let zero = F64::from_bits(0);
+    if n == 0 {
+        // 0x8b4 ucomisd 0, a0; 0x8ba je
+        if steps.compare_quiet(zero, a.0) == Some(Ordering::Equal) {
+            return (F64::from_bits(NAN), F64::from_bits(NAN));
+        }
+        return (one, zero); // 0x8c0
+    }
+    let mut count = n.unsigned_abs(); // 0x905 neg; 0x907 cmovs
+    let power = if count == 1 {
+        a // 0x90d je 0xa70
+    } else {
+        let (mut r, mut s) = (a, (one, zero)); // 0x913 .LC4; 0x91b
+        loop {
+            if count & 1 == 1 {
+                // 0x997 test bl, 1
+                s = mul_in_place(steps, s, r);
+                if count == 1 {
+                    break s; // 0xa1b
+                }
+            }
+            count >>= 1; // 0x934 sar
+            r = square_in_power(steps, r);
+        }
+    };
+    if n < 0 {
+        inv(steps, power) // 0xa26 jns; 0xa4f call accurate_div((1, +0), s)
+    } else {
+        power
+    }
 }
 
 /// `dd_real * double` for `b * q` in `accurate_div`: `two_prod(b0, q)` and
