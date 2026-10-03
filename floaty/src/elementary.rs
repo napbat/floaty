@@ -1,6 +1,6 @@
 //! The exponential and the natural logarithm of IEEE 754-2019 section 9.2,
 //! correctly rounded in every rounding direction, for the binary and the
-//! decimal formats.
+//! decimal formats, and `compound` for the binary formats.
 //!
 //! The functions evaluate in ball arithmetic: a center and a radius that
 //! bounds the distance to the true value. Every step truncates its center
@@ -23,10 +23,16 @@
 //! within one grid step of 1, so its truncation follows from the sign of the
 //! argument alone. An argument far past the range of the format gives an
 //! overflow or an underflow without an evaluation.
+//!
+//! `compound(x, n) = e^(n ln(1 + x))` has a rational result, which can lie
+//! on a grid. Its module computes those results without a ball.
 
 mod ball;
+mod compound;
 mod constants;
 mod series;
+
+pub(crate) use self::compound::compound;
 
 use self::ball::{Ball, truncation};
 use crate::exact::Unrounded;

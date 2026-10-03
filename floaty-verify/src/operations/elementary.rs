@@ -147,7 +147,7 @@ fn log(x: &BigFloat, format: &Format, env: &Env) -> (Outcome, Flags) {
 /// # Panics
 ///
 /// Panics when the working precision reaches [`PRECISION_LIMIT`].
-fn truncation(precision: u32, evaluate: impl Fn(u32, Round) -> BigFloat) -> Input {
+pub(super) fn truncation(precision: u32, evaluate: impl Fn(u32, Round) -> BigFloat) -> Input {
     let mut working = precision + 64;
     loop {
         let (low, high) = (evaluate(working, Round::Down), evaluate(working, Round::Up));
