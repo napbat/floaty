@@ -192,7 +192,8 @@ fn short_rows<I: Isa, A: Accumulation>(
 }
 
 /// Calls `each` as `short_rows` does, for rows of [`SHORT`] values when
-/// `WHOLE` holds, and of fewer otherwise.
+/// `WHOLE` holds, and of fewer otherwise. The loop runs with the features of
+/// `I` also where LLVM leaves the function out of line.
 #[inline]
 fn rows_of_count<I: Isa, A: Accumulation, const WHOLE: bool>(
     rows: impl Load,
@@ -200,22 +201,25 @@ fn rows_of_count<I: Isa, A: Accumulation, const WHOLE: bool>(
     row_count: usize,
     mut each: impl FnMut(usize, Option<u32>),
 ) {
-    let count = query.count();
-    let query = load_short::<I, WHOLE>(query);
-    let last = row_count.saturating_sub(1);
-    for first in (0..row_count).step_by(4) {
-        // A group past the last row repeats the last row.
-        let mut indices = [0; 4];
-        indices
-            .iter_mut()
-            .enumerate()
-            .for_each(|(offset, index)| *index = (first + offset).min(last));
-        let sums = query.and_then(|query| four_rows::<I, A, WHOLE>(rows, &query, indices, count));
-        for offset in 0..(row_count - first).min(4) {
-            let sum = sums.map(|sums| sums[offset]).filter(|&sum| !nan_32(sum));
-            each(first + offset, sum);
+    I::run(move || {
+        let count = query.count();
+        let query = load_short::<I, WHOLE>(query);
+        let last = row_count.saturating_sub(1);
+        for first in (0..row_count).step_by(4) {
+            // A group past the last row repeats the last row.
+            let mut indices = [0; 4];
+            indices
+                .iter_mut()
+                .enumerate()
+                .for_each(|(offset, index)| *index = (first + offset).min(last));
+            let sums =
+                query.and_then(|query| four_rows::<I, A, WHOLE>(rows, &query, indices, count));
+            for offset in 0..(row_count - first).min(4) {
+                let sum = sums.map(|sums| sums[offset]).filter(|&sum| !nan_32(sum));
+                each(first + offset, sum);
+            }
         }
-    }
+    });
 }
 
 /// Returns the values of a vector of [`SHORT`] values when `WHOLE` holds,
@@ -235,7 +239,10 @@ fn load_short<I: Isa, const WHOLE: bool>(vector: impl Load) -> Option<[f32; SHOR
 /// `short_rows` states. Each row adds the halves of its eight terms in one
 /// packed sum. One packed sum for each two rows then adds lanes 0 and 1 of
 /// each row to its lanes 2 and 3, and one more adds the two lanes left of
-/// each of the four rows.
+/// each of the four rows. The function runs with the features of `I` also
+/// where LLVM leaves it out of line: a copy without them called each form
+/// out of line, and `dot_rows` of rows of eight values took 12 ns for each
+/// row in x86-64-v3 and x86-64-v4, against 0.9 ns with them.
 #[inline]
 fn four_rows<I: Isa, A: Accumulation, const WHOLE: bool>(
     rows: impl Load,
@@ -243,27 +250,29 @@ fn four_rows<I: Isa, A: Accumulation, const WHOLE: bool>(
     indices: [usize; 4],
     count: usize,
 ) -> Option<[u32; 4]> {
-    let mut quarters = [[0.0; 4]; 4];
-    for (quarter, index) in quarters.iter_mut().zip(indices) {
-        let row = load_short::<I, WHOLE>(rows.part(index * count, count))?;
-        let terms = short_terms::<I, A>(&row, query)?;
-        *quarter = I::binary_f32x4(*chunk(&terms, 0), *chunk(&terms, 4), Operation::Add)?;
-    }
-    // Whole quarters move into the operands of each sum, as `halves_f32x4`
-    // states.
-    let pair = |first, second| {
-        let (low, high) = packed::halves_f32x4(first, second);
-        I::binary_f32x4(low, high, Operation::Add)
-    };
-    let front = pair(quarters[0], quarters[1])?;
-    let back = pair(quarters[2], quarters[3])?;
-    let (evens, odds) = packed::evens_odds_f32x4(front, back);
-    let mut sums = encodings(I::binary_f32x4(evens, odds, Operation::Add)?);
-    // A -0 sum is +0, as the lanes give it.
-    for sum in &mut sums {
-        *sum &= 0u32.wrapping_sub(u32::from(*sum != 0x8000_0000));
-    }
-    Some(sums)
+    I::run(move || {
+        let mut quarters = [[0.0; 4]; 4];
+        for (quarter, index) in quarters.iter_mut().zip(indices) {
+            let row = load_short::<I, WHOLE>(rows.part(index * count, count))?;
+            let terms = short_terms::<I, A>(&row, query)?;
+            *quarter = I::binary_f32x4(*chunk(&terms, 0), *chunk(&terms, 4), Operation::Add)?;
+        }
+        // Whole quarters move into the operands of each sum, as `halves_f32x4`
+        // states.
+        let pair = |first, second| {
+            let (low, high) = packed::halves_f32x4(first, second);
+            I::binary_f32x4(low, high, Operation::Add)
+        };
+        let front = pair(quarters[0], quarters[1])?;
+        let back = pair(quarters[2], quarters[3])?;
+        let (evens, odds) = packed::evens_odds_f32x4(front, back);
+        let mut sums = encodings(I::binary_f32x4(evens, odds, Operation::Add)?);
+        // A -0 sum is +0, as the lanes give it.
+        for sum in &mut sums {
+            *sum &= 0u32.wrapping_sub(u32::from(*sum != 0x8000_0000));
+        }
+        Some(sums)
+    })
 }
 
 /// Returns the term of each pair of values of `x` and `y`, rounded once.
@@ -324,25 +333,43 @@ fn add_vectors<I: Isa, const N: usize, const C: usize, A: Accumulation>(
             add_terms::<I, C, A>(chunk_mut(lanes, offset), &singles(a), &singles(b))?;
         }
     }
-    // Value `full + i` adds into lane `i`.
-    for offset in (0..count - full).step_by(C) {
-        let start = full + offset;
-        let lanes = chunk_mut(lanes, offset);
-        if start + C <= count {
-            let (a, b) = (x.load::<I, C>(start)?, y.load::<I, C>(start)?);
-            add_terms::<I, C, A>(lanes, &singles(a), &singles(b))?;
-        } else {
-            // The lanes past the last value must keep their values. A
-            // padding term of +0 can change a lane: a fused step can make a
-            // lane -0, and -0 plus +0 is +0.
-            let old = *lanes;
-            let (a, b) = (x.load_rest::<I, C>(start)?, y.load_rest::<I, C>(start)?);
-            add_terms::<I, C, A>(lanes, &singles(a), &singles(b))?;
-            let rest = count - start;
-            lanes[rest..].copy_from_slice(&old[rest..]);
-        }
+    // Value `full + i` adds into lane `i`. The values past the last part add
+    // in whole chunks of `C`, 8, and 4 values, and then one at a time, so no
+    // lane takes a padding term. A padding term of +0 can change a lane: a
+    // fused step can make a lane -0, and -0 plus +0 is +0.
+    let rest = count - full;
+    let mut offset = add_chunks::<I, N, C, A>(lanes, x, y, full, 0, rest)?;
+    if C > 8 {
+        offset = add_chunks::<I, N, 8, A>(lanes, x, y, full, offset, rest)?;
+    }
+    if C > 4 {
+        offset = add_chunks::<I, N, 4, A>(lanes, x, y, full, offset, rest)?;
+    }
+    if C > 1 {
+        add_chunks::<I, N, 1, A>(lanes, x, y, full, offset, rest)?;
     }
     Some(())
+}
+
+/// Adds the term of each pair of values from `full + offset` into its lane
+/// from `offset`, `C` lanes at a time, while `C` of the `rest` values past
+/// `full` are left. Returns the offset of the first value left.
+#[inline]
+fn add_chunks<I: Isa, const N: usize, const C: usize, A: Accumulation>(
+    lanes: &mut [f32; N],
+    x: impl Load,
+    y: impl Load,
+    full: usize,
+    mut offset: usize,
+    rest: usize,
+) -> Option<usize> {
+    while offset + C <= rest {
+        let start = full + offset;
+        let (a, b) = (x.load::<I, C>(start)?, y.load::<I, C>(start)?);
+        add_terms::<I, C, A>(chunk_mut(lanes, offset), &singles(a), &singles(b))?;
+        offset += C;
+    }
+    Some(offset)
 }
 
 /// Returns binary32 encodings as host values.

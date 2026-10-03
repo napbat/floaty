@@ -43,7 +43,7 @@ use super::environment::{self, packed};
 use super::paths::{ready_for, ready_for_arithmetic, ready_for_integral};
 use super::{Isa, Kind, Operation};
 use crate::env::{Env, Mode};
-use crate::float::Float;
+use crate::float::{Float, FloatType};
 use crate::format::Standard;
 use crate::format::internal::MinMax;
 use crate::host::Host;
@@ -547,67 +547,55 @@ pub fn convert<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     convert_lanes::<Build, S, W, M, N>(value, to)
 }
 
-/// Converts the values of `values` to the host kind `to` as `convert` does,
-/// `N` at a time, with one check of the environment for the call, in the
-/// instruction set that `dispatch` selects. Calls `each` with the index of
-/// the first value of each full chunk and its encodings, or `None` for a
-/// chunk that holds a NaN. Returns `None`, and calls `each` for no chunk,
-/// when the path does not apply. The values after the last full chunk are
-/// left to the caller.
+/// Converts each value of `values` to the float type `T`, whose format is a
+/// host kind, into the same index of `out`, as `convert` does, `N` values at
+/// a time, with one check of the environment for the call, in the
+/// instruction set that `dispatch` selects. A chunk that holds a NaN goes to
+/// `fallback`. Returns `None`, and writes nothing, when the path does not
+/// apply. The values after the last full chunk are left to the caller.
+/// `out` holds as many values as `values`.
 #[inline]
-pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, T: FloatType, const N: usize>(
     values: &[Float<S, W, M>],
-    to: Host,
+    out: &mut [T],
     env: &Env,
-    each: impl FnMut(usize, Option<[u64; N]>),
+    fallback: impl FnMut(&[Float<S, W, M>], &mut [T]),
 ) -> Option<()> {
-    if !ready_for(to, env, to.precision()) {
+    if !ready_for(T::HOST, env, T::HOST.precision()) {
         return None;
     }
-    dispatch::convert_chunks::<S, W, M, N>(values, to, each);
+    dispatch::convert_chunks::<S, W, M, T, N>(values, out, fallback);
     Some(())
 }
 
-/// Calls `each` for each full chunk as `convert_chunks` does, in the
-/// instruction set `I`, in an environment that allows the path. The match
-/// on `to` comes before `in_chunks_with`, so the loop of each kind runs
-/// with the features of `I` and the conversion of its kind alone.
+/// Converts the full chunks as `convert_chunks` does, in the instruction
+/// set `I`, in an environment that allows the path. The loop runs with the
+/// features of `I`, and the conversion and the store of each chunk run in
+/// the loop: a call for each chunk would pass the encodings through memory.
+/// `T::HOST` is a constant, so the loop has the conversion of one kind.
 #[inline]
-fn convert_chunks_on<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+fn convert_chunks_on<
+    I: Isa,
+    S: Standard<W>,
+    const W: usize,
+    M: Mode,
+    T: FloatType,
+    const N: usize,
+>(
     values: &[Float<S, W, M>],
-    to: Host,
-    each: impl FnMut(usize, Option<[u64; N]>),
-) {
-    match to {
-        Host::Single => in_chunks_with::<I, S, W, M, N>(values, each, |chunk| {
-            convert_lanes::<I, S, W, M, N>(chunk, Host::Single)
-        }),
-        Host::Double => in_chunks_with::<I, S, W, M, N>(values, each, |chunk| {
-            convert_lanes::<I, S, W, M, N>(chunk, Host::Double)
-        }),
-        Host::Half => in_chunks_with::<I, S, W, M, N>(values, each, |chunk| {
-            convert_lanes::<I, S, W, M, N>(chunk, Host::Half)
-        }),
-        Host::BFloat => in_chunks_with::<I, S, W, M, N>(values, each, |chunk| {
-            convert_lanes::<I, S, W, M, N>(chunk, Host::BFloat)
-        }),
-        Host::Extended | Host::Quad | Host::None => {
-            in_chunks_with::<I, S, W, M, N>(values, each, |_| None);
-        }
-    }
-}
-
-/// Calls `each` with the index of the first value of each full chunk of
-/// `values` and `convert` of the chunk, with the features of `I`.
-#[inline]
-fn in_chunks_with<I: Isa, S: Standard<W>, const W: usize, M: Mode, const N: usize>(
-    values: &[Float<S, W, M>],
-    mut each: impl FnMut(usize, Option<[u64; N]>),
-    convert: impl Fn(&[Float<S, W, M>; N]) -> Option<[u64; N]>,
+    out: &mut [T],
+    mut fallback: impl FnMut(&[Float<S, W, M>], &mut [T]),
 ) {
     I::run(move || {
-        for (index, chunk) in values.as_chunks::<N>().0.iter().enumerate() {
-            each(index * N, convert(chunk));
+        let chunks = values.as_chunks::<N>().0.iter();
+        for (chunk, out) in chunks.zip(out.as_chunks_mut::<N>().0) {
+            match convert_lanes::<I, S, W, M, N>(chunk, T::HOST) {
+                Some(bits) => out
+                    .iter_mut()
+                    .zip(bits)
+                    .for_each(|(result, bits)| *result = T::from_host([bits, 0])),
+                None => fallback(chunk, out),
+            }
         }
     });
 }
