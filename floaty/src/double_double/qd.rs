@@ -9,7 +9,8 @@
 //! in `dd_real::accurate_div`, the remainder `drem` as the shim inlines it in
 //! `run_remainder`, and the square root in `sqrt(const dd_real&)` and the
 //! truncated remainder in `fmod(const dd_real&, const dd_real&)` of
-//! `dd_real.o` in `libqd.a`. The comments give the instruction offsets.
+//! `dd_real.o` in `libqd.a`. `sqr` and `inv` follow `qd_unary.cpp`.
+//! The comments give the instruction offsets.
 //!
 //! The compiler keeps the arithmetic of the source, but it swaps the operands
 //! of some additions, and x86 returns the NaN of the first operand. A comment
@@ -118,6 +119,20 @@ pub fn mul<B: Behavior>(steps: &mut Steps<B>, (a0, a1): Pair, (b0, b1): Pair) ->
     (high, steps.sub(p2, bb)) // 0x18e
 }
 
+/// `sqr(dd_real)` as `floaty_qd_sqr` inlines it in `qd_unary.cpp`.
+pub fn sqr<B: Behavior>(steps: &mut Steps<B>, (a0, a1): Pair) -> Pair {
+    let p = steps.mul(a0, a0); // 0xcc
+    let e = steps.fused_add(a0, a0, -p); // 0xd9 xorpd; 0xe7 call fma
+    let doubled = steps.add(a0, a0); // 0x102: 2.0 * a0, compiled as a0 + a0
+    let cross = steps.mul(doubled, a1); // 0x106
+    let low_square = steps.mul(a1, a1); // 0x10a
+    let p2 = steps.add(cross, e); // 0x10e, swapped: p2 += cross
+    let p2 = steps.add(p2, low_square); // 0x112
+    let high = steps.add(p2, p); // 0x11a, swapped: p + p2
+    let bb = steps.sub(high, p); // 0x128
+    (high, steps.sub(p2, bb)) // 0x12c
+}
+
 /// `dd_real * double` for `b * q` in `accurate_div`: `two_prod(b0, q)` and
 /// `p2 += b1 * q`, renormalized.
 fn mul_double<B: Behavior>(steps: &mut Steps<B>, (b0, b1): Pair, q: F64) -> Pair {
@@ -155,6 +170,12 @@ pub fn div<B: Behavior>(steps: &mut Steps<B>, a: Pair, b: Pair) -> Pair {
     let high = steps.add(s, s2); // 0x280
     let bb = steps.sub(high, s); // 0x28d
     (high, steps.sub(s2, bb)) // 0x291
+}
+
+/// `inv(dd_real)` calls `accurate_div` with the numerator `(1, +0)`.
+/// `floaty_qd_inv` in `qd_unary.cpp` makes that call at 0x24e.
+pub fn inv<B: Behavior>(steps: &mut Steps<B>, a: Pair) -> Pair {
+    div(steps, (F64::from_bits(ONE), F64::from_bits(0)), a)
 }
 
 /// `sqrt(dd_real)`, by Karp's method (`_Z4sqrtRK7dd_real` of `dd_real.o`).

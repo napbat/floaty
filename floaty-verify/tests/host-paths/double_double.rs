@@ -1,4 +1,4 @@
-//! The operators and `sqrt` of the double-double algorithms.
+//! The operators and unary methods of the double-double algorithms.
 
 use floaty::{DoubleDouble, F64, Gcc, Qd};
 use floaty_verify::random::SplitMix64;
@@ -22,10 +22,23 @@ fn double_double_operators_match<Alg: floaty::Algorithm>(pairs: &[(F64, F64)]) {
     }
 }
 
+/// Checks that QD's square and inverse give their `_with` results under the
+/// default mode.
+fn qd_unary_methods_match(pairs: &[(F64, F64)]) {
+    let bits = |value: DoubleDouble<Qd>| (value.hi().to_bits(), value.lo().to_bits());
+    let env = DoubleDouble::<Qd>::ENV;
+    for &(hi, lo) in pairs {
+        let x = DoubleDouble::<Qd>::from_parts(hi, lo);
+        assert_eq!(bits(x.sqr()), bits(x.sqr_with(env).0), "{x:?} sqr");
+        assert_eq!(bits(x.inv()), bits(x.inv_with(env).0), "{x:?} inv");
+    }
+}
+
 #[test]
 fn double_double_operators_give_the_default_mode_results() {
     let mut random = SplitMix64::new(0xDD00);
     let pairs = double_double_pairs(&mut random);
     double_double_operators_match::<Qd>(&pairs);
     double_double_operators_match::<Gcc>(&pairs);
+    qd_unary_methods_match(&pairs);
 }
