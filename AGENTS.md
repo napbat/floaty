@@ -88,7 +88,8 @@ run all of these from the workspace root:
 ```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
-cargo test --workspace --no-fail-fast
+cargo nextest run --workspace --no-fail-fast
+cargo test --workspace --doc
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo +1.89 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
 ```
@@ -101,24 +102,35 @@ Each build with its own flags keeps its own target directory.
 ```text
 export V3="-C target-cpu=x86-64-v3" ENGINE="--cfg floaty_engine_only" FP16="-C target-feature=+fp16,+bf16"
 RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
-RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo test --workspace --no-fail-fast
+RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo nextest run --workspace --no-fail-fast
+RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo test --workspace --doc
 RUSTFLAGS="$V3" CARGO_TARGET_DIR=target/x86-64-v3 cargo +1.89 clippy -p floaty --all-targets -- -D warnings -D clippy::pedantic
 RUSTFLAGS="$ENGINE" CARGO_TARGET_DIR=target/engine-only cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
-RUSTFLAGS="$ENGINE" CARGO_TARGET_DIR=target/engine-only cargo test --workspace --no-fail-fast
+RUSTFLAGS="$ENGINE" CARGO_TARGET_DIR=target/engine-only cargo nextest run --workspace --no-fail-fast
+RUSTFLAGS="$ENGINE" CARGO_TARGET_DIR=target/engine-only cargo test --workspace --doc
 cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
-cargo test --workspace --no-fail-fast --target aarch64-unknown-linux-gnu
+cargo nextest run --workspace --no-fail-fast --target aarch64-unknown-linux-gnu
+cargo test --workspace --doc --target aarch64-unknown-linux-gnu
 cargo +1.89 clippy -p floaty --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
-RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo test --workspace --no-fail-fast --target aarch64-unknown-linux-gnu
+RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo nextest run --workspace --no-fail-fast --target aarch64-unknown-linux-gnu
+RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo test --workspace --doc --target aarch64-unknown-linux-gnu
 RUSTFLAGS="$FP16" CARGO_TARGET_DIR=target/aarch64-fp16 cargo +1.89 clippy -p floaty --all-targets --target aarch64-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 cargo clippy --workspace --all-targets --target i686-unknown-linux-gnu -- -D warnings -D clippy::pedantic
-cargo test --workspace --no-fail-fast --target i686-unknown-linux-gnu
+cargo nextest run --workspace --no-fail-fast --target i686-unknown-linux-gnu
+cargo test --workspace --doc --target i686-unknown-linux-gnu
 cargo +1.89 clippy -p floaty --all-targets --target i686-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 cargo clippy --workspace --all-targets --target s390x-unknown-linux-gnu -- -D warnings -D clippy::pedantic
-cargo test --workspace --no-fail-fast --target s390x-unknown-linux-gnu
+cargo nextest run --workspace --no-fail-fast --target s390x-unknown-linux-gnu
+cargo test --workspace --doc --target s390x-unknown-linux-gnu
 cargo +1.89 clippy -p floaty --all-targets --target s390x-unknown-linux-gnu -- -D warnings -D clippy::pedantic
 ```
 
+- Install cargo-nextest once:
+  `cargo install cargo-nextest --version 0.9.146 --locked`. nextest runs
+  each test in its own process, and runs the tests of all binaries at the
+  same time. nextest does not run doctests, so each build also runs
+  `cargo test --doc`.
 - Install the minimum-version toolchain once:
   `rustup toolchain install 1.89 --profile minimal --component clippy`.
 - Install the AArch64, i686, and s390x targets once for both toolchains:
@@ -153,8 +165,9 @@ cargo +1.89 clippy -p floaty --all-targets --target s390x-unknown-linux-gnu -- -
   `--workspace`.
 - Keep the submodules under `floaty-verify/reference/`, the pinned archives
   in `floaty-verify/build/`, the pinned compilers, the pinned PowerPC C
-  library, and the pinned QEMU at their pinned releases. Make a change of
-  release in its own commit, and state the reason in the commit message.
+  library, the pinned QEMU, and the pinned cargo-nextest at their pinned
+  releases. Make a change of release in its own commit, and state the
+  reason in the commit message.
 - Run the long exhaustive sweeps with
   `cargo test -p floaty-verify --release -- --ignored`.
 - Measure performance with `cargo bench -p floaty-verify --bench operations`

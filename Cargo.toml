@@ -42,5 +42,8 @@ all = { level = "deny", priority = -1 }
 
 # The verification harness runs millions of oracle comparisons in the normal
 # test run. Optimize it, and the floaty code it instantiates, in test builds.
+# Keep only the line tables of the debug information. Backtraces keep their
+# files and lines, and the build of the harness uses about a fifth less time.
 [profile.dev.package.floaty-verify]
 opt-level = 3
+debug = "line-tables-only"
