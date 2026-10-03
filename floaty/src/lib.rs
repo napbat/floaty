@@ -48,6 +48,7 @@ pub mod format;
 mod binary;
 mod decimal;
 mod double_double;
+mod elementary;
 mod exact;
 mod float;
 mod host;

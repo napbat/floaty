@@ -13,12 +13,14 @@ use crate::encodings::Layout;
 use super::algebraic;
 use super::augmented::{self, Augmentation};
 use super::compare::{self, MinMax};
+use super::elementary::{self, Function};
 use super::integral::{self, IntegerValue, to_int_value};
 use super::payload::{self, Payload};
 use super::{
     Direction, Outcome, Sample, next, outcome, remainder, scale_b, truncated_remainder, with_sign,
 };
-use crate::mpfr::{Format, Specials};
+use crate::mpfr::decimal::{DecimalFormat, DecimalValue};
+use crate::mpfr::{Format, Operand, Specials};
 
 /// A floaty value, and its sample for the oracle.
 pub struct Case<S: Standard<W>, const W: usize> {
@@ -353,6 +355,58 @@ pub fn check_reciprocal_sqrt<S: Standard<W>, const W: usize>(
         &algebraic::reciprocal_sqrt(&x.sample.operand, format, env),
         &|| format!("reciprocal_sqrt {:?} {env:?}", x.value),
     );
+}
+
+/// Checks `exp_with` and `log_with` on one value.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_elementary<S: Standard<W>, const W: usize>(
+    x: Float<S, W>,
+    format: &Format,
+    env: &Env,
+) {
+    let operand = Operand::<8>::of(x);
+    for function in Function::ALL {
+        let ours = match function {
+            Function::Exp => x.exp_with(*env),
+            Function::Log => x.log_with(*env),
+        };
+        check_float(
+            ours,
+            &elementary::expected(function, &operand, format, env),
+            &|| format!("{function:?} {x:?} {env:?}"),
+        );
+    }
+}
+
+/// Checks `exp_with` and `log_with` on one value of a decimal format.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_decimal_elementary<S: Standard<W>, const W: usize>(
+    x: Float<S, W>,
+    format: DecimalFormat,
+    env: &Env,
+) {
+    let operand = Operand::<2>::of(x);
+    for function in Function::ALL {
+        let (result, flags) = match function {
+            Function::Exp => x.exp_with(*env),
+            Function::Log => x.log_with(*env),
+        };
+        assert!(
+            result.is_canonical(),
+            "{function:?} {x:?} {env:?}: {result:?} is canonical"
+        );
+        assert_eq!(
+            (DecimalValue::from_decoded(result.decode::<2>()), flags),
+            elementary::expected_decimal(function, &operand, format, env),
+            "{function:?} {x:?} {env:?}"
+        );
+    }
 }
 
 /// The exponents of the `pown` and `rootn` checks: every `n` up to 66 in

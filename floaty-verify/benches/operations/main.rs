@@ -15,13 +15,14 @@
 //! A second table measures other operations and operands with the mode of
 //! the type: the remainder of close and of distant operands, conversions to
 //! binary32, binary16, x87 extended, and decimal64 and from `i64`, additions
-//! of subnormal operands and of a zero, and the comparison and the minimum of
-//! two operands. A third table measures the double-double types, and a
-//! fourth the operations of `Lanes` in nanoseconds per lane. A fifth table,
-//! in [`kernels`], measures the slice kernels of `Lanes` in nanoseconds per
-//! vector, and a sixth, in [`elementwise`], its elementwise slice
-//! operations. On x86-64, a seventh table compares the decimal formats with
-//! the Intel decimal library for BID and with decNumber for DPD.
+//! of subnormal operands and of a zero, the comparison and the minimum of
+//! two operands, and `exp` and `log`. A third table measures the
+//! double-double types, and a fourth the operations of `Lanes` in
+//! nanoseconds per lane. A fifth table, in [`kernels`], measures the slice
+//! kernels of `Lanes` in nanoseconds per vector, and a sixth, in
+//! [`elementwise`], its elementwise slice operations. On x86-64, a seventh
+//! table compares the decimal formats with the Intel decimal library for BID
+//! and with decNumber for DPD.
 
 mod elementwise;
 mod kernels;
@@ -101,10 +102,10 @@ const COLUMNS: Table<16> = Table {
 };
 
 /// The operations of the second table, in column order.
-const OTHER_COLUMNS: Table<11> = Table {
+const OTHER_COLUMNS: Table<13> = Table {
     columns: [
         "rem", "rem_far", "to_f32", "to_f16", "to_f80", "to_d64", "from_i64", "add_tiny",
-        "add_zero", "cmp", "min",
+        "add_zero", "cmp", "min", "exp", "log",
     ],
 };
 
@@ -301,6 +302,7 @@ fn other_row<S: Standard<W>, const W: usize>(name: &str, seed: u64) {
             .collect()
     };
     let (tiny_a, tiny_b) = (tiny(&a), tiny(&b));
+    let roots = positive(&a);
     let zero = zero::<S, W>();
     let pairs = |left: &[Float<S, W>],
                  right: &[Float<S, W>],
@@ -351,6 +353,16 @@ fn other_row<S: Standard<W>, const W: usize>(name: &str, seed: u64) {
             }
         })),
         Some(pairs(&a, &b, Float::minimum)),
+        Some(measure(|| {
+            for &x in &a {
+                black_box(black_box(x).exp());
+            }
+        })),
+        Some(measure(|| {
+            for &x in &roots {
+                black_box(black_box(x).log());
+            }
+        })),
     ];
     OTHER_COLUMNS.row(name, times);
 }

@@ -8,6 +8,7 @@ mod arithmetic;
 mod augmented;
 mod compare;
 mod convert;
+mod elementary;
 mod from_decimal;
 mod integral;
 mod payload;
@@ -637,6 +638,20 @@ where
     fn sqrt<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
         let env = behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::sqrt(value.to_limbs(), behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn exp<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = behavior.env();
+        let (bits, flags) = Layout::<E, Enc, W>::exp(value.to_limbs(), behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn log<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = behavior.env();
+        let (bits, flags) = Layout::<E, Enc, W>::log(value.to_limbs(), behavior);
         let bits = Layout::<E, Enc, W>::saturated(bits, &env);
         (Self::Bits::from_limbs(bits), flags)
     }

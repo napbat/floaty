@@ -10,6 +10,7 @@ mod compare;
 mod convert;
 mod declet;
 mod digits;
+mod elementary;
 mod integral;
 mod payload;
 mod round;
@@ -329,6 +330,16 @@ where
 
     fn sqrt<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
         let (bits, flags) = DecimalLayout::<Enc, W>::sqrt(value.to_limbs(), behavior);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn exp<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = DecimalLayout::<Enc, W>::exp(value.to_limbs(), behavior);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn log<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = DecimalLayout::<Enc, W>::log(value.to_limbs(), behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 

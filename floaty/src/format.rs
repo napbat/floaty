@@ -117,6 +117,14 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     #[doc(hidden)]
     fn sqrt<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
 
+    /// Returns `e^value`, correctly rounded.
+    #[doc(hidden)]
+    fn exp<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
+
+    /// Returns `ln value`, correctly rounded.
+    #[doc(hidden)]
+    fn log<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
+
     /// Returns `left * right + addend`, rounded once.
     #[doc(hidden)]
     fn mul_add<B: Behavior>(
@@ -190,7 +198,7 @@ pub trait Bits: Sealed + LimbConversion + Copy + Eq + Hash + Debug {}
 pub(crate) mod internal {
     //! Conversions and operation selectors that only the engine uses.
 
-    use crate::limbs::Widen;
+    use crate::elementary::Elementary;
 
     /// A minimum or maximum operation.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -308,8 +316,9 @@ pub(crate) mod internal {
 
     /// Converts a storage type to and from the limbs that the engine uses.
     pub trait LimbConversion: Sized {
-        /// The limb array that the engine computes on.
-        type Limbs: Widen;
+        /// The limb array that the engine computes on. Its working widths
+        /// for the elementary functions are twice and four times its width.
+        type Limbs: Elementary;
 
         /// Converts the storage value to limbs.
         fn to_limbs(self) -> Self::Limbs;
