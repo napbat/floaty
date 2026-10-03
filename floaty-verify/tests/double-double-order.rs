@@ -13,7 +13,7 @@
 
 use core::cmp::Ordering;
 
-use floaty::{Class, DoubleDouble, Env, F64, Flags, Gcc, Qd};
+use floaty::{Class, DoubleDouble, Env, F64, Flags, Gcc, Qd, TotalOrder};
 use floaty_verify::double_double::reference::Pair;
 use floaty_verify::double_double::{Exact, behaviors, exact, is_infinite, is_nan, pair};
 use floaty_verify::random::SplitMix64;
@@ -184,10 +184,11 @@ fn rank(value: &Exact) -> (u8, Rational) {
     }
 }
 
-/// Returns the expected total order of two pairs: the IEEE 754 `totalOrder`
-/// of their exact values, then the binary64 total order of the high halves
-/// and of the low halves.
-fn expected_order(a: (u64, u64), b: (u64, u64)) -> Ordering {
+/// Returns the expected total orders of two pairs: the IEEE 754
+/// `totalOrder` of their exact values for `TotalOrder::Datum`, then the
+/// binary64 total order of the high halves and of the low halves for
+/// `TotalOrder::Encoding`.
+fn expected_orders(a: (u64, u64), b: (u64, u64)) -> (Ordering, Ordering) {
     let (first, second) = (exact(Pair::new(a.0, a.1)), exact(Pair::new(b.0, b.1)));
     let by_value = match (first.negative(), second.negative()) {
         (true, false) => Ordering::Less,
@@ -198,9 +199,10 @@ fn expected_order(a: (u64, u64), b: (u64, u64)) -> Ordering {
         }
     };
     let halves = |x: u64, y: u64| F64::from_bits(x).total_cmp(F64::from_bits(y));
-    by_value
+    let by_encoding = by_value
         .then_with(|| halves(a.0, b.0))
-        .then_with(|| halves(a.1, b.1))
+        .then_with(|| halves(a.1, b.1));
+    (by_value, by_encoding)
 }
 
 /// Returns a pair and a second pair: random, or with the high half of the
@@ -223,21 +225,29 @@ fn two_pairs(random: &mut SplitMix64) -> ((u64, u64), (u64, u64)) {
 }
 
 #[test]
-fn the_total_order_orders_values_then_halves() {
+fn the_total_order_orders_values_then_halves_by_its_rule() {
     let mut random = SplitMix64::new(0xDD_707A);
     for _ in 0..100_000 {
         let (a, b) = two_pairs(&mut random);
-        let expected = expected_order(a, b);
+        let (datum, encoding) = expected_orders(a, b);
         let context = format!("{a:x?} {b:x?}");
+        let (x, y) = (value(a.0, a.1), value(b.0, b.1));
+        // The default mode of `Gcc` and of `Qd` orders by `TotalOrder::Datum`.
+        assert_eq!(x.total_cmp(y), datum, "{context}");
         assert_eq!(
-            value(a.0, a.1).total_cmp(value(b.0, b.1)),
-            expected,
+            x.total_cmp_with(y, TotalOrder::Encoding),
+            encoding,
             "{context}"
         );
         let qd = |pair: (u64, u64)| {
             DoubleDouble::<Qd>::from_parts(F64::from_bits(pair.0), F64::from_bits(pair.1))
         };
-        assert_eq!(qd(b).total_cmp(qd(a)), expected.reverse(), "{context}: Qd");
+        assert_eq!(qd(b).total_cmp(qd(a)), datum.reverse(), "{context}: Qd");
+        assert_eq!(
+            qd(b).total_cmp_with(qd(a), TotalOrder::Encoding),
+            encoding.reverse(),
+            "{context}: Qd"
+        );
     }
 }
 
@@ -270,7 +280,8 @@ macro_rules! check_min_max {
                 (a, flags)
             }
         } else {
-            let order = expected_order(a, b);
+            // Two pairs of one value order by their halves.
+            let (_, order) = expected_orders(a, b);
             let order = if $magnitude {
                 rank(&first).cmp(&rank(&second)).then(order)
             } else {

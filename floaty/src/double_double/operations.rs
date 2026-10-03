@@ -14,7 +14,7 @@ use core::cmp::Ordering;
 
 use super::value::{Magnitude, order_values};
 use super::{Algorithm, DoubleDouble, Pair, Qd, convert};
-use crate::env::{Behavior, Env, Flags, Mode, Override, Rounding};
+use crate::env::{Behavior, Env, Flags, Mode, Override, Rounding, TotalOrder};
 use crate::exact::{self, Unrounded};
 use crate::float::{Decoded, F64};
 use crate::format::internal::{MinMax, Step};
@@ -150,8 +150,10 @@ macro_rules! min_max {
         #[doc = concat!("Returns ", $summary, ", and the flags.")]
         ///
         /// The operands order by their exact values, and `-0` orders below
-        /// `+0`. Two pairs of one value order by
-        /// [`total_cmp`](Self::total_cmp). A magnitude operation first orders
+        /// `+0`. Two pairs of one value order by their halves, as
+        /// [`total_cmp_with`](Self::total_cmp_with) with
+        /// [`TotalOrder::Encoding`](crate::TotalOrder::Encoding) orders them,
+        /// whatever the behavior. A magnitude operation first orders
         /// the magnitudes of the exact values. The result is an operand as it
         /// is, or a NaN with a `+0` low half. That NaN, and the flags, are
         /// those of the binary64 operation on the halves that hold the NaNs,
@@ -358,7 +360,7 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
             let number = if first.is_nan() { other } else { self };
             return (number, flags);
         }
-        let order = self.total_cmp(other);
+        let order = self.total_cmp_with(other, TotalOrder::Encoding);
         let order = if operation.is_magnitude() {
             order_values(&first.abs(), &second.abs()).then(order)
         } else {

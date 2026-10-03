@@ -3,7 +3,7 @@
 
 use core::fmt::{self, Debug, Formatter};
 use core::num::NonZeroU32;
-use core::ops::{BitOr, BitOrAssign};
+use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign};
 
 use crate::sealed::Sealed;
 
@@ -536,6 +536,22 @@ impl Flags {
         Self(self.0 | other.0)
     }
 
+    /// Returns the flags that both values have.
+    ///
+    /// ```
+    /// use floaty::Flags;
+    ///
+    /// let raised = Flags::OVERFLOW | Flags::INEXACT | Flags::ROUNDED_UP;
+    /// let ieee = Flags::INVALID | Flags::OVERFLOW | Flags::INEXACT;
+    /// assert_eq!(raised.intersection(ieee), Flags::OVERFLOW | Flags::INEXACT);
+    /// assert_eq!(raised & Flags::TINY, Flags::NONE);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
     /// Returns the flags of `self` that are not in `other`.
     #[must_use]
     #[inline]
@@ -557,6 +573,22 @@ impl BitOrAssign for Flags {
     #[inline]
     fn bitor_assign(&mut self, other: Self) {
         *self = self.union(other);
+    }
+}
+
+impl BitAnd for Flags {
+    type Output = Self;
+
+    #[inline]
+    fn bitand(self, other: Self) -> Self {
+        self.intersection(other)
+    }
+}
+
+impl BitAndAssign for Flags {
+    #[inline]
+    fn bitand_assign(&mut self, other: Self) {
+        *self = self.intersection(other);
     }
 }
 

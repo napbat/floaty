@@ -479,9 +479,15 @@ functions of glibc 2.43 on canonical pairs: `logbl`, `copysignl`, `ilogbl`,
 `scalbnl`, `llrintl`, `lroundl`, the ten minimum and maximum functions,
 `totalorderl`, and `totalordermagl`. glibc reads the halves, so it differs
 from floaty in five cases, which the tests record: the sign of a zero low
-half, the low half of a NaN or an infinity, the order of two pairs of one
-value, a scaled value outside the normal range, and an extra inexact flag
-of `rintl`, and of `llrintl` and `lroundl` out of range.
+half, the low half of a NaN or an infinity, the minimum and maximum of two
+pairs of one value, a scaled value outside the normal range, and an extra
+inexact flag of `rintl`, and of `llrintl` and `lroundl` out of range.
+
+`total_cmp` follows the `TotalOrder` of the default mode, `Datum`, so two
+pairs of one value, such as `(1, 0)` and `(2, -1)`, are equal, as
+`totalorderl` treats two canonical pairs of one value. `total_cmp_with`
+and `TotalOrder::Encoding` order such pairs by their halves, as the minimum
+and maximum operations do.
 
 An exact value rounds to a pair in two steps: the high half is the value
 rounded to nearest even, and the low half is the rest rounded in the
