@@ -1,4 +1,4 @@
-//! Compares `DoubleDouble<Qd>::sqr` and `inv` with QD 2.3.24.
+//! Compares `DoubleDouble<Qd>::sqr`, `inv`, and `npwr` with QD 2.3.24.
 //!
 //! Each case checks both halves and the five IEEE flags in every rounding
 //! direction. QD also runs with FTZ, DAZ, and both MXCSR bits set.
@@ -86,6 +86,135 @@ fn operands() -> Vec<Pair> {
     pairs.extend((0..4_000).map(|_| operand(&mut random)));
     pairs.extend((0..4_000).map(|_| pair(&mut random)));
     pairs
+}
+
+/// Exponents at the edges of QD's binary exponentiation: 0, 1, small
+/// powers, powers of two and their neighbors, and the largest magnitudes
+/// that QD's `npwr` returns for.
+const EXPONENTS: [i32; 27] = [
+    0,
+    1,
+    -1,
+    2,
+    -2,
+    3,
+    -3,
+    4,
+    5,
+    -5,
+    7,
+    8,
+    -8,
+    15,
+    16,
+    31,
+    -31,
+    64,
+    100,
+    -100,
+    1023,
+    1024,
+    -1075,
+    1 << 30,
+    -(1 << 30),
+    i32::MAX,
+    -i32::MAX,
+];
+
+/// Returns a pair near 1 in magnitude, whose powers stay finite for longer.
+fn near_one(random: &mut SplitMix64) -> Pair {
+    let field = 1022 + random.below(2);
+    let sign = random.next_u64() & (1 << 63);
+    let hi = sign | field << 52 | (random.next_u64() & ((1 << 52) - 1));
+    let low_field = field - 54 - random.below(4);
+    let lo = (random.next_u64() & 0x800F_FFFF_FFFF_FFFF) | low_field << 52;
+    Pair::new(hi, lo)
+}
+
+/// Returns the operands of the integer power: the edge pairs, pairs near 1,
+/// and random pairs.
+fn power_operands() -> Vec<Pair> {
+    let mut random = SplitMix64::new(0x0DD5_0456);
+    let mut pairs: Vec<Pair> = operands().into_iter().take(256).collect();
+    pairs.extend((0..400).map(|_| near_one(&mut random)));
+    pairs.extend((0..400).map(|_| operand(&mut random)));
+    pairs
+}
+
+#[test]
+fn qd_integer_power_matches_qd() {
+    qd::check_host_fma();
+    let mut failures = Vec::new();
+    let mut count = 0;
+    for pair in power_operands() {
+        let x = value(pair);
+        for n in EXPONENTS {
+            for rounding in Rounding::ALL {
+                let flush = [(false, false)].into_iter().chain(qd::FLUSH_SETTINGS);
+                for (ftz, daz) in flush {
+                    let ours = outcome(x.npwr_with(n, sse_env(rounding.into(), ftz, daz)));
+                    let theirs = qd::with_flush(ftz, daz, || qd::npwr(pair, n, rounding));
+                    count += 1;
+                    if ours != theirs && failures.len() < 40 {
+                        failures.push(format!(
+                            "npwr {pair:?} {n} {rounding:?} FTZ {ftz} DAZ {daz}: floaty \
+                             {ours:?}, QD {theirs:?}"
+                        ));
+                    }
+                }
+            }
+            let theirs = qd::npwr(pair, n, Rounding::TiesToEven).result;
+            if pair_of(x.npwr(n)) != theirs && failures.len() < 40 {
+                failures.push(format!("npwr {pair:?} {n} default mode"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(count, 1_056 * 27 * 4 * 4);
+}
+
+// Conflict: QD 2.3.24 `src/dd_real.cpp`, line 138, computes
+// `int N = std::abs(n)`, which is undefined for INT_MIN. g++ 15.2.0 compiles
+// the halving as `sar` (`npwr` at 0x934), so the count stays at -1 and the
+// call never returns. Resolution: floaty takes the magnitude 2^31, as the
+// source intends. The oracle is the source loop with an unsigned magnitude,
+// compiled in the shim with the inline operators of QD. The test first
+// checks that loop against the library for every other nonzero exponent.
+#[test]
+fn qd_integer_power_of_int_min_follows_the_qd_source_loop() {
+    qd::check_host_fma();
+    let pairs = power_operands();
+    let mut failures = Vec::new();
+    for &pair in &pairs {
+        for n in EXPONENTS.into_iter().filter(|&n| n != 0) {
+            for rounding in Rounding::ALL {
+                let library = qd::npwr(pair, n, rounding);
+                let source_loop = qd::npwr_magnitude(pair, n, rounding);
+                if library != source_loop && failures.len() < 40 {
+                    failures.push(format!(
+                        "source loop {pair:?} {n} {rounding:?}: {source_loop:?}, library \
+                         {library:?}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    for &pair in &pairs {
+        let x = value(pair);
+        for rounding in Rounding::ALL {
+            let env = Env::X86_SSE.with_rounding(rounding.into());
+            let ours = outcome(x.npwr_with(i32::MIN, env));
+            let theirs = qd::npwr_magnitude(pair, i32::MIN, rounding);
+            if ours != theirs && failures.len() < 40 {
+                failures.push(format!(
+                    "npwr {pair:?} i32::MIN {rounding:?}: floaty {ours:?}, QD source loop \
+                     {theirs:?}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[test]

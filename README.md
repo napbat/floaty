@@ -452,7 +452,7 @@ returns the flags of every step.
 | `+`, `-`, `*`, `/` | libgcc `__gcc_qadd` and the others | `dd_real` operators |
 | `sqrt`, `remainder`, `%` | glibc 2.43 `sqrtl`, `remainderl`, `fmodl` | QD `sqrt`, `drem`, `fmod` |
 | `mul_add`, `next_up`, `next_down` | glibc 2.43 `fmal`, `nextupl`, `nextdownl` | none: QD has no such function |
-| `sqr`, `inv` | none: these are QD operations | QD `sqr`, `inv` |
+| `sqr`, `inv`, `npwr` | none: these are QD operations | QD `sqr`, `inv`, `npwr` |
 | Conversions, integer conversions, `scale_b`, `log_b`, `round_to_integral`, `copy_sign`, classification, total order, minimum and maximum | the exact value `hi + lo`, by floaty's rule. For canonical pairs, glibc 2.43 matches except for the cases listed below. | the same |
 | `payload`, `from_payload`, `from_payload_signaling` | IEEE 754-2019 section 9.7, on the exact value, with 51 payload bits | the same |
 
@@ -460,6 +460,10 @@ The payload operations ignore the mode and give a +0 low half.
 The constructors accept exact integral payloads, including noncanonical pairs.
 `from_payload` accepts +0. `from_payload_signaling` rejects zero.
 Both constructors reject -0, negative values, fractions, and values at or above `2^51`.
+
+QD's `npwr` takes `std::abs(n)`, which is undefined for `INT_MIN`, and its
+compiled loop never returns for that exponent. For `i32::MIN`, floaty's
+`npwr` takes the magnitude 2^31, as the source of QD intends.
 
 `floaty-verify` checks the rule of the operations on the exact value with
 exact rationals and MPFR. It also compares them with the IBM `long double`
