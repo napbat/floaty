@@ -227,4 +227,8 @@ unsigned floaty_qd_sqrt(const std::uint64_t *a, int rounding, std::uint64_t *res
   return run(Operation::sqrt, a, a, rounding, result);
 }
 
+/* Metadata lives outside the machine-code sections of the arithmetic oracle. */
+extern const unsigned floaty_qd_radix = std::numeric_limits<dd_real>::radix;
+extern const unsigned floaty_qd_precision = std::numeric_limits<dd_real>::digits;
+
 } // extern "C"

@@ -115,6 +115,12 @@ pub enum Function {
     /// `ilogbl`: the exponent of the value as an `int`. The program gives the
     /// bits of the integer as the high half.
     ILogB,
+    /// `getpayloadl`: the NaN payload as an integral value, or -1.
+    GetPayload,
+    /// `setpayloadl`: the quiet NaN with an integral payload, or +0.
+    SetPayload,
+    /// `setpayloadsigl`: the signaling NaN with an integral payload, or +0.
+    SetPayloadSignaling,
     /// `fmaxl`: the IEEE 754-2008 `maxNum`.
     Fmax,
     /// `fminl`: the IEEE 754-2008 `minNum`.
@@ -171,6 +177,9 @@ impl Function {
             Self::NearbyInt => "nearbyintl",
             Self::ScaleB => "scalbnl",
             Self::ILogB => "ilogbl",
+            Self::GetPayload => "getpayloadl",
+            Self::SetPayload => "setpayloadl",
+            Self::SetPayloadSignaling => "setpayloadsigl",
             Self::Fmax => "fmaxl",
             Self::Fmin => "fminl",
             Self::Fmaximum => "fmaximuml",
@@ -205,6 +214,9 @@ impl Function {
             | Self::Rint
             | Self::NearbyInt
             | Self::ILogB
+            | Self::GetPayload
+            | Self::SetPayload
+            | Self::SetPayloadSignaling
             | Self::LlRint
             | Self::LRound => 1,
             Self::Fmod

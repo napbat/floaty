@@ -436,6 +436,11 @@ assert_eq!(dpd.decode::<1>(), expected);
 the machine code of its reference, so the low halves, the NaN payloads, and
 the flags match too.
 
+`RADIX` is 2. `PRECISION` is the nominal precision of the reference:
+106 binary digits for `Gcc`, and 104 for `Qd`. A double-double has no
+fixed-width significand. The low half can hold bits beyond the nominal
+precision.
+
 Each algorithm takes the behavior of its reference as its default mode:
 `mode::Libgcc` for `Gcc`, and `mode::X86Sse` for `Qd`. So the operators
 match the reference without a behavior argument. Under another behavior,
@@ -447,7 +452,13 @@ returns the flags of every step.
 | `+`, `-`, `*`, `/` | libgcc `__gcc_qadd` and the others | `dd_real` operators |
 | `sqrt`, `remainder`, `%` | glibc 2.43 `sqrtl`, `remainderl`, `fmodl` | QD `sqrt`, `drem`, `fmod` |
 | `mul_add`, `next_up`, `next_down` | glibc 2.43 `fmal`, `nextupl`, `nextdownl` | none: QD has no such function |
-| Conversions, integer conversions, `scale_b`, `log_b`, `round_to_integral`, `copy_sign`, classification, total order, minimum and maximum | the exact value `hi + lo`, by floaty's rule. For a canonical pair, glibc 2.43 gives the same results but in the cases that the next paragraph lists. | the same |
+| Conversions, integer conversions, `scale_b`, `log_b`, `round_to_integral`, `copy_sign`, classification, total order, minimum and maximum | the exact value `hi + lo`, by floaty's rule. For canonical pairs, glibc 2.43 matches except for the cases listed below. | the same |
+| `payload`, `from_payload`, `from_payload_signaling` | IEEE 754-2019 section 9.7, on the exact value, with 51 payload bits | the same |
+
+The payload operations ignore the mode and give a +0 low half.
+The constructors accept exact integral payloads, including noncanonical pairs.
+`from_payload` accepts +0. `from_payload_signaling` rejects zero.
+Both constructors reject -0, negative values, fractions, and values at or above `2^51`.
 
 `floaty-verify` checks the rule of the operations on the exact value with
 exact rationals and MPFR. It also compares them with the IBM `long double`

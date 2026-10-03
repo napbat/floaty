@@ -27,6 +27,7 @@ mod convert;
 mod gcc;
 mod glibc;
 mod operations;
+mod payload;
 mod qd;
 mod steps;
 mod value;
@@ -209,6 +210,22 @@ impl<Alg: Algorithm, M: Mode> fmt::Debug for DoubleDouble<Alg, M> {
 impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     /// The behavior of the default mode.
     pub const ENV: Env = M::ENV;
+
+    /// The radix of both binary64 halves: 2.
+    pub const RADIX: u32 = 2;
+
+    /// The nominal precision of the reference, in binary digits: 106 for
+    /// [`Gcc`], and 104 for [`Qd`].
+    ///
+    /// A double-double has no fixed-width significand. The low half can hold
+    /// bits beyond this precision. This constant does not limit the exact
+    /// value or the operations on that value.
+    pub const PRECISION: u32 = match Alg::KIND {
+        // GCC 15.2.0 defines __LDBL_MANT_DIG__ as 106 with -mabi=ibmlongdouble.
+        AlgorithmKind::Gcc => 106,
+        // QD 2.3.24, include/qd/dd_real.h, line 170: numeric_limits<dd_real>::digits.
+        AlgorithmKind::Qd => 104,
+    };
 
     /// Makes a value from its halves. The pair is kept as it is. The halves
     /// can have any mode, and the value has the mode `M`.
