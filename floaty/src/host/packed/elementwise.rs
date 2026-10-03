@@ -181,13 +181,18 @@ fn nearest_even<I: Isa, const C: usize>(x: [u32; C]) -> Option<[u32; C]> {
 /// magnitude is integral.
 #[inline]
 fn with_signs<const C: usize>(x: [u32; C], rounded: [u32; C]) -> [u32; C] {
+    // Rust 1.89.0 (LLVM 20.1.7) and nightly 771916f90 (LLVM 23.1.0)
+    // emit masked VPTERNLOGD with immediate 0xE4 for the combined selection.
+    // That instruction needs 0xB8 for the emitted operand order.
+    // Select the magnitude first so the sign copy remains unmasked.
     let mut results = rounded;
     results.iter_mut().zip(x).for_each(|(result, value)| {
-        *result = if value & !SIGN < INTEGRAL {
-            (*result & !SIGN) | (value & SIGN)
+        let magnitude = if value & !SIGN < INTEGRAL {
+            *result
         } else {
             value
         };
+        *result = (magnitude & !SIGN) | (value & SIGN);
     });
     results
 }

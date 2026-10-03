@@ -11,6 +11,8 @@
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
+use core::cell::Cell;
+
 use floaty::elementwise::{
     Abs, Difference, Maximum, MaximumNumber, Minimum, MinimumNumber, Product, Quotient,
     RoundToIntegral, Splat, Sum,
@@ -385,6 +387,42 @@ fn reductions_follow_the_order() {
     }
 }
 
+/// Checks an exact in-place update and a disjoint update in one allocation
+/// against the same MPFR steps.
+fn check_cell_update(x: &[F32], y: &[F32], keep: F32, eta: F32, oracle: &Oracle, expected: &[u32]) {
+    let count = x.len();
+    let mut in_place = x.to_vec();
+    let cells = Cell::from_mut(&mut in_place[..]).as_slice_of_cells();
+    let view = Sum(
+        Product(cells, Splat::new(keep, count)),
+        Product(y, Splat::new(eta, count)),
+    );
+    let flags = Single::store_with(view, cells, oracle.env);
+    assert_store(
+        &in_place,
+        flags,
+        oracle,
+        expected,
+        &format!("in-place update {count}"),
+    );
+
+    let mut disjoint: Vec<_> = x.iter().chain(y).copied().collect();
+    let cells = Cell::from_mut(&mut disjoint[..]).as_slice_of_cells();
+    let (source, destination) = cells.split_at(count);
+    let view = Sum(
+        Product(source, Splat::new(keep, count)),
+        Product(destination, Splat::new(eta, count)),
+    );
+    let flags = Single::store_with(view, destination, oracle.env);
+    assert_store(
+        &disjoint[count..],
+        flags,
+        oracle,
+        expected,
+        &format!("disjoint update {count}"),
+    );
+}
+
 #[test]
 fn nested_views_follow_each_step() {
     let mut random = SplitMix64::new(0x6E65_7374);
@@ -419,6 +457,7 @@ fn nested_views_follow_each_step() {
                 );
                 let flags = Single::store_with(view, &mut out[..], env);
                 assert_store(&out, flags, &oracle, &expected, &format!("update {length}"));
+                check_cell_update(&x, &y, keep, eta, &oracle, &expected);
                 // A scalar quantization: |x| / y clamped to [0, 1], times
                 // 255, rounded to an integral value, a tie away from zero.
                 let mut oracle = Oracle {

@@ -536,6 +536,7 @@ The views of `floaty::elementwise` are vectors whose value `i` is one
 operation of value `i` of their operands: `Sum`, `Difference`, `Product`,
 `Quotient`, `Minimum`, `Maximum`, `MinimumNumber`, `MaximumNumber`, `Abs`,
 and `RoundToIntegral` in a fixed direction. `Splat` repeats one value.
+Integral rounding keeps each value's sign, including the sign of zero.
 Views nest, and each step rounds. `Lanes<F32, N>` reads a view `N` values
 at a time, and `store` and `to_int_slice` read the values past the last
 chunk of `N` eight at a time:
@@ -545,6 +546,11 @@ chunk of `N` eight at a time:
 | `store` | value `i` into element `i` of `&mut [T]`, or of `&[Cell<T>]` for a store into a vector that the view reads |
 | `to_int_slice` | value `i` converted to an integer type, as `Float::to_int` converts it |
 | `minimum_of`, `maximum_of`, `minimum_number_of`, `maximum_number_of` | one value, in the order of the kernels, from +∞ or -∞ in every lane |
+
+A cell destination must be disjoint from every cell operand, or use the
+same cells at the same indices. The rule applies to every operand of a
+nested view. `store` and `store_with` panic on shifted overlap before
+the first write.
 
 A kernel also reads a view, so the norm of a reconstruction needs no buffer.
 

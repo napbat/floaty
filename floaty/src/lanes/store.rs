@@ -27,6 +27,10 @@ use crate::integer::{Integer, ToInt};
 ///   empty vector gives the start value, and so does a vector of NaNs for
 ///   the `_number` operations.
 ///
+/// A cell destination must be disjoint from every cell operand, or use the
+/// same cells at the same indices. The rule applies to every operand of a
+/// nested view. The store checks all operands before the first write.
+///
 /// The methods without flags take the packed host path where the build has
 /// one. The path checks the mode and the environment once for the call and
 /// computes `N` values at a time. A store and `to_int_slice` compute the
@@ -54,12 +58,16 @@ use crate::integer::{Integer, ToInt};
 ///
 /// The methods panic when the destination does not hold one element for
 /// each value.
+/// [`store`](Self::store) and [`store_with`](Self::store_with) also panic
+/// when a cell operand overlaps the destination at different indices.
+/// The rejection changes no destination element.
 impl<M: Mode, const N: usize> Lanes<Single<M>, N> {
     /// Writes value `i` of `values` into element `i` of `out`, with the
     /// default mode.
     #[inline]
     pub fn store<T: From<Single<M>>>(values: impl Vector, mut out: impl Output<T>) {
         let count = Self::check_destination(values, out.count());
+        out.check_values(values);
         if Self::stores_on_host() {
             let done = host::packed::elementwise::store::<N>(
                 values,
@@ -87,6 +95,7 @@ impl<M: Mode, const N: usize> Lanes<Single<M>, N> {
         behavior: impl Override,
     ) -> Flags {
         let count = Self::check_destination(values, out.count());
+        out.check_values(values);
         Self::store_engine(values, &mut out, 0, count, behavior.apply::<M>())
     }
 

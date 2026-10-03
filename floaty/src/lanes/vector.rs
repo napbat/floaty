@@ -1,6 +1,7 @@
 //! The vectors that the slice kernels of `Lanes` read, and the conversion of
 //! their values to binary32.
 
+use core::cell::Cell;
 use core::marker::PhantomData;
 
 use crate::env::{Behavior, Flags, Mode};
@@ -104,6 +105,18 @@ pub trait Vector: Sealed + Load {
     /// flags of its conversion.
     #[doc(hidden)]
     fn value_with<M: Mode, B: Behavior>(self, index: usize, behavior: B) -> (Single<M>, Flags);
+
+    /// Checks that each cell operand is disjoint from `out`, or uses the
+    /// same cells at the same indices.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a cell operand overlaps `out` at different indices.
+    #[doc(hidden)]
+    #[inline]
+    fn check_store<T>(self, _out: &[Cell<T>]) {
+        // Immutable operands cannot alias a cell destination in safe Rust.
+    }
 }
 
 /// Returns the binary32 encodings of the `N` values of `values` from

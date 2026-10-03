@@ -107,6 +107,12 @@ macro_rules! binary_view {
                 let (value, flags) = x.$engine(y, behavior);
                 (value, x_flags | y_flags | flags)
             }
+
+            #[inline]
+            fn check_store<T>(self, out: &[Cell<T>]) {
+                self.0.check_store(out);
+                self.1.check_store(out);
+            }
         }
     };
 }
@@ -267,6 +273,11 @@ impl<X: Vector> Vector for RoundToIntegral<X> {
         let (rounded, flags) = value.round_to_integral_with(behavior.rounded(self.rounding));
         (rounded, value_flags | flags)
     }
+
+    #[inline]
+    fn check_store<T>(self, out: &[Cell<T>]) {
+        self.values.check_store(out);
+    }
 }
 
 /// The absolute values of a vector: value `i` is `x[i]` with the sign bit
@@ -303,6 +314,11 @@ impl<X: Vector> Vector for Abs<X> {
     fn value_with<M: Mode, B: Behavior>(self, index: usize, behavior: B) -> (Single<M>, Flags) {
         let (value, flags) = self.0.value_with::<M, B>(index, behavior);
         (value.abs(), flags)
+    }
+
+    #[inline]
+    fn check_store<T>(self, out: &[Cell<T>]) {
+        self.0.check_store(out);
     }
 }
 
@@ -348,6 +364,24 @@ fn cell_encodings_rest<T: Copy, const N: usize>(
     bits
 }
 
+/// Rejects a cell operand that overlaps the destination at different
+/// indices. Empty ranges and zero-sized destinations do not overlap.
+#[inline]
+fn check_cell_store<T, U>(values: &[Cell<T>], out: &[Cell<U>]) {
+    let source = values.as_ptr_range();
+    let destination = out.as_ptr_range();
+    let same_indices =
+        source.start.addr() == destination.start.addr() && size_of::<T>() == size_of::<U>();
+    let disjoint = source.start == source.end
+        || destination.start == destination.end
+        || source.start.addr() >= destination.end.addr()
+        || destination.start.addr() >= source.end.addr();
+    assert!(
+        same_indices || disjoint,
+        "a cell store must not shift an overlapping operand"
+    );
+}
+
 /// Implements [`Vector`] for cells of a binary32 type `$element`, whose
 /// encoding `$encode` returns. Cells let a store write a vector that its
 /// values read.
@@ -384,6 +418,11 @@ macro_rules! cells {
             ) -> (Single<M>, Flags) {
                 $value(self[index].get()).widen_with(behavior)
             }
+
+            #[inline]
+            fn check_store<T>(self, out: &[Cell<T>]) {
+                check_cell_store(self, out);
+            }
         }
     };
 }
@@ -398,11 +437,19 @@ cells!(f32, f32::to_bits, F32::from);
 
 /// A destination of the stores of [`Lanes`](crate::Lanes): `&mut [T]`, or
 /// `&[Cell<T>]` for a store into a vector that its values also read. Value
-/// `i` goes to element `i`. The trait is sealed.
+/// `i` goes to element `i`. Cell operands must be disjoint from the
+/// destination, or use the same cells at the same indices. A store rejects
+/// shifted overlap before the first write. The trait is sealed.
 pub trait Output<T>: Sealed {
     /// Returns the number of elements.
     #[doc(hidden)]
     fn count(&self) -> usize;
+
+    /// Checks that cell operands do not overlap the destination at
+    /// different indices. An exclusive slice cannot alias an operand.
+    #[doc(hidden)]
+    #[inline]
+    fn check_values(&self, _values: impl Vector) {}
 
     /// Writes `values` into the elements from `start`. The destination holds
     /// at least `start + values.len()` elements.
@@ -434,6 +481,11 @@ impl<T> Output<T> for &[Cell<T>] {
     #[inline]
     fn count(&self) -> usize {
         self.len()
+    }
+
+    #[inline]
+    fn check_values(&self, values: impl Vector) {
+        values.check_store(self);
     }
 
     #[inline]

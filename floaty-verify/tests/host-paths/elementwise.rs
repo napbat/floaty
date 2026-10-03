@@ -7,6 +7,7 @@
 //! of the values of the lane type.
 
 use core::cell::Cell;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use floaty::elementwise::{
     Abs, Difference, Maximum, MaximumNumber, Minimum, MinimumNumber, Product, Quotient,
@@ -204,6 +205,42 @@ fn rounding_gives_the_default_mode_results() {
 }
 
 #[test]
+fn integral_rounding_preserves_signs_and_magnitudes() {
+    let magnitudes = [
+        0,
+        1,
+        0x007F_FFFF,
+        0x0080_0000,
+        0x3E80_0000,
+        0x3EFF_FFFF,
+        0x3F00_0000,
+        0x3F00_0001,
+        0x3F40_0000,
+        0x3F80_0000,
+        0x3FC0_0000,
+        0x4AFF_FFFF,
+        0x4B00_0000,
+        0x4B00_0001,
+        0x7F7F_FFFF,
+        0x7F80_0000,
+    ];
+    let values: [F32; 32] = core::array::from_fn(|index| {
+        let sign = if index % 2 == 0 { 0 } else { 0x8000_0000 };
+        F32::from_bits(magnitudes[index / 2] | sign)
+    });
+    for rounding in DIRECTIONS {
+        let _ = check::<Ieee, 32>(
+            RoundToIntegral {
+                values: &values[..],
+                rounding,
+            },
+            values.len(),
+            &|| format!("{rounding:?} signed boundaries"),
+        );
+    }
+}
+
+#[test]
 fn nested_views_and_narrow_operands_give_the_default_mode_results() {
     let mut random = SplitMix64::new(0x6E73_7464);
     for mix in Mix::ALL {
@@ -280,6 +317,90 @@ fn stores_into_cells_read_each_value_first() {
             Single::<Ieee, 8>::store(MinimumNumber(cells, &y[..]), cells);
             let host_encodings: Vec<u32> = hosts.iter().map(|value| value.to_bits()).collect();
             assert_eq!(host_encodings, encodings(&expected), "f32 {mix:?} {length}");
+        }
+    }
+}
+
+/// Checks both overlap directions before a store can change any cell.
+fn check_shifted_cell_stores<T: Copy + From<F32>, const N: usize>()
+where
+    F32: From<T>,
+    for<'a> &'a [Cell<T>]: Vector,
+{
+    for count in [2, 3, 7, 8, 9, 31, 32, 33, 65] {
+        let cells: Vec<_> = (0..=count)
+            .map(|index| {
+                let value = u32::try_from(index + 1).expect("the test index is at most 66");
+                Cell::new(T::from(F32::from_int(value)))
+            })
+            .collect();
+        let encodings = || {
+            cells
+                .iter()
+                .map(|cell| F32::from(cell.get()).to_bits())
+                .collect::<Vec<_>>()
+        };
+        let before = encodings();
+        for (source_start, destination_start) in [(0, 1), (1, 0)] {
+            let source = &cells[source_start..source_start + count];
+            let destination = &cells[destination_start..destination_start + count];
+            let view = RoundToIntegral {
+                values: Abs(Sum(
+                    destination,
+                    Product(source, Splat::new(F32::from_bits(0x4000_0000), count)),
+                )),
+                rounding: Rounding::TiesToEven,
+            };
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                Single::<Ieee, N>::store(view, destination);
+            }));
+            assert!(result.is_err(), "shifted store: {N} lanes, {count} values");
+            assert_eq!(encodings(), before, "a rejected store must not write");
+            for rounding in [Rounding::TiesToEven, Rounding::TowardPositive] {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    Single::<Ieee, N>::store_with(view, destination, rounding)
+                }));
+                assert!(
+                    result.is_err(),
+                    "shifted store_with: {N} lanes, {count} values, {rounding:?}"
+                );
+                assert_eq!(encodings(), before, "a rejected store must not write");
+            }
+        }
+    }
+}
+
+#[test]
+fn shifted_cell_stores_panic_before_writing() {
+    check_shifted_cell_stores::<F32, 1>();
+    check_shifted_cell_stores::<F32, 4>();
+    check_shifted_cell_stores::<F32, 8>();
+    check_shifted_cell_stores::<F32, 32>();
+    check_shifted_cell_stores::<f32, 1>();
+    check_shifted_cell_stores::<f32, 4>();
+    check_shifted_cell_stores::<f32, 8>();
+    check_shifted_cell_stores::<f32, 32>();
+}
+
+#[test]
+fn adjacent_single_cell_stores_are_disjoint() {
+    let one = 0x3F80_0000;
+    let two = 0x4000_0000;
+    let three = 0x4040_0000;
+    for (source_start, destination_start, expected) in [(0, 1, [one, three]), (1, 0, [three, two])]
+    {
+        for with_flags in [false, true] {
+            let cells = [one, two].map(|bits| Cell::new(F32::from_bits(bits)));
+            let source = &cells[source_start..=source_start];
+            let destination = &cells[destination_start..=destination_start];
+            let view = Sum(source, destination);
+            if with_flags {
+                let flags = Single::<Ieee, 1>::store_with(view, destination, Rounding::TiesToEven);
+                assert_eq!(flags, floaty::Flags::NONE);
+            } else {
+                Single::<Ieee, 1>::store(view, destination);
+            }
+            assert_eq!(cells.each_ref().map(|cell| cell.get().to_bits()), expected);
         }
     }
 }
