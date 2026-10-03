@@ -69,6 +69,11 @@ const QD_SHIM_SECTIONS: [&str; 3] = [
 /// the other.
 const QD_SHIM_SHA256: &str = "d6346bd1dc44447732adb1db9c5776b23e206fbb52f512177e8e865b6356c583";
 
+/// The SHA-256 of [`QD_SHIM_SECTIONS`] in `qd_unary.cpp`'s object.
+/// The square follows the inspected inline steps. The inverse calls the
+/// same `dd_real::accurate_div` as the arithmetic shim.
+const QD_UNARY_SHA256: &str = "4f57c0f6a6670e528d7618885d70739bf3686cbf4667e88d3cd8d216358abbc7";
+
 /// The sections of `dd_real.o` in `libqd.a` that floaty's `Qd` algorithm
 /// follows: the code of the square root and of `fmod`, and their constants.
 const QD_LIBRARY_SECTIONS: [&str; 3] = [".text", ".rodata.cst8", ".rodata.cst16"];
@@ -83,6 +88,8 @@ const QD_LIBRARY_SHA256: &str = "0bcc95f145495cde281ad918b8aa6f1a841eeb879c4049b
 pub(super) fn build(manifest: &Path, out: &Path) {
     let shim = manifest.join("shim").join("qd_shim.cpp");
     println!("cargo:rerun-if-changed={}", shim.display());
+    let unary = manifest.join("shim").join("qd_unary.cpp");
+    println!("cargo:rerun-if-changed={}", unary.display());
     let compiler = check_gcc(QD_CXX, QD_CXX_VERSION, "Qd", "install the g++ package");
     let source = out.join("source");
     let root = QD.extract(manifest, &source);
@@ -116,6 +123,16 @@ pub(super) fn build(manifest: &Path, out: &Path) {
         "floaty_qd",
     );
     check_machine_code(&shim_object, &QD_SHIM_SECTIONS, QD_SHIM_SHA256);
+    let unary_object = shim_library(
+        QD_CXX,
+        &unary,
+        &flags,
+        &settings,
+        &out.join("unary.stamp"),
+        &libraries,
+        "floaty_qd_unary",
+    );
+    check_machine_code(&unary_object, &QD_SHIM_SECTIONS, QD_UNARY_SHA256);
     let library = root.join("src").join(".libs").join("libqd.a");
     let object = out.join("dd_real.o");
     extract_member("ar", &library, &object, "install the binutils package");
@@ -128,6 +145,7 @@ pub(super) fn build(manifest: &Path, out: &Path) {
         root.join("src").join(".libs").display()
     );
     println!("cargo:rustc-link-lib=static=floaty_qd");
+    println!("cargo:rustc-link-lib=static=floaty_qd_unary");
     println!("cargo:rustc-link-lib=static=qd");
     println!("cargo:rustc-link-lib=dylib=stdc++");
 }

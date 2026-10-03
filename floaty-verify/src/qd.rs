@@ -1,11 +1,13 @@
-//! Runs the double-double arithmetic of QD, `dd_real`, and its remainders
-//! `drem` and `fmod`, as an oracle.
+//! Runs the double-double arithmetic of QD, `dd_real`, its remainders
+//! `drem` and `fmod`, and its `sqr` and `inv`, as an oracle.
 //!
 //! The build script builds QD 2.3.24 from its pinned archive, with the
 //! IEEE-style addition, the accurate division, and the C `fma` for the error
 //! of a product, and with `-O2 -ffp-contract=off`. The shim
 //! `shim/qd_shim.cpp` compiles the inline operators of QD with the same
 //! options.
+//! The shim `shim/qd_unary.cpp` compiles `sqr` and `inv` with the same
+//! options. Its object keeps the machine code of `qd_shim.cpp` unchanged.
 //!
 //! Each function sets the rounding direction of the calling thread, clears
 //! the flags, computes with `dd_real`, and reads the flags with
@@ -123,6 +125,11 @@ pub fn check_host_fma() {
 /// returns the raised flags.
 type BinaryFunction = unsafe extern "C" fn(*const u64, *const u64, c_int, *mut u64) -> c_uint;
 
+/// The C shape of a unary operation of the shims: the halves of `a`, the
+/// rounding direction, and the halves of the result. It returns the raised
+/// flags.
+type UnaryFunction = unsafe extern "C" fn(*const u64, c_int, *mut u64) -> c_uint;
+
 unsafe extern "C" {
     static floaty_qd_radix: c_uint;
     static floaty_qd_precision: c_uint;
@@ -133,6 +140,8 @@ unsafe extern "C" {
     fn floaty_qd_drem(a: *const u64, b: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     fn floaty_qd_fmod(a: *const u64, b: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     fn floaty_qd_sqrt(a: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
+    fn floaty_qd_sqr(a: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
+    fn floaty_qd_inv(a: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     /// The C library `fma`, which QD calls for the error of a product.
     fn fma(x: f64, y: f64, z: f64) -> f64;
 }
@@ -176,12 +185,29 @@ pub fn fmod(a: Pair, b: Pair, rounding: Rounding) -> Outcome {
 /// Returns `sqrt(a)` of `dd_real` in `rounding`.
 #[must_use]
 pub fn sqrt(a: Pair, rounding: Rounding) -> Outcome {
+    unary(floaty_qd_sqrt, a, rounding)
+}
+
+/// Returns `sqr(a)` of `dd_real` in `rounding`.
+#[must_use]
+pub fn sqr(a: Pair, rounding: Rounding) -> Outcome {
+    unary(floaty_qd_sqr, a, rounding)
+}
+
+/// Returns `inv(a)` of `dd_real` in `rounding`.
+#[must_use]
+pub fn inv(a: Pair, rounding: Rounding) -> Outcome {
+    unary(floaty_qd_inv, a, rounding)
+}
+
+/// Calls a unary operation of the shim.
+fn unary(function: UnaryFunction, a: Pair, rounding: Rounding) -> Outcome {
     let a = [a.hi, a.lo];
     let mut result = [0; 2];
     // SAFETY: the function reads the two halves of `a` and writes the two
     // halves of `result`. Both arrays live until it returns. It restores
     // the floating-point environment of this thread before it returns.
-    let bits = unsafe { floaty_qd_sqrt(a.as_ptr(), code(rounding), result.as_mut_ptr()) };
+    let bits = unsafe { function(a.as_ptr(), code(rounding), result.as_mut_ptr()) };
     outcome(result, bits)
 }
 

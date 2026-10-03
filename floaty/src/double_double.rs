@@ -469,6 +469,52 @@ impl<M: Mode> DoubleDouble<Gcc, M> {
     }
 }
 
+impl<M: Mode> DoubleDouble<Qd, M> {
+    /// Returns QD's square with the default mode. The steps take the host
+    /// paths of binary64 where the build has them.
+    ///
+    /// Unlike `self * self`, QD's `sqr` includes the square of the low half.
+    /// See [`sqr_with`](Self::sqr_with) for the rounding rule.
+    #[must_use]
+    pub fn sqr(self) -> Self {
+        self.apply_one(Steps::without_flags(M::default()), qd::sqr)
+            .0
+    }
+
+    /// Returns QD's square, and the flags of every binary64 step.
+    ///
+    /// QD squares the high half with its product error, adds both cross
+    /// products and the low-half square, then renormalizes the pair.
+    /// Each step uses the behavior of the call. The operation does not
+    /// round the exact square once. Special values follow those same steps.
+    #[must_use]
+    pub fn sqr_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.apply_one(Steps::new(behavior.apply::<M>()), qd::sqr)
+    }
+
+    /// Returns QD's reciprocal with the default mode. The steps take the
+    /// host paths of binary64 where the build has them.
+    ///
+    /// See [`inv_with`](Self::inv_with) for the rounding rule.
+    #[must_use]
+    pub fn inv(self) -> Self {
+        self.apply_one(Steps::without_flags(M::default()), qd::inv)
+            .0
+    }
+
+    /// Returns QD's reciprocal, and the flags of every binary64 step.
+    ///
+    /// QD's `inv` computes `(1, +0) / self` with its accurate division.
+    /// Each step uses the behavior of the call. The operation does not
+    /// round the exact reciprocal once. Special values follow those same
+    /// steps, so a zero can give NaNs and signal both divide-by-zero and
+    /// invalid.
+    #[must_use]
+    pub fn inv_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.apply_one(Steps::new(behavior.apply::<M>()), qd::inv)
+    }
+}
+
 /// Returns the algorithm of `Alg` among the algorithms `[gcc, qd]` of an
 /// operation.
 fn of_algorithm<Alg: Algorithm, T>([gcc, qd]: [T; 2]) -> T {
