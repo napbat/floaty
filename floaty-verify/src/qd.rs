@@ -40,6 +40,20 @@ use crate::x86::{MXCSR_DAZ, MXCSR_FTZ, MXCSR_MASKED, with_mxcsr};
 /// other than the default: FTZ, DAZ, and both. Each is `(ftz, daz)`.
 pub const FLUSH_SETTINGS: [(bool, bool); 3] = [(true, false), (false, true), (true, true)];
 
+/// Returns the radix from QD's `std::numeric_limits<dd_real>`.
+#[must_use]
+pub fn radix() -> u32 {
+    // SAFETY: The shim exports an immutable C unsigned integer.
+    unsafe { floaty_qd_radix }
+}
+
+/// Returns the nominal precision from QD's `std::numeric_limits<dd_real>`.
+#[must_use]
+pub fn precision() -> u32 {
+    // SAFETY: The shim exports an immutable C unsigned integer.
+    unsafe { floaty_qd_precision }
+}
+
 /// Runs `body`, which calls functions of this module, with the flush-to-zero
 /// bit of MXCSR set to `ftz` and the denormals-are-zero bit set to `daz`.
 /// Every exception stays masked. MXCSR has its value from before the call
@@ -110,6 +124,8 @@ pub fn check_host_fma() {
 type BinaryFunction = unsafe extern "C" fn(*const u64, *const u64, c_int, *mut u64) -> c_uint;
 
 unsafe extern "C" {
+    static floaty_qd_radix: c_uint;
+    static floaty_qd_precision: c_uint;
     fn floaty_qd_add(a: *const u64, b: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     fn floaty_qd_sub(a: *const u64, b: *const u64, rounding: c_int, result: *mut u64) -> c_uint;
     fn floaty_qd_mul(a: *const u64, b: *const u64, rounding: c_int, result: *mut u64) -> c_uint;

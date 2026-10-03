@@ -18,7 +18,8 @@
  * `ilogbl`, a minimum or maximum operation (`fmaxl`, `fminl`, `fmaximuml`,
  * `fminimuml`, `fmaximum_numl`, `fminimum_numl`, `fmaximum_magl`,
  * `fminimum_magl`, `fmaximum_mag_numl`, or `fminimum_mag_numl`),
- * `totalorderl`, `totalordermagl`, `llrintl`, or `lroundl`.
+ * `totalorderl`, `totalordermagl`, `llrintl`, `lroundl`, `getpayloadl`,
+ * `setpayloadl`, or `setpayloadsigl`.
  * `iscanonicall` gives its integer result as the value of the high half, and
  * a zero low half. `ilogbl`, `totalorderl`, `totalordermagl`, `llrintl`, and
  * `lroundl` give the bits of their integer result, sign-extended to 64 bits,
@@ -99,6 +100,9 @@ int glibc_totalorderl(const __ibm128 *x, const __ibm128 *y) __asm__("__totalorde
 int glibc_totalordermagl(const __ibm128 *x, const __ibm128 *y) __asm__("__totalordermagl");
 long long glibc_llrintl(__ibm128 x) __asm__("__llrintl");
 long glibc_lroundl(__ibm128 x) __asm__("__lroundl");
+__ibm128 glibc_getpayloadl(const __ibm128 *x) __asm__("__getpayloadl");
+int glibc_setpayloadl(__ibm128 *result, __ibm128 payload) __asm__("__setpayloadl");
+int glibc_setpayloadsigl(__ibm128 *result, __ibm128 payload) __asm__("__setpayloadsigl");
 
 /*
  * Returns a long double whose high half holds the bits of `value`, and whose
@@ -129,6 +133,18 @@ static __ibm128 total_order_magnitude(__ibm128 x, __ibm128 y) {
 }
 static __ibm128 rint_integer(__ibm128 x) { return integer_result(glibc_llrintl(x)); }
 static __ibm128 round_integer(__ibm128 x) { return integer_result(glibc_lroundl(x)); }
+
+static __ibm128 get_payload(__ibm128 x) { return glibc_getpayloadl(&x); }
+static __ibm128 set_payload(__ibm128 x) {
+  __ibm128 result;
+  glibc_setpayloadl(&result, x);
+  return result;
+}
+static __ibm128 set_payload_signaling(__ibm128 x) {
+  __ibm128 result;
+  glibc_setpayloadsigl(&result, x);
+  return result;
+}
 
 /* Returns `iscanonicall` as a long double, for the one-operand table. */
 static __ibm128 canonical(__ibm128 x) {
@@ -167,6 +183,9 @@ static const struct library_function FUNCTIONS[] = {
     {"nearbyintl", 1, glibc_nearbyintl, NULL, NULL},
     {"scalbnl", 2, NULL, scale, NULL},
     {"ilogbl", 1, exponent, NULL, NULL},
+    {"getpayloadl", 1, get_payload, NULL, NULL},
+    {"setpayloadl", 1, set_payload, NULL, NULL},
+    {"setpayloadsigl", 1, set_payload_signaling, NULL, NULL},
     {"fmaxl", 2, NULL, glibc_fmaxl, NULL},
     {"fminl", 2, NULL, glibc_fminl, NULL},
     {"fmaximuml", 2, NULL, glibc_fmaximuml, NULL},
