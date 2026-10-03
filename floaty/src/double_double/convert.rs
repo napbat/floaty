@@ -249,7 +249,7 @@ fn overflow(negative: bool, env: &Env) -> (Pair, Flags) {
 /// to it, so every larger value must round to it too. At 53 bits, the pair
 /// is `2^1024 - 2^970 - 2^917`. The `LDBL_MAX` of GCC is `2^1024 - 2^970 -
 /// 2^918`, because GCC counts 106 bits in the IBM `long double`.
-fn largest(negative: bool, env: &Env) -> Pair {
+pub(super) fn largest(negative: bool, env: &Env) -> Pair {
     let precision = env.precision_within(<Binary<11> as Standard<64>>::PRECISION);
     let ones = [(1_u64 << precision) - 1];
     let bits = i32::try_from(precision).expect("a precision fits an i32");
