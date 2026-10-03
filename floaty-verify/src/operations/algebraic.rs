@@ -1,17 +1,21 @@
 //! An oracle for the algebraic functions of IEEE 754-2019 section 9.2 on the
-//! binary formats: `hypot`, `rSqrt`, `pown`, and `rootn`.
+//! binary formats: `hypot`, `rSqrt`, `pown`, `rootn`, and `compound`.
 //!
 //! MPFR's `mpfr_hypot`, `mpfr_rec_sqrt`, `mpfr_pow_si`, and `mpfr_rootn_si`
 //! give the exact result rounded toward zero with the ternary value, and
 //! [`crate::mpfr::round`] rounds it. IEEE 754-2019 section 9.2.1 gives the
 //! special cases. floaty documents the rest: past `|n| = 64`, `pown` rounds
 //! each product of squaring, and `rootn` gives the default NaN.
+//!
+//! [`compound`] computes `(1 + x)^n` exactly in GMP when the power has few
+//! bits, and bounds it with MPFR otherwise.
 
 use floaty::{Env, Flags};
-use rug::Float as BigFloat;
 use rug::float::Round;
 use rug::ops::Pow;
+use rug::{Float as BigFloat, Integer};
 
+use super::elementary::truncation;
 use super::{Outcome, propagate, special_operands};
 use crate::arithmetic::{finish, working};
 use crate::mpfr::{self, Format, Input, Operand, Read, Value};
@@ -284,4 +288,216 @@ pub fn rootn<const N: usize>(
 /// Returns the default NaN of the NaN rule.
 fn default_nan(format: &Format, env: &Env) -> Outcome {
     Outcome::from_value(format.nan(env.nan.default_negative))
+}
+
+/// The bits of an exact power `M^|n|` up to which the `compound` oracle
+/// computes it in GMP.
+const COMPOUND_EXACT_BITS: u64 = 1 << 16;
+
+/// The exponent of MPFR at or past which `n ln(1 + x)` puts `(1 + x)^n` past
+/// the range of every format: `|n ln(1 + x)| >= 2^24`.
+const COMPOUND_OUT_OF_RANGE: i32 = 25;
+
+/// The bound of the oracle on the exponent of an exact power. A clamped
+/// exponent rounds as the true one does.
+const COMPOUND_CLAMP: i128 = 1 << 28;
+
+/// Returns the expected `compound(x, n) = (1 + x)^n` of an operand, and the
+/// flags.
+///
+/// The special cases follow IEEE 754-2019 section 9.2.1, as
+/// `mpfr_compound_si` does: `n = 0` gives 1 for a quiet NaN and for every
+/// value at or above -1, a value below -1 gives the default NaN with
+/// invalid, and -1 gives +0 for `n > 0` and +inf with divide-by-zero for
+/// `n < 0`. Every other result is an exact power in GMP, the exact power
+/// `x^n` of a large `x` with a sticky bit, or a power that MPFR bounds.
+#[must_use]
+pub fn compound<const N: usize>(
+    x: &Operand<N>,
+    n: i64,
+    format: &Format,
+    env: &Env,
+) -> (Outcome, Flags) {
+    let mut flags = Flags::NONE;
+    let reads = [x.read(env, &mut flags)];
+    let one = || Outcome::Finite(BigFloat::with_val(1, 1));
+    if n == 0 && matches!(&reads[0], Read::Nan(nan) if !nan.signaling) {
+        return (one(), flags);
+    }
+    if let Some((value, special)) = special_operands(&reads, format, env) {
+        return (value, flags | special);
+    }
+    let [Read::Number(value)] = &reads else {
+        unreachable!("every special operand has a result");
+    };
+    if *value < -1 {
+        return (default_nan(format, env), flags | Flags::INVALID);
+    }
+    if n == 0 || value.is_zero() {
+        return (one(), flags);
+    }
+    if value.is_infinite() {
+        let result = if n > 0 {
+            format.infinity(false, env)
+        } else {
+            format.zero(false)
+        };
+        return (Outcome::from_value(result), flags);
+    }
+    if *value == -1 {
+        if n > 0 {
+            return (Outcome::from_value(format.zero(false)), flags);
+        }
+        let infinity = format.infinity(false, env);
+        return (Outcome::from_value(infinity), flags | Flags::DIVIDE_BY_ZERO);
+    }
+    let (result, round_flags) = mpfr::round(&compound_input(value, n, format), format, env);
+    (Outcome::from_value(result), flags | round_flags)
+}
+
+/// Returns `(1 + x)^n` of a finite `x > -1` other than zero and an `n` other
+/// than zero, as an input of the rounding oracle.
+///
+/// With `1 + x = M 2^E` and `M` odd, a power of two is exact. A power
+/// `M^|n|` of at most [`COMPOUND_EXACT_BITS`] bits is exact in GMP: `M^n
+/// 2^(E n)` for `n > 0`, and the quotient `2^s / M^|n|` with a sticky bit for
+/// `n < 0`. Every other power is off the grid of `p + 3` bits, so bounds
+/// decide its truncation: `e^(n log1p(x))` with `mpfr_log1p`, `mpfr_mul_si`,
+/// and `mpfr_exp` rounded in the direction of each bound, at a precision
+/// that doubles until the bounds agree.
+///
+/// # Panics
+///
+/// Panics when `x` is not finite, or not above -1.
+fn compound_input(x: &BigFloat, n: i64, format: &Format) -> Input {
+    let sum = x.to_rational().expect("a finite value is rational") + 1u32;
+    let (numerator, denominator) = sum.into_numer_denom();
+    let zeros = numerator.find_one(0).expect("1 + x is above zero");
+    let odd = numerator >> zeros;
+    let exponent = i128::from(zeros) - i128::from(denominator.significant_bits() - 1);
+    let scale = exponent * i128::from(n);
+    if odd == 1 {
+        return Input {
+            negative: false,
+            exponent: clamp_exponent(scale),
+            significand: Integer::from(1),
+            sticky: false,
+        };
+    }
+    let count = n.unsigned_abs();
+    if u64::from(odd.significant_bits()).saturating_mul(count) <= COMPOUND_EXACT_BITS {
+        let power = odd.pow(u32::try_from(count).expect("an exact power has a small count"));
+        if n > 0 {
+            return Input {
+                negative: false,
+                exponent: clamp_exponent(scale),
+                significand: power,
+                sticky: false,
+            };
+        }
+        let shift = power.significant_bits() + format.precision + 3;
+        let (quotient, rest) = (Integer::from(1) << shift).div_rem(power);
+        return Input {
+            negative: false,
+            exponent: clamp_exponent(scale - i128::from(shift)),
+            significand: quotient,
+            sticky: rest != 0,
+        };
+    }
+    if let Some(input) = dominant_input(x, n, format) {
+        return input;
+    }
+    let estimate = BigFloat::with_val(64, x.ln_1p_ref()) * n;
+    if estimate
+        .get_exp()
+        .is_some_and(|exponent| exponent >= COMPOUND_OUT_OF_RANGE)
+    {
+        // A value far past the range: `2^(p + 2)` times `2^(±2^28)`.
+        return Input {
+            negative: false,
+            exponent: if estimate.is_sign_negative() {
+                -(1 << 28)
+            } else {
+                1 << 28
+            },
+            significand: Integer::from(1) << (format.precision + 2),
+            sticky: true,
+        };
+    }
+    // Conflict: MPFR 4.2.2 `mpfr_compound_si` gives a wrong bound in a hard
+    // case. For x = (2^205 + 1) 2^43485 and n = -3, `(1 + x)^-3` lies about
+    // 4.3e-42 ulp above a number of 270 bits, by exact GMP rationals. At 270
+    // and at 1080 bits, `mpfr_compound_si` toward +inf returns that number,
+    // below the exact value, with a positive ternary value, and toward -inf
+    // one ulp lower. Resolution: the oracle takes its bounds from
+    // `mpfr_log1p`, `mpfr_mul_si`, and `mpfr_exp`, which give correct
+    // directed bounds, and does not call `mpfr_compound_si`.
+    truncation(format.precision, |precision, round| {
+        // `e^t` increases with `t = n ln(1 + x)`, which increases with
+        // `ln(1 + x)` for `n > 0` and decreases for `n < 0`.
+        let inner = match (n > 0, round) {
+            (false, Round::Up) => Round::Down,
+            (false, _) => Round::Up,
+            (true, round) => round,
+        };
+        let log = BigFloat::with_val_round(precision, x.ln_1p_ref(), inner).0;
+        let t = BigFloat::with_val_round(precision, &log * n, round).0;
+        BigFloat::with_val_round(precision, t.exp_ref(), round).0
+    })
+}
+
+/// Returns an exponent clamped to [`COMPOUND_CLAMP`].
+fn clamp_exponent(exponent: i128) -> i32 {
+    i32::try_from(exponent.clamp(-COMPOUND_CLAMP, COMPOUND_CLAMP)).expect("the clamp fits an i32")
+}
+
+/// Returns `(1 + x)^n` for a large `x`, from the exact power `x^n`, or
+/// `None` when `x` is not large enough or `x^n` has too many bits.
+///
+/// `(1 + x)^n` is `x^n (1 + d)`, where `d` has the sign of `n` and `|d|` is
+/// below `2 |n| / x`. With `x = m 2^e`, `m` odd, and `x` at least
+/// `2^(bits(m^|n|) + p + 8 + bits(n))`, `|d|` is below
+/// `2^-(bits(m^|n|) + p + 7)`. Then `x^n` scaled to an integer of at least
+/// `p + 3` bits stays within one unit of `(1 + x)^n`: it is a lower bound for
+/// `n > 0`, and the quotient `2^s / m^|n|` or one below it, at a power of
+/// two, is for `n < 0`. So that integer with the sticky bit rounds as
+/// `(1 + x)^n` does.
+fn dominant_input(x: &BigFloat, n: i64, format: &Format) -> Option<Input> {
+    if x.is_sign_negative() {
+        return None;
+    }
+    let (integer, exponent) = x.to_integer_exp()?;
+    let zeros = integer.find_one(0)?;
+    let odd = integer >> zeros;
+    let count = n.unsigned_abs();
+    if u64::from(odd.significant_bits()).saturating_mul(count) > COMPOUND_EXACT_BITS {
+        return None;
+    }
+    let power = odd.pow(u32::try_from(count).ok()?);
+    let bits = power.significant_bits();
+    let count_bits = u64::BITS - count.leading_zeros();
+    let top = i64::from(x.get_exp()?) - 1;
+    let bound = i64::from(bits) + i64::from(format.precision) + 8 + i64::from(count_bits);
+    if top < bound {
+        return None;
+    }
+    let scale = (i128::from(exponent) + i128::from(zeros)) * i128::from(n);
+    Some(if n > 0 {
+        let shift = format.precision + 5;
+        Input {
+            negative: false,
+            exponent: clamp_exponent(scale - i128::from(shift)),
+            significand: power << shift,
+            sticky: true,
+        }
+    } else {
+        let shift = bits + format.precision + 3;
+        let (quotient, rest) = (Integer::from(1) << shift).div_rem(power);
+        Input {
+            negative: false,
+            exponent: clamp_exponent(scale - i128::from(shift)),
+            significand: if rest == 0 { quotient - 1u32 } else { quotient },
+            sticky: true,
+        }
+    })
 }

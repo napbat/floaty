@@ -467,6 +467,30 @@ pub fn check_powers<S: Standard<W>, const W: usize>(
     }
 }
 
+/// Checks `compound_with` on one value for each exponent of `counts`.
+/// `compound` runs the operation of floaty, which only the binary formats
+/// have.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_compound<S: Standard<W>, const W: usize>(
+    x: Float<S, W>,
+    counts: &[i64],
+    format: &Format,
+    env: &Env,
+    compound: impl Fn(Float<S, W>, i64, Env) -> (Float<S, W>, Flags),
+) {
+    let operand = Operand::<8>::of(x);
+    for &n in counts {
+        check_float(
+            compound(x, n, *env),
+            &algebraic::compound(&operand, n, format, env),
+            &|| format!("compound {x:?} {n} {env:?}"),
+        );
+    }
+}
+
 /// Checks `to_int_with` into the integer type `I` on one value.
 ///
 /// # Panics

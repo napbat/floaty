@@ -1,5 +1,5 @@
-//! Compares `exp` and `log` of the binary formats with the MPFR oracle in
-//! `floaty_verify::operations::elementary`, in every behavior of
+//! Compares `exp`, `log`, and `compound` of the binary formats with the MPFR
+//! oracles in `floaty_verify::operations`, in every behavior of
 //! `operations::BEHAVIORS`.
 //!
 //! Every encoding of the FP8 and MX formats, binary16, and bfloat16 runs. The
@@ -8,12 +8,18 @@
 //! threshold, arguments next to the thresholds where `exp` overflows,
 //! becomes tiny, and rounds to zero, and arguments next to 1 for `log`.
 //! binary64 also runs the worst cases of Lefèvre and Muller.
+//!
+//! `compound` runs every exponent of [`COUNTS`] on each encoding of the FP8
+//! and MX formats, and one of them on each other sample. It also runs every
+//! exponent on arguments whose `1 + x` is a short odd multiple of a power of
+//! two, which give exact powers, and on arguments next to -1. And it runs
+//! arguments next to the thresholds of `(1 + x)^n` for a few exponents.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
 
 use floaty::format::Standard;
-use floaty::{Binary, F32, F64, F80, F128, Float, TF32};
+use floaty::{Binary, Env, F32, F64, F80, F128, Flags, Float, TF32};
 use floaty_verify::encodings::{IntegerBit, Layout, boundary_encodings, to_limbs};
 use floaty_verify::mpfr::{Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
@@ -21,6 +27,38 @@ use floaty_verify::operations::check;
 use floaty_verify::random::SplitMix64;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
+
+/// The exponents of the `compound` checks: the extremes of `i64`, both sides
+/// of the limit of `i32`, of 64, and of the exact powers, and small ones.
+const COUNTS: [i64; 24] = [
+    i64::MIN,
+    -(1 << 40) - 1,
+    -(1 << 31),
+    -1000,
+    -65,
+    -64,
+    -17,
+    -3,
+    -2,
+    -1,
+    0,
+    1,
+    2,
+    3,
+    5,
+    17,
+    64,
+    65,
+    1000,
+    123_457,
+    (1 << 31) - 1,
+    1 << 31,
+    (1 << 40) + 1,
+    i64::MAX,
+];
+
+/// A `compound_with` of a format.
+type Compound<S, const W: usize> = dyn Fn(Float<S, W>, i64, Env) -> (Float<S, W>, Flags);
 
 /// Checks every encoding of a format of the small format lists.
 macro_rules! every_small_encoding {
@@ -32,6 +70,9 @@ macro_rules! every_small_encoding {
             );
             for env in &BEHAVIORS {
                 check::check_elementary(x, &format, env);
+                check::check_compound(x, &COUNTS, &format, env, |x, n, env| {
+                    x.compound_with(n, env)
+                });
             }
         }
     }};
@@ -42,7 +83,8 @@ fn every_small_format_encoding() {
     floaty_verify::for_each_small_format!(every_small_encoding);
 }
 
-/// Checks every encoding of a 16-bit format.
+/// Checks every encoding of a 16-bit format, and `compound` with a few
+/// exponents.
 fn every_16_bit_encoding<const E: u32>()
 where
     Binary<E>: Standard<16, Bits = u16>,
@@ -52,6 +94,9 @@ where
         let x = Float::<Binary<E>, 16>::from_bits(bits);
         for env in &BEHAVIORS {
             check::check_elementary(x, &format, env);
+            check::check_compound(x, &[-7, 3, 1000], &format, env, |x, n, env| {
+                x.compound_with(n, env)
+            });
         }
     }
 }
@@ -188,11 +233,54 @@ fn thresholds(layout: Layout) -> Vec<Integer> {
         .collect()
 }
 
-/// Checks `exp` and `log` on the samples of a format of the IEEE layout, and
-/// on `extra` encodings.
+/// Returns pairs of an argument and an exponent of `compound`: every
+/// exponent of [`COUNTS`] with arguments whose `1 + x` is `m 2^-j` for an odd
+/// `m` up to 15, and with arguments next to -1, and a few exponents with the
+/// arguments next to the thresholds of `(1 + x)^n`: where it overflows,
+/// becomes tiny, is the smallest subnormal, and is half of it.
+fn compound_samples(layout: Layout) -> Vec<(Integer, i64)> {
+    let precision = layout.precision();
+    let emax = layout.ieee_bias();
+    let emin = 1 - emax;
+    let working = 2 * precision + 64;
+    let mut arguments: Vec<BigFloat> = (1..=15_u32)
+        .step_by(2)
+        .flat_map(|m| (0..=4_u32).map(move |j| (BigFloat::with_val(working, m) >> j) - 1u32))
+        .filter(|x| *x > -1 && !x.is_zero())
+        .collect();
+    arguments.extend((1..=3_u32).map(|k| (BigFloat::with_val(working, k) >> precision) - 1u32));
+    let mut pairs: Vec<(Integer, i64)> = arguments
+        .iter()
+        .filter_map(|x| encode(layout, &BigFloat::with_val(precision, x)))
+        .flat_map(|bits| COUNTS.map(|n| (bits.clone(), n)))
+        .collect();
+    let ulp = BigFloat::with_val(working, 1) >> (precision - 1);
+    let largest = (BigFloat::with_val(working, 2) - ulp) << emax;
+    let precision = i32::try_from(precision).expect("a precision fits an i32");
+    let mut thresholds = vec![largest];
+    thresholds.extend(
+        [emin, emin - precision + 1, emin - precision]
+            .map(|exponent| BigFloat::with_val(working, 1) << exponent),
+    );
+    for n in [3_i64, -3, 65, -65, 1000, -1000] {
+        let root = u32::try_from(n.unsigned_abs()).expect("the exponent is small");
+        for threshold in &thresholds {
+            let root = BigFloat::with_val(working, threshold.root_ref(root));
+            let base = if n > 0 { root } else { root.recip() };
+            let x = base - 1u32;
+            pairs.extend(around(layout, &x, 3).into_iter().map(|bits| (bits, n)));
+        }
+    }
+    pairs
+}
+
+/// Checks `exp`, `log`, and `compound` on the samples of a format of the
+/// IEEE layout, and on `extra` encodings. Each sample takes one exponent of
+/// [`COUNTS`] in turn, and the pairs of [`compound_samples`] run too.
 fn check_format<S: Standard<W>, const W: usize>(
     layout: Layout,
     make: &dyn Fn(&Integer) -> Float<S, W>,
+    compound: &Compound<S, W>,
     count: usize,
     seed: u64,
     extra: &[Integer],
@@ -204,10 +292,16 @@ fn check_format<S: Standard<W>, const W: usize>(
     encodings.extend(exp_binades(layout, &mut random));
     encodings.extend(thresholds(layout));
     encodings.extend_from_slice(extra);
-    for bits in &encodings {
-        let x = make(bits);
-        for env in &BEHAVIORS {
+    let pairs = compound_samples(layout);
+    for env in &BEHAVIORS {
+        for (index, bits) in encodings.iter().enumerate() {
+            let x = make(bits);
             check::check_elementary(x, &format, env);
+            let n = COUNTS[index % COUNTS.len()];
+            check::check_compound(x, &[n], &format, env, compound);
+        }
+        for (bits, n) in &pairs {
+            check::check_compound(make(bits), &[*n], &format, env, compound);
         }
     }
 }
@@ -273,6 +367,7 @@ fn tf32_binary32_binary64_x87_and_binary128() {
     check_format(
         Layout::TF32,
         &|bits: &Integer| TF32::from_bits(bits.to_u32().expect("a TF32 encoding has 19 bits")),
+        &|x, n, env| x.compound_with(n, env),
         4_000,
         0x0F19,
         &[],
@@ -280,6 +375,7 @@ fn tf32_binary32_binary64_x87_and_binary128() {
     check_format(
         Layout::BINARY32,
         &|bits: &Integer| F32::from_bits(bits.to_u32().expect("a binary32 encoding fits a u32")),
+        &|x, n, env| x.compound_with(n, env),
         4_000,
         0x0F32,
         &[],
@@ -292,6 +388,7 @@ fn tf32_binary32_binary64_x87_and_binary128() {
     check_format(
         Layout::BINARY64,
         &|bits: &Integer| F64::from_bits(bits.to_u64().expect("a binary64 encoding fits a u64")),
+        &|x, n, env| x.compound_with(n, env),
         3_000,
         0x0F64,
         &worst,
@@ -299,6 +396,7 @@ fn tf32_binary32_binary64_x87_and_binary128() {
     check_format(
         Layout::X87_EXTENDED,
         &|bits: &Integer| F80::from_bits(bits.to_u128().expect("an x87 encoding fits a u128")),
+        &|x, n, env| x.compound_with(n, env),
         2_000,
         0x0F80,
         &[],
@@ -308,6 +406,7 @@ fn tf32_binary32_binary64_x87_and_binary128() {
         &|bits: &Integer| {
             F128::from_bits(bits.to_u128().expect("a binary128 encoding fits a u128"))
         },
+        &|x, n, env| x.compound_with(n, env),
         1_500,
         0x0128,
         &[],
@@ -324,6 +423,7 @@ fn layouts_that_fill_or_cross_limbs() {
         &|bits: &Integer| {
             Float::<Binary<2>, 64>::from_bits(bits.to_u64().expect("the encoding fits a u64"))
         },
+        &|x, n, env| x.compound_with(n, env),
         1_000,
         0x0264,
         &[],
@@ -333,6 +433,7 @@ fn layouts_that_fill_or_cross_limbs() {
         &|bits: &Integer| {
             Float::<Binary<2>, 128>::from_bits(bits.to_u128().expect("the encoding fits a u128"))
         },
+        &|x, n, env| x.compound_with(n, env),
         1_000,
         0x0228,
         &[],
@@ -342,6 +443,7 @@ fn layouts_that_fill_or_cross_limbs() {
         &|bits: &Integer| {
             Float::<Binary<15>, 72>::from_bits(bits.to_u128().expect("the encoding fits a u128"))
         },
+        &|x, n, env| x.compound_with(n, env),
         1_000,
         0x0072,
         &[],
@@ -354,6 +456,7 @@ macro_rules! wide_format {
         check_format(
             Layout::ieee($width, $exponent_bits),
             &|bits: &Integer| floaty::$alias::from_bits(to_limbs::<$limbs>(bits)),
+            &|x, n, env| x.compound_with(n, env),
             200,
             $width,
             &[],

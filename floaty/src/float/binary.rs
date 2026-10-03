@@ -1,6 +1,6 @@
 //! The operations of the binary formats alone: `log_b`, the algebraic
-//! functions `hypot`, the reciprocal square root, `pown`, and `rootn`, the
-//! augmented operations, and the NaN payload operations.
+//! functions `hypot`, the reciprocal square root, `pown`, `rootn`, and
+//! `compound`, the augmented operations, and the NaN payload operations.
 
 use super::Float;
 use crate::binary::Layout;
@@ -223,6 +223,44 @@ where
     pub fn rootn_with(self, n: i64, behavior: impl Override) -> (Self, Flags) {
         let env = behavior.apply::<M>().env();
         let (bits, flags) = Layout::<E, Enc, W>::rootn(self.bits.to_limbs(), n, &env);
+        (Self::saturated_result(bits, &env), flags)
+    }
+
+    /// Returns `(1 + self)^n`, with the default mode.
+    #[must_use]
+    pub fn compound(self, n: i64) -> Self {
+        self.compound_with(n, M::default()).0
+    }
+
+    /// Returns `(1 + self)^n` for an integer `n`, correctly rounded, as IEEE
+    /// 754-2019 `compound` does, and the flags.
+    ///
+    /// The exact power rounds once in the direction of the behavior, for
+    /// every `n`. The result is exact only when the format holds the exact
+    /// power. The flags are those of that rounding.
+    ///
+    /// The special cases follow IEEE 754-2019 section 9.2.1. `n = 0` gives 1
+    /// for a value at or above -1, +inf, and a quiet NaN. A value below -1,
+    /// -inf included, gives the default NaN and signals invalid for every
+    /// `n`. -1 gives +0 for a positive `n`, and +inf with divide-by-zero for
+    /// a negative `n`, or the NaN or the largest finite value of a format
+    /// without an infinity. A zero gives 1. +inf gives +inf for a positive
+    /// `n`, and +0 for a negative `n`. Another NaN gives the NaN of the NaN
+    /// rule.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let compound = |bits, n| F64::from_bits(bits).compound_with(n, Env::IEEE);
+    /// // (1 + 1)^3 is 8 exactly. (1 + 0.05)^10 rounds.
+    /// assert_eq!(compound(0x3FF0_0000_0000_0000, 3), (F64::from_bits(0x4020_0000_0000_0000), Flags::NONE));
+    /// assert_eq!(compound(0x3FA9_9999_9999_999A, 10).0.to_bits(), 0x3FFA_0FF3_CFEA_3A50);
+    /// ```
+    #[must_use]
+    pub fn compound_with(self, n: i64, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        let env = behavior.env();
+        let (bits, flags) = Layout::<E, Enc, W>::compound(self.bits.to_limbs(), n, behavior);
         (Self::saturated_result(bits, &env), flags)
     }
 
