@@ -1,0 +1,121 @@
+//! The balls of `exp`, `log`, and the powers of 10 at one working width.
+
+use super::ball::Ball;
+use super::constants::{ln2, ln10};
+use crate::limbs::Widen;
+
+/// `floor(sqrt(2) * 2^63)`: a mantissa whose top 64 bits are at or above it
+/// lies at or above `sqrt(2)` in its binade.
+const SQRT2: u64 = 0xB504_F333_F9DE_6484;
+
+/// The terms that a series sums at most. Each series stops far earlier.
+const TERM_LIMIT: u64 = 4096;
+
+/// Returns the number of squarings that ends the evaluation of `exp`: about
+/// half the square root of the width, which balances the terms of the series
+/// against the squarings.
+fn squarings<W: Widen>() -> i64 {
+    i64::from(W::BITS.isqrt() / 2 + 2)
+}
+
+/// Returns the ball of `e^x` for a ball of `|x|` below 2^30.
+///
+/// `x = k ln 2 + r` with `k` the integer nearest `x / ln 2`, so `|r|` is
+/// about `ln 2 / 2` at most. The series of `e^t` runs on `t = r / 2^s` and
+/// stops at a term below `2^-(W::BITS + 8)`. Each later term is at most a
+/// quarter of the one before, so the rest of the series is below that term,
+/// which the radius takes. `s` squarings then give `e^r`, and `2^k` scales
+/// it.
+pub(super) fn exp<W: Widen>(x: &Ball<W>) -> Ball<W> {
+    let ln2 = ln2::<W>();
+    let (quotient, _) = x.center().div(ln2.center());
+    let k = quotient.round_to_i64();
+    let r = x.sub(&ln2.mul(&Ball::integer(k)));
+    let squarings = squarings::<W>();
+    let t = r.scale(-squarings);
+    let limit = -i64::from(W::BITS) - 8;
+    let mut sum = Ball::one();
+    let mut term = Ball::one();
+    // `|t|` is below 1/2, so each term is at most a quarter of the one before
+    // and the rest of the series lies below the last term, also when the
+    // limit stops the loop.
+    for index in 1..=TERM_LIMIT {
+        term = term.mul(&t).div_small(index);
+        sum = sum.add(&term);
+        if term.upper().ceiling_log2() < limit {
+            break;
+        }
+    }
+    sum = sum.widened(term.upper());
+    for _ in 0..squarings {
+        sum = sum.mul(&sum);
+    }
+    sum.scale(k)
+}
+
+/// Returns the ball of `ln y` for a ball of positive values, or `None` when
+/// the ball comes near zero.
+///
+/// `y = m 2^e` with `m` from `1 / sqrt(2)` to `sqrt(2)`, so
+/// `t = (m - 1) / (m + 1)` is at most 0.172 in magnitude, and
+/// `ln m = 2 atanh(t)`, the sum of `2 t^(2j + 1) / (2j + 1)`. The series stops
+/// at a term below `|t| 2^-(W::BITS + 8)`. The rest is below twice that term,
+/// because `t^2` is below 0.03, and the radius takes it.
+pub(super) fn log<W: Widen>(y: &Ball<W>) -> Option<Ball<W>> {
+    if !y.is_positive() {
+        return None;
+    }
+    let center = y.center();
+    let exponent = if center.leading() >= SQRT2 {
+        center.top() + 1
+    } else {
+        center.top()
+    };
+    let m = y.scale(-exponent);
+    let one = Ball::one();
+    let t = m.sub(&one).div(&m.add(&one))?;
+    let log_m = if t.center().is_zero() {
+        // `m` is within the radius of 1, and so is `t` of 0. The terms past
+        // the first are below the cube of the radius.
+        t.widened(t.radius()).scale(1)
+    } else {
+        let t2 = t.mul(&t);
+        let limit = t.center().top() - i64::from(W::BITS) - 8;
+        let mut sum = t;
+        let mut power = t;
+        let mut term = t;
+        for index in 1..=TERM_LIMIT {
+            power = power.mul(&t2);
+            term = power.div_small(2 * index + 1);
+            sum = sum.add(&term);
+            if term.upper().ceiling_log2() < limit {
+                break;
+            }
+        }
+        sum.widened(term.upper().scale(1)).scale(1)
+    };
+    Some(log_m.add(&ln2::<W>().mul(&Ball::integer(exponent))))
+}
+
+/// Returns the ball of `ln c + q ln 10` for a positive integer `c`.
+pub(super) fn log_decimal<W: Widen>(c: &Ball<W>, q: i64) -> Option<Ball<W>> {
+    let log_c = log(c)?;
+    Some(log_c.add(&ln10::<W>().mul(&Ball::integer(q))))
+}
+
+/// Returns the ball of `10^n` for `n >= 0`, by squaring.
+pub(super) fn power_of_ten<W: Widen>(n: u64) -> Ball<W> {
+    let mut result = Ball::one();
+    let mut base = Ball::integer(10);
+    let mut rest = n;
+    while rest != 0 {
+        if rest & 1 == 1 {
+            result = result.mul(&base);
+        }
+        rest >>= 1;
+        if rest != 0 {
+            base = base.mul(&base);
+        }
+    }
+    result
+}

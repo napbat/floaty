@@ -21,15 +21,15 @@ binary lifters, decompilers, constant folders, and FPU emulators.
 - **The IEEE 754 operations.** Comparisons, total order, the IEEE 754-2019
   minimum, maximum, and magnitude operations and the IEEE 754-2008 `minNum`
   and `maxNum`, the remainder, rounding to an integral value, integer
-  conversions up to 512 bits, `scale_b` and `log_b`, `hypot`, the
-  reciprocal square root, `pown`, and `rootn` of the binary formats,
-  correctly rounded, the last two for `|n|` up to 64, the IEEE 754-2019
-  augmented addition, subtraction, and multiplication of the binary
-  formats, `next_up` and `next_down`, the sign operations, the NaN payload
-  operations, the reduction operations of the binary formats, and the
-  decimal quantum operations. The sums of the reductions round once. The
-  operators include `%`, the truncated remainder of C `fmod`, and the
-  compound assignments such as `+=`.
+  conversions up to 512 bits, `scale_b` and `log_b`, `exp` and `log` of
+  every format, `hypot`, the reciprocal square root, `pown`, and `rootn`
+  of the binary formats, correctly rounded, the last two for `|n|` up to
+  64, the IEEE 754-2019 augmented addition, subtraction, and
+  multiplication of the binary formats, `next_up` and `next_down`, the sign
+  operations, the NaN payload operations, the reduction operations of the
+  binary formats, and the decimal quantum operations. The sums of the
+  reductions round once. The operators include `%`, the truncated
+  remainder of C `fmod`, and the compound assignments such as `+=`.
 - **Hardware behavior as data.** Flush-to-zero, denormals-are-zero, tininess
   detection, NaN propagation rules, x87 precision control, and saturation
   of overflows. Presets give the x86 SSE and x87 behavior.
@@ -743,6 +743,22 @@ call also sets up a context.
 | decimal64, DPD | 58.5 / 70.3 | 49.3 / 58.5 | 73.1 / 153.5 | 63.8 | 74.8 / 170.4 |
 | decimal128, DPD | 66.6 / 95.4 | 72.2 / 84.5 | 123.5 / 331.7 | 187.2 | 124.0 / 219.7 |
 
+`exp` and `log` in nanoseconds per operation, with the mode of the type, on
+an AMD Ryzen AI Max+ 395. The time grows with the precision, because the
+evaluation runs at twice the bits of the storage.
+
+| Format | exp | log |
+| --- | --- | --- |
+| binary32 | 1,341 | 1,773 |
+| binary64 | 1,350 | 1,733 |
+| binary128 | 2,751 | 4,926 |
+| binary256 | 7,488 | 17,246 |
+| binary512 | 45,650 | 135,521 |
+| decimal64, BID | 1,024 | 1,996 |
+| decimal128, BID | 2,408 | 5,113 |
+| decimal64, DPD | 1,096 | 1,984 |
+| decimal128, DPD | 2,313 | 5,150 |
+
 ## Verification
 
 Every behavior has a test against an established reference. Where no
@@ -754,6 +770,7 @@ decNumber.
 | --- | --- |
 | Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in the six directions of TestFloat, under four NaN rules |
 | MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, with FTZ, DAZ, and saturation, and with unsupported operands, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, from binary32, binary64, x87 extended, and binary128 to them, and between every binary format and the decimal formats, in every behavior of the conversion tests. The truncated remainder. `hypot`, the reciprocal square root, `pown`, and `rootn`, against `mpfr_hypot`, `mpfr_rec_sqrt`, `mpfr_pow_si`, and `mpfr_rootn_si`, and the rounded steps of `pown` past `|n| = 64`. The augmented operations, whose tail `mpfr_sum` rounds. The sums of the reduction operations, with `mpfr_sum` and `mpfr_dot`, and each step of the scaled products. The NaN payload operations of every binary format, by floaty's rule. The operations of `DoubleDouble` on its exact value, by their rules, with exact rationals. Each binary64 step of the other `DoubleDouble` operations, in the behaviors that libgcc and QD do not define. |
+| MPFR, through `rug`, with published worst cases | `exp` and `log` of every binary and decimal format, against `mpfr_exp` and `mpfr_log` at a precision that grows until its bounds decide the rounding, in every behavior of the operation tests for the binary formats and of the conversion tests for the decimal formats. Every FP8, FP6, FP4, binary16, and bfloat16 encoding. The binary64 worst cases of Lefèvre and Muller, and the decimal64 `exp` worst cases of Lefèvre, Stehlé, and Zimmermann. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, `scale_b`, and `log_b` against `ilogb` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
 | The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 and s390x tests run under QEMU 10.2.1. |
@@ -795,7 +812,8 @@ The minimum supported Rust version is 1.89. The crate uses edition 2024.
 
 ## Limitations
 
-- No transcendental functions, such as `sin`, `exp`, and `log`.
+- No transcendental functions other than `exp` and `log`, such as `sin` and
+  `pow`.
 - No text parsing or printing, in decimal or in hexadecimal.
 - No `const fn` evaluation. The engine uses traits, which a `const fn` on
   stable Rust cannot call.
