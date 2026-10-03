@@ -859,11 +859,13 @@ The workspace has two packages:
 `floaty-verify` builds its C references on Linux x86-64 only. It needs the
 submodules, a C and C++ toolchain, the PowerPC cross compiler, and QEMU.
 The first build downloads the decimal and QD archives and two Mesa headers.
-The AArch64 gates also need the AArch64 cross compiler.
+The AArch64 gates also need the AArch64 cross compiler. The tests run
+under cargo-nextest, and the doctests under `cargo test --doc`.
 
 ```text
 git submodule update --init
-cargo test --workspace
+cargo nextest run --workspace
+cargo test --workspace --doc
 cargo bench -p floaty-verify --bench operations
 ```
 
