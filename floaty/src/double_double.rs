@@ -418,7 +418,7 @@ impl<M: Mode> DoubleDouble<Gcc, M> {
     /// their products in round to nearest, as accurate as the long double
     /// arithmetic, not rounded once. Then only an overflow, an underflow, and
     /// an exact zero read the rounding direction. QD has no such function, so
-    /// [`Qd`] has no `mul_add`.
+    /// [`Qd`] rounds the exact value once instead.
     #[must_use]
     pub fn mul_add_with(
         self,
@@ -448,7 +448,7 @@ impl<M: Mode> DoubleDouble<Gcc, M> {
     /// glibc counts 106 bits in a pair: the step is one unit in the 106th
     /// bit of the high half, added with `__gcc_qadd`. The step above a zero
     /// is `2^-1074`, and a NaN gives `x + x`. QD has no such function, so
-    /// [`Qd`] has no `next_up`.
+    /// [`Qd`] steps to the next canonical pair instead.
     #[must_use]
     pub fn next_up_with(self, behavior: impl Override) -> (Self, Flags) {
         self.apply_one(Steps::new(behavior.apply::<M>()), glibc::next_up)
