@@ -19,7 +19,8 @@
 //! changes neither the result nor the flags, that the flags are the union of
 //! the flags of the steps, and that each step runs under the behavior of the
 //! call. Then the MPFR oracles compute each step: the arithmetic oracle, the
-//! integer conversion oracles for a truncation, and the comparison oracle.
+//! integer conversion oracles for a truncation, the comparison oracle, and
+//! the `exp` and `log` oracle for the seed of `nroot`.
 //!
 //! The replay does not check the branches of an algorithm on the values that
 //! only these behaviors give. The branches read only the results of steps,
@@ -42,6 +43,7 @@ use floaty_verify::double_double::reference::Pair;
 use floaty_verify::double_double::{BINARY64, pair};
 use floaty_verify::mpfr::{DIRECTIONS, Operand, Value};
 use floaty_verify::operations::compare::{compare_quiet, compare_signaling};
+use floaty_verify::operations::elementary::{self, Function};
 use floaty_verify::operations::integral::{from_int, to_int};
 use floaty_verify::operations::{Outcome, outcome};
 use floaty_verify::random::SplitMix64;
@@ -62,7 +64,13 @@ enum Operation {
     MulAdd,
     NextUp,
     NextDown,
+    /// `nroot` with the exponent [`ROOT`].
+    Root,
 }
+
+/// The exponent of the replayed `nroot`. An odd exponent takes negative
+/// values too.
+const ROOT: i32 = 3;
 
 /// The operations of `Gcc`.
 const GCC: [Operation; 10] = [
@@ -79,7 +87,7 @@ const GCC: [Operation; 10] = [
 ];
 
 /// The operations of `Qd`. QD has no `fma`, `nextup`, or `nextdown`.
-const QD: [Operation; 7] = [
+const QD: [Operation; 8] = [
     Operation::Add,
     Operation::Sub,
     Operation::Mul,
@@ -87,6 +95,7 @@ const QD: [Operation; 7] = [
     Operation::Sqrt,
     Operation::Remainder,
     Operation::TruncatedRemainder,
+    Operation::Root,
 ];
 
 /// The result halves and the flags of an operation.
@@ -176,6 +185,7 @@ fn gcc(operation: Operation, [x, y, z]: [Pair; 3], behavior: impl Behavior) -> R
         Operation::MulAdd => x.mul_add_with(y, z, behavior),
         Operation::NextUp => x.next_up_with(behavior),
         Operation::NextDown => x.next_down_with(behavior),
+        Operation::Root => unreachable!("libgcc has no nroot"),
     })
 }
 
@@ -190,6 +200,7 @@ fn qd(operation: Operation, [x, y, _]: [Pair; 3], behavior: impl Behavior) -> Re
         Operation::Sqrt => x.sqrt_with(behavior),
         Operation::Remainder => x.remainder_with(y, behavior),
         Operation::TruncatedRemainder => x.truncated_remainder_with(y, behavior),
+        Operation::Root => x.nroot_with(ROOT, behavior),
         Operation::MulAdd | Operation::NextUp | Operation::NextDown => {
             unreachable!("QD has no {operation:?}")
         }
@@ -251,6 +262,17 @@ fn check_step(step: &Step) {
             "{step:?}"
         );
     };
+    let elementary = |function: Function, a: u64| {
+        let StepResult::Value(bits) = step.result else {
+            panic!("{step:?}: an exp or log step gives a value");
+        };
+        let expected = elementary::expected(function, &operand(a), &BINARY64, env);
+        assert_eq!(
+            (outcome(F64::from_bits(bits)), step.flags),
+            expected,
+            "{step:?}"
+        );
+    };
     match step.operation {
         StepOperation::Add(a, b) => arithmetic(Arithmetic::Add, &[a, b]),
         StepOperation::Sub(a, b) => arithmetic(Arithmetic::Sub, &[a, b]),
@@ -269,6 +291,9 @@ fn check_step(step: &Step) {
         StepOperation::CompareSignaling(a, b) => {
             order(compare_signaling(&operand(a), &operand(b), env));
         }
+        StepOperation::Exp(a) => elementary(Function::Exp, a),
+        StepOperation::Log(a) => elementary(Function::Log, a),
+        _ => panic!("{step:?}: the replay checks every kind of step"),
     }
 }
 
@@ -294,6 +319,9 @@ impl Coverage {
             StepOperation::Truncate(..) => "truncate",
             StepOperation::CompareQuiet(..) => "compare_quiet",
             StepOperation::CompareSignaling(..) => "compare_signaling",
+            StepOperation::Exp(..) => "exp",
+            StepOperation::Log(..) => "log",
+            _ => panic!("{step:?}: the replay counts every kind of step"),
         };
         if !self.kinds.contains(&kind) {
             self.kinds.push(kind);
@@ -407,6 +435,8 @@ fn every_step_of_qd_follows_its_oracle() {
             "truncate",
             "compare_quiet",
             "compare_signaling",
+            "exp",
+            "log",
         ],
     );
     println!("Qd: {} steps", coverage.steps);

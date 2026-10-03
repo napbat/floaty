@@ -23,6 +23,7 @@ pub struct Step {
 
 /// The operation of a step, with its operands in operand order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StepOperation {
     /// `a + b`.
     Add(u64, u64),
@@ -43,6 +44,10 @@ pub enum StepOperation {
     CompareQuiet(u64, u64),
     /// A signaling comparison of `a` and `b`.
     CompareSignaling(u64, u64),
+    /// `e^a`, correctly rounded.
+    Exp(u64),
+    /// The natural logarithm of `a`, correctly rounded.
+    Log(u64),
 }
 
 /// The result of a step.
@@ -59,7 +64,8 @@ pub enum StepResult {
 ///
 /// Only the operations of a double-double value with binary64 steps report
 /// them: the arithmetic, the square root, the remainders, `mul_add`,
-/// `next_up`, and `next_down`. Every other operation reports nothing.
+/// `next_up`, `next_down`, and the QD operations `sqr`, `inv`, `npwr`, and
+/// `nroot`. Every other operation reports nothing.
 #[derive(Clone, Copy)]
 pub struct Observed<'a, B> {
     behavior: B,

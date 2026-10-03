@@ -22,8 +22,8 @@ fn double_double_operators_match<Alg: floaty::Algorithm>(pairs: &[(F64, F64)]) {
     }
 }
 
-/// Checks that QD's square, inverse, and integer power give their `_with`
-/// results under the default mode.
+/// Checks that QD's square, inverse, integer power, and root give their
+/// `_with` results under the default mode.
 fn qd_unary_methods_match(pairs: &[(F64, F64)]) {
     let bits = |value: DoubleDouble<Qd>| (value.hi().to_bits(), value.lo().to_bits());
     let env = DoubleDouble::<Qd>::ENV;
@@ -36,6 +36,13 @@ fn qd_unary_methods_match(pairs: &[(F64, F64)]) {
                 bits(x.npwr(n)),
                 bits(x.npwr_with(n, env).0),
                 "{x:?} npwr {n}"
+            );
+        }
+        for n in [0, 2, 3, 4, 7] {
+            assert_eq!(
+                bits(x.nroot(n)),
+                bits(x.nroot_with(n, env).0),
+                "{x:?} nroot {n}"
             );
         }
     }

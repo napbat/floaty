@@ -72,13 +72,15 @@ const QD_SHIM_SHA256: &str = "d6346bd1dc44447732adb1db9c5776b23e206fbb52f512177e
 /// The SHA-256 of [`QD_SHIM_SECTIONS`] in `qd_unary.cpp`'s object.
 /// The square follows the inspected inline steps. The inverse calls the
 /// same `dd_real::accurate_div` as the arithmetic shim. The integer power
-/// calls `npwr` of `dd_real.o`, whose code [`QD_LIBRARY_SHA256`] pins.
-const QD_UNARY_SHA256: &str = "5d0bacbc8d48dfcb2cfe9388295dd842db379e517c0dcb21c1940d253eda2a9f";
+/// and the library root call `npwr` and `nroot` of `dd_real.o`, whose code
+/// [`QD_LIBRARY_SHA256`] pins. The seeded root inlines the source of
+/// `nroot` with the seed as an operand.
+const QD_UNARY_SHA256: &str = "84d0d502e2452ee74d40ae4a05188f9611e65ca375442a863ae3be6587e54816";
 
 /// The sections of `dd_real.o` in `libqd.a` that floaty's `Qd` algorithm
-/// follows: the code of the square root, `fmod`, and `npwr`, and their
-/// constants. The `accurate_div` that `npwr` calls has the bytes of the
-/// shim's pinned copy.
+/// follows: the code of the square root, `fmod`, `npwr`, and `nroot`, and
+/// their constants. The `accurate_div` that `npwr` and `nroot` call has the
+/// bytes of the shim's pinned copy.
 const QD_LIBRARY_SECTIONS: [&str; 3] = [".text", ".rodata.cst8", ".rodata.cst16"];
 
 /// The SHA-256 of [`QD_LIBRARY_SECTIONS`] in `dd_real.o`, one section after

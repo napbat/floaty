@@ -520,7 +520,8 @@ impl<M: Mode> DoubleDouble<Qd, M> {
     /// See [`npwr_with`](Self::npwr_with) for the rule.
     #[must_use]
     pub fn npwr(self, n: i32) -> Self {
-        self.power(n, Steps::without_flags(M::default())).0
+        self.with_count(n, Steps::without_flags(M::default()), qd::npwr)
+            .0
     }
 
     /// Returns QD's integer power `npwr(self, n)`, and the flags of every
@@ -539,12 +540,53 @@ impl<M: Mode> DoubleDouble<Qd, M> {
     /// magnitude 2^31, as the source of QD intends.
     #[must_use]
     pub fn npwr_with(self, n: i32, behavior: impl Override) -> (Self, Flags) {
-        self.power(n, Steps::new(behavior.apply::<M>()))
+        self.with_count(n, Steps::new(behavior.apply::<M>()), qd::npwr)
     }
 
-    /// Runs QD's integer power in `steps`.
-    fn power<B: Behavior>(self, n: i32, mut steps: Steps<B>) -> (Self, Flags) {
-        let (hi, lo) = qd::npwr(&mut steps, (self.hi, self.lo), n);
+    /// Returns QD's root `nroot(self, n)` with the default mode. The steps
+    /// take the host paths of binary64 where the build has them. The `exp`
+    /// and `log` steps always run in the engine.
+    ///
+    /// See [`nroot_with`](Self::nroot_with) for the rule.
+    #[must_use]
+    pub fn nroot(self, n: i32) -> Self {
+        self.with_count(n, Steps::without_flags(M::default()), qd::nroot)
+            .0
+    }
+
+    /// Returns QD's root `nroot(self, n)`, the `n`th root, and the flags of
+    /// every binary64 step.
+    ///
+    /// An exponent below 1 gives QD's NaN in both halves, and so does an
+    /// even exponent with a negative high half. An exponent of 1 gives the
+    /// pair unchanged, and 2 gives [`sqrt_with`](Self::sqrt_with) after a
+    /// signaling comparison of the high half with 0. A zero high half gives
+    /// `(+0, +0)`. Otherwise QD takes the seed `x = exp(-log(|hi|) / n)`,
+    /// one Newton step `x += x * (1 - |self| * x^n) / n` with
+    /// [`npwr_with`](Self::npwr_with), the sign of `self`, and the
+    /// reciprocal by [`inv_with`](Self::inv_with). Each step uses the
+    /// behavior of the call. The operation does not round the exact root
+    /// once.
+    ///
+    /// QD computes the seed with the `exp` and `log` of the C library, which
+    /// do not always round correctly. floaty takes the correctly rounded
+    /// [`exp_with`](crate::Float::exp_with) and
+    /// [`log_with`](crate::Float::log_with) of binary64 in the behavior of
+    /// the call. Where the C library rounds the seed differently, the
+    /// result can differ from QD.
+    #[must_use]
+    pub fn nroot_with(self, n: i32, behavior: impl Override) -> (Self, Flags) {
+        self.with_count(n, Steps::new(behavior.apply::<M>()), qd::nroot)
+    }
+
+    /// Runs a QD operation with an integer operand in `steps`.
+    fn with_count<B: Behavior>(
+        self,
+        n: i32,
+        mut steps: Steps<B>,
+        operation: fn(&mut Steps<B>, Pair, i32) -> Pair,
+    ) -> (Self, Flags) {
+        let (hi, lo) = operation(&mut steps, (self.hi, self.lo), n);
         (Self::new(hi, lo), steps.flags())
     }
 }

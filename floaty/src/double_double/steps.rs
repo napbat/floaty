@@ -181,6 +181,22 @@ impl<B: Behavior> Steps<B> {
         self.record_value(operation, step)
     }
 
+    /// Returns `e^a`, correctly rounded. No host path computes it, so the
+    /// step always runs in the engine.
+    #[inline]
+    pub fn exp(&mut self, a: F64) -> F64 {
+        let step = a.exp_with(self.behavior);
+        self.record_value(StepOperation::Exp(a.to_bits()), step)
+    }
+
+    /// Returns the natural logarithm of `a`, correctly rounded. No host path
+    /// computes it, so the step always runs in the engine.
+    #[inline]
+    pub fn log(&mut self, a: F64) -> F64 {
+        let step = a.log_with(self.behavior);
+        self.record_value(StepOperation::Log(a.to_bits()), step)
+    }
+
     /// Returns the order of two values by a quiet comparison, which signals
     /// invalid only for a signaling NaN. `None` means unordered.
     #[inline]

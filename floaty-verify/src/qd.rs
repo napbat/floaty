@@ -154,6 +154,19 @@ unsafe extern "C" {
         rounding: c_int,
         result: *mut u64,
     ) -> c_uint;
+    fn floaty_qd_nroot(
+        a: *const u64,
+        n: c_int,
+        seed: u64,
+        rounding: c_int,
+        result: *mut u64,
+    ) -> c_uint;
+    fn floaty_qd_nroot_library(
+        a: *const u64,
+        n: c_int,
+        rounding: c_int,
+        result: *mut u64,
+    ) -> c_uint;
     /// The C library `fma`, which QD calls for the error of a product.
     fn fma(x: f64, y: f64, z: f64) -> f64;
 }
@@ -233,6 +246,28 @@ pub fn npwr(a: Pair, n: i32, rounding: Rounding) -> Outcome {
 #[must_use]
 pub fn npwr_magnitude(a: Pair, n: i32, rounding: Rounding) -> Outcome {
     power(floaty_qd_npwr_magnitude, a, n, rounding)
+}
+
+/// Returns QD's `nroot(a, n)` source with the seed `seed` in place of
+/// `exp(-log(|a.hi|) / n)`, in `rounding`. The shim compiles the source with
+/// the inline operators of QD. The flags leave out the seed, which the
+/// caller computes.
+#[must_use]
+pub fn nroot(a: Pair, n: i32, seed: u64, rounding: Rounding) -> Outcome {
+    let a = [a.hi, a.lo];
+    let mut result = [0; 2];
+    // SAFETY: the function reads the two halves of `a` and writes the two
+    // halves of `result`. Both arrays live until it returns. It restores
+    // the floating-point environment of this thread before it returns.
+    let bits = unsafe { floaty_qd_nroot(a.as_ptr(), n, seed, code(rounding), result.as_mut_ptr()) };
+    outcome(result, bits)
+}
+
+/// Returns the library's `nroot(a, n)` of `dd_real` in `rounding`, whose
+/// seed comes from the C library `log` and `exp`.
+#[must_use]
+pub fn nroot_library(a: Pair, n: i32, rounding: Rounding) -> Outcome {
+    power(floaty_qd_nroot_library, a, n, rounding)
 }
 
 /// Calls an integer power of the shim.
