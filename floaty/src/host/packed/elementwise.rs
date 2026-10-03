@@ -57,7 +57,13 @@ pub fn binary<I: Isa, const C: usize>(
 /// binary32 encodings in the instruction set `I`: `Minimum`, `Maximum`,
 /// `MinimumNumber`, or `MaximumNumber`. Returns `None` for another
 /// operation.
-#[inline]
+// With `#[inline]`, LLVM leaves a copy of this function out of line in a
+// loop of chunks. A copy for `V3` or `V4` then has no features of the set,
+// and a call passes the lanes through memory. Inline in every loop,
+// `maximum_of` on 1,280 values of the operations bench takes 1,049 ns for
+// 1,514 ns in `Build`, and 1,106 ns for 1,441 ns in x86-64-v3.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 pub fn min_max<I: Isa, const C: usize>(
     x: [u32; C],
     y: [u32; C],
@@ -376,6 +382,16 @@ pub fn reduce<const N: usize>(values: impl Load, operation: MinMax, env: &Env) -
     dispatch::reduce::<N>(values, operation)
 }
 
+/// The lanes of a reduction, on a boundary of 64 bytes: the line of the
+/// cache, and the width of a 512-bit register. `reduce_into` stores a chunk
+/// of lanes and loads it again for the next chunk. A chunk that crosses a
+/// line makes the load wait for the store: the reduction of `maximum_of` on
+/// 1,280 values took 293 or 435 ns in x86-64-v4 on a Ryzen AI Max+ 395 with
+/// the lanes on a 4-byte boundary, as the build placed them, and 280 ns
+/// aligned.
+#[repr(C, align(64))]
+struct Aligned<T>(T);
+
 /// Returns the result of `reduce` in the instruction set `I`, with its
 /// features, in an environment that allows the path.
 #[inline]
@@ -389,15 +405,16 @@ pub(super) fn reduce_on<I: Isa, const N: usize>(
         } else {
             0xFF80_0000
         };
-        let mut lanes = [identity; N];
+        let mut lanes = Aligned([identity; N]);
+        let lanes = &mut lanes.0;
         if I::EXTRA_WIDE && N.is_multiple_of(16) {
-            reduce_into::<I, N, 16>(&mut lanes, values, operation, identity)?;
+            reduce_into::<I, N, 16>(lanes, values, operation, identity)?;
         } else if N.is_multiple_of(8) {
-            reduce_into::<I, N, 8>(&mut lanes, values, operation, identity)?;
+            reduce_into::<I, N, 8>(lanes, values, operation, identity)?;
         } else if N.is_multiple_of(4) {
-            reduce_into::<I, N, 4>(&mut lanes, values, operation, identity)?;
+            reduce_into::<I, N, 4>(lanes, values, operation, identity)?;
         } else {
-            reduce_into::<I, N, 1>(&mut lanes, values, operation, identity)?;
+            reduce_into::<I, N, 1>(lanes, values, operation, identity)?;
         }
         let mut half = N / 2;
         while half > 0 {

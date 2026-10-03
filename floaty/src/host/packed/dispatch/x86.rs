@@ -20,10 +20,10 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use super::super::super::environment::packed::{avx512, wide};
-use super::super::super::{Host, Isa, Load, Operation, Step, Term};
+use super::super::super::{Isa, Load, Operation, Step, Term};
 use super::super::{convert_chunks_on, elementwise, kernel};
 use crate::env::{Mode, Rounding};
-use crate::float::Float;
+use crate::float::{Float, FloatType};
 use crate::format::Standard;
 use crate::format::internal::MinMax;
 use crate::sealed::Sealed;
@@ -274,13 +274,16 @@ impl Selected {
 
     /// Runs `convert_chunks_on` in the instruction set.
     #[inline]
-    pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+    pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, T: FloatType, const N: usize>(
         self,
         values: &[Float<S, W, M>],
-        to: Host,
-        each: impl FnMut(usize, Option<[u64; N]>),
+        out: &mut [T],
+        fallback: impl FnMut(&[Float<S, W, M>], &mut [T]),
     ) {
-        in_selected!(self, convert_chunks_on::<S, W, M, N>(values, to, each));
+        in_selected!(
+            self,
+            convert_chunks_on::<S, W, M, T, N>(values, out, fallback)
+        );
     }
 }
 

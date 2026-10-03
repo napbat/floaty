@@ -3,9 +3,12 @@
 //!
 //! Each entry point runs in `Build` unless the processor has a larger
 //! instruction set than the build enables. It then runs generic over that
-//! set, and `Isa::run` puts each block of the generic code in a function
-//! compiled with the features of the set, so a helper that LLVM does not
-//! inline keeps them too. The check of the processor runs
+//! set. `Isa::run` puts each block of the generic code in a function
+//! compiled with the features of the set, so a block that LLVM does not
+//! inline keeps them too. The loop of a block calls no closure of its caller
+//! for each chunk: a closure that LLVM does not inline has no features of
+//! the set, and the call passes the lanes through memory. So the loop of
+//! `convert_chunks` stores each chunk itself. The check of the processor runs
 //! once, in a build with the feature `std`, and an atomic keeps its answer.
 //! So a call pays one load of the atomic and one branch. A build without
 //! `std`, and a build that enables the features of the largest set, takes
@@ -26,7 +29,7 @@ mod x86;
 use super::super::{Host, Kind, Load, Step, Term};
 use super::{Build, available, convert_chunks_on, elementwise, kernel};
 use crate::env::Mode;
-use crate::float::Float;
+use crate::float::{Float, FloatType};
 use crate::format::Standard;
 use crate::format::internal::MinMax;
 
@@ -131,15 +134,15 @@ pub fn reduce<const N: usize>(values: impl Load, operation: MinMax) -> Option<u3
 
 /// Runs `convert_chunks_on` in the instruction set of this processor.
 #[inline]
-pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, T: FloatType, const N: usize>(
     values: &[Float<S, W, M>],
-    to: Host,
-    each: impl FnMut(usize, Option<[u64; N]>),
+    out: &mut [T],
+    fallback: impl FnMut(&[Float<S, W, M>], &mut [T]),
 ) {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
     if let Some(selected) = x86::selected() {
-        selected.convert_chunks::<S, W, M, N>(values, to, each);
+        selected.convert_chunks::<S, W, M, T, N>(values, out, fallback);
         return;
     }
-    convert_chunks_on::<Build, S, W, M, N>(values, to, each);
+    convert_chunks_on::<Build, S, W, M, T, N>(values, out, fallback);
 }

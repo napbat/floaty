@@ -655,7 +655,7 @@ mod none {
         use core::cmp::Ordering;
 
         use crate::env::{Env, Mode};
-        use crate::float::Float;
+        use crate::float::{Float, FloatType};
         use crate::format::Standard;
         use crate::format::internal::MinMax;
         use crate::host::{Host, Isa, Kind, Load, Operation, Step, Term};
@@ -765,11 +765,17 @@ mod none {
 
         /// Returns `None`: this build has no host path.
         #[inline]
-        pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
+        pub fn convert_chunks<
+            S: Standard<W>,
+            const W: usize,
+            M: Mode,
+            T: FloatType,
+            const N: usize,
+        >(
             _values: &[Float<S, W, M>],
-            _to: Host,
+            _out: &mut [T],
             _env: &Env,
-            _each: impl FnMut(usize, Option<[u64; N]>),
+            _fallback: impl FnMut(&[Float<S, W, M>], &mut [T]),
         ) -> Option<()> {
             None
         }

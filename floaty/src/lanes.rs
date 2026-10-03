@@ -346,20 +346,11 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
             "the slices of a conversion have one length"
         );
         if const { host::packed::convertible(S::HOST, T::HOST) } {
-            let done = host::packed::convert_chunks::<S, W, M, N>(
+            let done = host::packed::convert_chunks::<S, W, M, T, N>(
                 values,
-                T::HOST,
+                out,
                 &<T::Mode as Mode>::ENV,
-                |start, bits| {
-                    let chunk = &mut out[start..start + N];
-                    match bits {
-                        Some(bits) => chunk
-                            .iter_mut()
-                            .zip(bits)
-                            .for_each(|(result, bits)| *result = T::from_host([bits, 0])),
-                        None => convert_each(&values[start..start + N], chunk),
-                    }
-                },
+                convert_each,
             );
             if done.is_some() {
                 let rest = values.len() - values.len() % N;
@@ -714,7 +705,10 @@ fn convert_out_of_line<S: Standard<W>, const W: usize, M: Mode, const N: usize, 
 /// Converts each value to the float type `T` into the same index of `out`,
 /// with the mode of `T`, one value at a time: for a build without the
 /// packed path, for a chunk that holds a NaN, and for the values after the
-/// last full chunk.
+/// last full chunk. The function runs out of line, so that the engine stays
+/// out of the loop of the packed path, which calls it for a chunk that
+/// holds a NaN.
+#[inline(never)]
 fn convert_each<S: Standard<W>, const W: usize, M: Mode, T: FloatType>(
     values: &[Float<S, W, M>],
     out: &mut [T],
