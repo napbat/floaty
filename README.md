@@ -452,7 +452,7 @@ returns the flags of every step.
 | `+`, `-`, `*`, `/` | libgcc `__gcc_qadd` and the others | `dd_real` operators |
 | `sqrt`, `remainder`, `%` | glibc 2.43 `sqrtl`, `remainderl`, `fmodl` | QD `sqrt`, `drem`, `fmod` |
 | `mul_add`, `next_up`, `next_down` | glibc 2.43 `fmal`, `nextupl`, `nextdownl` | QD has no such function: `mul_add` rounds the exact value once, as IEEE 754 `fusedMultiplyAdd` does, and `next_up` and `next_down` give the next canonical pair, as IEEE 754 `nextUp` and `nextDown` do |
-| `sqr`, `inv`, `npwr` | none: these are QD operations | QD `sqr`, `inv`, `npwr` |
+| `sqr`, `inv`, `npwr`, `nroot` | none: these are QD operations | QD `sqr`, `inv`, `npwr`, `nroot`, with a correctly rounded seed for `nroot` |
 | Conversions, integer conversions, `scale_b`, `log_b`, `round_to_integral`, `copy_sign`, classification, total order, minimum and maximum | the exact value `hi + lo`, by floaty's rule. For canonical pairs, glibc 2.43 matches except for the cases listed below. | the same |
 | `payload`, `from_payload`, `from_payload_signaling` | IEEE 754-2019 section 9.7, on the exact value, with 51 payload bits | the same |
 
@@ -464,6 +464,13 @@ Both constructors reject -0, negative values, fractions, and values at or above 
 QD's `npwr` takes `std::abs(n)`, which is undefined for `INT_MIN`, and its
 compiled loop never returns for that exponent. For `i32::MIN`, floaty's
 `npwr` takes the magnitude 2^31, as the source of QD intends.
+
+QD seeds `nroot` with `exp(-log(|hi|) / n)` of the C library, and glibc's
+`exp` does not always round correctly. floaty's `nroot` takes its own
+correctly rounded binary64 `exp` and `log` there, in the behavior of the
+call, so its result does not depend on the C library. In 1.4 million test
+pairs and exponents, glibc 2.43 gives another seed in 852 cases, and
+another root in 790.
 
 `floaty-verify` checks the rule of the operations on the exact value with
 exact rationals and MPFR. It also compares them with the IBM `long double`
@@ -779,7 +786,7 @@ decNumber.
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
 | glibc 2.43 libm of the powerpc64le cross C library, under QEMU | `sqrt`, `remainder`, `%`, `mul_add`, `next_up`, `next_down`, and `is_canonical` of `DoubleDouble<Gcc>`, and its operations on the exact value of canonical pairs: `log_b`, `copy_sign`, `round_to_integral` in each direction, `scale_b`, `to_int`, the minimum and maximum operations, and the total order |
 | glibc 2.43 libm of the host | The NaN payload operations of binary32, binary64, x87 extended, and binary128 |
-| QD 2.3.24 | `DoubleDouble<Qd>`, also under the FTZ and DAZ bits of MXCSR |
+| QD 2.3.24 | `DoubleDouble<Qd>`, also under the FTZ and DAZ bits of MXCSR. `nroot` runs against the source of QD with the seed from MPFR, and that copy against the library with the seed of the C library. |
 | Mesa 25.2.0, `format_r11g11b10f.h` | The R11G11B10 recipe: every rounding case of both channels, and every channel code |
 
 The normal test run tests every FP8, FP6, and FP4 operand pair of every

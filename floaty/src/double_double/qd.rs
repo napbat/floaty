@@ -9,9 +9,10 @@
 //! in `dd_real::accurate_div`, the remainder `drem` as the shim inlines it in
 //! `run_remainder`, and the square root in `sqrt(const dd_real&)` and the
 //! truncated remainder in `fmod(const dd_real&, const dd_real&)` of
-//! `dd_real.o` in `libqd.a`. `sqr` and `inv` follow `qd_unary.cpp`, and the
-//! integer power follows `npwr(const dd_real&, int)` of `dd_real.o`. The
-//! comments give the instruction offsets.
+//! `dd_real.o` in `libqd.a`. `sqr` and `inv` follow `qd_unary.cpp`, the
+//! integer power follows `npwr(const dd_real&, int)`, and the root follows
+//! `nroot(const dd_real&, int)` of `dd_real.o`, with floaty's `exp` and `log`
+//! for its seed. The comments give the instruction offsets.
 //!
 //! The compiler keeps the arithmetic of the source, but it swaps the operands
 //! of some additions, and x86 returns the NaN of the first operand. A comment
@@ -290,6 +291,145 @@ pub fn sqrt<B: Behavior>(steps: &mut Steps<B>, a: Pair) -> Pair {
     let right = steps.sub(correction, bb); // 0x803
     let left = steps.sub(ax, left); // 0x807
     (s, steps.add(left, right)) // 0x80b
+}
+
+/// `nroot(const dd_real&, int)` of `dd_real.o` (from 0xab0).
+///
+/// An exponent below 1 gives QD's NaN in both halves, and QD writes an
+/// error. An odd exponent compares the high half with 0 once, by a signaling
+/// comparison: 1 gives `a`, a zero gives `(+0, +0)`, and a negative value
+/// takes `r = -a`. An even exponent gives QD's NaN for a negative value by a
+/// signaling comparison, the square root for 2, and `(+0, +0)` for a zero by
+/// a quiet comparison. A NaN goes on to the arithmetic.
+///
+/// The seed is `exp(-log(r0) / n)`. QD calls the C library `log` and `exp`
+/// there. These steps use floaty's correctly rounded `exp` and `log` instead.
+pub fn nroot<B: Behavior>(steps: &mut Steps<B>, a: Pair, n: i32) -> Pair {
+    let zero = F64::from_bits(0);
+    if n <= 0 {
+        // 0xad0 jle 0xec8
+        return (F64::from_bits(NAN), F64::from_bits(NAN));
+    }
+    let r = if n & 1 == 1 {
+        // 0xad9 test sil, 1
+        if n == 1 {
+            return a; // 0xae2
+        }
+        // 0xf28 comisd a0, 0: a NaN (jp) and a positive value (ja) go on
+        match steps.compare_signaling(a.0, zero) {
+            Some(Ordering::Equal) => return (zero, zero), // 0xf32 je 0xf10
+            Some(Ordering::Less) => (-a.0, -a.1),         // 0xf4b, 0xf4f xorpd
+            _ => a,
+        }
+    } else {
+        // 0xb28 comisd 0, a0; 0xb2c ja
+        if steps.compare_signaling(zero, a.0) == Some(Ordering::Greater) {
+            return (F64::from_bits(NAN), F64::from_bits(NAN));
+        }
+        if n == 2 {
+            return sqrt(steps, a); // 0xb35 je 0xef0, then jmp sqrt
+        }
+        // 0xb3b ucomisd a0, 0; 0xb41 je 0xf10
+        if steps.compare_quiet(a.0, zero) == Some(Ordering::Equal) {
+            return (zero, zero);
+        }
+        a
+    };
+    // 0xb7f cvtsi2sd: every `i32` is exact in binary64, without flags.
+    let count = F64::from_int(n);
+    let log = steps.log(r.0); // 0xb71 call log
+    let quotient = steps.div(-log, count); // 0xb76 xorpd; 0xb8b
+    let seed = steps.exp(quotient); // 0xb8f call exp
+    let x = newton_step(steps, r, seed, count, n);
+    // 0xe73 comisd 0, a0; 0xe77 jbe
+    let x = if steps.compare_signaling(zero, a.0) == Some(Ordering::Greater) {
+        (-x.0, -x.1) // 0xe7e, 0xe82 xorpd
+    } else {
+        x
+    };
+    inv(steps, x) // 0xea9 call accurate_div((1, +0), x)
+}
+
+/// `x += x * (1.0 - r * npwr(x, n)) / static_cast<double>(n)` of `nroot`,
+/// with `x = (seed, +0)` (0xbb4 to 0xe53).
+fn newton_step<B: Behavior>(steps: &mut Steps<B>, r: Pair, seed: F64, count: F64, n: i32) -> Pair {
+    let x = (seed, F64::from_bits(0));
+    let power = npwr(steps, x, n); // 0xbb4 call npwr
+    let product = mul(steps, r, power); // 0xbd8 to 0xc66
+    let difference = one_minus(steps, product); // 0xc36 to 0xcda
+    let scaled = mul_by_difference(steps, x, difference); // 0xc87 to 0xd8c
+    let step = div_by_count(steps, scaled, count); // 0xd07 to 0xdcb
+    add_to_seed(steps, x, step) // 0xdd3 to 0xe53
+}
+
+/// `1.0 - t`, `operator-(double, const dd_real&)`: `two_diff(1, t0)`,
+/// `s2 -= t1`, and `quick_two_sum`.
+fn one_minus<B: Behavior>(steps: &mut Steps<B>, t: Pair) -> Pair {
+    let one = F64::from_bits(ONE);
+    let (s1, s2) = two_diff(steps, one, t.0); // 0xc36 to 0xc70
+    let s2 = steps.sub(s2, t.1); // 0xc79
+    let high = steps.add(s1, s2); // 0xc7d
+    let bb = steps.sub(high, s1); // 0xcbd
+    (high, steps.sub(s2, bb)) // 0xcda
+}
+
+/// `x * u` in `nroot`. It is `dd_real * dd_real`, but the compiler swaps the
+/// factors of both cross products.
+fn mul_by_difference<B: Behavior>(steps: &mut Steps<B>, (x0, x1): Pair, (u0, u1): Pair) -> Pair {
+    let p = steps.mul(x0, u0); // 0xc87
+    let e = steps.fused_add(u0, x0, -p); // 0xc97 xorpd; 0xc9c call fma(x0, u0, -p)
+    let first = steps.mul(u1, x0); // 0xcde, swapped: x0 * u1
+    let second = steps.mul(u0, x1); // 0xcc9, swapped: x1 * u0
+    let cross = steps.add(first, second); // 0xce4
+    let p2 = steps.add(cross, e); // 0xce8, swapped: p2 += cross
+    let high = steps.add(p, p2); // 0xcf0
+    let bb = steps.sub(high, p); // 0xd81
+    (high, steps.sub(p2, bb)) // 0xd8c
+}
+
+/// `v / static_cast<double>(n)`, `operator/(const dd_real&, double)`: a
+/// quotient, its remainder by `two_prod` and `two_diff`, and a second
+/// quotient, summed by `quick_two_sum`.
+fn div_by_count<B: Behavior>(steps: &mut Steps<B>, (v0, v1): Pair, count: F64) -> Pair {
+    let q1 = steps.div(v0, count); // 0xd07
+    let p1 = steps.mul(count, q1); // 0xd0b, swapped: q1 * n
+    let p2 = steps.fused_add(q1, count, -p1); // 0xd16 xorpd; 0xd26 call fma(n, q1, -p1)
+    let s = steps.sub(v0, p1); // 0xd5a
+    let bb = steps.sub(s, v0); // 0xd6d
+    let left = steps.sub(s, bb); // 0xd72
+    let right = steps.add(p1, bb); // 0xd77
+    let left = steps.sub(v0, left); // 0xd87
+    let e = steps.sub(left, right); // 0xd90
+    let e = steps.add(e, v1); // 0xd95
+    let e = steps.sub(e, p2); // 0xd9d
+    let sum = steps.add(e, s); // 0xda2, swapped: s + e
+    let q2 = steps.div(sum, count); // 0xda7
+    let high = steps.add(q1, q2); // 0xdad
+    let bb = steps.sub(high, q1); // 0xdc3
+    (high, steps.sub(q2, bb)) // 0xdcb
+}
+
+/// `x += w` with `QD_IEEE_ADD` in `nroot`. It is [`add`], but the compiler
+/// does not swap `s2 += t2`.
+fn add_to_seed<B: Behavior>(steps: &mut Steps<B>, (x0, x1): Pair, (w0, w1): Pair) -> Pair {
+    let (s1, bb) = sum_and_bb(steps, x0, w0); // 0xdd3, 0xde5
+    let (t1, bb_t) = sum_and_bb(steps, x1, w1); // 0xdd7, 0xdef
+    let left = steps.sub(s1, bb); // 0xdf4
+    let right = steps.sub(w0, bb); // 0xdf9
+    let right_t = steps.sub(w1, bb_t); // 0xdfe
+    let left = steps.sub(x0, left); // 0xe03
+    let s2 = steps.add(left, right); // 0xe10
+    let s2 = steps.add(s2, t1); // 0xe14
+    let left_t = steps.sub(t1, bb_t); // 0xe18
+    let left_t = steps.sub(x1, left_t); // 0xe1d
+    let s = steps.add(s1, s2); // 0xe21
+    let t2 = steps.add(left_t, right_t); // 0xe29
+    let bb = steps.sub(s, s1); // 0xe31
+    let s2 = steps.sub(s2, bb); // 0xe35
+    let s2 = steps.add(s2, t2); // 0xe39
+    let high = steps.add(s, s2); // 0xe41
+    let bb = steps.sub(high, s); // 0xe4f
+    (high, steps.sub(s2, bb)) // 0xe53
 }
 
 /// `std::floor` as g++ inlines it for SSE2 in `drem` and `fmod`: a value of

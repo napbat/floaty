@@ -1,5 +1,5 @@
 /*
- * Runs QD 2.3.24's sqr, inv, and npwr with the pinned arithmetic
+ * Runs QD 2.3.24's sqr, inv, npwr, and nroot with the pinned arithmetic
  * configuration. A separate object keeps the existing arithmetic oracle's
  * machine code. Each call restores the caller's floating-point environment.
  */
@@ -121,6 +121,60 @@ dd_real power(const dd_real &a, int n) {
   return z;
 }
 
+/*
+ * The source of QD's nroot, with the seed exp(-log(|a.x[0]|) / n) as an
+ * operand. The library calls the C library log and exp for the seed, which
+ * do not always round correctly. floaty takes its correctly rounded exp and
+ * log there, and the caller computes the seed with them.
+ */
+dd_real root_from_seed(const dd_real &a, int n, double seed) {
+  if (n <= 0) {
+    dd_real::error("(dd_real::nroot): N must be positive.");
+    return dd_real::_nan;
+  }
+
+  if (n % 2 == 0 && a.is_negative()) {
+    dd_real::error("(dd_real::nroot): Negative argument.");
+    return dd_real::_nan;
+  }
+
+  if (n == 1) {
+    return a;
+  }
+  if (n == 2) {
+    return sqrt(a);
+  }
+
+  if (a.is_zero())
+    return 0.0;
+
+  dd_real r = abs(a);
+  dd_real x = seed;
+
+  x += x * (1.0 - r * npwr(x, n)) / static_cast<double>(n);
+  if (a.x[0] < 0.0)
+    x = -x;
+  return 1.0 / x;
+}
+
+/* Runs the seeded nroot, and discards the error text. */
+dd_real root(const dd_real &a, int n, double seed) {
+  std::streambuf *error = std::cerr.rdbuf(nullptr);
+  dd_real z = root_from_seed(a, n, seed);
+  std::cerr.rdbuf(error);
+  std::cerr.clear();
+  return z;
+}
+
+/* Runs the library's nroot, and discards the error text. */
+dd_real library_root(const dd_real &a, int n) {
+  std::streambuf *error = std::cerr.rdbuf(nullptr);
+  dd_real z = nroot(a, n);
+  std::cerr.rdbuf(error);
+  std::cerr.clear();
+  return z;
+}
+
 } // namespace
 
 extern "C" {
@@ -142,6 +196,26 @@ unsigned floaty_qd_npwr(const std::uint64_t *a, int n, int rounding, std::uint64
 unsigned floaty_qd_npwr_magnitude(const std::uint64_t *a, int n, int rounding,
                                   std::uint64_t *result) {
   return run(a, rounding, result, [n](const dd_real &x) { return power_of_magnitude(x, n); });
+}
+
+/* QD's nroot with the seed as an operand. */
+unsigned floaty_qd_nroot(const std::uint64_t *a, int n, std::uint64_t seed, int rounding,
+                         std::uint64_t *result) {
+  double start = from_bits(seed);
+  return run(a, rounding, result, [n, start](const dd_real &x) {
+    /* A volatile read keeps the seed inside the flag check. */
+    volatile double input = start;
+    return root(x, n, input);
+  });
+}
+
+/*
+ * The library's nroot, whose seed comes from the C library log and exp. The
+ * test of the seeded copy compares the two with the C library seed.
+ */
+unsigned floaty_qd_nroot_library(const std::uint64_t *a, int n, int rounding,
+                                 std::uint64_t *result) {
+  return run(a, rounding, result, [n](const dd_real &x) { return library_root(x, n); });
 }
 
 } // extern "C"
