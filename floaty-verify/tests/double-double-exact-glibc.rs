@@ -172,7 +172,7 @@ fn scaled(case: &FunctionCase, theirs: Outcome) -> Option<String> {
 /// Returns `true` for two different pairs of one exact value: the same
 /// number, or zeros of different signs when `zeros` is `true`.
 fn one_value(a: DoubleDouble<Gcc>, b: DoubleDouble<Gcc>, zeros: bool) -> bool {
-    let equal = a.compare_quiet(b).0 == Some(Ordering::Equal);
+    let equal = a.compare_quiet(b) == Some(Ordering::Equal);
     let signs = zeros || a.is_sign_negative() == b.is_sign_negative();
     equal && signs && halves(a) != halves(b)
 }
@@ -184,9 +184,10 @@ fn one_value(a: DoubleDouble<Gcc>, b: DoubleDouble<Gcc>, zeros: bool) -> bool {
 /// templates, return the first operand when the operands compare equal.
 /// `fmaxl` and `fminl` do so also for zeros of different signs, which IEEE
 /// 754-2008 `maxNum` and `minNum` allow. floaty orders two pairs of one
-/// value by `total_cmp`, and orders `-0` below `+0`, as the minimum and
-/// maximum operations state. Resolution: floaty keeps its rule, and the test
-/// skips such pairs of operands.
+/// value by their halves, as `total_cmp_with` with `TotalOrder::Encoding`
+/// does, and orders `-0` below `+0`, as the minimum and maximum operations
+/// state. Resolution: floaty keeps its rule, and the test skips such pairs
+/// of operands.
 fn min_max(case: &FunctionCase, theirs: Outcome) -> Option<String> {
     let env = ibm_ldouble::behavior(case.rounding);
     let [a, b, _] = case.operands.map(value);
@@ -213,19 +214,12 @@ fn min_max(case: &FunctionCase, theirs: Outcome) -> Option<String> {
 /// Compares `totalorderl` and `totalordermagl`. IEEE 754 defines
 /// `totalOrderMag(x, y)` as `totalOrder(abs(x), abs(y))`.
 ///
-/// Conflict: two pairs with one high half. glibc 2.43 `s_totalorderl.c`
-/// lines 47-55 and `s_totalordermagl.c` lines 47-55 return 1 when the high
-/// halves are one NaN or one infinity, or when both low halves are zeros,
-/// so both orders of such operands give 1. floaty's `total_cmp` then orders
-/// the low halves, so that two different encodings never compare equal.
-/// Resolution: floaty keeps its rule, and the test skips such pairs of
-/// operands.
+/// glibc 2.43 `s_totalorderl.c` lines 47-55 and `s_totalordermagl.c` lines
+/// 47-55 return 1 when the high halves are one NaN or one infinity, or when
+/// both low halves are zeros: two canonical pairs of one datum. The default
+/// mode of `Gcc` orders by `TotalOrder::Datum`, which makes such pairs equal,
+/// so `total_cmp` gives 1 in both orders too.
 fn total_order(case: &FunctionCase, theirs: Outcome) -> Option<String> {
-    let [x, y, _] = case.operands;
-    let one_high = x.hi << 1 == y.hi << 1;
-    if one_high && (special(x.hi) || (x.lo | y.lo) << 1 == 0) {
-        return None;
-    }
     let [a, b, _] = case.operands.map(value);
     let order = if case.function == Function::TotalOrder {
         a.total_cmp(b)

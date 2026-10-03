@@ -4,7 +4,7 @@
 use core::cmp::Ordering;
 
 use super::{Algorithm, DoubleDouble, glibc};
-use crate::env::{Flags, Mode};
+use crate::env::{Behavior, Flags, Mode, Override, TotalOrder};
 use crate::float::{Class, Decoded, F64};
 use crate::limbs::Limbs;
 use crate::unpacked::Unpacked;
@@ -86,10 +86,29 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         }
     }
 
-    /// Compares the exact values as the IEEE 754 quiet predicates do. `None`
-    /// means unordered. A signaling NaN signals invalid.
+    /// Compares the exact values as the IEEE 754 quiet predicates do, with
+    /// the default mode. Returns the order, or `None` when the values are
+    /// unordered. The order is that of
+    /// [`compare_quiet_with`](Self::compare_quiet_with) and of
+    /// [`PartialOrd`], without the flags.
     #[must_use]
-    pub fn compare_quiet(self, other: Self) -> (Option<Ordering>, Flags) {
+    pub fn compare_quiet(self, other: Self) -> Option<Ordering> {
+        self.compare(other).0
+    }
+
+    /// Compares the exact values as the IEEE 754 quiet predicates do.
+    /// Returns the order, or `None` when the values are unordered, and the
+    /// flags. A signaling NaN signals invalid.
+    ///
+    /// The comparison reads no field of the behavior: it reads the halves
+    /// without denormals-are-zero, as every operation on the exact value
+    /// does.
+    #[must_use]
+    pub fn compare_quiet_with(
+        self,
+        other: Self,
+        _behavior: impl Override,
+    ) -> (Option<Ordering>, Flags) {
         let (order, signaling) = self.compare(other);
         let flags = if signaling {
             Flags::INVALID
@@ -100,9 +119,17 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
     }
 
     /// Compares the exact values as the IEEE 754 signaling predicates do.
-    /// `None` means unordered. Every NaN signals invalid.
+    /// Returns the order, or `None` when the values are unordered, and the
+    /// flags. Every unordered comparison signals invalid.
+    ///
+    /// The comparison reads no field of the behavior, as
+    /// [`compare_quiet_with`](Self::compare_quiet_with) does.
     #[must_use]
-    pub fn compare_signaling(self, other: Self) -> (Option<Ordering>, Flags) {
+    pub fn compare_signaling_with(
+        self,
+        other: Self,
+        _behavior: impl Override,
+    ) -> (Option<Ordering>, Flags) {
         let (order, _) = self.compare(other);
         let flags = if order.is_none() {
             Flags::INVALID
@@ -253,21 +280,46 @@ impl<Alg: Algorithm, M: Mode> DoubleDouble<Alg, M> {
         glibc::is_canonical((self.hi, self.lo))
     }
 
-    /// Orders the pairs by a total order: by their exact values as IEEE 754
-    /// `totalOrder` orders values, then by the halves.
+    /// Orders the pairs as IEEE 754 `totalOrder` orders their exact values,
+    /// with the rule of the default mode for two pairs of one exact value.
+    #[must_use]
+    pub fn total_cmp(self, other: Self) -> Ordering {
+        self.total_cmp_with(other, M::default())
+    }
+
+    /// Orders the pairs as IEEE 754 `totalOrder` orders their exact values,
+    /// with the [`TotalOrder`] of the behavior for two pairs of one exact
+    /// value.
     ///
     /// A negative NaN orders first, then the numbers from negative infinity
     /// to positive infinity with `-0` below `+0`, then a positive NaN. A
     /// signaling NaN orders nearer the numbers than a quiet NaN, and a larger
     /// payload farther. The NaN and the sign of a zero are those of the
     /// exact value. Two pairs of one exact value, such as `(1, 0)` and
-    /// `(2, -1)`, order by the binary64 total order of their high halves,
-    /// then of their low halves. The operation signals nothing.
+    /// `(2, -1)`, are equal with [`TotalOrder::Datum`], and order by the
+    /// binary64 total order of their high halves, then of their low halves,
+    /// with [`TotalOrder::Encoding`]. The operation reads only the
+    /// total-order rule, and signals nothing.
+    ///
+    /// ```
+    /// use core::cmp::Ordering;
+    /// use floaty::{DoubleDouble, F64, Gcc, TotalOrder};
+    ///
+    /// let pair = |hi, lo| DoubleDouble::<Gcc>::from_parts(F64::from_bits(hi), F64::from_bits(lo));
+    /// // (1, 0) and (2, -1) hold the value 1.
+    /// let (one, twin) = (pair(0x3FF0_0000_0000_0000, 0), pair(0x4000_0000_0000_0000, 0xBFF0_0000_0000_0000));
+    /// assert_eq!(twin.total_cmp(one), Ordering::Equal);
+    /// assert_eq!(twin.total_cmp_with(one, TotalOrder::Encoding), Ordering::Greater);
+    /// ```
     #[must_use]
-    pub fn total_cmp(self, other: Self) -> Ordering {
-        order_values(&self.exact(), &other.exact())
-            .then_with(|| self.hi.total_cmp(other.hi))
-            .then_with(|| self.lo.total_cmp(other.lo))
+    pub fn total_cmp_with(self, other: Self, behavior: impl Override) -> Ordering {
+        let order = order_values(&self.exact(), &other.exact());
+        match behavior.apply::<M>().env().total_order {
+            TotalOrder::Encoding => order
+                .then_with(|| self.hi.total_cmp(other.hi))
+                .then_with(|| self.lo.total_cmp(other.lo)),
+            TotalOrder::Datum => order,
+        }
     }
 }
 
@@ -406,14 +458,14 @@ fn magnitude(value: &Unpacked<Magnitude>) -> Magnitude {
 impl<Alg: Algorithm, M: Mode> PartialEq for DoubleDouble<Alg, M> {
     /// Compares the exact values as the quiet equality predicate does.
     fn eq(&self, other: &Self) -> bool {
-        self.compare_quiet(*other).0 == Some(Ordering::Equal)
+        self.compare_quiet(*other) == Some(Ordering::Equal)
     }
 }
 
 impl<Alg: Algorithm, M: Mode> PartialOrd for DoubleDouble<Alg, M> {
     /// Orders the exact values as the quiet predicates do.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.compare_quiet(*other).0
+        self.compare_quiet(*other)
     }
 }
 
@@ -422,7 +474,7 @@ mod tests {
     use core::cmp::Ordering;
 
     use crate::double_double::{DoubleDouble, Gcc};
-    use crate::env::{Flags, Rounding};
+    use crate::env::{Flags, Rounding, TotalOrder};
     use crate::float::{Class, Decoded, F32, F64};
 
     const ONE: u64 = 0x3FF0_0000_0000_0000;
@@ -535,16 +587,25 @@ mod tests {
     }
 
     #[test]
-    fn pairs_of_one_value_order_by_their_halves() {
+    fn pairs_of_one_value_are_one_datum_and_two_encodings() {
         // (1, 0) and (2, -1) hold 1.
         let (one, twin) = (
             gcc(ONE, 0),
             gcc(0x4000_0000_0000_0000, 0xBFF0_0000_0000_0000),
         );
-        assert_eq!(one.total_cmp(twin), Ordering::Less);
-        assert_eq!(twin.total_cmp(one), Ordering::Greater);
+        assert_eq!(one.total_cmp(twin), Ordering::Equal);
+        assert_eq!(
+            one.total_cmp_with(twin, TotalOrder::Encoding),
+            Ordering::Less
+        );
+        assert_eq!(
+            twin.total_cmp_with(one, TotalOrder::Encoding),
+            Ordering::Greater
+        );
+        // The minimum and the maximum order them as encodings.
         assert_eq!(bits(one.minimum(twin)), bits(one));
         assert_eq!(bits(one.maximum(twin)), bits(twin));
+        assert_eq!(bits(twin.minimum(one)), bits(one));
         // -0 orders below +0.
         let (negative, positive) = (gcc(1 << 63, 0), gcc(0, 0));
         assert_eq!(bits(positive.minimum(negative)), bits(negative));

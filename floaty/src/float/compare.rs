@@ -48,6 +48,17 @@ macro_rules! min_max {
 }
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
+    /// Compares with `other` as the IEEE 754 quiet predicates do, with the
+    /// default mode. Returns the order, or `None` when the values are
+    /// unordered. The order is that of
+    /// [`compare_quiet_with`](Self::compare_quiet_with) and of
+    /// [`PartialOrd`], without the flags.
+    #[must_use]
+    #[inline]
+    pub fn compare_quiet(self, other: Self) -> Option<Ordering> {
+        self.partial_cmp(&other)
+    }
+
     /// Compares with `other` as the IEEE 754 quiet predicates do, such as
     /// `compareQuietLess`. Returns the order, or `None` when the values are
     /// unordered, and the flags.

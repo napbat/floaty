@@ -174,8 +174,18 @@ fn the_exact_values_compare() {
         } else {
             Flags::NONE
         };
-        assert_eq!(x.compare_quiet(y), (order, quiet), "{a:x?} {b:x?}");
-        assert_eq!(x.compare_signaling(y), (order, signaled), "{a:x?} {b:x?}");
+        let env = Env::IEEE;
+        assert_eq!(
+            x.compare_quiet_with(y, env),
+            (order, quiet),
+            "{a:x?} {b:x?}"
+        );
+        assert_eq!(
+            x.compare_signaling_with(y, env),
+            (order, signaled),
+            "{a:x?} {b:x?}"
+        );
+        assert_eq!(x.compare_quiet(y), order, "{a:x?} {b:x?}");
         assert_eq!(x.partial_cmp(&y), order, "{a:x?} {b:x?}");
     }
 }
