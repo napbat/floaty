@@ -507,7 +507,12 @@ assert_eq!(rounded.to_bits(), 0x3FF0_0000_0000_0000);
 
 `Lanes<T, N>` holds the lanes of a vector register. Each lane gives the bits
 of the scalar operation. A `_with` method returns the union of the flags of
-the lanes, as a vector unit accumulates them.
+the lanes, as a vector unit accumulates them. Besides the arithmetic,
+`Lanes` has `exp` and `log`, the operations of the binary formats alone,
+such as `hypot`, `pown`, `compound`, and the augmented operations, and those
+of the decimal formats alone, such as `quantize`. `pown`, `rootn`, and
+`compound` take one exponent for each lane. The augmented operations return
+the heads and the tails as two `Lanes`.
 
 ```rust
 use floaty::{Env, F32, Flags, Lanes};

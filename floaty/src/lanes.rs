@@ -1,5 +1,7 @@
 //! Values of one float type as the lanes of a vector register.
 
+mod binary;
+mod decimal;
 pub mod elementwise;
 mod kernel;
 mod order;
@@ -187,6 +189,36 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     pub fn sqrt_with(self, behavior: impl Override) -> (Self, Flags) {
         let behavior = behavior.apply::<M>();
         self.map_with(|lane| lane.sqrt_with(behavior))
+    }
+
+    /// Returns `e^x` of each lane, with the default mode. Each lane takes
+    /// [`Float::exp`].
+    #[must_use]
+    pub fn exp(self) -> Self {
+        self.map(Float::exp)
+    }
+
+    /// Returns `e^x` of each lane, correctly rounded, and the union of the
+    /// flags.
+    #[must_use]
+    pub fn exp_with(self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.map_with(|lane| lane.exp_with(behavior))
+    }
+
+    /// Returns the natural logarithm of each lane, with the default mode.
+    /// Each lane takes [`Float::log`].
+    #[must_use]
+    pub fn log(self) -> Self {
+        self.map(Float::log)
+    }
+
+    /// Returns the natural logarithm of each lane, correctly rounded, and the
+    /// union of the flags.
+    #[must_use]
+    pub fn log_with(self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.map_with(|lane| lane.log_with(behavior))
     }
 
     /// Returns `self * multiplier + addend` of each triple of lanes, each
