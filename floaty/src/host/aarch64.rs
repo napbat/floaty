@@ -234,6 +234,10 @@ pub fn narrow_half(value: f32) -> u16 {
     u16::try_from(bits & 0xFFFF).expect("the mask keeps 16 bits")
 }
 
+/// `true` when `narrow_bfloat` rounds in integer instructions: in a build
+/// without `FEAT_BF16`. `BFCVT` reads FPCR.
+pub const NARROW_BFLOAT_IN_INTEGERS: bool = !cfg!(target_feature = "bf16");
+
 /// Returns a binary32 value rounded to bfloat16 in the rounding direction of
 /// FPCR, which the path requires to be to nearest even, by `BFCVT`. The Arm
 /// Architecture Reference Manual states that `BFCVT` honors every control of

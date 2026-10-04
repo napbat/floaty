@@ -153,13 +153,32 @@ pub fn round_to_integral<I: Isa, const C: usize>(
             &singles(even),
             Operation::Sub,
         )?);
-        let mut steps = [0; C];
-        steps
-            .iter_mut()
-            .zip(x.iter().zip(differences))
-            .for_each(|(step, (&value, difference))| {
-                *step = correction(value, difference, rounding);
-            });
+        // One loop for each direction selects each step with masks, which
+        // LLVM computes in vector instructions. With the direction tested in
+        // each lane, `TiesToAway` on 1,280 values took 0.96 ns per value in
+        // x86-64-v3 on a Ryzen AI Max+ 395, against 0.28 ns.
+        let steps = match rounding {
+            Rounding::TiesToAway => {
+                corrections(&x, differences, |c| c.tie & c.toward_zero & c.away)
+            }
+            Rounding::TiesTowardZero => {
+                corrections(&x, differences, |c| c.tie & !c.toward_zero & c.back)
+            }
+            Rounding::TowardPositive => {
+                corrections(&x, differences, |c| c.inexact & !c.negative & ONE)
+            }
+            Rounding::TowardNegative => {
+                corrections(&x, differences, |c| c.inexact & c.negative & (ONE | SIGN))
+            }
+            Rounding::TowardZero => {
+                corrections(&x, differences, |c| c.inexact & !c.toward_zero & c.back)
+            }
+            Rounding::AwayFromZero => {
+                corrections(&x, differences, |c| c.inexact & c.toward_zero & c.away)
+            }
+            // The function returned above for these directions.
+            Rounding::TiesToEven | Rounding::ToOdd => [0; C],
+        };
         let moved = encodings(isa::binary::<I, C>(
             &singles(even),
             &singles(steps),
@@ -220,31 +239,60 @@ fn with_signs<const C: usize>(x: [u32; C], rounded: [u32; C]) -> [u32; C] {
     results
 }
 
-/// Returns the encoding of the step, +0, +1, or -1, that moves the nearest
-/// even integer of `value` to its integer in the direction `rounding`.
-/// `difference` is `value` minus that integer, exact, of a magnitude of at
-/// most 0.5, or a NaN.
+/// The parts of the step, +0, +1, or -1, that moves the nearest even
+/// integer of a value to its integer in another direction. Each condition
+/// is a mask: all ones where it holds, and zero elsewhere.
+#[derive(Clone, Copy)]
+struct Correction {
+    /// The value is not integral: the difference is not zero and not a NaN.
+    inexact: u32,
+    /// The value lies halfway between two integers.
+    tie: u32,
+    /// The rounding to nearest even moved the value toward zero.
+    toward_zero: u32,
+    /// The difference is negative: the rounding moved the value up.
+    negative: u32,
+    /// The encoding of the step away from zero.
+    away: u32,
+    /// The encoding of the step back toward zero.
+    back: u32,
+}
+
+impl Correction {
+    /// Returns the parts for `value` and `difference`: `value` minus its
+    /// nearest even integer, exact, of a magnitude of at most 0.5, or a NaN.
+    #[inline]
+    fn new(value: u32, difference: u32) -> Self {
+        let mask = |condition: bool| 0_u32.wrapping_sub(u32::from(condition));
+        let magnitude = difference & !SIGN;
+        Self {
+            inexact: mask(magnitude != 0) & mask(magnitude <= HALF),
+            tie: mask(magnitude == HALF),
+            // The difference has the sign of the value.
+            toward_zero: mask((difference ^ value) & SIGN == 0),
+            negative: mask(difference & SIGN != 0),
+            away: value & SIGN | ONE,
+            back: (value ^ SIGN) & SIGN | ONE,
+        }
+    }
+}
+
+/// Returns the step of each value of `x`, as `step` selects it from the
+/// [`Correction`] of the value and its difference in `differences`.
 #[inline]
-fn correction(value: u32, difference: u32, rounding: Rounding) -> u32 {
-    let magnitude = difference & !SIGN;
-    let inexact = magnitude != 0 && magnitude <= HALF;
-    let tie = magnitude == HALF;
-    // The rounding to nearest even moved the value toward zero when the
-    // difference has the sign of the value.
-    let toward_zero = (difference ^ value) & SIGN == 0;
-    let away = value & SIGN | ONE;
-    let back = (value ^ SIGN) & SIGN | ONE;
-    let negative = difference & SIGN != 0;
-    let step = match rounding {
-        Rounding::TiesToAway => (tie && toward_zero).then_some(away),
-        Rounding::TiesTowardZero => (tie && !toward_zero).then_some(back),
-        Rounding::TowardPositive => (inexact && !negative).then_some(ONE),
-        Rounding::TowardNegative => (inexact && negative).then_some(ONE | SIGN),
-        Rounding::TowardZero => (inexact && !toward_zero).then_some(back),
-        Rounding::AwayFromZero => (inexact && toward_zero).then_some(away),
-        Rounding::TiesToEven | Rounding::ToOdd => None,
-    };
-    step.unwrap_or(0)
+fn corrections<const C: usize>(
+    x: &[u32; C],
+    differences: [u32; C],
+    step: impl Fn(Correction) -> u32,
+) -> [u32; C] {
+    let mut steps = [0; C];
+    steps
+        .iter_mut()
+        .zip(x.iter().zip(differences))
+        .for_each(|(result, (&value, difference))| {
+            *result = step(Correction::new(value, difference));
+        });
+    steps
 }
 
 /// Returns each binary32 encoding converted to a 32-bit integer in the
@@ -263,12 +311,12 @@ fn integers<I: Isa, const C: usize, D: Direction>(x: [u32; C], direction: D) -> 
     }
 }
 
-/// Returns a chunk of encodings, or `None` when the chunk holds a NaN, which
-/// the engine selects. The test takes a slice, whose loop stays short until
-/// the function inlines into a loop of chunks of a known length.
+/// Returns `true` when a chunk of encodings holds a NaN, which the engine
+/// selects. The test takes a slice, whose loop stays short until the
+/// function inlines into a loop of chunks of a known length.
 #[inline]
-fn without_nan<const C: usize>(bits: [u32; C]) -> Option<[u32; C]> {
-    (!any_lane(bits[..].iter().copied(), nan_32)).then_some(bits)
+fn holds_nan(bits: &[u32]) -> bool {
+    any_lane(bits.iter().copied(), nan_32)
 }
 
 /// Computes the values of `values` `N` at a time, and the values past the
@@ -313,7 +361,18 @@ fn store_in<I: Isa, const N: usize>(
     each: impl FnMut(usize, usize, Option<&[u32]>),
 ) {
     I::run(move || {
-        in_value_chunks::<I, N, u32>(values, direction, without_nan, without_nan, each);
+        // A closure at each call, not a shared function: with one codegen
+        // unit, LLVM called a shared test out of line from the copy of each
+        // instruction set, and the lanes went through memory. The
+        // difference of two slices of 1,280 values then took 0.20 ns per
+        // value in x86-64-v3 on a Ryzen AI Max+ 395, against 0.05 ns.
+        in_value_chunks::<I, N, u32>(
+            values,
+            direction,
+            |bits| (!holds_nan(&bits)).then_some(bits),
+            |bits| (!holds_nan(&bits)).then_some(bits),
+            each,
+        );
     });
 }
 

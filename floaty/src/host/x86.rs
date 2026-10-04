@@ -355,6 +355,9 @@ pub fn narrow_half(value: f32) -> u16 {
     super::narrow::round_to_half(value.to_bits())
 }
 
+/// `true`: `narrow_bfloat` rounds in integer instructions.
+pub const NARROW_BFLOAT_IN_INTEGERS: bool = true;
+
 /// Returns a binary32 value rounded to bfloat16 to nearest even, by the
 /// integer rounding of the host paths. The bfloat16 conversions of x86
 /// read a subnormal input as zero.
