@@ -9,7 +9,7 @@
 use std::hint::black_box;
 
 use floaty::block::{Chain, Steps};
-use floaty::elementwise::{Difference, Product, Splat, Sum};
+use floaty::elementwise::{Difference, MaximumNumber, MinimumNumber, Product, Splat, Sum};
 use floaty::{F32, Lanes};
 use floaty_verify::random::SplitMix64;
 
@@ -53,6 +53,16 @@ struct Normalize;
 impl Chain<1, 4> for Normalize {
     fn apply<S: Steps>(&self, [x]: [S; 1], [mean, inverse, gamma, beta]: [S; 4]) -> S {
         (x - mean) * inverse * gamma + beta
+    }
+}
+
+/// `minimum_number(maximum_number(x, low), y)`: a lower bound, then the
+/// smaller of the result and `y`.
+struct Bounds;
+
+impl Chain<2, 1> for Bounds {
+    fn apply<S: Steps>(&self, [x, y]: [S; 2], [low]: [S; 1]) -> S {
+        x.maximum_number(low).minimum_number(y)
     }
 }
 
@@ -213,6 +223,48 @@ fn normalize_row(vectors: &[Vec<f32>]) {
     );
 }
 
+/// Measures a lower bound and then the smaller of the result and a second
+/// vector, by the number operations, which take the other operand of a NaN.
+fn bounds_row(vectors: &[Vec<f32>]) {
+    let low = F32::from_bits(0xBF80_0000);
+    let host_low = f32::from(low);
+    let mut out = vec![0.0_f32; DIMENSION];
+    let mut host = |x: &[f32], y: &[f32]| {
+        for (o, (&x, &y)) in out.iter_mut().zip(x.iter().zip(y)) {
+            *o = x.max(host_low).min(y);
+        }
+        black_box(&out);
+    };
+    let mut views_out = vec![0.0_f32; DIMENSION];
+    let mut views = |x: &[f32], y: &[f32]| {
+        let view = MinimumNumber(MaximumNumber(x, Splat::new(low, DIMENSION)), y);
+        Single::store(view, &mut views_out[..]);
+    };
+    let mut block_out = vec![0.0_f32; DIMENSION];
+    let mut block = |x: &[f32], y: &[f32]| F32::map(&Bounds, [x, y], [low], &mut block_out[..]);
+    let mut scalar_out = vec![0.0_f32; DIMENSION];
+    let mut scalar = |x: &[f32], y: &[f32]| {
+        for (o, (&x, &y)) in scalar_out.iter_mut().zip(x.iter().zip(y)) {
+            *o = f32::from(
+                F32::from(x)
+                    .maximum_number(low)
+                    .minimum_number(F32::from(y)),
+            );
+        }
+        black_box(&scalar_out);
+    };
+    row(
+        "bounds minimum_number(maximum_number(x, low), y)",
+        vectors,
+        [
+            Some(&mut host),
+            Some(&mut views),
+            Some(&mut block),
+            Some(&mut scalar),
+        ],
+    );
+}
+
 /// Measures a score of each value, with a fused step, a square root, and a
 /// quotient, by `map` and by `evaluate` of each value.
 fn score_rows(vectors: &[Vec<f32>]) {
@@ -256,5 +308,6 @@ pub fn table() {
     update_row(&vectors);
     fused_update_row(&vectors);
     normalize_row(&vectors);
+    bounds_row(&vectors);
     score_rows(&vectors);
 }
