@@ -115,8 +115,22 @@ impl<M: Mode, const N: usize> Lanes<Single<M>, N> {
                         }
                         return;
                     };
+                    // `i32::MIN` marks a value that the engine converts. A
+                    // chunk without the mark converts in a loop that calls
+                    // no function. With this test, LLVM inlines the loop into
+                    // the copy of each instruction set: `to_int_slice` of
+                    // 1,280 values took 0.21 ns per value to `i8` and 0.37 ns
+                    // to `u8` in x86-64-v3 on a Ryzen AI Max+ 395, against
+                    // 0.68 and 0.59 ns. With `contains`, the loop stays out of
+                    // line, and `i8` took 0.64 ns.
+                    if integers.iter().all(|&integer| integer != i32::MIN) {
+                        for (result, &integer) in results.iter_mut().zip(integers) {
+                            *result = from_host_integer(i64::from(integer));
+                        }
+                        return;
+                    }
                     for ((index, result), &integer) in (start..end).zip(results).zip(integers) {
-                        // `i32::MIN` marks a value that the engine converts.
+                        // The mark selects the engine for its lane.
                         *result = if integer == i32::MIN {
                             Self::to_int_out_of_line(values, index)
                         } else {
