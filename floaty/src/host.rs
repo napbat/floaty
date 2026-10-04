@@ -13,14 +13,20 @@
 //! `compatible` in `paths` accepts. That function names every field of
 //! `Env`, and the README states the rule. The environment of the host must
 //! match the mode. The rounding to an integral value also takes a directed
-//! rounding, which its instructions take from their encoding. A NaN result
-//! goes back to the engine, which selects the NaN by the rule of the mode.
+//! rounding, which its instructions take from their encoding. So do the
+//! slice kernels and the elementwise slice operations in the instruction
+//! sets with a rounding control, as `ready_in_direction` in `paths` states.
+//! A NaN result goes back to the engine, which selects the NaN by the rule
+//! of the mode.
 
 use crate::env::{Mode, Rounding};
 use crate::float::Float;
 use crate::format::internal::MinMax;
 use crate::format::{Binary, EncodingKind};
 use crate::sealed::Sealed;
+
+mod load;
+pub use self::load::{Direction, Load};
 
 /// Returns host binary32 values as binary32 values of floaty, which have
 /// their layout. Each value keeps its bits.
@@ -275,6 +281,25 @@ pub trait Isa: Sealed {
     /// Returns `left * right + addend` of sixteen triples of binary32 lanes,
     /// each rounded once.
     fn mul_add_f32x16(left: [f32; 16], right: [f32; 16], addend: [f32; 16]) -> Option<[f32; 16]>;
+    /// Returns `operation` of sixteen pairs of binary32 lanes, rounded in the
+    /// direction `rounding` by the rounding control of the encoding of each
+    /// instruction, or `None` for a direction without a control. The
+    /// rounding control of the environment then does not apply.
+    fn binary_rounded_f32x16(
+        left: [f32; 16],
+        right: [f32; 16],
+        operation: Operation,
+        rounding: Rounding,
+    ) -> Option<[f32; 16]>;
+    /// Returns `left * right + addend` of sixteen triples of binary32 lanes,
+    /// each rounded once in the direction `rounding`, as
+    /// `binary_rounded_f32x16` rounds.
+    fn mul_add_rounded_f32x16(
+        left: [f32; 16],
+        right: [f32; 16],
+        addend: [f32; 16],
+        rounding: Rounding,
+    ) -> Option<[f32; 16]>;
     /// Returns the lane of each of four pairs that the minimum or maximum
     /// instruction selects: the smaller or the larger value, and the right
     /// lane when a lane is a NaN or both are zeros.
@@ -300,6 +325,10 @@ pub trait Isa: Sealed {
     fn to_int_f32x8(value: [f32; 8]) -> Option<[i32; 8]>;
     /// Returns sixteen binary32 lanes rounded as `to_int_f32x4` rounds them.
     fn to_int_f32x16(value: [f32; 16]) -> Option<[i32; 16]>;
+    /// Returns sixteen binary32 lanes rounded to 32-bit integers in the
+    /// direction `rounding`, as `binary_rounded_f32x16` rounds, with the
+    /// integer indefinite as `to_int_f32x4` gives it.
+    fn to_int_rounded_f32x16(value: [f32; 16], rounding: Rounding) -> Option<[i32; 16]>;
     /// Returns four 32-bit integers rounded to binary32.
     fn from_int_x4(value: [i32; 4]) -> Option<[f32; 4]>;
     /// Returns eight 32-bit integers rounded to binary32.
@@ -326,42 +355,6 @@ pub trait Isa: Sealed {
     fn narrow_x2(value: [f64; 2]) -> Option<[f32; 2]>;
     /// Returns four binary64 lanes rounded to binary32.
     fn narrow_x4(value: [f64; 4]) -> Option<[f32; 4]>;
-}
-
-/// A vector that a slice kernel of `Lanes` reads on the host unit, as the
-/// binary32 encodings of its values. A load computes in the instruction set
-/// `I`, with its features: `load` and `load_rest` run `load_on` and
-/// `load_rest_on` in [`Isa::run`].
-pub trait Load: Copy {
-    /// Returns the number of values.
-    fn count(self) -> usize;
-
-    /// Returns the binary32 encodings of the `N` values from `start`, or
-    /// `None` when the instruction set has no instruction for the
-    /// conversion. The vector holds at least `start + N` values.
-    #[inline]
-    fn load<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
-        I::run(|| self.load_on::<I, N>(start))
-    }
-
-    /// Returns the binary32 encodings of the values from `start`, with +0
-    /// in the lanes past the last value, as [`load`](Self::load) does. The
-    /// vector holds more than `start` and fewer than `start + N` values.
-    #[inline]
-    fn load_rest<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
-        I::run(|| self.load_rest_on::<I, N>(start))
-    }
-
-    /// Computes [`load`](Self::load) in the instruction set `I`.
-    fn load_on<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]>;
-
-    /// Computes [`load_rest`](Self::load_rest) in the instruction set `I`.
-    fn load_rest_on<I: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]>;
-
-    /// Returns the `count` values from `start` as a vector of the same kind.
-    /// The vector holds at least `start + count` values.
-    #[must_use]
-    fn part(self, start: usize, count: usize) -> Self;
 }
 
 /// The kind of a host path, for [`available`].
@@ -706,7 +699,7 @@ mod none {
         use crate::float::{Float, FloatType};
         use crate::format::Standard;
         use crate::format::internal::MinMax;
-        use crate::host::{Host, Isa, Kind, Load, Operation, Step, Term};
+        use crate::host::{Direction, Host, Isa, Kind, Load, Operation, Step, Term};
 
         /// Returns `false`: this build has no host path.
         #[must_use]
@@ -876,9 +869,10 @@ mod none {
 
         /// Returns `None`: this build has no host path.
         #[inline]
-        pub fn widen_scaled_codes<I: Isa, const N: usize>(
+        pub fn widen_scaled_codes<I: Isa, const N: usize, D: Direction>(
             _codes: &[i8; N],
             _scale: u32,
+            _direction: D,
         ) -> Option<[u32; N]> {
             None
         }
@@ -888,14 +882,15 @@ mod none {
         pub mod elementwise {
             use crate::env::{Env, Rounding};
             use crate::format::internal::MinMax;
-            use crate::host::{Isa, Load, Operation};
+            use crate::host::{Direction, Isa, Load, Operation};
 
             /// Returns `None`: this build has no host path.
             #[inline]
-            pub fn binary<I: Isa, const C: usize>(
+            pub fn binary<I: Isa, const C: usize, D: Direction>(
                 _x: [u32; C],
                 _y: [u32; C],
                 _operation: Operation,
+                _direction: D,
             ) -> Option<[u32; C]> {
                 None
             }
@@ -953,134 +948,4 @@ mod none {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{Host, Kind, Operation, Unit, available, convertible};
-    use crate::env::Env;
-    use crate::float::Float;
-    use crate::format::internal::{LimbConversion, MinMax};
-    use crate::format::{Binary, Standard, X87};
-    use crate::limbs::Limbs;
-
-    /// The host kinds, as conversion destinations.
-    const HOSTS: [Host; 6] = [
-        Host::Half,
-        Host::BFloat,
-        Host::Single,
-        Host::Double,
-        Host::Extended,
-        Host::Quad,
-    ];
-
-    /// Asserts that each host path of the format `S` that `available`,
-    /// `convertible`, `packed::available`, or `packed::convertible` claims
-    /// gives a result. The operands 3, 2, and 1 are exact in every format,
-    /// and no path declines them by value.
-    fn claimed_paths_give_results<S: Standard<W>, const W: usize>() {
-        let env = Env::IEEE;
-        let host = S::HOST;
-        // One read for every scalar path, as the lanes of one `Lanes`
-        // operation take it.
-        let unit = Unit::read(host);
-        let value = |integer: i64| Float::<S, W>::from_int(integer);
-        let (three, two, one) = (value(3), value(2), value(1));
-        let (left_bits, right_bits, addend_bits) = (three.to_bits(), two.to_bits(), one.to_bits());
-        let add = Operation::Add;
-        let minimum = MinMax::Minimum;
-        let scalar = [
-            (
-                Kind::Arithmetic,
-                super::binary::<S, W>(left_bits, right_bits, add, &env, unit).is_some(),
-            ),
-            (
-                Kind::SquareRoot,
-                super::sqrt::<S, W>(left_bits, &env, unit).is_some(),
-            ),
-            (
-                Kind::FusedMultiplyAdd,
-                super::mul_add::<S, W>(left_bits, right_bits, addend_bits, &env, unit).is_some(),
-            ),
-            (
-                Kind::RoundToIntegral,
-                super::round_to_integral::<S, W>(left_bits, &env, unit).is_some(),
-            ),
-            (
-                Kind::ToInt,
-                super::to_int::<S, W>(left_bits, &env, unit).is_some(),
-            ),
-            (
-                Kind::FromInt,
-                super::from_int::<S, W>(3, &env, unit).is_some(),
-            ),
-            (
-                Kind::Comparison,
-                super::compare::<S, W>(left_bits, right_bits, &env, unit).is_some()
-                    && super::min_max::<S, W>(left_bits, right_bits, minimum, &env, unit).is_some(),
-            ),
-            (
-                Kind::Remainder,
-                super::remainder::<S, W>(left_bits, right_bits, &env, unit).is_some(),
-            ),
-        ];
-        for (kind, taken) in scalar {
-            assert!(
-                !available(host, kind) || taken,
-                "{host:?} {kind:?}: the claimed path gives no result"
-            );
-        }
-        let (left, right, addend) = ([three; 8], [two; 8], [one; 8]);
-        let packed = [
-            (
-                Kind::Arithmetic,
-                super::packed::binary(&left, &right, Operation::Add, &env).is_some(),
-            ),
-            (Kind::SquareRoot, super::packed::sqrt(&left, &env).is_some()),
-            (
-                Kind::FusedMultiplyAdd,
-                super::packed::mul_add(&left, &right, &addend, &env).is_some(),
-            ),
-            (
-                Kind::RoundToIntegral,
-                super::packed::round_to_integral(&left, &env).is_some(),
-            ),
-            (
-                Kind::ToInt,
-                super::packed::to_int_i32(&left, &env).is_some(),
-            ),
-            (
-                Kind::Comparison,
-                super::packed::compare(&left, &right, &env).is_some()
-                    && super::packed::min_max(&left, &right, MinMax::Minimum, &env).is_some(),
-            ),
-        ];
-        for (kind, taken) in packed {
-            assert!(
-                !super::packed::available(host, kind) || taken,
-                "{host:?} {kind:?}: the claimed packed path gives no result"
-            );
-        }
-        let limbs = left_bits.to_limbs();
-        let encoding = [limbs.limb(0), limbs.limb(1)];
-        for to in HOSTS {
-            assert!(
-                !convertible(host, to)
-                    || super::convert(host, to, encoding, &env, Unit::Read).is_some(),
-                "{host:?} to {to:?}: the claimed conversion gives no result"
-            );
-            assert!(
-                !super::packed::convertible(host, to)
-                    || super::packed::convert(&left, to, &env).is_some(),
-                "{host:?} to {to:?}: the claimed packed conversion gives no result"
-            );
-        }
-    }
-
-    #[test]
-    fn every_claimed_host_path_gives_a_result() {
-        claimed_paths_give_results::<Binary<5>, 16>();
-        claimed_paths_give_results::<Binary<8>, 16>();
-        claimed_paths_give_results::<Binary<8>, 32>();
-        claimed_paths_give_results::<Binary<11>, 64>();
-        claimed_paths_give_results::<Binary<15, X87>, 80>();
-        claimed_paths_give_results::<Binary<15>, 128>();
-    }
-}
+mod tests;

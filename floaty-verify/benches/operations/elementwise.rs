@@ -4,6 +4,8 @@
 //! Each row compares a host `f32` loop of the same steps, the operation of
 //! `Lanes<F32, 32>` with the default mode, its `_with` method, which runs the
 //! engine, and a loop of the scalar operations of `F32`, one value at a time.
+//! The host has no rounding toward -∞, so the row of that mode has no host
+//! cell.
 
 use std::cell::Cell;
 use std::hint::black_box;
@@ -12,7 +14,9 @@ use floaty::elementwise::{
     Abs, Difference, Maximum, Minimum, MinimumNumber, Product, Quotient, RoundToIntegral, Splat,
     Sum,
 };
-use floaty::{BF16, F16, F32, FloatType, Lanes, Rounding, ToInt, Vector, mode};
+use floaty::mode::direction::TowardNegative;
+use floaty::mode::{Ieee, Rounded};
+use floaty::{BF16, Binary, F16, F32, Float, FloatType, Lanes, Rounding, ToInt, Vector, mode};
 use floaty_verify::random::SplitMix64;
 
 use super::{Table, measure};
@@ -117,6 +121,53 @@ fn update_row(vectors: &[Vec<f32>]) {
         "update x * keep + y * eta",
         vectors,
         [&mut host, &mut lanes, &mut with, &mut scalar],
+    );
+}
+
+/// binary32 in the mode that rounds toward -∞.
+type Down = Float<Binary<8>, 32, Rounded<Ieee, TowardNegative>>;
+
+/// Measures the k-means update of `update_row` in the mode that rounds
+/// toward -∞.
+fn update_down_row(vectors: &[Vec<f32>]) {
+    let (keep, eta) = (F32::from_bits(0x3F7F_0000), F32::from_bits(0x3B80_0000));
+    let mut lanes_center = vectors[0].clone();
+    let mut lanes = |point: &[f32]| {
+        let cells = Cell::from_mut(&mut lanes_center[..]).as_slice_of_cells();
+        let view = Sum(
+            Product(cells, Splat::new(keep, DIMENSION)),
+            Product(point, Splat::new(eta, DIMENSION)),
+        );
+        Lanes::<Down, 32>::store(view, cells);
+    };
+    let mut with_center = vectors[0].clone();
+    let mut with = |point: &[f32]| {
+        let cells = Cell::from_mut(&mut with_center[..]).as_slice_of_cells();
+        let view = Sum(
+            Product(cells, Splat::new(keep, DIMENSION)),
+            Product(point, Splat::new(eta, DIMENSION)),
+        );
+        Lanes::<Down, 32>::store_with(view, cells, Rounded::<Ieee, TowardNegative>::default());
+    };
+    let (keep, eta) = (
+        Down::from_bits(keep.to_bits()),
+        Down::from_bits(eta.to_bits()),
+    );
+    let mut scalar_center = vectors[0].clone();
+    let mut scalar = |point: &[f32]| {
+        for (c, &p) in scalar_center.iter_mut().zip(point) {
+            *c = f32::from(Down::from(*c) * keep + Down::from(p) * eta);
+        }
+        black_box(&scalar_center);
+    };
+    COLUMNS.row(
+        "update toward -inf",
+        [
+            None,
+            Some(per_vector(vectors, &mut lanes)),
+            Some(per_vector(vectors, &mut with)),
+            Some(per_vector(vectors, &mut scalar)),
+        ],
     );
 }
 
@@ -285,6 +336,7 @@ pub fn table() {
     COLUMNS.header("Operation");
     let vectors = vectors(71);
     update_row(&vectors);
+    update_down_row(&vectors);
     quantize_row(&vectors);
     minimum_row(&vectors);
     magnitude_row(&vectors);

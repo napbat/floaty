@@ -41,12 +41,44 @@ use core::cmp::Ordering;
 use super::bits::{nan_16, nan_32, nan_64, nan_bfloat};
 use super::environment::{self, packed};
 use super::paths::{ready_for, ready_for_arithmetic, ready_for_integral};
-use super::{Isa, Kind, Operation};
-use crate::env::{Env, Mode};
+use super::{Direction, Isa, Kind, Operation};
+use crate::env::{Env, Mode, Rounding};
 use crate::float::{Float, FloatType};
 use crate::format::Standard;
 use crate::format::internal::MinMax;
 use crate::host::Host;
+use crate::sealed::Sealed;
+
+/// To nearest even, in the forms of the environment, as `Direction` states.
+#[derive(Clone, Copy, Debug)]
+struct Nearest;
+
+impl Sealed for Nearest {}
+
+impl Direction for Nearest {
+    const NEAREST: bool = true;
+
+    #[inline]
+    fn rounding(self) -> Rounding {
+        Rounding::TiesToEven
+    }
+}
+
+/// A direction other than to nearest even, in the forms with a rounding
+/// control, as `Direction` states.
+#[derive(Clone, Copy, Debug)]
+struct Directed(Rounding);
+
+impl Sealed for Directed {}
+
+impl Direction for Directed {
+    const NEAREST: bool = false;
+
+    #[inline]
+    fn rounding(self) -> Rounding {
+        self.0
+    }
+}
 
 /// Returns `true` when the packed paths compute the operations of `kind` on
 /// lanes of the host kind `host`: the build has the scalar path, and the

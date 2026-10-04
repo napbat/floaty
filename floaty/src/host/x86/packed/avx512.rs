@@ -4,6 +4,13 @@
 //! lane gives the bits of that form. Each function inlines into a caller
 //! with the feature: a build that enables it, or a copy of the module
 //! `dispatch` that runs only on a processor that has it.
+//!
+//! The `rounded` forms have no 256-bit form. They take the rounding
+//! direction from the embedded rounding control of their encoding, which
+//! AVX-512F has only for 512-bit register operands. The control overrides
+//! the rounding control of MXCSR and suppresses every exception. The paths
+//! still require the default MXCSR, as every path does, so FTZ and DAZ are
+//! clear.
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::{__m256i, __m512, __m512i};
@@ -126,6 +133,139 @@ pub unsafe fn to_int_f32x16(value: [f32; 16]) -> [i32; 16] {
     // SAFETY: both types hold 64 bytes, and every bit pattern is a value of
     // each.
     unsafe { transmute::<__m512i, [i32; 16]>(result) }
+}
+
+/// Runs the instruction template `$template` with the embedded rounding
+/// control of the direction `$rounding` and the operands `$operands`, or
+/// returns `None` from the function for a direction without a control.
+macro_rules! embedded {
+    ($rounding:expr, $template:literal, $($operands:tt)*) => {
+        // SAFETY: the instruction reads and writes AVX-512 registers. The
+        // function enables AVX-512F, and its caller guarantees it. The
+        // control suppresses every exception, so the instruction changes no
+        // state.
+        unsafe {
+            match $rounding {
+                Rounding::TiesToEven => {
+                    core::arch::asm!(concat!($template, ", {{rn-sae}}"), $($operands)*);
+                }
+                Rounding::TowardNegative => {
+                    core::arch::asm!(concat!($template, ", {{rd-sae}}"), $($operands)*);
+                }
+                Rounding::TowardPositive => {
+                    core::arch::asm!(concat!($template, ", {{ru-sae}}"), $($operands)*);
+                }
+                Rounding::TowardZero => {
+                    core::arch::asm!(concat!($template, ", {{rz-sae}}"), $($operands)*);
+                }
+                Rounding::TiesToAway
+                | Rounding::TiesTowardZero
+                | Rounding::AwayFromZero
+                | Rounding::ToOdd => return None,
+            }
+        }
+    };
+}
+
+/// Returns `operation` of sixteen pairs of binary32 lanes, rounded in the
+/// direction `rounding` by the embedded rounding control, or `None` for a
+/// direction without a control.
+///
+/// # Safety
+///
+/// The processor must have AVX-512F.
+#[target_feature(enable = "avx512f")]
+#[inline]
+pub unsafe fn binary_rounded_f32x16(
+    left: [f32; 16],
+    right: [f32; 16],
+    operation: Operation,
+    rounding: Rounding,
+) -> Option<[f32; 16]> {
+    let (mut a, b) = (singles(left), singles(right));
+    match operation {
+        Operation::Add => embedded!(
+            rounding,
+            "vaddps {a}, {a}, {b}",
+            a = inout(zmm_reg) a,
+            b = in(zmm_reg) b,
+            options(pure, nomem, nostack, preserves_flags),
+        ),
+        Operation::Sub => embedded!(
+            rounding,
+            "vsubps {a}, {a}, {b}",
+            a = inout(zmm_reg) a,
+            b = in(zmm_reg) b,
+            options(pure, nomem, nostack, preserves_flags),
+        ),
+        Operation::Mul => embedded!(
+            rounding,
+            "vmulps {a}, {a}, {b}",
+            a = inout(zmm_reg) a,
+            b = in(zmm_reg) b,
+            options(pure, nomem, nostack, preserves_flags),
+        ),
+        Operation::Div => embedded!(
+            rounding,
+            "vdivps {a}, {a}, {b}",
+            a = inout(zmm_reg) a,
+            b = in(zmm_reg) b,
+            options(pure, nomem, nostack, preserves_flags),
+        ),
+    }
+    Some(single_lanes(a))
+}
+
+/// Returns `left * right + addend` of sixteen triples of binary32 lanes,
+/// each rounded once in the direction `rounding` by the embedded rounding
+/// control, or `None` for a direction without a control.
+///
+/// # Safety
+///
+/// The processor must have AVX-512F.
+#[target_feature(enable = "avx512f")]
+#[inline]
+pub unsafe fn mul_add_rounded_f32x16(
+    left: [f32; 16],
+    right: [f32; 16],
+    addend: [f32; 16],
+    rounding: Rounding,
+) -> Option<[f32; 16]> {
+    let (mut a, b, c) = (singles(left), singles(right), singles(addend));
+    embedded!(
+        rounding,
+        "vfmadd213ps {a}, {b}, {c}",
+        a = inout(zmm_reg) a,
+        b = in(zmm_reg) b,
+        c = in(zmm_reg) c,
+        options(pure, nomem, nostack, preserves_flags),
+    );
+    Some(single_lanes(a))
+}
+
+/// Returns sixteen binary32 lanes rounded to 32-bit integers in the
+/// direction `rounding` by the embedded rounding control, or `None` for a
+/// direction without a control. A NaN lane, or a lane outside the range of
+/// `i32`, gives the integer indefinite `i32::MIN`.
+///
+/// # Safety
+///
+/// The processor must have AVX-512F.
+#[target_feature(enable = "avx512f")]
+#[inline]
+pub unsafe fn to_int_rounded_f32x16(value: [f32; 16], rounding: Rounding) -> Option<[i32; 16]> {
+    let a = singles(value);
+    let result: __m512i;
+    embedded!(
+        rounding,
+        "vcvtps2dq {result}, {a}",
+        a = in(zmm_reg) a,
+        result = lateout(zmm_reg) result,
+        options(pure, nomem, nostack, preserves_flags),
+    );
+    // SAFETY: both types hold 64 bytes, and every bit pattern is a value of
+    // each.
+    Some(unsafe { transmute::<__m512i, [i32; 16]>(result) })
 }
 
 /// # Safety
