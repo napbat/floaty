@@ -15,7 +15,7 @@ use core::ops;
 use crate::env::{Flags, Mode, Override};
 use crate::float::{Class, Float, FloatType, from_host_integer};
 use crate::format::{Binary, Standard};
-use crate::host::{self, Kind, Operation};
+use crate::host::{self, Kind, Operation, Unit};
 use crate::integer::{Integer, ToInt};
 use crate::sealed::Sealed;
 
@@ -49,8 +49,10 @@ impl<M: Mode> Element<Float<Binary<8>, 32, M>> for f32 {
 /// `Lanes<F32, 4>` holds an SSE or NEON register of binary32 values, and
 /// `Lanes<F32, 8>` an AVX register. Each operation applies the operation of
 /// the type to every lane, so each lane gives the bits of the scalar
-/// operation. A `_with` method returns the union of the flags of the lanes,
-/// as a vector unit accumulates them in its status register.
+/// operation. An operation that takes the scalar host path in each lane
+/// reads the floating-point environment of the host once for all lanes. A
+/// `_with` method returns the union of the flags of the lanes, as a vector
+/// unit accumulates them in its status register.
 ///
 /// ```
 /// use floaty::{F32, Lanes};
@@ -131,6 +133,18 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         core::array::from_fn(|index| operation(self.lanes[index], other.lanes[index]))
     }
 
+    /// Reads once the environment of the host unit that the scalar host path
+    /// of `kind` reads, for the lanes of one operation, where the build has
+    /// that path. Each lane that takes the scalar path then reads nothing.
+    #[inline]
+    fn unit(kind: Kind) -> Unit {
+        if host::available(S::HOST, kind) {
+            Unit::read(S::HOST)
+        } else {
+            Unit::Read
+        }
+    }
+
     /// Applies `operation` to each lane, for lanes whose packed host path
     /// declines at run time or gives a NaN lane. Each lane can still take a
     /// scalar host path, which sends a NaN to the engine. The call stays out
@@ -155,11 +169,14 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
 
     /// Returns the fused multiply-add of each triple of lanes, lane by lane.
     fn mul_add_lane_wise(self, multiplier: Self, addend: Self) -> Self {
+        let unit = Self::unit(Kind::FusedMultiplyAdd);
         let mut lanes = self.lanes;
         lanes
             .iter_mut()
             .zip(multiplier.lanes.into_iter().zip(addend.lanes))
-            .for_each(|(lane, (multiplier, addend))| *lane = lane.mul_add(multiplier, addend));
+            .for_each(|(lane, (multiplier, addend))| {
+                *lane = lane.mul_add_in(multiplier, addend, unit);
+            });
         Self::new(lanes)
     }
 
@@ -175,12 +192,13 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn sqrt(self) -> Self {
+        let root = |unit: Unit| move |lane: Float<S, W, M>| lane.sqrt_in(unit);
         if !host::packed::available(S::HOST, Kind::SquareRoot) {
-            return self.map(Float::sqrt);
+            return self.map(root(Self::unit(Kind::SquareRoot)));
         }
         match host::packed::sqrt(&self.lanes, &M::ENV) {
             Some(lanes) => Self::new(lanes),
-            None => self.map_out_of_line(Float::sqrt),
+            None => self.map_out_of_line(root(Self::unit(Kind::SquareRoot))),
         }
     }
 
@@ -262,12 +280,13 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[must_use]
     #[inline]
     pub fn round_to_integral(self) -> Self {
+        let integral = |unit: Unit| move |lane: Float<S, W, M>| lane.round_to_integral_in(unit);
         if !host::packed::available(S::HOST, Kind::RoundToIntegral) {
-            return self.map(Float::round_to_integral);
+            return self.map(integral(Self::unit(Kind::RoundToIntegral)));
         }
         match host::packed::round_to_integral(&self.lanes, &M::ENV) {
             Some(lanes) => Self::new(lanes),
-            None => self.map_out_of_line(Float::round_to_integral),
+            None => self.map_out_of_line(integral(Self::unit(Kind::RoundToIntegral))),
         }
     }
 
@@ -285,7 +304,8 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[inline]
     pub fn convert<T: FloatType>(self) -> Lanes<T, N> {
         if !host::packed::convertible(S::HOST, T::HOST) {
-            return Lanes::new(self.lanes.map(Float::convert::<T>));
+            let unit = conversion_unit::<S, W, T>();
+            return Lanes::new(self.lanes.map(|lane| lane.convert_in::<T>(unit)));
         }
         match host::packed::convert(&self.lanes, T::HOST, &<T::Mode as Mode>::ENV) {
             Some(bits) => {
@@ -403,12 +423,15 @@ macro_rules! operator {
 
             #[inline]
             fn $method(self, other: Self) -> Self {
+                let operation = |unit: Unit| {
+                    move |left: Float<S, W, M>, right| left.binary_in(right, Operation::$trait, unit)
+                };
                 if !host::packed::available(S::HOST, Kind::Arithmetic) {
-                    return self.zip(other, ops::$trait::$method);
+                    return self.zip(other, operation(Self::unit(Kind::Arithmetic)));
                 }
                 match host::packed::binary(&self.lanes, &other.lanes, Operation::$trait, &M::ENV) {
                     Some(lanes) => Self::new(lanes),
-                    None => self.zip_out_of_line(other, ops::$trait::$method),
+                    None => self.zip_out_of_line(other, operation(Self::unit(Kind::Arithmetic))),
                 }
             }
         }
@@ -567,16 +590,21 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[inline]
     pub fn to_int<I: Integer>(self) -> [ToInt<I>; N] {
         if !host::packed::available(S::HOST, Kind::ToInt) {
-            return self.lanes.map(Float::to_int::<I>);
+            let unit = Self::unit(Kind::ToInt);
+            return self.lanes.map(|lane| lane.to_int_in::<I>(unit));
         }
         let Some(integers) = host::packed::to_int_i32(&self.lanes, &M::ENV) else {
-            return self.lanes.map(Float::to_int::<I>);
+            let unit = Self::unit(Kind::ToInt);
+            return self.lanes.map(|lane| lane.to_int_in::<I>(unit));
         };
+        // A lane that the packed path does not decide takes the scalar path.
+        // The first such lane reads the environment for the others.
+        let mut unit = None;
         let mut results = [ToInt::Nan; N];
         for ((result, lane), integer) in results.iter_mut().zip(self.lanes).zip(integers) {
             *result = match integer {
                 Some(integer) => from_host_integer(i64::from(integer)),
-                None => lane.to_int(),
+                None => lane.to_int_in(*unit.get_or_insert_with(|| Self::unit(Kind::ToInt))),
             };
         }
         results
@@ -595,7 +623,8 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     /// 32-bit integers measured no faster.
     #[must_use]
     pub fn from_int<I: Integer>(values: [I; N]) -> Self {
-        Self::new(values.map(Float::from_int))
+        let unit = Self::unit(Kind::FromInt);
+        Self::new(values.map(|value| Float::from_int_in(value, unit)))
     }
 
     /// Makes lanes from integers, each rounded with the behavior, and returns
@@ -692,6 +721,18 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     }
 }
 
+/// Returns the environment of the host unit that converts the lanes of one
+/// conversion from `S` to `T`, read once, where the build has the scalar
+/// path, as `Lanes::unit` reads it.
+#[inline]
+fn conversion_unit<S: Standard<W>, const W: usize, T: FloatType>() -> Unit {
+    if host::convertible(S::HOST, T::HOST) {
+        Unit::read(host::conversion_unit(S::HOST, T::HOST))
+    } else {
+        Unit::Read
+    }
+}
+
 /// Converts each lane to the float type `T`, for lanes whose packed host
 /// path declines, as `Lanes::map_out_of_line` does.
 #[cold]
@@ -699,7 +740,8 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
 fn convert_out_of_line<S: Standard<W>, const W: usize, M: Mode, const N: usize, T: FloatType>(
     lanes: Lanes<Float<S, W, M>, N>,
 ) -> Lanes<T, N> {
-    Lanes::new(lanes.lanes.map(Float::convert::<T>))
+    let unit = conversion_unit::<S, W, T>();
+    Lanes::new(lanes.lanes.map(|lane| lane.convert_in::<T>(unit)))
 }
 
 /// Converts each value to the float type `T` into the same index of `out`,
@@ -713,10 +755,11 @@ fn convert_each<S: Standard<W>, const W: usize, M: Mode, T: FloatType>(
     values: &[Float<S, W, M>],
     out: &mut [T],
 ) {
+    let unit = conversion_unit::<S, W, T>();
     values
         .iter()
         .zip(out)
-        .for_each(|(value, result)| *result = value.convert());
+        .for_each(|(value, result)| *result = value.convert_in(unit));
 }
 
 /// Applies `operation`, which returns a result and flags, to each item, and

@@ -1,6 +1,8 @@
 //! The entry points of the host paths, the same on every architecture that
 //! has them. The module of the architecture reads its floating-point
-//! environment.
+//! environment. Each scalar entry point reads the environment of its unit,
+//! or takes it from the one read of a [`Unit`] for the lanes of one `Lanes`
+//! operation.
 //!
 //! Every floating-point instruction of a path runs in inline assembly, and
 //! the NaN tests use integer instructions. LLVM assumes the default
@@ -175,16 +177,78 @@ fn limb_pair_encoding<S: Standard<W>, const W: usize>(result: [u64; 2]) -> S::Bi
     S::Bits::from_limbs(result.resize())
 }
 
+/// How a scalar host path learns whether the floating-point environment of
+/// its unit is the default. A host path reads the environment for each
+/// operation by default. A `Lanes` operation that runs a scalar host path in
+/// each lane reads it once for all lanes: no code between the lanes changes
+/// the environment, and `STMXCSR` takes about 20 cycles on a Ryzen AI Max+
+/// 395, more than the operation. The x87 unit reads its control word for
+/// each operation either way, because that read is fast.
+#[derive(Clone, Copy, Debug)]
+pub enum Unit {
+    /// The host path reads the environment of its unit.
+    Read,
+    /// One read found the environment of the unit of every host kind but x87
+    /// extended: `true` when it is the default.
+    Known(bool),
+}
+
+impl Unit {
+    /// Reads once the environment of the unit that computes the host kind
+    /// `host`, for the scalar host paths of the lanes of one operation. x87
+    /// extended and a kind without a host unit keep [`Unit::Read`].
+    #[must_use]
+    #[inline]
+    pub fn read(host: Host) -> Self {
+        match host {
+            Host::None | Host::Extended => Self::Read,
+            Host::Single | Host::Double | Host::Half | Host::BFloat | Host::Quad => {
+                Self::Known(default_environment())
+            }
+        }
+    }
+
+    /// Returns `true` when the environment of the unit of every host kind
+    /// but x87 extended is the default, as one read found it, or from a read
+    /// now.
+    #[inline]
+    fn default_environment(self) -> bool {
+        match self {
+            Self::Read => default_environment(),
+            Self::Known(default) => default,
+        }
+    }
+}
+
+/// Returns the host kind whose unit converts the host kind `from` to `to`:
+/// the x87 unit converts to and from x87 extended precision.
+#[must_use]
+#[inline]
+pub const fn conversion_unit(from: Host, to: Host) -> Host {
+    if matches!(from, Host::Extended) {
+        from
+    } else {
+        to
+    }
+}
+
 /// Returns `true` when the mode and the environment of the host unit that
 /// computes the host kind `host` allow a host path for a format of
 /// `precision` bits. The x87 unit computes x87 extended precision, and the
 /// SSE unit, the AArch64 unit, or the s390x unit computes the other kinds.
 #[inline]
 pub(super) fn ready_for(host: Host, env: &Env, precision: u32) -> bool {
+    ready_for_in(host, env, precision, Unit::Read)
+}
+
+/// Returns `true` when `ready_for` allows the path, with the environment of
+/// the unit from `unit`.
+#[inline]
+fn ready_for_in(host: Host, env: &Env, precision: u32, unit: Unit) -> bool {
     let unit = match host {
         Host::Extended => environment::x87_environment(),
         Host::None | Host::Half | Host::BFloat | Host::Single | Host::Double | Host::Quad => {
-            default_environment()
+            unit.default_environment()
         }
     };
     compatible(env, precision) && unit
@@ -196,10 +260,17 @@ pub(super) fn ready_for(host: Host, env: &Env, precision: u32) -> bool {
 /// paths do not need, as `x87_environment` states.
 #[inline]
 pub(super) fn ready_for_arithmetic(host: Host, env: &Env, precision: u32) -> bool {
+    ready_for_arithmetic_in(host, env, precision, Unit::Read)
+}
+
+/// Returns `true` when `ready_for_arithmetic` allows the path, with the
+/// environment of the unit from `unit`.
+#[inline]
+fn ready_for_arithmetic_in(host: Host, env: &Env, precision: u32, unit: Unit) -> bool {
     match host {
         Host::Extended => compatible(env, precision) && environment::x87_full_precision(),
         Host::None | Host::Half | Host::BFloat | Host::Single | Host::Double | Host::Quad => {
-            ready_for(host, env, precision)
+            ready_for_in(host, env, precision, unit)
         }
     }
 }
@@ -212,8 +283,9 @@ pub fn binary<S: Standard<W>, const W: usize>(
     right: S::Bits,
     operation: Operation,
     env: &Env,
+    unit: Unit,
 ) -> Option<S::Bits> {
-    if !ready_for_arithmetic(S::HOST, env, S::PRECISION) {
+    if !ready_for_arithmetic_in(S::HOST, env, S::PRECISION, unit) {
         return None;
     }
     match S::HOST {
@@ -248,8 +320,12 @@ pub fn binary<S: Standard<W>, const W: usize>(
 /// Returns the square root from the host unit, or `None` when the path does
 /// not apply or the result is a NaN.
 #[inline]
-pub fn sqrt<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Option<S::Bits> {
-    if !ready_for_arithmetic(S::HOST, env, S::PRECISION) {
+pub fn sqrt<S: Standard<W>, const W: usize>(
+    value: S::Bits,
+    env: &Env,
+    unit: Unit,
+) -> Option<S::Bits> {
+    if !ready_for_arithmetic_in(S::HOST, env, S::PRECISION, unit) {
         return None;
     }
     match S::HOST {
@@ -275,8 +351,9 @@ pub fn mul_add<S: Standard<W>, const W: usize>(
     right: S::Bits,
     addend: S::Bits,
     env: &Env,
+    unit: Unit,
 ) -> Option<S::Bits> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+    if !ready_for_in(S::HOST, env, S::PRECISION, unit) {
         return None;
     }
     match S::HOST {
@@ -311,7 +388,19 @@ pub fn mul_add<S: Standard<W>, const W: usize>(
 /// nearest even.
 #[inline]
 pub(super) fn ready_for_integral(host: Host, env: &Env, precision: u32) -> bool {
-    ready_for(host, &env.with_rounding(Rounding::TiesToEven), precision)
+    ready_for_integral_in(host, env, precision, Unit::Read)
+}
+
+/// Returns `true` when `ready_for_integral` allows the path, with the
+/// environment of the unit from `unit`.
+#[inline]
+fn ready_for_integral_in(host: Host, env: &Env, precision: u32, unit: Unit) -> bool {
+    ready_for_in(
+        host,
+        &env.with_rounding(Rounding::TiesToEven),
+        precision,
+        unit,
+    )
 }
 
 /// Returns the value rounded to an integral value in the rounding direction
@@ -321,8 +410,9 @@ pub(super) fn ready_for_integral(host: Host, env: &Env, precision: u32) -> bool 
 pub fn round_to_integral<S: Standard<W>, const W: usize>(
     value: S::Bits,
     env: &Env,
+    unit: Unit,
 ) -> Option<S::Bits> {
-    if !ready_for_integral(S::HOST, env, S::PRECISION) {
+    if !ready_for_integral_in(S::HOST, env, S::PRECISION, unit) {
         return None;
     }
     let rounding = env.rounding;
@@ -363,8 +453,12 @@ pub fn round_to_integral<S: Standard<W>, const W: usize>(
 /// host unit, or `None` when the path does not apply, for a NaN, and for a
 /// result that the host cannot tell from a value out of range.
 #[inline]
-pub fn to_int<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Option<i64> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+pub fn to_int<S: Standard<W>, const W: usize>(
+    value: S::Bits,
+    env: &Env,
+    unit: Unit,
+) -> Option<i64> {
+    if !ready_for_in(S::HOST, env, S::PRECISION, unit) {
         return None;
     }
     match S::HOST {
@@ -381,8 +475,12 @@ pub fn to_int<S: Standard<W>, const W: usize>(value: S::Bits, env: &Env) -> Opti
 /// Returns a 64-bit integer rounded to the format by the host unit, or
 /// `None` when the path does not apply.
 #[inline]
-pub fn from_int<S: Standard<W>, const W: usize>(value: i64, env: &Env) -> Option<S::Bits> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+pub fn from_int<S: Standard<W>, const W: usize>(
+    value: i64,
+    env: &Env,
+    unit: Unit,
+) -> Option<S::Bits> {
+    if !ready_for_in(S::HOST, env, S::PRECISION, unit) {
         return None;
     }
     match S::HOST {
@@ -421,8 +519,9 @@ pub fn compare<S: Standard<W>, const W: usize>(
     left: S::Bits,
     right: S::Bits,
     env: &Env,
+    unit: Unit,
 ) -> Option<Ordering> {
-    if !ready_for(S::HOST, env, S::PRECISION) {
+    if !ready_for_in(S::HOST, env, S::PRECISION, unit) {
         return None;
     }
     match S::HOST {
@@ -471,9 +570,10 @@ pub fn min_max<S: Standard<W>, const W: usize>(
     right: S::Bits,
     operation: MinMax,
     env: &Env,
+    unit: Unit,
 ) -> Option<S::Bits> {
     // The instructions compare values, not magnitudes.
-    if operation.is_magnitude() || !ready_for(S::HOST, env, S::PRECISION) {
+    if operation.is_magnitude() || !ready_for_in(S::HOST, env, S::PRECISION, unit) {
         return None;
     }
     // The widened values of binary16 and bfloat16 are exact, and the
@@ -574,8 +674,9 @@ pub fn remainder<S: Standard<W>, const W: usize>(
     dividend: S::Bits,
     divisor: S::Bits,
     env: &Env,
+    unit: Unit,
 ) -> Option<S::Bits> {
-    if !ready_for(Host::Extended, env, S::PRECISION) {
+    if !ready_for_in(Host::Extended, env, S::PRECISION, unit) {
         return None;
     }
     let (x, y) = (dividend.to_limbs().limb(0), divisor.to_limbs().limb(0));
@@ -583,7 +684,7 @@ pub fn remainder<S: Standard<W>, const W: usize>(
         Host::None | Host::Quad => None,
         Host::Half => {
             // F16C widens and rounds in instructions that read MXCSR.
-            if !default_environment() {
+            if !unit.default_environment() {
                 return None;
             }
             let (a, b) = (half::<S, W>(dividend), half::<S, W>(divisor));
@@ -624,17 +725,11 @@ pub fn remainder<S: Standard<W>, const W: usize>(
 /// value is a NaN. A widening is exact, and a narrowing rounds once. The
 /// limbs hold the encoding from the low bits up.
 #[inline]
-pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 2]> {
+pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env, unit: Unit) -> Option<[u64; 2]> {
     if env.rounding == Rounding::ToOdd {
-        return convert_to_odd(from, to, bits, env);
+        return convert_to_odd(from, to, bits, env, unit);
     }
-    // The x87 unit converts to and from x87 extended precision.
-    let unit = if matches!(from, Host::Extended) {
-        from
-    } else {
-        to
-    };
-    if !ready_for(unit, env, to.precision()) {
+    if !ready_for_in(conversion_unit(from, to), env, to.precision(), unit) {
         return None;
     }
     let low = bits[0];
@@ -705,11 +800,11 @@ pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 
 /// environment must round to nearest even, and every other field of the mode
 /// must allow a host path.
 #[inline]
-fn convert_to_odd(from: Host, to: Host, bits: [u64; 2], env: &Env) -> Option<[u64; 2]> {
+fn convert_to_odd(from: Host, to: Host, bits: [u64; 2], env: &Env, unit: Unit) -> Option<[u64; 2]> {
     let nearest = env.with_rounding(Rounding::TiesToEven);
     if (from, to) != (Host::Double, Host::Single)
         || !environment::ROUND_TO_ODD
-        || !ready_for(to, &nearest, to.precision())
+        || !ready_for_in(to, &nearest, to.precision(), unit)
         || nan_64(bits[0])
     {
         return None;

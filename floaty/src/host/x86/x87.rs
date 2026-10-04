@@ -393,7 +393,7 @@ mod tests {
     use crate::float::Float;
     use crate::format::internal::LimbConversion;
     use crate::format::{Binary, Standard, X87};
-    use crate::host::{self, Host, Kind, Operation};
+    use crate::host::{self, Host, Kind, Operation, Unit};
     use crate::limbs::Limbs;
 
     /// x87 extended precision.
@@ -450,7 +450,7 @@ mod tests {
     fn assert_remainder<S: Standard<W>, const W: usize>(control: u16) {
         let (three, two) = (value::<S, W>(3), value::<S, W>(2));
         assert_eq!(
-            host::remainder::<S, W>(three, two, &Env::IEEE),
+            host::remainder::<S, W>(three, two, &Env::IEEE, Unit::Read),
             Some(value::<S, W>(-1)),
             "{:?} remainder under {control:#06x}",
             S::HOST
@@ -494,23 +494,37 @@ mod tests {
             assert_remainder::<Extended, 80>(control);
             let three = extended(3);
             assert_eq!(
-                host::round_to_integral::<Extended, 80>(three, &env),
+                host::round_to_integral::<Extended, 80>(three, &env, Unit::Read),
                 Some(three)
             );
-            assert_eq!(host::to_int::<Extended, 80>(three, &env), Some(3));
-            assert_eq!(host::from_int::<Extended, 80>(3, &env), Some(three));
             assert_eq!(
-                host::convert(Host::Single, Host::Extended, [single_three, 0], &env),
+                host::to_int::<Extended, 80>(three, &env, Unit::Read),
+                Some(3)
+            );
+            assert_eq!(
+                host::from_int::<Extended, 80>(3, &env, Unit::Read),
+                Some(three)
+            );
+            let single = [single_three, 0];
+            assert_eq!(
+                host::convert(Host::Single, Host::Extended, single, &env, Unit::Read),
                 Some(extended_three)
             );
             assert_eq!(
-                host::convert(Host::Extended, Host::Single, extended_three, &env),
+                host::convert(
+                    Host::Extended,
+                    Host::Single,
+                    extended_three,
+                    &env,
+                    Unit::Read
+                ),
                 Some([single_three, 0])
             );
             // `FADD` and `FSQRT` round to the precision control.
-            let sum = host::binary::<Extended, 80>(three, extended(2), Operation::Add, &env);
+            let add = Operation::Add;
+            let sum = host::binary::<Extended, 80>(three, extended(2), add, &env, Unit::Read);
             assert_eq!(sum, full.then(|| extended(5)), "{control:#06x}");
-            let root = host::sqrt::<Extended, 80>(extended(9), &env);
+            let root = host::sqrt::<Extended, 80>(extended(9), &env, Unit::Read);
             assert_eq!(root, full.then_some(three), "{control:#06x}");
         }
     }
