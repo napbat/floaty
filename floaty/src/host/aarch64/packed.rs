@@ -27,6 +27,10 @@ pub const WIDE: bool = false;
 /// `false`: no form uses 512-bit registers on AArch64.
 pub const EXTRA_WIDE: bool = false;
 
+/// `false`: no form of AArch64 takes its rounding direction from its
+/// encoding.
+pub const ROUNDING_CONTROL: bool = false;
+
 /// `true`: every AArch64 target widens binary16 lanes to binary32 and
 /// rounds binary32 lanes to binary16.
 pub const HALF: bool = super::HALF;
@@ -614,6 +618,9 @@ no_wide!(to_int_f32x16, ([f32; 16]) -> [i32; 16]);
 no_wide!(from_int_x16, ([i32; 16]) -> [f32; 16]);
 no_wide!(widen_halves_x16, ([u16; 16]) -> [f32; 16]);
 no_wide!(narrow_halves_x16, ([f32; 16]) -> [u16; 16]);
+no_wide!(binary_rounded_f32x16, ([f32; 16], [f32; 16], Operation, Rounding) -> [f32; 16]);
+no_wide!(mul_add_rounded_f32x16, ([f32; 16], [f32; 16], [f32; 16], Rounding) -> [f32; 16]);
+no_wide!(to_int_rounded_f32x16, ([f32; 16], Rounding) -> [i32; 16]);
 
 /// Returns the integer indefinite in every lane, which sends each lane to
 /// the scalar conversion. AArch64 `FCVTNS` saturates a lane outside the

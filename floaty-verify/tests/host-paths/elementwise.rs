@@ -4,7 +4,9 @@
 //! `floaty_verify::kernels`. A kernel of a view gives the result of its
 //! `_with` method. A store into cells that its view reads gives the store
 //! into another slice. `convert_slice` of host values gives the conversion
-//! of the values of the lane type.
+//! of the values of the lane type. The modes that round toward +∞, -∞, and
+//! zero take the forms with a rounding control where the processor has
+//! them.
 
 use core::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -14,7 +16,8 @@ use floaty::elementwise::{
     RoundToIntegral, Splat, Sum,
 };
 use floaty::env::Mode;
-use floaty::mode::{Ieee, X86Sse};
+use floaty::mode::direction::{TowardNegative, TowardPositive, TowardZero};
+use floaty::mode::{Ieee, Rounded, X86Sse};
 use floaty::{BF16, Binary, F16, F32, Float, Lanes, Rounding, ToInt, Vector};
 use floaty_verify::encodings::Layout;
 use floaty_verify::kernels::{LENGTHS, Mix, codes, integral_vector, pair};
@@ -123,7 +126,7 @@ fn check_integers<
     );
 }
 
-/// Checks every operation in each lane count and both modes on a view, and
+/// Checks every operation in each lane count and mode on a view, and
 /// returns the encodings of the stores.
 fn check_lanes(view: impl Vector, count: usize, context: &dyn Fn() -> String) -> Vec<u32> {
     let mut encodings = Vec::new();
@@ -133,6 +136,24 @@ fn check_lanes(view: impl Vector, count: usize, context: &dyn Fn() -> String) ->
     encodings.extend(check::<Ieee, 8>(view, count, context));
     encodings.extend(check::<Ieee, 32>(view, count, context));
     encodings.extend(check::<X86Sse, 8>(view, count, context));
+    encodings.extend(check_directions::<1>(view, count, context));
+    encodings.extend(check_directions::<8>(view, count, context));
+    encodings.extend(check_directions::<32>(view, count, context));
+    encodings
+}
+
+/// Checks every operation of `N` lanes on a view in the modes that round
+/// toward +∞, -∞, and zero, and returns the encodings of the stores.
+fn check_directions<const N: usize>(
+    view: impl Vector,
+    count: usize,
+    context: &dyn Fn() -> String,
+) -> Vec<u32> {
+    let mut encodings = check::<Rounded<Ieee, TowardPositive>, N>(view, count, context);
+    encodings.extend(check::<Rounded<Ieee, TowardNegative>, N>(
+        view, count, context,
+    ));
+    encodings.extend(check::<Rounded<Ieee, TowardZero>, N>(view, count, context));
     encodings
 }
 

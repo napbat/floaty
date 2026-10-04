@@ -6,11 +6,14 @@
 //! `Lanes<F32, 32>`, which runs the engine. The host loop of a fused row
 //! calls `f32::mul_add`, which is the FMA instruction only in a build with
 //! FMA. The host has no binary16 type, so the binary16 row has no host
-//! cells.
+//! cells. The host has no rounding toward -∞, so the rows of that mode have
+//! no host cells either.
 
 use std::hint::black_box;
 
-use floaty::{BF16, F16, F32, Lanes, LittleEndian, ScaledCodes, mode};
+use floaty::mode::direction::TowardNegative;
+use floaty::mode::{Ieee, Rounded};
+use floaty::{BF16, Binary, F16, F32, Float, Lanes, LittleEndian, ScaledCodes, mode};
 use floaty_verify::random::SplitMix64;
 
 use super::{COUNT, Table, measure};
@@ -162,6 +165,47 @@ fn binary32_rows(dimension: usize, seed: u64) {
             |x, _| Lanes::<F32, 8>::norm(x),
             |x, _| Lanes::<F32, 32>::norm(x),
             |x, _| Lanes::<F32, 32>::norm_with(x, mode::Ieee).0,
+        ],
+    );
+}
+
+/// binary32 in the mode that rounds toward -∞.
+type Down = Float<Binary<8>, 32, Rounded<Ieee, TowardNegative>>;
+
+/// Returns a result toward -∞ as a value of `F32`, with its bits.
+fn down(value: Down) -> F32 {
+    F32::from_bits(value.to_bits())
+}
+
+/// Measures the binary32 rows toward -∞ at `dimension`.
+fn directed_rows(dimension: usize, seed: u64) {
+    let vectors = vectors(dimension, seed);
+    let pairs: Vec<(&[f32], &[f32])> = vectors.iter().map(|(x, y)| (&x[..], &y[..])).collect();
+    row(
+        &format!("dot {dimension} toward -inf"),
+        &pairs,
+        None,
+        [
+            |x, y| down(Lanes::<Down, 8>::dot(x, y)),
+            |x, y| down(Lanes::<Down, 32>::dot(x, y)),
+            |x, y| {
+                down(
+                    Lanes::<Down, 32>::dot_with(x, y, Rounded::<Ieee, TowardNegative>::default()).0,
+                )
+            },
+        ],
+    );
+    row(
+        &format!("dot_fused {dimension} toward -inf"),
+        &pairs,
+        None,
+        [
+            |x, y| down(Lanes::<Down, 8>::dot_fused(x, y)),
+            |x, y| down(Lanes::<Down, 32>::dot_fused(x, y)),
+            |x, y| {
+                let mode = Rounded::<Ieee, TowardNegative>::default();
+                down(Lanes::<Down, 32>::dot_fused_with(x, y, mode).0)
+            },
         ],
     );
 }
@@ -384,6 +428,7 @@ pub fn table() {
     COLUMNS.header("Kernel");
     binary32_rows(1024, 61);
     binary32_rows(2560, 62);
+    directed_rows(1024, 61);
     format_rows(1280, 63);
     short_rows(64);
 }

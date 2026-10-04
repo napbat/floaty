@@ -26,9 +26,11 @@
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
 mod x86;
 
+use super::super::environment::packed;
+use super::super::paths::ready_in_direction;
 use super::super::{Host, Kind, Load, Step, Term};
 use super::{Build, available, convert_chunks_on, elementwise, kernel};
-use crate::env::Mode;
+use crate::env::{Env, Mode, Rounding};
 use crate::float::{Float, FloatType};
 use crate::format::Standard;
 use crate::format::internal::MinMax;
@@ -43,6 +45,26 @@ pub fn fused_kernels() -> bool {
         return true;
     }
     const { available(Host::Single, Kind::FusedMultiplyAdd) }
+}
+
+/// Returns the rounding direction of the mode when the mode and the
+/// environment allow the slice kernels and the elementwise slice operations
+/// of binary32, as `ready_in_direction` states, and this processor rounds in
+/// the direction. Every instruction set rounds to nearest even. Only the
+/// forms with a rounding control round in the other directions, in the
+/// build or in the instruction set that the processor selects. Elsewhere a
+/// directed mode takes the engine for the whole call, not for each chunk.
+#[inline]
+pub fn direction(env: &Env) -> Option<Rounding> {
+    let rounding = ready_in_direction(Host::Single, env, Host::Single.precision())?;
+    if rounding == Rounding::TiesToEven {
+        return Some(rounding);
+    }
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
+    if let Some(selected) = x86::selected() {
+        return selected.rounding_control().then_some(rounding);
+    }
+    packed::ROUNDING_CONTROL.then_some(rounding)
 }
 
 /// Returns the name of the instruction set that this processor runs:
@@ -75,12 +97,13 @@ pub fn accumulate<const N: usize>(
     y: impl Load,
     term: Term,
     step: Step,
+    rounding: Rounding,
 ) -> Option<u32> {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
     if let Some(selected) = x86::selected() {
-        return selected.accumulate::<N>(x, y, term, step);
+        return selected.accumulate::<N>(x, y, term, step, rounding);
     }
-    kernel::accumulate_on::<Build, N>(x, y, term, step)
+    kernel::accumulate_on::<Build, N>(x, y, term, step, rounding)
 }
 
 /// Runs `rows_on` in the instruction set of this processor.
@@ -90,46 +113,59 @@ pub fn rows<const N: usize>(
     query: impl Load,
     row_count: usize,
     term: Term,
+    rounding: Rounding,
     each: impl FnMut(usize, Option<u32>),
 ) {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
     if let Some(selected) = x86::selected() {
-        selected.rows::<N>(rows, query, row_count, term, each);
+        selected.rows::<N>(rows, query, row_count, term, rounding, each);
         return;
     }
-    kernel::rows_on::<Build, N>(rows, query, row_count, term, each);
+    kernel::rows_on::<Build, N>(rows, query, row_count, term, rounding, each);
 }
 
 /// Runs `store_on` in the instruction set of this processor.
 #[inline]
-pub fn store<const N: usize>(values: impl Load, each: impl FnMut(usize, usize, Option<&[u32]>)) {
+pub fn store<const N: usize>(
+    values: impl Load,
+    rounding: Rounding,
+    each: impl FnMut(usize, usize, Option<&[u32]>),
+) {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
     if let Some(selected) = x86::selected() {
-        selected.store::<N>(values, each);
+        selected.store::<N>(values, rounding, each);
         return;
     }
-    elementwise::store_on::<Build, N>(values, each);
+    elementwise::store_on::<Build, N>(values, rounding, each);
 }
 
 /// Runs `to_int_on` in the instruction set of this processor.
 #[inline]
-pub fn to_int<const N: usize>(values: impl Load, each: impl FnMut(usize, usize, Option<&[i32]>)) {
+pub fn to_int<const N: usize>(
+    values: impl Load,
+    rounding: Rounding,
+    each: impl FnMut(usize, usize, Option<&[i32]>),
+) {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
     if let Some(selected) = x86::selected() {
-        selected.to_int::<N>(values, each);
+        selected.to_int::<N>(values, rounding, each);
         return;
     }
-    elementwise::to_int_on::<Build, N>(values, each);
+    elementwise::to_int_on::<Build, N>(values, rounding, each);
 }
 
 /// Runs `reduce_on` in the instruction set of this processor.
 #[inline]
-pub fn reduce<const N: usize>(values: impl Load, operation: MinMax) -> Option<u32> {
+pub fn reduce<const N: usize>(
+    values: impl Load,
+    operation: MinMax,
+    rounding: Rounding,
+) -> Option<u32> {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
     if let Some(selected) = x86::selected() {
-        return selected.reduce::<N>(values, operation);
+        return selected.reduce::<N>(values, operation, rounding);
     }
-    elementwise::reduce_on::<Build, N>(values, operation)
+    elementwise::reduce_on::<Build, N>(values, operation, rounding)
 }
 
 /// Runs `convert_chunks_on` in the instruction set of this processor.

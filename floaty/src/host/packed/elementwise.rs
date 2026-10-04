@@ -9,15 +9,20 @@
 //! two zeros in integer instructions, because the instructions of the hosts
 //! treat those pairs differently. The loops compute in the instruction set
 //! that `dispatch` selects.
+//!
+//! Each step that rounds, in a view or in `to_int`, rounds in the direction
+//! of the mode. To nearest even, it takes the forms of the environment. In
+//! the other directions that `dispatch::direction` allows, it takes the
+//! forms with a rounding control, which only the instruction sets of those
+//! directions have.
 
 use super::super::bits::nan_32;
 use super::super::environment::packed;
-use super::super::paths::ready_for;
 use super::kernel::{encodings, singles};
-use super::{any_lane, chunk, chunk_mut, dispatch, isa};
+use super::{Directed, Nearest, any_lane, chunk, chunk_mut, dispatch, isa};
 use crate::env::{Env, Rounding};
 use crate::format::internal::MinMax;
-use crate::host::{Host, Isa, Load, Operation};
+use crate::host::{Direction, Isa, Load, Operation};
 
 /// The sign bit of a binary32 encoding.
 const SIGN: u32 = 0x8000_0000;
@@ -32,25 +37,30 @@ const HALF: u32 = 0x3F00_0000;
 /// The encoding of 1.
 const ONE: u32 = 0x3F80_0000;
 
-/// Returns `true` when the environment allows the host paths of binary32.
+/// Returns the rounding direction of the mode when the mode, the
+/// environment, and this processor allow the host paths of binary32, as
+/// `dispatch::direction` states.
 #[inline]
-fn ready(env: &Env) -> bool {
-    ready_for(Host::Single, env, Host::Single.precision())
+fn ready(env: &Env) -> Option<Rounding> {
+    dispatch::direction(env)
 }
 
 /// Returns `operation` of each pair of binary32 encodings in the
-/// instruction set `I`.
+/// instruction set `I`, rounded in the direction `D`.
 #[inline]
-pub fn binary<I: Isa, const C: usize>(
+pub fn binary<I: Isa, const C: usize, D: Direction>(
     x: [u32; C],
     y: [u32; C],
     operation: Operation,
+    direction: D,
 ) -> Option<[u32; C]> {
-    Some(encodings(isa::binary::<I, C>(
-        &singles(x),
-        &singles(y),
-        operation,
-    )?))
+    let (x, y) = (singles(x), singles(y));
+    let results = if D::NEAREST {
+        isa::binary::<I, C>(&x, &y, operation)
+    } else {
+        isa::binary_rounded::<I, C>(&x, &y, operation, direction.rounding())
+    };
+    Some(encodings(results?))
 }
 
 /// Returns the minimum or maximum operation `operation` of each pair of
@@ -237,16 +247,20 @@ fn correction(value: u32, difference: u32, rounding: Rounding) -> u32 {
     step.unwrap_or(0)
 }
 
-/// Returns each binary32 encoding converted to a 32-bit integer, to nearest
-/// even, in the instruction set `I`, or `None` where it has no packed
-/// conversion. A lane that the scalar conversion must decide holds
+/// Returns each binary32 encoding converted to a 32-bit integer in the
+/// direction `D`, in the instruction set `I`, or `None` where it has no
+/// packed conversion. A lane that the scalar conversion must decide holds
 /// `i32::MIN`: a NaN, a value outside the range of `i32`, and `-2^31`.
 #[inline]
-fn integers<I: Isa, const C: usize>(x: [u32; C]) -> Option<[i32; C]> {
+fn integers<I: Isa, const C: usize, D: Direction>(x: [u32; C], direction: D) -> Option<[i32; C]> {
     if !I::INTEGERS {
         return None;
     }
-    isa::to_int::<I, C>(&singles(x))
+    if D::NEAREST {
+        isa::to_int::<I, C>(&singles(x))
+    } else {
+        isa::to_int_rounded::<I, C>(&singles(x), direction.rounding())
+    }
 }
 
 /// Returns a chunk of encodings, or `None` when the chunk holds a NaN, which
@@ -269,52 +283,93 @@ pub fn store<const N: usize>(
     env: &Env,
     each: impl FnMut(usize, usize, Option<&[u32]>),
 ) -> Option<()> {
-    if !ready(env) {
-        return None;
-    }
-    dispatch::store::<N>(values, each);
+    let rounding = ready(env)?;
+    dispatch::store::<N>(values, rounding, each);
     Some(())
 }
 
 /// Calls `each` for each chunk as `store` does, in the instruction set `I`,
-/// with its features, in an environment that allows the path.
+/// with its features, in an environment that allows the path, rounding in
+/// the direction `rounding`.
 #[inline]
 pub(super) fn store_on<I: Isa, const N: usize>(
     values: impl Load,
+    rounding: Rounding,
     each: impl FnMut(usize, usize, Option<&[u32]>),
 ) {
-    I::run(move || in_value_chunks::<I, N, u32>(values, without_nan, without_nan, each));
+    if rounding == Rounding::TiesToEven {
+        store_in::<I, N>(values, Nearest, each);
+    } else {
+        store_in::<I, N>(values, Directed(rounding), each);
+    }
 }
 
-/// Converts the values of `values` to 32-bit integers to nearest even, in
-/// the chunks of `store`, with one check of the environment for the call.
-/// Calls `each` with the index of the first value of each chunk, the index
-/// past its last value, and its integers, or `None` for a chunk without an
-/// instruction. A lane that the scalar conversion must decide holds
-/// `i32::MIN`. Returns `None`, and calls `each` for no chunk, when the path
-/// does not apply.
+/// Calls `each` as `store_on` does, in the copy of the loop for the
+/// direction type of `direction`.
+#[inline]
+fn store_in<I: Isa, const N: usize>(
+    values: impl Load,
+    direction: impl Direction,
+    each: impl FnMut(usize, usize, Option<&[u32]>),
+) {
+    I::run(move || {
+        in_value_chunks::<I, N, u32>(values, direction, without_nan, without_nan, each);
+    });
+}
+
+/// Converts the values of `values` to 32-bit integers in the direction of
+/// the mode, in the chunks of `store`, with one check of the environment for
+/// the call. Calls `each` with the index of the first value of each chunk,
+/// the index past its last value, and its integers, or `None` for a chunk
+/// without an instruction. A lane that the scalar conversion must decide
+/// holds `i32::MIN`. Returns `None`, and calls `each` for no chunk, when the
+/// path does not apply.
 #[inline]
 pub fn to_int<const N: usize>(
     values: impl Load,
     env: &Env,
     each: impl FnMut(usize, usize, Option<&[i32]>),
 ) -> Option<()> {
-    if !packed::INTEGERS || !ready(env) {
+    if !packed::INTEGERS {
         return None;
     }
-    dispatch::to_int::<N>(values, each);
+    let rounding = ready(env)?;
+    dispatch::to_int::<N>(values, rounding, each);
     Some(())
 }
 
 /// Calls `each` for each chunk as `to_int` does, in the instruction set `I`,
-/// with its features, in an environment that allows the path.
+/// with its features, in an environment that allows the path, rounding in
+/// the direction `rounding`.
 #[inline]
 pub(super) fn to_int_on<I: Isa, const N: usize>(
     values: impl Load,
+    rounding: Rounding,
+    each: impl FnMut(usize, usize, Option<&[i32]>),
+) {
+    if rounding == Rounding::TiesToEven {
+        to_int_in::<I, N>(values, Nearest, each);
+    } else {
+        to_int_in::<I, N>(values, Directed(rounding), each);
+    }
+}
+
+/// Calls `each` as `to_int_on` does, in the copy of the loop for the
+/// direction type of `direction`.
+#[inline]
+fn to_int_in<I: Isa, const N: usize>(
+    values: impl Load,
+    direction: impl Direction,
     each: impl FnMut(usize, usize, Option<&[i32]>),
 ) {
     I::run(move || {
-        in_value_chunks::<I, N, i32>(values, integers::<I, N>, integers::<I, PART>, each);
+        in_value_chunks::<I, N, i32>(
+            values,
+            direction,
+            |x| integers::<I, N, _>(x, direction),
+            |x| integers::<I, PART, _>(x, direction),
+            each,
+        );
     });
 }
 
@@ -325,13 +380,15 @@ pub(super) fn to_int_on<I: Isa, const N: usize>(
 const PART: usize = 8;
 
 /// Loads the values of `values` `C` at a time in the instruction set `I`,
-/// and calls `each` with the index of the first value of each chunk, the
-/// index past its last value, and `compute` of its encodings, or `None`
-/// where a load or `compute` gives `None`. The values past the last chunk
-/// of `C` take chunks of [`PART`] and `compute_part` when `C` is larger.
+/// rounding in the direction `direction`, and calls `each` with the index of
+/// the first value of each chunk, the index past its last value, and
+/// `compute` of its encodings, or `None` where a load or `compute` gives
+/// `None`. The values past the last chunk of `C` take chunks of [`PART`] and
+/// `compute_part` when `C` is larger.
 #[inline]
 fn in_value_chunks<I: Isa, const C: usize, T>(
     values: impl Load,
+    direction: impl Direction,
     compute: impl Fn([u32; C]) -> Option<[T; C]>,
     compute_part: impl Fn([u32; PART]) -> Option<[T; PART]>,
     mut each: impl FnMut(usize, usize, Option<&[T]>),
@@ -339,13 +396,13 @@ fn in_value_chunks<I: Isa, const C: usize, T>(
     let count = values.count();
     let full = count - count % C;
     for start in (0..full).step_by(C) {
-        let chunk = values.load::<I, C>(start).and_then(&compute);
+        let chunk = values.load::<I, C>(start, direction).and_then(&compute);
         each(start, start + C, chunk.as_ref().map(|chunk| &chunk[..]));
     }
     if C > PART {
-        in_rest::<I, PART, T>(values, full, compute_part, each);
+        in_rest::<I, PART, T>(values, full, direction, compute_part, each);
     } else {
-        in_rest::<I, C, T>(values, full, compute, each);
+        in_rest::<I, C, T>(values, full, direction, compute, each);
     }
 }
 
@@ -356,6 +413,7 @@ fn in_value_chunks<I: Isa, const C: usize, T>(
 fn in_rest<I: Isa, const W: usize, T>(
     values: impl Load,
     start: usize,
+    direction: impl Direction,
     compute: impl Fn([u32; W]) -> Option<[T; W]>,
     mut each: impl FnMut(usize, usize, Option<&[T]>),
 ) {
@@ -363,9 +421,9 @@ fn in_rest<I: Isa, const W: usize, T>(
     for first in (start..count).step_by(W) {
         let end = count.min(first + W);
         let chunk = if end - first == W {
-            values.load::<I, W>(first)
+            values.load::<I, W>(first, direction)
         } else {
-            values.load_rest::<I, W>(first)
+            values.load_rest::<I, W>(first, direction)
         };
         let chunk = chunk.and_then(&compute);
         each(
@@ -383,10 +441,8 @@ fn in_rest<I: Isa, const W: usize, T>(
 /// operation has no instruction, and when the result is a NaN.
 #[inline]
 pub fn reduce<const N: usize>(values: impl Load, operation: MinMax, env: &Env) -> Option<u32> {
-    if !ready(env) {
-        return None;
-    }
-    dispatch::reduce::<N>(values, operation)
+    let rounding = ready(env)?;
+    dispatch::reduce::<N>(values, operation, rounding)
 }
 
 /// The lanes of a reduction, on a boundary of 64 bytes: the line of the
@@ -400,11 +456,29 @@ pub fn reduce<const N: usize>(values: impl Load, operation: MinMax, env: &Env) -
 struct Aligned<T>(T);
 
 /// Returns the result of `reduce` in the instruction set `I`, with its
-/// features, in an environment that allows the path.
+/// features, in an environment that allows the path. The minimum and
+/// maximum select a value, and the loads of `values` round in the direction
+/// `rounding`.
 #[inline]
 pub(super) fn reduce_on<I: Isa, const N: usize>(
     values: impl Load,
     operation: MinMax,
+    rounding: Rounding,
+) -> Option<u32> {
+    if rounding == Rounding::TiesToEven {
+        reduce_in::<I, N>(values, operation, Nearest)
+    } else {
+        reduce_in::<I, N>(values, operation, Directed(rounding))
+    }
+}
+
+/// Returns the result of `reduce_on` in the copy of the loop for the
+/// direction type of `direction`.
+#[inline]
+fn reduce_in<I: Isa, const N: usize>(
+    values: impl Load,
+    operation: MinMax,
+    direction: impl Direction,
 ) -> Option<u32> {
     I::run(move || {
         let identity = if operation.is_minimum() {
@@ -415,13 +489,13 @@ pub(super) fn reduce_on<I: Isa, const N: usize>(
         let mut lanes = Aligned([identity; N]);
         let lanes = &mut lanes.0;
         if I::EXTRA_WIDE && N.is_multiple_of(16) {
-            reduce_into::<I, N, 16>(lanes, values, operation, identity)?;
+            reduce_into::<I, N, 16>(lanes, values, operation, identity, direction)?;
         } else if N.is_multiple_of(8) {
-            reduce_into::<I, N, 8>(lanes, values, operation, identity)?;
+            reduce_into::<I, N, 8>(lanes, values, operation, identity, direction)?;
         } else if N.is_multiple_of(4) {
-            reduce_into::<I, N, 4>(lanes, values, operation, identity)?;
+            reduce_into::<I, N, 4>(lanes, values, operation, identity, direction)?;
         } else {
-            reduce_into::<I, N, 1>(lanes, values, operation, identity)?;
+            reduce_into::<I, N, 1>(lanes, values, operation, identity, direction)?;
         }
         let mut half = N / 2;
         while half > 0 {
@@ -439,13 +513,15 @@ pub(super) fn reduce_on<I: Isa, const N: usize>(
 /// Combines each value of `values` into its lane, `C` lanes at a time. The
 /// values of each whole part of `N` combine at fixed offsets, so the lanes
 /// stay in registers. The lanes past the last value of the last chunk take
-/// the identity, which changes no lane.
+/// the identity, which changes no lane. Each load rounds in the direction
+/// `direction`.
 #[inline]
 fn reduce_into<I: Isa, const N: usize, const C: usize>(
     lanes: &mut [u32; N],
     values: impl Load,
     operation: MinMax,
     identity: u32,
+    direction: impl Direction,
 ) -> Option<()> {
     let count = values.count();
     let full = count - count % N;
@@ -454,17 +530,17 @@ fn reduce_into<I: Isa, const N: usize, const C: usize>(
         let part = values.part(start, N);
         for offset in (0..N).step_by(C) {
             let old: [u32; C] = *chunk(lanes, offset);
-            *chunk_mut(lanes, offset) =
-                min_max::<I, C>(old, part.load::<I, C>(offset)?, operation)?;
+            let next = part.load::<I, C>(offset, direction)?;
+            *chunk_mut(lanes, offset) = min_max::<I, C>(old, next, operation)?;
         }
     }
     // Value `full + i` combines into lane `i`.
     for offset in (0..count - full).step_by(C) {
         let start = full + offset;
         let next = if start + C <= count {
-            values.load::<I, C>(start)?
+            values.load::<I, C>(start, direction)?
         } else {
-            let mut rest = values.load_rest::<I, C>(start)?;
+            let mut rest = values.load_rest::<I, C>(start, direction)?;
             rest[count - start..].fill(identity);
             rest
         };

@@ -3,10 +3,12 @@
 //! kind of vector, lane count, and length of `floaty_verify::kernels`. Each
 //! view of one vector, `&[F32]`, `&[f32]`, and `LittleEndian`, gives one
 //! result. The mode `X86Sse` gives another NaN than `Ieee`, which a NaN sum
-//! takes from the engine.
+//! takes from the engine. The modes that round toward +∞, -∞, and zero take
+//! the forms with a rounding control where the processor has them.
 
 use floaty::env::Mode;
-use floaty::mode::{Ieee, X86Sse};
+use floaty::mode::direction::{TowardNegative, TowardPositive, TowardZero};
+use floaty::mode::{Ieee, Rounded, X86Sse};
 use floaty::{BF16, Binary, F16, F32, F64, Float, Lanes, LittleEndian, ScaledCodes, Vector};
 use floaty_verify::encodings::{Layout, boundary_encodings_u128, sample_encodings_u128};
 use floaty_verify::kernels::{LENGTHS, Mix, codes, pair};
@@ -82,8 +84,8 @@ fn check<M: Mode, const N: usize>(
     })
 }
 
-/// Checks every kernel in each lane count and both modes on `x` and `y`,
-/// and returns the bits of each result.
+/// Checks every kernel in each lane count and mode on `x` and `y`, and
+/// returns the bits of each result.
 fn check_lanes(x: impl Vector, y: impl Vector, context: &dyn Fn() -> String) -> Vec<u32> {
     let mut bits = Vec::new();
     bits.extend(check::<Ieee, 1>(x, y, context));
@@ -95,6 +97,23 @@ fn check_lanes(x: impl Vector, y: impl Vector, context: &dyn Fn() -> String) -> 
     bits.extend(check::<Ieee, 64>(x, y, context));
     bits.extend(check::<X86Sse, 8>(x, y, context));
     bits.extend(check::<X86Sse, 32>(x, y, context));
+    bits.extend(check_directions::<1>(x, y, context));
+    bits.extend(check_directions::<8>(x, y, context));
+    bits.extend(check_directions::<32>(x, y, context));
+    bits
+}
+
+/// Checks every kernel with `N` lanes in the modes that round toward +∞,
+/// -∞, and zero, and returns the bits of each result.
+fn check_directions<const N: usize>(
+    x: impl Vector,
+    y: impl Vector,
+    context: &dyn Fn() -> String,
+) -> Vec<u32> {
+    let mut bits = Vec::new();
+    bits.extend(check::<Rounded<Ieee, TowardPositive>, N>(x, y, context));
+    bits.extend(check::<Rounded<Ieee, TowardNegative>, N>(x, y, context));
+    bits.extend(check::<Rounded<Ieee, TowardZero>, N>(x, y, context));
     bits
 }
 
@@ -210,23 +229,29 @@ fn integer_codes_give_the_default_mode_results() {
     }
 }
 
-/// Checks the rows of one matrix in `N` lanes: each row of `dot_rows` and
-/// `distance_square_rows` is the kernel of the row, and the `_with` methods
-/// give the same results.
-fn check_rows<const N: usize>(rows: &[F32], query: &[F32], context: &dyn Fn() -> String) {
+/// Checks the rows of one matrix in `N` lanes in the mode `M`: each row of
+/// `dot_rows` and `distance_square_rows` is the kernel of the row, and the
+/// `_with` methods give the same results.
+fn check_rows<M: Mode, const N: usize>(rows: &[F32], query: &[F32], context: &dyn Fn() -> String) {
     let count = rows.len() / query.len().max(1);
     let count = if query.is_empty() { 3 } else { count };
     let rows = &rows[..count * query.len()];
-    let (mut dots, mut dots_with) = (vec![0.0_f32; count], vec![F32::from_bits(0); count]);
-    Lanes::<F32, N>::dot_rows(rows, query, &mut dots);
-    let _ = Lanes::<F32, N>::dot_rows_with(rows, query, &mut dots_with, Ieee);
-    let (mut distances, mut distances_with) =
-        (vec![F32::from_bits(0); count], vec![0.0_f32; count]);
-    Lanes::<F32, N>::distance_square_rows(rows, query, &mut distances);
-    let _ = Lanes::<F32, N>::distance_square_rows_with(rows, query, &mut distances_with, Ieee);
+    let (rows, query) = (in_mode::<M>(rows), in_mode::<M>(query));
+    let zero = Float::<Binary<8>, 32, M>::from_bits(0);
+    let (mut dots, mut dots_with) = (vec![0.0_f32; count], vec![zero; count]);
+    Single::<M, N>::dot_rows(&rows[..], &query[..], &mut dots);
+    let _ = Single::<M, N>::dot_rows_with(&rows[..], &query[..], &mut dots_with, M::default());
+    let (mut distances, mut distances_with) = (vec![zero; count], vec![0.0_f32; count]);
+    Single::<M, N>::distance_square_rows(&rows[..], &query[..], &mut distances);
+    let _ = Single::<M, N>::distance_square_rows_with(
+        &rows[..],
+        &query[..],
+        &mut distances_with,
+        M::default(),
+    );
     for index in 0..count {
         let row = &rows[index * query.len()..(index + 1) * query.len()];
-        let dot = Lanes::<F32, N>::dot(row, query).to_bits();
+        let dot = Single::<M, N>::dot(row, &query[..]).to_bits();
         assert_eq!(
             dots[index].to_bits(),
             dot,
@@ -239,7 +264,7 @@ fn check_rows<const N: usize>(rows: &[F32], query: &[F32], context: &dyn Fn() ->
             "dot_with row {index} {}",
             context()
         );
-        let distance = Lanes::<F32, N>::distance_square(row, query).to_bits();
+        let distance = Single::<M, N>::distance_square(row, &query[..]).to_bits();
         assert_eq!(
             distances[index].to_bits(),
             distance,
@@ -255,6 +280,26 @@ fn check_rows<const N: usize>(rows: &[F32], query: &[F32], context: &dyn Fn() ->
     }
 }
 
+/// Returns binary32 values with the default mode `M`.
+fn in_mode<M: Mode>(values: &[F32]) -> Vec<Float<Binary<8>, 32, M>> {
+    values
+        .iter()
+        .map(|value| Float::from_bits(value.to_bits()))
+        .collect()
+}
+
+/// Checks the rows of one matrix in `N` lanes in each mode of `check_rows`.
+fn check_rows_in_each_mode<const N: usize>(
+    rows: &[F32],
+    query: &[F32],
+    context: &dyn Fn() -> String,
+) {
+    check_rows::<Ieee, N>(rows, query, context);
+    check_rows::<Rounded<Ieee, TowardPositive>, N>(rows, query, context);
+    check_rows::<Rounded<Ieee, TowardNegative>, N>(rows, query, context);
+    check_rows::<Rounded<Ieee, TowardZero>, N>(rows, query, context);
+}
+
 #[test]
 fn rows_give_the_kernel_of_each_row() {
     let mut random = SplitMix64::new(0x726F_7773);
@@ -264,18 +309,19 @@ fn rows_give_the_kernel_of_each_row() {
         for length in [0, 1, 7, 8, 9, 33, 100] {
             let context = || format!("{mix:?} query {length}");
             let query = &query[..length];
-            check_rows::<1>(&rows, query, &context);
-            check_rows::<8>(&rows, query, &context);
-            check_rows::<32>(&rows, query, &context);
+            check_rows_in_each_mode::<1>(&rows, query, &context);
+            check_rows_in_each_mode::<8>(&rows, query, &context);
+            check_rows_in_each_mode::<32>(&rows, query, &context);
         }
     }
 }
 
-/// Rows of at most eight values take a path of their own. A row of -0
-/// products sums to +0 in the lanes, and every count of rows leaves a
-/// different count after the last group of four.
+/// Rows of at most eight values take a path of their own to nearest even. A
+/// row of -0 products sums to +0 in the lanes there, and to -0 toward -∞.
+/// Every count of rows leaves a different count after the last group of
+/// four.
 #[test]
-fn short_rows_of_negative_zero_products_give_positive_zero() {
+fn short_rows_of_negative_zero_products_give_the_zero_of_the_mode() {
     let negative_zero = F32::from_bits(0x8000_0000);
     let one = F32::from_bits(0x3F80_0000);
     for length in 1..=8 {
@@ -283,8 +329,8 @@ fn short_rows_of_negative_zero_products_give_positive_zero() {
             let rows = vec![negative_zero; length * count];
             let query = vec![one; length];
             let context = || format!("query {length} rows {count}");
-            check_rows::<8>(&rows, &query, &context);
-            check_rows::<32>(&rows, &query, &context);
+            check_rows_in_each_mode::<8>(&rows, &query, &context);
+            check_rows_in_each_mode::<32>(&rows, &query, &context);
         }
     }
 }

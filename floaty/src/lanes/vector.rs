@@ -7,7 +7,7 @@ use core::marker::PhantomData;
 use crate::env::{Behavior, Flags, Mode};
 use crate::float::{F32, Float};
 use crate::format::Binary;
-use crate::host::{self, Isa, Load};
+use crate::host::{self, Direction, Isa, Load};
 use crate::sealed::Sealed;
 
 /// The binary32 type with the default mode `M`.
@@ -153,7 +153,8 @@ fn load_rest<E: Copy, const N: usize>(
 }
 
 /// Implements [`Load`] for a slice of `$element`, whose chunks `$widen`
-/// widens in the instruction set `H`.
+/// widens in the instruction set `H`. A widening is exact, so it takes no
+/// rounding direction.
 macro_rules! load_slice {
     ($element:ty, |$chunk:ident| $widen:expr) => {
         #[inline]
@@ -162,12 +163,20 @@ macro_rules! load_slice {
         }
 
         #[inline]
-        fn load_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+        fn load_on<H: Isa, const N: usize>(
+            self,
+            start: usize,
+            _direction: impl Direction,
+        ) -> Option<[u32; N]> {
             load_full::<$element, N>(self, start, |$chunk| $widen)
         }
 
         #[inline]
-        fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+        fn load_rest_on<H: Isa, const N: usize>(
+            self,
+            start: usize,
+            _direction: impl Direction,
+        ) -> Option<[u32; N]> {
             load_rest::<$element, N>(self, start, |$chunk| $widen)
         }
 
@@ -298,12 +307,20 @@ macro_rules! little_endian {
             }
 
             #[inline]
-            fn load_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            fn load_on<H: Isa, const N: usize>(
+                self,
+                start: usize,
+                _direction: impl Direction,
+            ) -> Option<[u32; N]> {
                 load_full(self.encodings(), start, Self::widen::<H, N>)
             }
 
             #[inline]
-            fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+            fn load_rest_on<H: Isa, const N: usize>(
+                self,
+                start: usize,
+                _direction: impl Direction,
+            ) -> Option<[u32; N]> {
                 load_rest(self.encodings(), start, Self::widen::<H, N>)
             }
 
@@ -361,18 +378,26 @@ impl Load for ScaledCodes<'_> {
     }
 
     #[inline]
-    fn load_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_on<H: Isa, const N: usize>(
+        self,
+        start: usize,
+        direction: impl Direction,
+    ) -> Option<[u32; N]> {
         let scale = self.scale.to_bits();
         load_full(self.codes, start, |chunk| {
-            host::packed::widen_scaled_codes::<H, N>(chunk, scale)
+            host::packed::widen_scaled_codes::<H, N, _>(chunk, scale, direction)
         })
     }
 
     #[inline]
-    fn load_rest_on<H: Isa, const N: usize>(self, start: usize) -> Option<[u32; N]> {
+    fn load_rest_on<H: Isa, const N: usize>(
+        self,
+        start: usize,
+        direction: impl Direction,
+    ) -> Option<[u32; N]> {
         let scale = self.scale.to_bits();
         load_rest(self.codes, start, |chunk| {
-            host::packed::widen_scaled_codes::<H, N>(chunk, scale)
+            host::packed::widen_scaled_codes::<H, N, _>(chunk, scale, direction)
         })
     }
 

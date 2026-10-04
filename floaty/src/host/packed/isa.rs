@@ -66,6 +66,26 @@ impl Isa for Build {
     }
 
     #[inline]
+    fn binary_rounded_f32x16(
+        left: [f32; 16],
+        right: [f32; 16],
+        operation: Operation,
+        rounding: Rounding,
+    ) -> Option<[f32; 16]> {
+        packed::binary_rounded_f32x16(left, right, operation, rounding)
+    }
+
+    #[inline]
+    fn mul_add_rounded_f32x16(
+        left: [f32; 16],
+        right: [f32; 16],
+        addend: [f32; 16],
+        rounding: Rounding,
+    ) -> Option<[f32; 16]> {
+        packed::mul_add_rounded_f32x16(left, right, addend, rounding)
+    }
+
+    #[inline]
     fn min_max_f32x4(left: [f32; 4], right: [f32; 4], operation: MinMax) -> Option<[f32; 4]> {
         Some(packed::min_max_f32x4(left, right, operation))
     }
@@ -108,6 +128,11 @@ impl Isa for Build {
     #[inline]
     fn to_int_f32x16(value: [f32; 16]) -> Option<[i32; 16]> {
         packed::to_int_f32x16(value)
+    }
+
+    #[inline]
+    fn to_int_rounded_f32x16(value: [f32; 16], rounding: Rounding) -> Option<[i32; 16]> {
+        packed::to_int_rounded_f32x16(value, rounding)
     }
 
     #[inline]
@@ -209,6 +234,36 @@ fn in_single_chunks<I: Isa, T: Copy, const N: usize>(
     Some(())
 }
 
+/// Computes the `N` lanes of `lanes` sixteen at a time in `extra_wide`,
+/// which takes the index of its first lane. Embedded rounding has only
+/// 512-bit register forms, so a last chunk of fewer lanes runs in one too,
+/// with its operands from [`sixteen`]. Returns `None` when `extra_wide` has
+/// no instruction.
+#[inline]
+fn in_rounded_chunks<T: Copy, const N: usize>(
+    lanes: &mut [T; N],
+    extra_wide: impl Fn(usize) -> Option<[T; 16]>,
+) -> Option<()> {
+    let whole = N - N % 16;
+    for start in (0..whole).step_by(16) {
+        *chunk_mut(lanes, start) = extra_wide(start)?;
+    }
+    if whole < N {
+        lanes[whole..].copy_from_slice(&extra_wide(whole)?[..N - whole]);
+    }
+    Some(())
+}
+
+/// Returns the sixteen lanes of `x` from `start`, with +0 past its last
+/// lane. The results of the lanes past it are not used.
+#[inline]
+fn sixteen<const N: usize>(x: &[f32; N], start: usize) -> [f32; 16] {
+    let mut lanes = [0.0; 16];
+    let end = N.min(start + 16);
+    lanes[..end - start].copy_from_slice(&x[start..end]);
+    lanes
+}
+
 /// Returns `operation` of each pair of lanes of `x` and `y`.
 #[inline]
 pub fn binary<I: Isa, const N: usize>(
@@ -227,6 +282,24 @@ pub fn binary<I: Isa, const N: usize>(
     Some(lanes)
 }
 
+/// Returns `operation` of each pair of lanes of `x` and `y`, rounded in the
+/// direction `rounding` by the forms with a rounding control, as
+/// `in_rounded_chunks` computes them. The paths to nearest even take
+/// `binary`, so their code holds none of these forms.
+#[inline]
+pub fn binary_rounded<I: Isa, const N: usize>(
+    x: &[f32; N],
+    y: &[f32; N],
+    operation: Operation,
+    rounding: Rounding,
+) -> Option<[f32; N]> {
+    let mut lanes = [0.0; N];
+    in_rounded_chunks(&mut lanes, |start| {
+        I::binary_rounded_f32x16(sixteen(x, start), sixteen(y, start), operation, rounding)
+    })?;
+    Some(lanes)
+}
+
 /// Returns `x * y + z` of each triple of lanes, rounded once.
 #[inline]
 pub fn mul_add<I: Isa, const N: usize>(
@@ -242,6 +315,23 @@ pub fn mul_add<I: Isa, const N: usize>(
         |start| I::mul_add_f32x4(*chunk(x, start), *chunk(y, start), *chunk(z, start)),
         |index| Some(I::mul_add_f32x4([x[index]; 4], [y[index]; 4], [z[index]; 4])?[0]),
     )?;
+    Some(lanes)
+}
+
+/// Returns `x * y + z` of each triple of lanes, rounded once in the
+/// direction `rounding`, as `binary_rounded` rounds.
+#[inline]
+pub fn mul_add_rounded<I: Isa, const N: usize>(
+    x: &[f32; N],
+    y: &[f32; N],
+    z: &[f32; N],
+    rounding: Rounding,
+) -> Option<[f32; N]> {
+    let mut lanes = [0.0; N];
+    in_rounded_chunks(&mut lanes, |start| {
+        let (x, y, z) = (sixteen(x, start), sixteen(y, start), sixteen(z, start));
+        I::mul_add_rounded_f32x16(x, y, z, rounding)
+    })?;
     Some(lanes)
 }
 
@@ -292,6 +382,21 @@ pub fn to_int<I: Isa, const N: usize>(x: &[f32; N]) -> Option<[i32; N]> {
         |start| I::to_int_f32x4(*chunk(x, start)),
         |index| Some(I::to_int_f32x4([x[index]; 4])?[0]),
     )?;
+    Some(lanes)
+}
+
+/// Returns each lane rounded to a 32-bit integer in the direction
+/// `rounding`, as `binary_rounded` rounds, with the integer indefinite as
+/// `to_int` gives it.
+#[inline]
+pub fn to_int_rounded<I: Isa, const N: usize>(
+    x: &[f32; N],
+    rounding: Rounding,
+) -> Option<[i32; N]> {
+    let mut lanes = [0; N];
+    in_rounded_chunks(&mut lanes, |start| {
+        I::to_int_rounded_f32x16(sixteen(x, start), rounding)
+    })?;
     Some(lanes)
 }
 

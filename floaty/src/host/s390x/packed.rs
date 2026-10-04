@@ -20,6 +20,10 @@ pub const WIDE: bool = false;
 /// `false`: s390x has no vector registers in the base z/Architecture.
 pub const EXTRA_WIDE: bool = false;
 
+/// `false`: the packed paths of s390x run the scalar instruction of each
+/// lane, which takes no rounding direction from its encoding.
+pub const ROUNDING_CONTROL: bool = false;
+
 /// `false`: s390x has no binary16 conversion instruction, so binary16 lanes
 /// take the scalar path of each lane.
 pub const HALF: bool = false;
@@ -265,6 +269,9 @@ no_wide!(
     from_int_x16, ([i32; 16]) -> [f32; 16];
     widen_halves_x16, ([u16; 16]) -> [f32; 16];
     narrow_halves_x16, ([f32; 16]) -> [u16; 16];
+    binary_rounded_f32x16, ([f32; 16], [f32; 16], Operation, Rounding) -> [f32; 16];
+    mul_add_rounded_f32x16, ([f32; 16], [f32; 16], [f32; 16], Rounding) -> [f32; 16];
+    to_int_rounded_f32x16, ([f32; 16], Rounding) -> [i32; 16];
 );
 
 no_native!(

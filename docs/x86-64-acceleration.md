@@ -167,12 +167,13 @@ remainder of close operands takes `FPREM1`: 14.7 and 14.8 per operation.
 ## Modes
 
 Every host path needs a mode without FTZ, DAZ, saturation, or a precision limit, and
-every path but `round_to_integral` needs a mode that rounds to nearest even.
-A mode is a type, so an operation in another mode compiles to the engine.
+every path but `round_to_integral`, the slice kernels, and the elementwise
+slice operations needs a mode that rounds to nearest even. A mode is a
+type, so an operation in another mode compiles to the engine.
 
 | Mode | x86-64 support | Gap |
 | --- | --- | --- |
-| Directed rounding, `Rounded<M, R>` | `round_to_integral` takes the direction in the immediate of `ROUNDSS` and `ROUNDPS` (SSE4.1): a path today. `VCVTPS2PH` takes the direction in its immediate too (F16C). `CVTTPS2DQ` and the other `T` forms round toward zero. Embedded rounding, such as `{rz-sae}`, sets the direction of one instruction and suppresses every exception. It applies to 512-bit register forms and to scalar forms (AVX-512F). Revision 4.0 of the AVX10.2 specification removed embedded rounding on 256-bit registers. | Paths for the other operations at AVX-512F. Embedded rounding does not override FTZ or DAZ, so the path must still check them in MXCSR. |
+| Directed rounding, `Rounded<M, R>` | `round_to_integral` takes the direction in the immediate of `ROUNDSS` and `ROUNDPS` (SSE4.1): a path today. `VCVTPS2PH` takes the direction in its immediate too (F16C). `CVTTPS2DQ` and the other `T` forms round toward zero. Embedded rounding, such as `{rz-sae}`, sets the direction of one instruction and suppresses every exception. It applies to 512-bit register forms and to scalar forms (AVX-512F). Revision 4.0 of the AVX10.2 specification removed embedded rounding on 256-bit registers. The slice kernels and the elementwise slice operations take the 512-bit forms with embedded rounding toward +∞, -∞, and zero: a path today, in a build with AVX-512F or on a processor with x86-64-v4. In x86-64-v4 on a Ryzen AI Max+ 395, the update `x * keep + y * eta` of 1,280 values takes 83 ns toward -∞ against 35,821 ns in the engine, and `dot` of 1,024 values in 32 lanes takes 96 ns against 18,197 ns. | Paths for the scalar operations and the operators of `Lanes`, which the build selects at compile time, so only a build with AVX-512F can have them. In x86-64-v4, the engine takes 8.4 ns for a binary32 `+` toward -∞, against 4.7 ns for the host path to nearest even. Embedded rounding does not override FTZ or DAZ, so the path must still check them in MXCSR. |
 | FTZ and DAZ | MXCSR.FTZ and MXCSR.DAZ apply to every SSE and AVX instruction that honors them. No instruction takes them from an operand. `VCVTNEPS2BF16`, `VDPBF16PS`, and the AVX10.2 bfloat16 arithmetic always flush. | A path for an FTZ or DAZ mode must write MXCSR, and this record does not measure that cost. The AVX10.2 bfloat16 arithmetic can match an FTZ and DAZ mode of bfloat16 if its tininess rule matches. This record does not check that. |
 | Precision limit | SSE and AVX have no precision control. The x87 precision control applies only to x87 extended. | None |
 
@@ -260,7 +261,7 @@ path, so the record lists no gap for it.
 
 | Priority | Gap | Instructions | Feature | Cost today | Blocker |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 512-bit chunks, masked tails, directed rounding of the other operations, `scale_b`, conversions of 64-bit integers, `min_num` and `max_num` without the fallback | 512-bit forms, masks, embedded rounding, `VSCALEFPS`, `VCVTPS2QQ`, `VRANGEPS` | AVX-512F, DQ, VL | Engine, or 256-bit paths | No hardware in the gates. |
+| 1 | 512-bit chunks, masked tails, directed rounding of the scalar operations and of the operators of `Lanes`, `scale_b`, conversions of 64-bit integers, `min_num` and `max_num` without the fallback | 512-bit forms, masks, embedded rounding, `VSCALEFPS`, `VCVTPS2QQ`, `VRANGEPS` | AVX-512F, DQ, VL | Engine, or 256-bit paths | No hardware in the gates. |
 | 2 | binary16 lanes in binary16 instructions, and the binary16 `mul_add` in one instruction | `VADDPH`, `VFMADD213PH`, `VCVTPD2PH` | AVX512-FP16 | 3.7 per lane for `mul_add`, and 0.5 for the others | No hardware in the gates. Conflict 1. |
 | 3 | The IEEE 754-2019 minimum and maximum without the fallback, bfloat16 `mul_add`, FP8 conversions, and saturating integer conversions | `VMINMAXPS`, `VFMADD213BF16`, `VCVTHF82PH`, `VCVTPH2HF8`, `VCVTTPS2DQS` | AVX10.2 | Engine | No hardware in the gates. `avx10.2` is unstable in Rust. Conflict 2. |
 

@@ -254,6 +254,26 @@ fn ready_for_in(host: Host, env: &Env, precision: u32, unit: Unit) -> bool {
     compatible(env, precision) && unit
 }
 
+/// Returns the rounding direction of `env` when `ready_for` allows a host
+/// path of `host` for a format of `precision` bits in `env` rounded to
+/// nearest even, and the direction is one of IEEE 754 that the instructions
+/// of a path can take from their encoding: to nearest even, toward +∞,
+/// toward -∞, or toward zero. Returns `None` otherwise. The packed paths of
+/// the slice operations round in the other three directions only in the
+/// forms with a rounding control, as `packed::dispatch::direction` checks.
+#[inline]
+pub(super) fn ready_in_direction(host: Host, env: &Env, precision: u32) -> Option<Rounding> {
+    let direction = matches!(
+        env.rounding,
+        Rounding::TiesToEven
+            | Rounding::TowardPositive
+            | Rounding::TowardNegative
+            | Rounding::TowardZero
+    );
+    let nearest = env.with_rounding(Rounding::TiesToEven);
+    (direction && ready_for(host, &nearest, precision)).then_some(env.rounding)
+}
+
 /// Returns `true` when `ready_for` allows a host path whose instructions
 /// round to the precision of the unit: `+`, `-`, `*`, `/`, and `sqrt`. The
 /// x87 unit must then compute at the 64-bit precision too, which its other

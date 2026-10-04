@@ -218,6 +218,13 @@ impl Selected {
         }
     }
 
+    /// Returns `true` when the instruction set has the forms with a rounding
+    /// control: `V4`.
+    #[inline]
+    pub fn rounding_control(self) -> bool {
+        matches!(self.0, Level::V4)
+    }
+
     /// Runs `accumulate_on` in the instruction set.
     #[inline]
     pub fn accumulate<const N: usize>(
@@ -226,8 +233,9 @@ impl Selected {
         y: impl Load,
         term: Term,
         step: Step,
+        rounding: Rounding,
     ) -> Option<u32> {
-        in_selected!(self, kernel::accumulate_on::<N>(x, y, term, step))
+        in_selected!(self, kernel::accumulate_on::<N>(x, y, term, step, rounding))
     }
 
     /// Runs `rows_on` in the instruction set.
@@ -238,11 +246,12 @@ impl Selected {
         query: impl Load,
         row_count: usize,
         term: Term,
+        rounding: Rounding,
         each: impl FnMut(usize, Option<u32>),
     ) {
         in_selected!(
             self,
-            kernel::rows_on::<N>(rows, query, row_count, term, each)
+            kernel::rows_on::<N>(rows, query, row_count, term, rounding, each)
         );
     }
 
@@ -251,9 +260,10 @@ impl Selected {
     pub fn store<const N: usize>(
         self,
         values: impl Load,
+        rounding: Rounding,
         each: impl FnMut(usize, usize, Option<&[u32]>),
     ) {
-        in_selected!(self, elementwise::store_on::<N>(values, each));
+        in_selected!(self, elementwise::store_on::<N>(values, rounding, each));
     }
 
     /// Runs `to_int_on` in the instruction set.
@@ -261,15 +271,24 @@ impl Selected {
     pub fn to_int<const N: usize>(
         self,
         values: impl Load,
+        rounding: Rounding,
         each: impl FnMut(usize, usize, Option<&[i32]>),
     ) {
-        in_selected!(self, elementwise::to_int_on::<N>(values, each));
+        in_selected!(self, elementwise::to_int_on::<N>(values, rounding, each));
     }
 
     /// Runs `reduce_on` in the instruction set.
     #[inline]
-    pub fn reduce<const N: usize>(self, values: impl Load, operation: MinMax) -> Option<u32> {
-        in_selected!(self, elementwise::reduce_on::<N>(values, operation))
+    pub fn reduce<const N: usize>(
+        self,
+        values: impl Load,
+        operation: MinMax,
+        rounding: Rounding,
+    ) -> Option<u32> {
+        in_selected!(
+            self,
+            elementwise::reduce_on::<N>(values, operation, rounding)
+        )
     }
 
     /// Runs `convert_chunks_on` in the instruction set.
@@ -375,6 +394,26 @@ impl Isa for V3 {
     }
 
     #[inline]
+    fn binary_rounded_f32x16(
+        _: [f32; 16],
+        _: [f32; 16],
+        _: Operation,
+        _: Rounding,
+    ) -> Option<[f32; 16]> {
+        None
+    }
+
+    #[inline]
+    fn mul_add_rounded_f32x16(
+        _: [f32; 16],
+        _: [f32; 16],
+        _: [f32; 16],
+        _: Rounding,
+    ) -> Option<[f32; 16]> {
+        None
+    }
+
+    #[inline]
     fn min_max_f32x16(_: [f32; 16], _: [f32; 16], _: MinMax) -> Option<[f32; 16]> {
         None
     }
@@ -386,6 +425,11 @@ impl Isa for V3 {
 
     #[inline]
     fn to_int_f32x16(_: [f32; 16]) -> Option<[i32; 16]> {
+        None
+    }
+
+    #[inline]
+    fn to_int_rounded_f32x16(_: [f32; 16], _: Rounding) -> Option<[i32; 16]> {
         None
     }
 
@@ -469,5 +513,33 @@ impl Isa for V4 {
         // SAFETY: the processor has AVX-512F, as the comment of the type
         // states.
         unsafe { avx512::round_f32x16(value, rounding) }
+    }
+
+    #[inline]
+    fn binary_rounded_f32x16(
+        left: [f32; 16],
+        right: [f32; 16],
+        operation: Operation,
+        rounding: Rounding,
+    ) -> Option<[f32; 16]> {
+        // SAFETY: as in `round_f32x16`.
+        unsafe { avx512::binary_rounded_f32x16(left, right, operation, rounding) }
+    }
+
+    #[inline]
+    fn mul_add_rounded_f32x16(
+        left: [f32; 16],
+        right: [f32; 16],
+        addend: [f32; 16],
+        rounding: Rounding,
+    ) -> Option<[f32; 16]> {
+        // SAFETY: as in `round_f32x16`.
+        unsafe { avx512::mul_add_rounded_f32x16(left, right, addend, rounding) }
+    }
+
+    #[inline]
+    fn to_int_rounded_f32x16(value: [f32; 16], rounding: Rounding) -> Option<[i32; 16]> {
+        // SAFETY: as in `round_f32x16`.
+        unsafe { avx512::to_int_rounded_f32x16(value, rounding) }
     }
 }

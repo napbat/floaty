@@ -30,6 +30,11 @@ pub const WIDE: bool = cfg!(target_feature = "avx");
 /// lanes.
 pub const EXTRA_WIDE: bool = cfg!(target_feature = "avx512f");
 
+/// `true` when the build has the 512-bit forms with an embedded rounding
+/// control, which round to nearest even, toward +∞, toward -∞, or toward
+/// zero (AVX-512F).
+pub const ROUNDING_CONTROL: bool = cfg!(target_feature = "avx512f");
+
 /// `true`: SSE2 converts binary32 and binary64 lanes to 32-bit integers.
 pub const INTEGERS: bool = true;
 
@@ -770,6 +775,25 @@ wide!(
     /// Returns sixteen binary32 lanes rounded to binary16 to nearest even, by
     /// `VCVTPS2PH` with the rounding control 0 in its immediate.
     avx512::narrow_halves_x16, target_feature = "avx512f", (value: [f32; 16]) -> [u16; 16]
+);
+wide!(
+    /// Returns `operation` of sixteen pairs of binary32 lanes, rounded in the
+    /// direction `rounding` by the embedded rounding control of `VADDPS`,
+    /// `VSUBPS`, `VMULPS`, or `VDIVPS`, or `None` for a direction without a
+    /// control.
+    avx512::binary_rounded_f32x16, target_feature = "avx512f", (left: [f32; 16], right: [f32; 16], operation: Operation, rounding: Rounding) -> Option<[f32; 16]>
+);
+wide!(
+    /// Returns `left * right + addend` of sixteen triples of binary32 lanes,
+    /// each rounded once in the direction `rounding` by the embedded rounding
+    /// control of `VFMADD213PS`, or `None` for a direction without a control.
+    avx512::mul_add_rounded_f32x16, target_feature = "avx512f", (left: [f32; 16], right: [f32; 16], addend: [f32; 16], rounding: Rounding) -> Option<[f32; 16]>
+);
+wide!(
+    /// Returns sixteen binary32 lanes rounded to 32-bit integers in the
+    /// direction `rounding` by the embedded rounding control of `VCVTPS2DQ`,
+    /// or `None` for a direction without a control.
+    avx512::to_int_rounded_f32x16, target_feature = "avx512f", (value: [f32; 16], rounding: Rounding) -> Option<[i32; 16]>
 );
 
 #[cfg(any(target_feature = "avx512f", feature = "std"))]
