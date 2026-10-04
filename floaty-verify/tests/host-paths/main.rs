@@ -19,12 +19,15 @@
 //!   and lane count, and the slice conversion.
 //! - [`elementwise`]: the elementwise views, stores, integer conversions,
 //!   and reductions of `Lanes`, and the slice conversion of host values.
+//! - [`blocks`]: `F32::map` and `F32::evaluate` of chains of every step,
+//!   and their check of MXCSR on x86-64.
 //! - [`levels`]: the runs of these tests in each instruction set that the
-//!   slice paths of `Lanes` can select on the processor.
+//!   slice paths of `Lanes` and blocks can select on the processor.
 //!
 //! [`operands`] gives the operands of every check.
 
 mod arithmetic;
+mod blocks;
 mod comparisons;
 mod conversions;
 mod double_double;

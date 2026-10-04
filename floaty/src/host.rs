@@ -5,9 +5,10 @@
 //! and its features. One module in `host/` reads the floating-point
 //! environment of each architecture. A build for another architecture, or with
 //! `--cfg floaty_engine_only`, has no host path, and each entry point returns
-//! `None`. The slice kernels and the elementwise slice operations of `Lanes`
-//! also take a larger instruction set that the processor has, in a build with
-//! the feature `std`, as `packed::dispatch` states.
+//! `None`. The slice kernels and the elementwise slice operations of `Lanes`,
+//! and blocks, also take a larger instruction set that the processor has, in
+//! a build with the feature `std`, as `packed::dispatch` states. `block`
+//! runs the steps of a chain as Rust operations on `f32`, as it states.
 //!
 //! A path serves only entry points that return no flags, in a mode that
 //! `compatible` in `paths` accepts. That function names every field of
@@ -38,6 +39,14 @@ pub fn floats_of_singles<M: Mode>(values: &[f32]) -> &[Float<Binary<8>, 32, M>] 
     unsafe { core::slice::from_raw_parts(values.as_ptr().cast(), values.len()) }
 }
 
+/// Returns host binary32 values as binary32 values of floaty to write, as
+/// `floats_of_singles` returns them to read.
+#[must_use]
+pub fn floats_of_singles_mut<M: Mode>(values: &mut [f32]) -> &mut [Float<Binary<8>, 32, M>] {
+    // SAFETY: as in `floats_of_singles`. The slice keeps the unique borrow.
+    unsafe { core::slice::from_raw_parts_mut(values.as_mut_ptr().cast(), values.len()) }
+}
+
 #[cfg(not(floaty_engine_only))]
 #[cfg(any(
     all(
@@ -48,6 +57,16 @@ pub fn floats_of_singles<M: Mode>(values: &[f32]) -> &[Float<Binary<8>, 32, M>] 
     target_arch = "s390x"
 ))]
 mod bits;
+#[cfg(not(floaty_engine_only))]
+#[cfg(any(
+    all(
+        any(target_arch = "x86", target_arch = "x86_64"),
+        target_feature = "sse2"
+    ),
+    target_arch = "aarch64",
+    target_arch = "s390x"
+))]
+pub mod block;
 #[cfg(not(floaty_engine_only))]
 #[cfg(any(
     all(
@@ -262,6 +281,8 @@ pub trait Isa: Sealed {
     /// integers, with the integer indefinite `i32::MIN` in a lane that the
     /// scalar conversion must decide.
     const INTEGERS: bool;
+    /// `true` when the instruction set has a binary32 fused multiply-add.
+    const FUSED: bool;
 
     /// Returns `f()`, computed with the features of the instruction set.
     fn run<R>(f: impl FnOnce() -> R) -> R;
@@ -483,8 +504,8 @@ pub const fn convertible(from: Host, to: Host) -> bool {
     ))
 ))]
 pub use self::none::{
-    Ready, Unit, binary, compare, conversion_unit, convert, from_int, min_max, mul_add, packed,
-    ready, remainder, round_to_integral, sqrt, to_int,
+    Ready, Unit, binary, block, compare, conversion_unit, convert, from_int, min_max, mul_add,
+    packed, ready, remainder, round_to_integral, sqrt, to_int,
 };
 
 /// The entry points of a build without a host path: each returns `None`.
@@ -506,6 +527,36 @@ mod none {
     use crate::env::Env;
     use crate::format::Standard;
     use crate::format::internal::MinMax;
+
+    /// The block entry points of a build without a host path: each returns
+    /// `None`.
+    pub mod block {
+        use crate::block::Chain;
+        use crate::env::Mode;
+        use crate::float::Float;
+        use crate::format::Binary;
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn map<C: Chain<IN, P>, M: Mode, const IN: usize, const P: usize>(
+            _chain: &C,
+            _x: [&[Float<Binary<8>, 32, M>]; IN],
+            _p: [Float<Binary<8>, 32, M>; P],
+            _out: &mut [Float<Binary<8>, 32, M>],
+        ) -> Option<bool> {
+            None
+        }
+
+        /// Returns `None`: this build has no host path.
+        #[inline]
+        pub fn evaluate<C: Chain<IN, P>, M: Mode, const IN: usize, const P: usize>(
+            _chain: &C,
+            _x: [Float<Binary<8>, 32, M>; IN],
+            _p: [Float<Binary<8>, 32, M>; P],
+        ) -> Option<Float<Binary<8>, 32, M>> {
+            None
+        }
+    }
 
     /// `false`: this build has no host unit.
     pub const UNIT: bool = false;

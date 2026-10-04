@@ -19,11 +19,13 @@
 //! two operands, and `exp` and `log`. A third table measures the
 //! double-double types, and a fourth the operations of `Lanes` in
 //! nanoseconds per lane. A fifth table, in [`kernels`], measures the slice
-//! kernels of `Lanes` in nanoseconds per vector, and a sixth, in
-//! [`elementwise`], its elementwise slice operations. On x86-64, a seventh
-//! table compares the decimal formats with the Intel decimal library for BID
-//! and with decNumber for DPD.
+//! kernels of `Lanes` in nanoseconds per vector, a sixth, in
+//! [`elementwise`], its elementwise slice operations, and a seventh, in
+//! [`blocks`], the blocks of `floaty::block`. On x86-64, an eighth table
+//! compares the decimal formats with the Intel decimal library for BID and
+//! with decNumber for DPD.
 
+mod blocks;
 mod elementwise;
 mod kernels;
 
@@ -846,6 +848,7 @@ fn main() {
     lanes_row::<Binary<15, X87>, 80, 2, _>("F80 x 2", 57, Lanes::convert::<F64>);
     kernels::table();
     elementwise::table();
+    blocks::table();
     #[cfg(target_arch = "x86_64")]
     decimal_table();
 }

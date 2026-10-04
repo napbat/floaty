@@ -29,6 +29,7 @@ impl Isa for Build {
     const EXTRA_WIDE: bool = packed::EXTRA_WIDE;
     const HALF: bool = packed::HALF;
     const INTEGERS: bool = packed::INTEGERS;
+    const FUSED: bool = super::super::environment::FUSED;
 
     #[inline]
     fn run<R>(f: impl FnOnce() -> R) -> R {

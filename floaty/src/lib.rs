@@ -36,12 +36,17 @@
 //!
 //! [`Float::round`] rounds an exact value to a format, and
 //! [`Float::convert`] converts between formats.
+//!
+//! [`block`] runs a chain of binary32 steps for each lane of slices, with
+//! one check of the environment for the whole call. On the host unit, LLVM
+//! sees the whole chain and computes many lanes in vector instructions.
 
 #![no_std]
 
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod block;
 pub mod env;
 pub mod format;
 

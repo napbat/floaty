@@ -605,6 +605,47 @@ Lanes::<F32, 32>::to_int_slice(scaled, &mut codes);
 assert_eq!(codes, [64, 128, 255].map(ToInt::Value)); // 63.75, 127.5, 255
 ```
 
+### Blocks
+
+`floaty::block` runs a chain of binary32 steps for each lane of slices.
+A type that implements `Chain<IN, P>` states the steps of one lane once,
+generic over the sealed trait `Steps`: `+`, `-`, `*`, `/`, negation,
+`mul_add`, `sqrt`, `abs`, `minimum`, `maximum`, `minimum_number`, and
+`maximum_number`. Each step gives the result of its entry point in the
+mode of the type, so a block gives the bits of the same steps one at a
+time on every host.
+
+| Function | Result |
+| --- | --- |
+| `F32::map(&chain, x, p, out)` | the chain of value `i` of each slice of `x` and the parameters `p`, into element `i` of `out`; slices of the type or of `f32` |
+| `F32::evaluate(&chain, x, p)` | the chain of one lane |
+
+A block checks the environment and selects the instruction set once for
+the call. Its steps then run as Rust operations on `f32`, so LLVM sees the
+whole chain and computes many lanes in vector instructions. A lane whose
+result is a NaN runs the chain again in the engine, which selects the NaN
+by the rule of the mode. So does a lane with a `mul_add` where the
+instruction set has no fused multiply-add.
+
+```rust
+use floaty::F32;
+use floaty::block::{Chain, Steps};
+
+/// `(x - mean) * scale + offset`, with the product and the sum rounded once.
+struct Normalize;
+
+impl Chain<1, 3> for Normalize {
+    fn apply<S: Steps>(&self, [x]: [S; 1], [mean, scale, offset]: [S; 3]) -> S {
+        (x - mean).mul_add(scale, offset)
+    }
+}
+
+let x = [1.5_f32, 2.5, -0.5];
+let mut out = [0.0_f32; 3];
+F32::map(&Normalize, [&x[..]], [0.5_f32, 2.0, 1.0].map(F32::from), &mut out[..]);
+assert_eq!(out, [3.0, 5.0, -1.0]);
+```
+
 ## Hardware acceleration
 
 The engine computes every result in integer arithmetic. A host path
@@ -616,9 +657,10 @@ path.
   `target_feature`. Enable more paths with `-C target-cpu` or
   `-C target-feature`, for example `RUSTFLAGS="-C target-cpu=x86-64-v3"`.
 - With the feature `std`, the slice kernels, the elementwise slice
-  operations, and `convert_slice` of `Lanes` also select an instruction set
-  at run time. The first call checks the processor, and an atomic keeps the
-  answer, so a later call pays one load and one branch. On x86-64 and
+  operations, and `convert_slice` of `Lanes`, and blocks, also select an
+  instruction set at run time. The first call checks the processor, and an
+  atomic keeps the answer, so a later call pays one load and one branch. On
+  x86-64 and
   32-bit x86, a processor with the features of x86-64-v3 (AVX, AVX2, BMI1,
   BMI2, F16C, FMA, LZCNT, and MOVBE) runs a copy of these paths compiled for
   them. A processor that also has those of x86-64-v4 (AVX-512F, BW, CD, DQ,
@@ -676,6 +718,7 @@ path.
 | Slice kernels | x86 or x86-64 with SSE2, AVX for 256 bits, and AVX-512F for 512 bits, in the build or, with `std`, on the processor; AArch64; or s390x | The kernels of `Lanes<F32, N>`: `sum`, `dot`, `distance_square`, `norm`, `dot_rows`, and `distance_square_rows` in the packed binary32 instructions, and the fused kernels with FMA. Rows of at most eight values sum four rows at a time, in the order of the kernels. bfloat16 widens by a shift, binary16 by F16C or `FCVTL` or in integer and binary32 instructions, and codes by `CVTDQ2PS`, `SCVTF`, or `CEGBR`. `convert_slice` takes the packed conversions. On s390x, each lane runs its scalar instruction, as the packed paths of s390x do. One check of the environment serves the call. With AVX-512F, the modes that round toward +∞, -∞, and zero compute each step in the 512-bit forms with the embedded rounding control of the direction, sixteen lanes at a time, and a row of at most eight values as any other row. | A NaN sum sends the call, or its row, to the engine. A chunk of `convert_slice` that holds a NaN converts one value at a time. Without AVX-512F, the modes that round toward +∞, -∞, and zero send the call to the engine. |
 | Elementwise slice operations | As the slice kernels | The views of `floaty::elementwise` in the packed binary32 instructions: `MINPS` and `MAXPS` or `FMIN` and `FMAX`, with a NaN or two zeros settled in integer instructions; `RoundToIntegral` by `ROUNDPS` with SSE4.1, `VRNDSCALEPS` with AVX-512F, `FRINT`, or `FIEBR`, and otherwise by the sum and difference with 2^23 and an exact correction of one in the direction. `store`, `to_int_slice` by `CVTPS2DQ` on x86 and x86-64, and the reductions, with one check of the environment for the call. With AVX-512F, the modes that round toward +∞, -∞, and zero compute the sum, difference, product, quotient, and code scale of each view, and `to_int_slice`, in the 512-bit forms with the embedded rounding control of the direction. | A chunk of a store that holds a NaN, and a value that `CVTPS2DQ` does not convert, go to the engine. A reduction that gives a NaN goes to the engine. `to_int_slice` on AArch64 and s390x runs the engine. Without AVX-512F, the modes that round toward +∞, -∞, and zero send the call to the engine. |
 | Double-double | The binary64 paths of the build | `+`, `-`, `*`, `/`, and `sqrt` of `Gcc` and `Qd`, with one check of the environment for all steps | |
+| Blocks | As the slice kernels | `F32::map` and `F32::evaluate` of `floaty::block`: the steps of a chain as Rust operations on `f32`, which LLVM vectorizes, after one check of the environment for the call. The fused multiply-add and the square root take intrinsics that LLVM sees on x86, x86-64, and AArch64, and `MAEBR` and `SQEBR` on s390x. Every input passes through an empty assembly block after the check, so LLVM computes no step before the check | A NaN result, and a `mul_add` without FMA: the lane runs the chain again in the engine |
 
 [docs/x86-64-acceleration.md](docs/x86-64-acceleration.md) lists the x86-64
 instructions that could give more paths, and what blocks each one.

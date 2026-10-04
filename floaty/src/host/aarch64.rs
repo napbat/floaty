@@ -173,6 +173,30 @@ pub fn mul_add_f32(left: f32, right: f32, addend: f32) -> Option<f32> {
     Some(result)
 }
 
+/// Returns the square root of a binary32 value for the steps of a block, by
+/// an operation that LLVM sees: `FSQRT`.
+#[inline]
+pub fn block_sqrt(value: f32) -> f32 {
+    use core::arch::aarch64::{vdup_n_f32, vget_lane_f32, vsqrt_f32};
+    // SAFETY: the intrinsics need NEON, which every AArch64 target has. Both
+    // lanes hold the value, so lane 0 holds its square root.
+    unsafe { vget_lane_f32::<0>(vsqrt_f32(vdup_n_f32(value))) }
+}
+
+/// Returns `left * right + addend`, rounded once, for the steps of a block,
+/// by an operation that LLVM sees: `FMADD`, or `FMLA` in a vectorized loop.
+///
+/// # Safety
+///
+/// None beyond the call: every AArch64 processor has the instruction. The
+/// function is unsafe as on x86, where a processor can lack FMA.
+#[inline]
+pub unsafe fn block_mul_add(left: f32, right: f32, addend: f32) -> f32 {
+    use core::arch::aarch64::{vdup_n_f32, vfmas_lane_f32};
+    // SAFETY: the intrinsics need NEON, which every AArch64 target has.
+    unsafe { vfmas_lane_f32::<0>(addend, left, vdup_n_f32(right)) }
+}
+
 /// Returns `left * right + addend`, rounded once, by `FMADD`.
 #[inline]
 #[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack FMA.

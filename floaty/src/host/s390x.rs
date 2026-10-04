@@ -186,6 +186,27 @@ pub fn mul_add_f32(left: f32, right: f32, mut addend: f32) -> Option<f32> {
     Some(addend)
 }
 
+/// Returns the square root of a binary32 value for the steps of a block, by
+/// `SQEBR`. LLVM does not see the instruction, and the build has no vector
+/// form of the steps, so a loop of steps stays scalar.
+#[inline]
+pub fn block_sqrt(value: f32) -> f32 {
+    sqrt_f32(value)
+}
+
+/// Returns `left * right + addend`, rounded once, for the steps of a block,
+/// by `MAEBR`, as `block_sqrt` takes `SQEBR`.
+///
+/// # Safety
+///
+/// None beyond the call: every s390x processor has the instruction. The
+/// function is unsafe as on x86, where a processor can lack FMA.
+#[inline]
+pub unsafe fn block_mul_add(left: f32, right: f32, mut addend: f32) -> f32 {
+    fused!("maebr {addend}, {left}, {right}", left, right, addend);
+    addend
+}
+
 /// Returns `left * right + addend` of binary64 values, rounded once, by
 /// `MADBR`.
 #[inline]
