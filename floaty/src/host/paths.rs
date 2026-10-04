@@ -2,7 +2,11 @@
 //! has them. The module of the architecture reads its floating-point
 //! environment. Each scalar entry point reads the environment of its unit,
 //! or takes it from the one read of a [`Unit`] for the lanes of one `Lanes`
-//! operation.
+//! operation. Three paths do not read it, because no field of it can change
+//! their result: the comparison of binary16, bfloat16, binary32, and
+//! binary64 in integer instructions, the conversions between bfloat16 and
+//! binary32 in integer instructions, and `from_int` of an integer that
+//! binary32 or binary64 holds exactly. The mode must still allow the path.
 //!
 //! Every floating-point instruction of a path runs in inline assembly, and
 //! the NaN tests use integer instructions. LLVM assumes the default
@@ -26,7 +30,7 @@ use core::cmp::Ordering;
 
 use super::Operation;
 use super::bits::{
-    min_max_differs, min_max_differs_64, min_max_differs_128, nan_16, nan_32, nan_64,
+    min_max_differs, min_max_differs_64, min_max_differs_128, nan_16, nan_32, nan_64, order,
 };
 use super::environment::{self, default_environment};
 use crate::env::{Env, Rounding};
@@ -493,14 +497,29 @@ pub fn to_int<S: Standard<W>, const W: usize>(
 }
 
 /// Returns a 64-bit integer rounded to the format by the host unit, or
-/// `None` when the path does not apply.
+/// `None` when the path does not apply. The path does not read the
+/// environment of the unit for an integer that binary32 or binary64 holds
+/// exactly.
 #[inline]
 pub fn from_int<S: Standard<W>, const W: usize>(
     value: i64,
     env: &Env,
     unit: Unit,
 ) -> Option<S::Bits> {
-    if !ready_for_in(S::HOST, env, S::PRECISION, unit) {
+    // An exact conversion does not round, gives no subnormal result, and
+    // signals no exception. So no field of the environment of the unit
+    // changes the result, and no unmasked exception traps.
+    let exact = match S::HOST {
+        Host::Single => value.unsigned_abs() <= 1 << 24,
+        Host::Double => value.unsigned_abs() <= 1 << 53,
+        Host::None | Host::Half | Host::BFloat | Host::Extended | Host::Quad => false,
+    };
+    let ready = if exact {
+        compatible(env, S::PRECISION)
+    } else {
+        ready_for_in(S::HOST, env, S::PRECISION, unit)
+    };
+    if !ready {
         return None;
     }
     match S::HOST {
@@ -530,10 +549,12 @@ pub fn from_int<S: Standard<W>, const W: usize>(
     }
 }
 
-/// Returns the order of two values from the host unit, as the quiet
-/// predicates give it, or `None` when the path does not apply or the values
-/// are unordered. An unordered pair holds a NaN, whose flags the engine
-/// computes.
+/// Returns the order of two values, as the quiet predicates give it, or
+/// `None` when the path does not apply or the values are unordered. An
+/// unordered pair holds a NaN, whose flags the engine computes. Integer
+/// instructions order binary16, bfloat16, binary32, and binary64 encodings,
+/// so the path does not read the environment of the unit for them. The unit
+/// orders binary128.
 #[inline]
 pub fn compare<S: Standard<W>, const W: usize>(
     left: S::Bits,
@@ -541,20 +562,26 @@ pub fn compare<S: Standard<W>, const W: usize>(
     env: &Env,
     unit: Unit,
 ) -> Option<Ordering> {
-    if !ready_for_in(S::HOST, env, S::PRECISION, unit) {
+    let (width, infinity) = match S::HOST {
+        Host::None | Host::Extended => return None,
+        Host::Half => (16, 0x7C00),
+        Host::BFloat => (16, 0x7F80),
+        Host::Single => (32, 0x7F80_0000),
+        Host::Double => (64, 0x7FF0_0000_0000_0000),
+        Host::Quad => {
+            if !ready_for_in(S::HOST, env, S::PRECISION, unit) {
+                return None;
+            }
+            return environment::quad_compare(&limb_pair::<S, W>(left), &limb_pair::<S, W>(right));
+        }
+    };
+    // DAZ reads a subnormal operand as zero, which the order of the
+    // encodings does not do.
+    if !compatible(env, S::PRECISION) {
         return None;
     }
-    match S::HOST {
-        Host::None | Host::Extended => None,
-        Host::Single => environment::compare_f32(single::<S, W>(left), single::<S, W>(right)),
-        Host::Double => environment::compare_f64(double::<S, W>(left), double::<S, W>(right)),
-        // The widenings are exact, so the order is the order of the values.
-        Host::Half => environment::compare_f32(half::<S, W>(left), half::<S, W>(right)),
-        Host::BFloat => environment::compare_f32(bfloat::<S, W>(left), bfloat::<S, W>(right)),
-        Host::Quad => {
-            environment::quad_compare(&limb_pair::<S, W>(left), &limb_pair::<S, W>(right))
-        }
-    }
+    let low = |bits: S::Bits| bits.to_limbs().limb(0);
+    order(low(left), low(right), width, infinity)
 }
 
 /// Returns the smaller or the larger of two binary32 values from the host
@@ -743,13 +770,27 @@ pub fn remainder<S: Standard<W>, const W: usize>(
 /// Returns an encoding of the host kind `from` converted to the host kind
 /// `to` by the host unit, or `None` when the path does not apply or the
 /// value is a NaN. A widening is exact, and a narrowing rounds once. The
-/// limbs hold the encoding from the low bits up.
+/// limbs hold the encoding from the low bits up. The path does not read the
+/// environment of the unit for a conversion between bfloat16 and binary32
+/// in integer instructions.
 #[inline]
 pub fn convert(from: Host, to: Host, bits: [u64; 2], env: &Env, unit: Unit) -> Option<[u64; 2]> {
     if env.rounding == Rounding::ToOdd {
         return convert_to_odd(from, to, bits, env, unit);
     }
-    if !ready_for_in(conversion_unit(from, to), env, to.precision(), unit) {
+    // A shift widens bfloat16. No floating-point environment changes an
+    // integer instruction.
+    let in_integers = match (from, to) {
+        (Host::BFloat, Host::Single) => true,
+        (Host::Single, Host::BFloat) => environment::NARROW_BFLOAT_IN_INTEGERS,
+        _ => false,
+    };
+    let ready = if in_integers {
+        compatible(env, to.precision())
+    } else {
+        ready_for_in(conversion_unit(from, to), env, to.precision(), unit)
+    };
+    if !ready {
         return None;
     }
     let low = bits[0];

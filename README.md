@@ -644,9 +644,16 @@ path.
   the processor has AVX-512F: the embedded rounding control of its 512-bit
   forms encodes the direction.
 - Each call reads MXCSR, the x87 control word, FPCR, or the FPC register of
-  s390x. Another setting, or an unmasked exception, sends the operation to
-  the engine. So does a NaN result: the engine selects the NaN by the rule
-  of the mode.
+  s390x, except on the paths of the next item. Another setting, or an
+  unmasked exception, sends the operation to the engine. So does a NaN
+  result: the engine selects the NaN by the rule of the mode.
+- Three paths do not read the environment, because no field of it can
+  change their result. The comparisons of binary16, bfloat16, binary32,
+  and binary64 order the encodings in integer instructions. The conversions
+  between bfloat16 and binary32 shift and round in integer instructions,
+  except where `FEAT_BF16` rounds in `BFCVT`. `from_int` of an integer that
+  binary32 or binary64 holds exactly does not round. The mode must still
+  allow each path.
 - Build with `RUSTFLAGS="--cfg floaty_engine_only"` to remove every host
   path and all `unsafe` code.
 

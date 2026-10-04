@@ -2,6 +2,8 @@
 //! instructions: LLVM can move a float comparison above the check of the
 //! environment.
 
+use core::cmp::Ordering;
+
 /// Returns `true` for the bits of a binary32 NaN.
 #[inline]
 pub(super) const fn nan_32(bits: u32) -> bool {
@@ -24,6 +26,34 @@ pub(super) const fn nan_bfloat(bits: u16) -> bool {
 #[inline]
 pub(super) const fn nan_64(bits: u64) -> bool {
     bits & 0x7FFF_FFFF_FFFF_FFFF > 0x7FF0_0000_0000_0000
+}
+
+/// Returns the order of two encodings of a binary interchange format, as the
+/// quiet predicates give it, or `None` when an encoding is a NaN. Each
+/// encoding sits in the low `width` bits, and `infinity` is the encoding of
+/// +∞. The order of two values that are not NaNs is the order of their
+/// sign-magnitude encodings, with -0 equal to +0. Integer instructions
+/// compute it, so no floating-point environment changes it.
+#[inline]
+pub(super) fn order(left: u64, right: u64, width: u32, infinity: u64) -> Option<Ordering> {
+    // The shift puts the sign bit of the format in the sign bit of `i64`.
+    let shift = 64 - width;
+    let (left, right, infinity) = (left << shift, right << shift, infinity << shift);
+    // A shift by one more drops the sign bit and keeps the magnitude.
+    if (left << 1).max(right << 1) > infinity << 1 {
+        return None;
+    }
+    if (left | right) << 1 == 0 {
+        return Some(Ordering::Equal);
+    }
+    // A negative encoding with its magnitude bits inverted orders as a
+    // two's complement integer. -0 then orders below +0, which the test of
+    // two zeros above excludes.
+    let key = |bits: u64| {
+        let signed = bits.cast_signed();
+        signed ^ ((signed >> 63) & i64::MAX)
+    };
+    Some(key(left).cmp(&key(right)))
 }
 
 /// Returns `true` for two binary32 encodings where the minimum and maximum
