@@ -9,8 +9,10 @@
 use std::hint::black_box;
 
 use floaty::block::{Chain, Steps};
-use floaty::elementwise::{Difference, MaximumNumber, MinimumNumber, Product, Splat, Sum};
-use floaty::{F32, Lanes};
+use floaty::elementwise::{
+    Difference, MaximumNumber, MinimumNumber, Product, RoundToIntegral, Splat, Sum,
+};
+use floaty::{F32, Lanes, Rounding};
 use floaty_verify::random::SplitMix64;
 
 use super::{Table, measure};
@@ -63,6 +65,16 @@ struct Bounds;
 impl Chain<2, 1> for Bounds {
     fn apply<S: Steps>(&self, [x, y]: [S; 2], [low]: [S; 1]) -> S {
         x.maximum_number(low).minimum_number(y)
+    }
+}
+
+/// `round_to_integral(x * inverse) * step`: a value quantized to a
+/// multiple of `step`.
+struct Quantize;
+
+impl Chain<1, 2> for Quantize {
+    fn apply<S: Steps>(&self, [x]: [S; 1], [inverse, step]: [S; 2]) -> S {
+        (x * inverse).round_to_integral() * step
     }
 }
 
@@ -265,6 +277,51 @@ fn bounds_row(vectors: &[Vec<f32>]) {
     );
 }
 
+/// Measures a value quantized to a multiple of a step, through the
+/// integral value to nearest even.
+fn quantize_row(vectors: &[Vec<f32>]) {
+    let (inverse, step) = (F32::from_bits(0x4080_0000), F32::from_bits(0x3E80_0000));
+    let (host_inverse, host_step) = (f32::from(inverse), f32::from(step));
+    let mut out = vec![0.0_f32; DIMENSION];
+    let mut host = |x: &[f32], _: &[f32]| {
+        for (o, &x) in out.iter_mut().zip(x) {
+            *o = (x * host_inverse).round_ties_even() * host_step;
+        }
+        black_box(&out);
+    };
+    let mut views_out = vec![0.0_f32; DIMENSION];
+    let mut views = |x: &[f32], _: &[f32]| {
+        let integral = RoundToIntegral {
+            values: Product(x, Splat::new(inverse, DIMENSION)),
+            rounding: Rounding::TiesToEven,
+        };
+        Single::store(
+            Product(integral, Splat::new(step, DIMENSION)),
+            &mut views_out[..],
+        );
+    };
+    let mut block_out = vec![0.0_f32; DIMENSION];
+    let mut block =
+        |x: &[f32], _: &[f32]| F32::map(&Quantize, [x], [inverse, step], &mut block_out[..]);
+    let mut scalar_out = vec![0.0_f32; DIMENSION];
+    let mut scalar = |x: &[f32], _: &[f32]| {
+        for (o, &x) in scalar_out.iter_mut().zip(x) {
+            *o = f32::from((F32::from(x) * inverse).round_to_integral() * step);
+        }
+        black_box(&scalar_out);
+    };
+    row(
+        "quantize round_to_integral(x * inverse) * step",
+        vectors,
+        [
+            Some(&mut host),
+            Some(&mut views),
+            Some(&mut block),
+            Some(&mut scalar),
+        ],
+    );
+}
+
 /// Measures a score of each value, with a fused step, a square root, and a
 /// quotient, by `map` and by `evaluate` of each value.
 fn score_rows(vectors: &[Vec<f32>]) {
@@ -309,5 +366,6 @@ pub fn table() {
     fused_update_row(&vectors);
     normalize_row(&vectors);
     bounds_row(&vectors);
+    quantize_row(&vectors);
     score_rows(&vectors);
 }

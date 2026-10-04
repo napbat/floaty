@@ -62,7 +62,7 @@ crate documentation records each rule of its behavior. The
   block must check the environment first, and pass every input through the
   empty assembly block of `host/block.rs` after the check. Send each lane
   with a NaN result, and each lane with a step without an exact
-  instruction, to the engine. Add a step only where no NaN payload can
+  instruction, to the engine. Add a step only where no bit of a NaN can
   decide a result that is not a NaN, or taint the lane.
 - Put code for one architecture, such as inline assembly and `core::arch`
   intrinsics, behind `cfg(target_arch)` in `floaty` and in its tests. Every

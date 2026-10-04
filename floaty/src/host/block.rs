@@ -13,12 +13,20 @@
 //! block after the check, and each step after the block.
 //!
 //! A lane whose result is a NaN goes back to the engine, which selects the
-//! NaN by the rule of the mode. No step lets the payload of a NaN decide a
-//! result that is not a NaN: a NaN operand of the arithmetic, `minimum`, or
-//! `maximum` gives a NaN, and a `minimum_number` or `maximum_number` takes
-//! the other operand of a NaN, whatever its payload. A step that the
-//! instruction set cannot compute exactly, `mul_add` without FMA, taints
-//! its lane, and each later step carries the taint to the result.
+//! NaN by the rule of the mode. No step lets the bits of a NaN decide a
+//! result that is not a NaN. A NaN operand of the arithmetic gives a NaN,
+//! and so does a NaN operand of `minimum`, `maximum`, and their magnitude
+//! steps. A `number` step takes the other operand of a NaN, whatever its
+//! payload.
+//!
+//! A step that the instruction set cannot compute exactly taints its lane,
+//! and each later step carries the taint to the result: `mul_add` without
+//! FMA, `round_to_integral_by` to odd, `scale_b` with a scale outside -126
+//! to 127, the remainders, and the steps that have no instruction: `exp`,
+//! `log`, `compound`, `hypot`, `pown`, `rootn`, and `reciprocal_sqrt`. A
+//! step that reads a bit of a NaN that the lane can hold otherwise than the
+//! engine also taints its lane: `copy_sign` from a NaN `sign`, and `min_num`
+//! and `max_num` of a signaling NaN.
 
 use core::marker::PhantomData;
 use core::ops::{Add, Div, Mul, Neg, Sub};
@@ -29,9 +37,10 @@ use super::packed::{Task, run_task};
 use super::paths::ready_for;
 use super::{Host, Isa};
 use crate::block::{Chain, Steps};
-use crate::env::Mode;
+use crate::env::{Mode, Rounding};
 use crate::float::Float;
 use crate::format::Binary;
+use crate::format::internal::MinMax;
 use crate::sealed::Sealed;
 
 /// The binary32 type of the mode `M`.
@@ -105,20 +114,59 @@ impl<I> Lane<I> {
         Self::new(f32::from_bits(bits), self.taint | other.taint)
     }
 
-    /// Returns `order` of the lanes, or a NaN for a NaN operand, as
-    /// `minimum` and `maximum` give it.
+    /// Returns the lane with its taint set: the lane runs again in the
+    /// engine.
     #[inline]
-    fn propagating(self, other: Self, minimum: bool) -> Self {
+    fn tainted(self) -> Self {
+        Self::new(self.value, true)
+    }
+
+    /// Returns a lane of the encoding `bits`, with the taint of `self`.
+    #[inline]
+    fn with_bits(self, bits: u32) -> Self {
+        Self::new(f32::from_bits(bits), self.taint)
+    }
+
+    /// Returns the minimum or the maximum `operation` of the lanes, as the
+    /// engine gives it for every result but a NaN.
+    ///
+    /// Where the engine holds a signaling NaN, the lane holds the same
+    /// NaN: every operation gives a quiet NaN, and only `abs`, `-`, and
+    /// `copy_sign` copy a signaling NaN. So `min_num` and `max_num` take the
+    /// other operand of a quiet NaN of the lane, as the engine does, and
+    /// taint the lane of a signaling NaN, which the engine can hold quiet.
+    #[inline]
+    fn min_max(self, other: Self, operation: MinMax) -> Self {
+        let signaling = |value: f32| value.is_nan() && value.to_bits() & 0x0040_0000 == 0;
+        match operation {
+            MinMax::Minimum
+            | MinMax::Maximum
+            | MinMax::MinimumMagnitude
+            | MinMax::MaximumMagnitude => self.propagating(other, operation),
+            MinMax::MinNum | MinMax::MaxNum if signaling(self.value) || signaling(other.value) => {
+                self.tainted()
+            }
+            _ => self.number(other, operation),
+        }
+    }
+
+    /// Returns `select` of the lanes, or a NaN for a NaN operand.
+    #[inline]
+    fn propagating(self, other: Self, operation: MinMax) -> Self {
         if self.value.is_nan() || other.value.is_nan() {
             return Self::new(f32::NAN, self.taint | other.taint);
         }
-        self.order(other, minimum)
+        self.select(other, operation)
     }
 
-    /// Returns `order` of the lanes, or the other operand of a NaN, as
-    /// `minimum_number` and `maximum_number` give it.
+    /// Returns `select` of the lanes, or the other operand of a NaN.
+    ///
+    /// The two tests of a NaN keep the shape that LLVM vectorizes best: with
+    /// one test of either NaN first, `maximum_number` then `minimum_number`
+    /// of 1,280 values took 188 ns in x86-64-v3 on a Ryzen AI Max+ 395,
+    /// against 170 ns.
     #[inline]
-    fn number(self, other: Self, minimum: bool) -> Self {
+    fn number(self, other: Self, operation: MinMax) -> Self {
         let taint = self.taint | other.taint;
         if self.value.is_nan() {
             return Self::new(other.value, taint);
@@ -126,7 +174,67 @@ impl<I> Lane<I> {
         if other.value.is_nan() {
             return Self::new(self.value, taint);
         }
+        self.select(other, operation)
+    }
+
+    /// Returns the lane that `operation` selects of two lanes whose values
+    /// are not NaNs: of the smaller or the larger magnitude first for a
+    /// magnitude operation, and then `order` of the values.
+    #[inline]
+    fn select(self, other: Self, operation: MinMax) -> Self {
+        let minimum = operation.is_minimum();
+        if operation.is_magnitude() {
+            // The magnitudes of numbers order as their encodings do.
+            let magnitude = |lane: Self| lane.value.to_bits() & 0x7FFF_FFFF;
+            let (left, right) = (magnitude(self), magnitude(other));
+            if left != right {
+                let left_wins = (left < right) == minimum;
+                let value = if left_wins { self.value } else { other.value };
+                return Self::new(value, self.taint | other.taint);
+            }
+        }
         self.order(other, minimum)
+    }
+
+    /// Returns the value rounded to an integral value in the direction
+    /// `rounding`, as the packed path `round_to_integral` rounds, or a
+    /// tainted lane for `ToOdd`, which that path sends to the engine.
+    ///
+    /// The magnitude rounds to nearest even by the sum and difference with
+    /// 2^23, in the default environment that the check found. A step of one
+    /// then moves it in the direction. The result takes the sign of the
+    /// value, as IEEE 754 requires of every direction. LLVM vectorizes these
+    /// steps. On x86 the intrinsic `_mm_round_ss` stays one scalar `ROUNDSS`
+    /// for each lane, which LLVM does not vectorize.
+    #[inline]
+    fn integral(self, rounding: Rounding) -> Self {
+        // From 2^23 up, every binary32 value is integral.
+        const LIMIT: f32 = 8_388_608.0;
+        let bits = self.value.to_bits();
+        let negative = bits >> 31 != 0;
+        let magnitude = f32::from_bits(bits & 0x7FFF_FFFF);
+        let even = if magnitude < LIMIT {
+            (magnitude + LIMIT) - LIMIT
+        } else {
+            magnitude
+        };
+        // Each integer below 2^23, and each step of one from it, is exact,
+        // and so is the fraction. An infinity gives a NaN fraction, and a
+        // NaN gives NaNs, so neither moves.
+        let below = if even > magnitude { even - 1.0 } else { even };
+        let above = if even < magnitude { even + 1.0 } else { even };
+        let fraction = magnitude - below;
+        let rounded = match rounding {
+            Rounding::TiesToEven => even,
+            Rounding::TiesToAway if fraction >= 0.5 => below + 1.0,
+            Rounding::TiesTowardZero if fraction > 0.5 => below + 1.0,
+            Rounding::TiesToAway | Rounding::TiesTowardZero | Rounding::TowardZero => below,
+            Rounding::TowardPositive if negative => below,
+            Rounding::TowardNegative if !negative => below,
+            Rounding::AwayFromZero | Rounding::TowardPositive | Rounding::TowardNegative => above,
+            Rounding::ToOdd => return self.tainted(),
+        };
+        self.with_bits(rounded.to_bits() | (bits & 0x8000_0000))
     }
 }
 
@@ -158,18 +266,41 @@ impl<I> Neg for Lane<I> {
     }
 }
 
+/// Implements each step of [`Steps`] that has no exact instruction by a
+/// tainted lane.
+macro_rules! engine_steps {
+    ($($name:ident($($argument:ident: $type:ty),*);)*) => {
+        $(
+            #[inline]
+            fn $name(self, $($argument: $type),*) -> Self {
+                self.tainted()
+            }
+        )*
+    };
+}
+
+/// Implements each minimum or maximum step of [`Steps`] by `min_max`.
+macro_rules! min_max_steps {
+    ($($name:ident => $operation:ident;)*) => {
+        $(
+            #[inline]
+            fn $name(self, other: Self) -> Self {
+                self.min_max(other, MinMax::$operation)
+            }
+        )*
+    };
+}
+
 impl<I: Isa> Steps for Lane<I> {
     #[inline]
     fn mul_add(self, multiplier: Self, addend: Self) -> Self {
-        let taint = self.taint | multiplier.taint | addend.taint;
         if !I::FUSED {
-            // No exact instruction: the lane runs again in the engine.
-            return Self::new(self.value, true);
+            return self.tainted();
         }
         // SAFETY: `I` has FMA, and the step runs in `I::run`, from a check
         // of the processor that found the features of `I`.
         let value = unsafe { block_mul_add(self.value, multiplier.value, addend.value) };
-        Self::new(value, taint)
+        Self::new(value, self.taint | multiplier.taint | addend.taint)
     }
 
     #[inline]
@@ -179,30 +310,117 @@ impl<I: Isa> Steps for Lane<I> {
 
     #[inline]
     fn abs(self) -> Self {
-        Self::new(
-            f32::from_bits(self.value.to_bits() & 0x7FFF_FFFF),
-            self.taint,
-        )
+        self.with_bits(self.value.to_bits() & 0x7FFF_FFFF)
     }
 
     #[inline]
-    fn minimum(self, other: Self) -> Self {
-        self.propagating(other, true)
+    fn copy_sign(self, sign: Self) -> Self {
+        // A NaN that the host unit creates takes the sign of the unit, which
+        // can differ from the sign of the NaN of the engine.
+        if sign.value.is_nan() {
+            return self.tainted();
+        }
+        let bits = (self.value.to_bits() & 0x7FFF_FFFF) | (sign.value.to_bits() & 0x8000_0000);
+        Self::new(f32::from_bits(bits), self.taint | sign.taint)
     }
 
     #[inline]
-    fn maximum(self, other: Self) -> Self {
-        self.propagating(other, false)
+    fn next_up(self) -> Self {
+        let bits = self.value.to_bits();
+        let next = if nan_32(bits) {
+            f32::NAN.to_bits()
+        } else if bits << 1 == 0 {
+            // Both zeros step to the least positive subnormal.
+            1
+        } else if bits == f32::INFINITY.to_bits() {
+            bits
+        } else if bits >> 31 == 0 {
+            bits + 1
+        } else {
+            // A negative value steps toward zero, -∞ to the most negative
+            // finite value, and the least negative subnormal to -0.
+            bits - 1
+        };
+        self.with_bits(next)
     }
 
     #[inline]
-    fn minimum_number(self, other: Self) -> Self {
-        self.number(other, true)
+    fn next_down(self) -> Self {
+        let up = (-self).next_up();
+        -up
     }
 
     #[inline]
-    fn maximum_number(self, other: Self) -> Self {
-        self.number(other, false)
+    fn round_to_integral(self) -> Self {
+        // The check found the mode rounded to nearest even.
+        self.integral(Rounding::TiesToEven)
+    }
+
+    #[inline]
+    fn round_to_integral_by(self, rounding: Rounding) -> Self {
+        self.integral(rounding)
+    }
+
+    #[inline]
+    fn scale_b(self, scale: i32) -> Self {
+        // From -126 to 127, 2^scale is a normal value, so one product gives
+        // `value * 2^scale` rounded once, as `scaleB` does.
+        match scale.checked_add(127).map(u32::try_from) {
+            Some(Ok(biased @ 1..=254)) => {
+                Self::new(self.value * f32::from_bits(biased << 23), self.taint)
+            }
+            _ => self.tainted(),
+        }
+    }
+
+    #[inline]
+    fn log_b(self) -> Self {
+        // A subnormal times 2^23 is normal, and exact.
+        const NORMALIZE: f32 = 8_388_608.0;
+        let magnitude = self.value.to_bits() & 0x7FFF_FFFF;
+        let bits = if magnitude >= f32::INFINITY.to_bits() {
+            // An infinity gives +∞, and a NaN gives a NaN.
+            magnitude
+        } else if magnitude == 0 {
+            // A zero gives what -1 / 0 gives.
+            f32::NEG_INFINITY.to_bits()
+        } else {
+            let subnormal = magnitude < 0x0080_0000;
+            let normal = if subnormal {
+                (f32::from_bits(magnitude) * NORMALIZE).to_bits()
+            } else {
+                magnitude
+            };
+            let field = i16::try_from(normal >> 23).expect("a binary32 exponent field has 8 bits");
+            let bias = if subnormal { 150 } else { 127 };
+            f32::from(field - bias).to_bits()
+        };
+        self.with_bits(bits)
+    }
+
+    engine_steps! {
+        remainder(_divisor: Self);
+        truncated_remainder(_divisor: Self);
+        exp();
+        log();
+        compound(_n: i64);
+        hypot(_other: Self);
+        pown(_n: i64);
+        rootn(_n: i64);
+        reciprocal_sqrt();
+    }
+
+    min_max_steps! {
+        minimum => Minimum;
+        maximum => Maximum;
+        minimum_number => MinimumNumber;
+        maximum_number => MaximumNumber;
+        min_num => MinNum;
+        max_num => MaxNum;
+        minimum_magnitude => MinimumMagnitude;
+        maximum_magnitude => MaximumMagnitude;
+        minimum_magnitude_number => MinimumMagnitudeNumber;
+        maximum_magnitude_number => MaximumMagnitudeNumber;
     }
 }
 

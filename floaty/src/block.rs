@@ -5,10 +5,9 @@
 //! A [`Chain`] states the steps of one lane once, generic over [`Steps`].
 //! [`Float::map`] runs the chain for each lane of slices, and
 //! [`Float::evaluate`] runs it for one lane. Each step gives the result of
-//! its entry point in the mode of the type: the operators, `mul_add`,
-//! `sqrt`, `abs`, `minimum`, `maximum`, `minimum_number`, and
-//! `maximum_number`. So a block gives the bits of the same steps one at a
-//! time, on every host.
+//! its entry point in the mode of the type: every operation of binary32 from
+//! binary32 values to one binary32 value. So a block gives the bits of the
+//! same steps one at a time, on every host.
 //!
 //! Where the build has a host path, and the mode and the environment allow
 //! it, the steps run as Rust operations on `f32` after one check of the
@@ -16,8 +15,10 @@
 //! then sees the whole chain and computes many lanes in vector
 //! instructions. A lane whose result is a NaN runs the chain again in the
 //! engine, which selects the NaN by the rule of the mode. So does a lane
-//! with a `mul_add` where the instruction set has no fused multiply-add.
-//! Elsewhere every lane runs the steps of the type.
+//! with a step that no instruction of the set computes exactly, such as
+//! `exp`, or `mul_add` where the instruction set has no fused multiply-add,
+//! and a lane where a step reads a bit of a NaN that can change a result
+//! that is not a NaN. Elsewhere every lane runs the steps of the type.
 //!
 //! ```
 //! use floaty::F32;
@@ -45,7 +46,7 @@
 
 use core::ops::{Add, Div, Mul, Neg, Sub};
 
-use crate::env::Mode;
+use crate::env::{Mode, Rounding};
 use crate::float::Float;
 use crate::format::Binary;
 use crate::host;
@@ -55,10 +56,10 @@ use crate::sealed::Sealed;
 /// The binary32 type of the mode `M`.
 type Single<M> = Float<Binary<8>, 32, M>;
 
-/// The steps of a [`Chain`]: the arithmetic, the fused multiply-add, the
-/// square root, the absolute value, and the minimum and maximum operations
-/// of binary32, each rounded once to nearest even as its entry point
-/// rounds. The binary32 types of floaty implement the trait, and so does
+/// The steps of a [`Chain`]: every operation of binary32 from binary32
+/// values to one binary32 value, each rounded once to nearest even as its
+/// entry point rounds. Each step names the method of [`Float`] that gives
+/// its result. The binary32 types of floaty implement the trait, and so does
 /// the lane type of the host path of a block. The trait is sealed.
 pub trait Steps:
     Sealed
@@ -82,6 +83,77 @@ pub trait Steps:
     #[must_use]
     fn abs(self) -> Self;
 
+    /// Returns the value with the sign of `sign`, as [`Float::copy_sign`]
+    /// gives it.
+    #[must_use]
+    fn copy_sign(self, sign: Self) -> Self;
+
+    /// Returns the least value above `self`, as [`Float::next_up`] gives
+    /// it.
+    #[must_use]
+    fn next_up(self) -> Self;
+
+    /// Returns the greatest value below `self`, as [`Float::next_down`]
+    /// gives it.
+    #[must_use]
+    fn next_down(self) -> Self;
+
+    /// Returns the integral value in the direction of the mode, as
+    /// [`Float::round_to_integral`] gives it.
+    #[must_use]
+    fn round_to_integral(self) -> Self;
+
+    /// Returns the integral value in the direction `rounding`, as
+    /// [`Float::round_to_integral_with`] gives it.
+    #[must_use]
+    fn round_to_integral_by(self, rounding: Rounding) -> Self;
+
+    /// Returns the IEEE 754 remainder, as [`Float::remainder`] gives it.
+    #[must_use]
+    fn remainder(self, divisor: Self) -> Self;
+
+    /// Returns the truncated remainder, as [`Float::truncated_remainder`]
+    /// gives it.
+    #[must_use]
+    fn truncated_remainder(self, divisor: Self) -> Self;
+
+    /// Returns `self * 2^scale`, as [`Float::scale_b`] gives it.
+    #[must_use]
+    fn scale_b(self, scale: i32) -> Self;
+
+    /// Returns the exponent of the leading bit, as [`Float::log_b`] gives
+    /// it.
+    #[must_use]
+    fn log_b(self) -> Self;
+
+    /// Returns `e^self`, as [`Float::exp`] gives it.
+    #[must_use]
+    fn exp(self) -> Self;
+
+    /// Returns the natural logarithm, as [`Float::log`] gives it.
+    #[must_use]
+    fn log(self) -> Self;
+
+    /// Returns `(1 + self)^n`, as [`Float::compound`] gives it.
+    #[must_use]
+    fn compound(self, n: i64) -> Self;
+
+    /// Returns `sqrt(self^2 + other^2)`, as [`Float::hypot`] gives it.
+    #[must_use]
+    fn hypot(self, other: Self) -> Self;
+
+    /// Returns `self^n`, as [`Float::pown`] gives it.
+    #[must_use]
+    fn pown(self, n: i64) -> Self;
+
+    /// Returns `self^(1/n)`, as [`Float::rootn`] gives it.
+    #[must_use]
+    fn rootn(self, n: i64) -> Self;
+
+    /// Returns `1 / sqrt(self)`, as [`Float::reciprocal_sqrt`] gives it.
+    #[must_use]
+    fn reciprocal_sqrt(self) -> Self;
+
     /// Returns the IEEE 754-2019 `minimum`, as [`Float::minimum`] gives it.
     #[must_use]
     fn minimum(self, other: Self) -> Self;
@@ -99,42 +171,84 @@ pub trait Steps:
     /// [`Float::maximum_number`] gives it.
     #[must_use]
     fn maximum_number(self, other: Self) -> Self;
+
+    /// Returns the IEEE 754-2008 `minNum`, as [`Float::min_num`] gives it.
+    #[must_use]
+    fn min_num(self, other: Self) -> Self;
+
+    /// Returns the IEEE 754-2008 `maxNum`, as [`Float::max_num`] gives it.
+    #[must_use]
+    fn max_num(self, other: Self) -> Self;
+
+    /// Returns the IEEE 754-2019 `minimumMagnitude`, as
+    /// [`Float::minimum_magnitude`] gives it.
+    #[must_use]
+    fn minimum_magnitude(self, other: Self) -> Self;
+
+    /// Returns the IEEE 754-2019 `maximumMagnitude`, as
+    /// [`Float::maximum_magnitude`] gives it.
+    #[must_use]
+    fn maximum_magnitude(self, other: Self) -> Self;
+
+    /// Returns the IEEE 754-2019 `minimumMagnitudeNumber`, as
+    /// [`Float::minimum_magnitude_number`] gives it.
+    #[must_use]
+    fn minimum_magnitude_number(self, other: Self) -> Self;
+
+    /// Returns the IEEE 754-2019 `maximumMagnitudeNumber`, as
+    /// [`Float::maximum_magnitude_number`] gives it.
+    #[must_use]
+    fn maximum_magnitude_number(self, other: Self) -> Self;
+}
+
+/// Implements each step of [`Steps`] for a binary32 type by its entry
+/// point, the method of the same name.
+macro_rules! entry_points {
+    ($($name:ident($($argument:ident: $type:ty),*);)*) => {
+        $(
+            #[inline]
+            fn $name(self, $($argument: $type),*) -> Self {
+                Self::$name(self, $($argument),*)
+            }
+        )*
+    };
 }
 
 impl<M: Mode> Steps for Single<M> {
-    #[inline]
-    fn mul_add(self, multiplier: Self, addend: Self) -> Self {
-        Self::mul_add(self, multiplier, addend)
+    entry_points! {
+        mul_add(multiplier: Self, addend: Self);
+        sqrt();
+        abs();
+        copy_sign(sign: Self);
+        next_up();
+        next_down();
+        round_to_integral();
+        remainder(divisor: Self);
+        truncated_remainder(divisor: Self);
+        scale_b(scale: i32);
+        log_b();
+        exp();
+        log();
+        compound(n: i64);
+        hypot(other: Self);
+        pown(n: i64);
+        rootn(n: i64);
+        reciprocal_sqrt();
+        minimum(other: Self);
+        maximum(other: Self);
+        minimum_number(other: Self);
+        maximum_number(other: Self);
+        min_num(other: Self);
+        max_num(other: Self);
+        minimum_magnitude(other: Self);
+        maximum_magnitude(other: Self);
+        minimum_magnitude_number(other: Self);
+        maximum_magnitude_number(other: Self);
     }
 
     #[inline]
-    fn sqrt(self) -> Self {
-        Self::sqrt(self)
-    }
-
-    #[inline]
-    fn abs(self) -> Self {
-        Self::abs(self)
-    }
-
-    #[inline]
-    fn minimum(self, other: Self) -> Self {
-        Self::minimum(self, other)
-    }
-
-    #[inline]
-    fn maximum(self, other: Self) -> Self {
-        Self::maximum(self, other)
-    }
-
-    #[inline]
-    fn minimum_number(self, other: Self) -> Self {
-        Self::minimum_number(self, other)
-    }
-
-    #[inline]
-    fn maximum_number(self, other: Self) -> Self {
-        Self::maximum_number(self, other)
+    fn round_to_integral_by(self, rounding: Rounding) -> Self {
+        self.round_to_integral_with(rounding).0
     }
 }
 
