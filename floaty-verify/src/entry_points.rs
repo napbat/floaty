@@ -380,9 +380,10 @@ pub fn lane_comparisons_with<S: Standard<W>, const W: usize, M: Mode, const N: u
 }
 
 /// The results of the conversion entry points of `Lanes` on a lane set `x`:
-/// the conversions to the formats of the packed paths, and to `i32`.
+/// the conversions to the formats of the packed paths, to `i32`, and from
+/// the integers of [`LANE_INTEGERS`] to the type of the lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LaneConversions<const N: usize> {
+pub struct LaneConversions<B, const N: usize> {
     /// `x` converted to binary16.
     pub to_binary16: [u16; N],
     /// `x` converted to binary32.
@@ -393,19 +394,49 @@ pub struct LaneConversions<const N: usize> {
     pub to_bfloat16: [u16; N],
     /// `x` converted to `i32`.
     pub to_i32: [ToInt<i32>; N],
+    /// The integers of [`LANE_INTEGERS`] converted to the type of `x`.
+    pub from_i32: [B; N],
 }
 
-/// Returns the results of `convert` and `to_int::<i32>` of `Lanes`.
+/// The integers that the lane checks convert, one for each lane: the ties of
+/// binary16, bfloat16, and binary32, the values next to the overflow of
+/// binary16, a value that binary32 rounds without a tie, and the bounds of
+/// `i32`. Each one rounds to another value in some direction.
+pub const LANE_INTEGERS: [i32; 13] = [
+    2_049,
+    -2_049,
+    65_520,
+    -65_520,
+    257,
+    -257,
+    16_777_217,
+    -16_777_217,
+    33_554_435,
+    i32::MAX,
+    i32::MIN,
+    3,
+    0,
+];
+
+/// Returns the integers of [`LANE_INTEGERS`] for `N` lanes, from the first
+/// again after the last.
+fn lane_integers<const N: usize>() -> [i32; N] {
+    core::array::from_fn(|index| LANE_INTEGERS[index % LANE_INTEGERS.len()])
+}
+
+/// Returns the results of `convert`, `to_int::<i32>`, and `from_int` of
+/// `Lanes`.
 #[must_use]
 pub fn lane_conversions<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     x: Lanes<Float<S, W, M>, N>,
-) -> LaneConversions<N> {
+) -> LaneConversions<S::Bits, N> {
     LaneConversions {
         to_binary16: x.convert::<F16>().to_bits(),
         to_binary32: x.convert::<F32>().to_bits(),
         to_binary64: x.convert::<F64>().to_bits(),
         to_bfloat16: x.convert::<BF16>().to_bits(),
         to_i32: x.to_int::<i32>(),
+        from_i32: Lanes::<Float<S, W, M>, N>::from_int(black_box(lane_integers())).to_bits(),
     }
 }
 
@@ -415,13 +446,17 @@ pub fn lane_conversions<S: Standard<W>, const W: usize, M: Mode, const N: usize>
 #[must_use]
 pub fn lane_conversions_with<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     x: Lanes<Float<S, W, M>, N>,
-) -> LaneConversions<N> {
+) -> LaneConversions<S::Bits, N> {
+    let env = Float::<S, W, M>::ENV;
     LaneConversions {
         to_binary16: x.convert_with::<F16>(F16::ENV).0.to_bits(),
         to_binary32: x.convert_with::<F32>(F32::ENV).0.to_bits(),
         to_binary64: x.convert_with::<F64>(F64::ENV).0.to_bits(),
         to_bfloat16: x.convert_with::<BF16>(BF16::ENV).0.to_bits(),
-        to_i32: x.to_int_with::<i32>(Float::<S, W, M>::ENV).0,
+        to_i32: x.to_int_with::<i32>(env).0,
+        from_i32: Lanes::<Float<S, W, M>, N>::from_int_with(lane_integers(), env)
+            .0
+            .to_bits(),
     }
 }
 
@@ -610,7 +645,7 @@ pub fn assert_lane_arithmetic_under<S: Standard<W>, const W: usize, M: Mode, con
 pub fn assert_lane_conversions_under<S: Standard<W>, const W: usize, M: Mode, const N: usize>(
     x: Lanes<Float<S, W, M>, N>,
     setting: &str,
-    run: impl FnOnce(&dyn Fn() -> LaneConversions<N>) -> LaneConversions<N>,
+    run: impl FnOnce(&dyn Fn() -> LaneConversions<S::Bits, N>) -> LaneConversions<S::Bits, N>,
 ) {
     let ours = run(&|| lane_conversions(black_box(x)));
     assert_eq!(

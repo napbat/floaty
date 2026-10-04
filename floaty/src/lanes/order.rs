@@ -8,7 +8,7 @@ use crate::env::{Flags, Mode, Override};
 use crate::float::Float;
 use crate::format::Standard;
 use crate::format::internal::MinMax;
-use crate::host::{self, Kind};
+use crate::host::{self, Kind, Unit};
 
 impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {
     /// Compares each pair of lanes in the engine or the scalar paths, for
@@ -16,7 +16,8 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[cold]
     #[inline(never)]
     fn compare_out_of_line(self, other: Self) -> [Option<Ordering>; N] {
-        self.pairs(other, |left, right| left.partial_cmp(&right))
+        let unit = Self::unit(Kind::Comparison);
+        self.pairs(other, |left, right| left.compare_in(right, unit))
     }
 
     /// Compares each pair of lanes as the IEEE 754 quiet predicates do, with
@@ -26,7 +27,8 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     #[inline]
     pub fn compare_quiet(self, other: Self) -> [Option<Ordering>; N] {
         if !host::packed::available(S::HOST, Kind::Comparison) {
-            return self.pairs(other, |left, right| left.partial_cmp(&right));
+            let unit = Self::unit(Kind::Comparison);
+            return self.pairs(other, |left, right| left.compare_in(right, unit));
         }
         match host::packed::compare(&self.lanes, &other.lanes, &M::ENV) {
             Some(orders) => orders,
@@ -88,13 +90,21 @@ macro_rules! min_max {
             #[must_use]
             #[inline]
             pub fn $name(self, other: Self) -> Self {
-                if !host::packed::available(S::HOST, Kind::Comparison) {
-                    return self.zip(other, Float::$name);
-                }
                 let operation = MinMax::$operation;
+                let select = |unit: Unit| {
+                    move |left: Float<S, W, M>, right| left.min_max_in(right, operation, unit)
+                };
+                if !host::packed::available(S::HOST, Kind::Comparison) {
+                    // Without a scalar host path, each lane calls the method,
+                    // which keeps the engine out of line, as `Float` states.
+                    if !host::available(S::HOST, Kind::Comparison) {
+                        return self.zip(other, Float::$name);
+                    }
+                    return self.zip(other, select(Self::unit(Kind::Comparison)));
+                }
                 match host::packed::min_max(&self.lanes, &other.lanes, operation, &M::ENV) {
                     Some(lanes) => Self::new(lanes),
-                    None => self.zip_out_of_line(other, Float::$name),
+                    None => self.zip_out_of_line(other, select(Self::unit(Kind::Comparison))),
                 }
             }
 

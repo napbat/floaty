@@ -8,7 +8,7 @@ use crate::exact::{Exact, Unrounded};
 use crate::format::internal::{LimbConversion, Source};
 use crate::format::{B11Fnuz, Bid, Binary, Decimal, Dpd, Finite, Fnuz, NoInf, Standard, X87};
 use crate::host;
-use crate::host::Host;
+use crate::host::{Host, Unit};
 use crate::limbs::Limbs;
 use crate::sealed::Sealed;
 use crate::unpacked::Unpacked;
@@ -133,11 +133,18 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     #[inline]
     pub fn convert<T: FloatType>(self) -> T {
+        self.convert_in(Unit::Read)
+    }
+
+    /// Converts the value to another format as `convert` does, with the
+    /// environment of the host unit from `unit`.
+    #[inline]
+    pub(crate) fn convert_in<T: FloatType>(self, unit: Unit) -> T {
         if !host::convertible(S::HOST, T::HOST) {
             return self.convert_with(T::Mode::default()).0;
         }
         let bits = self.bits.to_limbs().resize();
-        match host::convert(S::HOST, T::HOST, bits, &<T::Mode as Mode>::ENV) {
+        match host::convert(S::HOST, T::HOST, bits, &<T::Mode as Mode>::ENV, unit) {
             Some(bits) => T::from_host(bits),
             None => convert_in_engine(self),
         }

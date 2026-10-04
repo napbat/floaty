@@ -6,7 +6,7 @@ use super::Float;
 use crate::env::{Behavior, Flags, Mode, Override};
 use crate::format::Standard;
 use crate::format::internal::MinMax;
-use crate::host::{self, Kind};
+use crate::host::{self, Kind, Unit};
 
 /// Defines a minimum or maximum operation: a method with the default mode and
 /// a `_with` method that returns the flags.
@@ -18,13 +18,7 @@ macro_rules! min_max {
         #[doc = concat!("Returns ", $summary, ", with the default mode.")]
         #[must_use]
         pub fn $name(self, other: Self) -> Self {
-            if !host::available(S::HOST, Kind::Comparison) {
-                return self.$with(other, M::default()).0;
-            }
-            match host::min_max::<S, W>(self.bits, other.bits, MinMax::$operation, &M::ENV) {
-                Some(bits) => Self::from_masked(bits),
-                None => min_max_in_engine(self, other, MinMax::$operation),
-            }
+            self.min_max_in(other, MinMax::$operation, Unit::Read)
         }
 
         #[doc = concat!("Returns ", $summary, ", and the flags.")]
@@ -48,6 +42,34 @@ macro_rules! min_max {
 }
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
+    /// Returns the minimum or maximum operation `operation` with the default
+    /// mode, as its method does, with the environment of the host unit from
+    /// `unit`.
+    #[inline]
+    pub(crate) fn min_max_in(self, other: Self, operation: MinMax, unit: Unit) -> Self {
+        if !host::available(S::HOST, Kind::Comparison) {
+            let (bits, _) = S::min_max(self.bits, other.bits, operation, M::default().apply::<M>());
+            return Self::from_masked(bits);
+        }
+        match host::min_max::<S, W>(self.bits, other.bits, operation, &M::ENV, unit) {
+            Some(bits) => Self::from_masked(bits),
+            None => min_max_in_engine(self, other, operation),
+        }
+    }
+
+    /// Compares with `other` as `PartialOrd` does, with the environment of
+    /// the host unit from `unit`.
+    #[inline]
+    pub(crate) fn compare_in(self, other: Self, unit: Unit) -> Option<Ordering> {
+        if !host::available(S::HOST, Kind::Comparison) {
+            return self.compare_quiet_with(other, M::default()).0;
+        }
+        match host::compare::<S, W>(self.bits, other.bits, &M::ENV, unit) {
+            Some(order) => Some(order),
+            None => compare_in_engine(self, other),
+        }
+    }
+
     /// Compares with `other` as the IEEE 754 quiet predicates do, with the
     /// default mode. Returns the order, or `None` when the values are
     /// unordered. The order is that of
@@ -220,13 +242,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> PartialEq for Float<S, W, M> {
 impl<S: Standard<W>, const W: usize, M: Mode> PartialOrd for Float<S, W, M> {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if !host::available(S::HOST, Kind::Comparison) {
-            return self.compare_quiet_with(*other, M::default()).0;
-        }
-        match host::compare::<S, W>(self.bits, other.bits, &M::ENV) {
-            Some(order) => Some(order),
-            None => compare_in_engine(*self, *other),
-        }
+        self.compare_in(*other, Unit::Read)
     }
 }
 

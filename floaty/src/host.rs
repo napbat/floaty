@@ -62,8 +62,8 @@ mod paths;
     target_arch = "s390x"
 ))]
 pub use self::paths::{
-    Ready, binary, compare, convert, from_int, min_max, mul_add, ready, remainder,
-    round_to_integral, sqrt, to_int,
+    Ready, Unit, binary, compare, conversion_unit, convert, from_int, min_max, mul_add, ready,
+    remainder, round_to_integral, sqrt, to_int,
 };
 
 #[cfg(not(floaty_engine_only))]
@@ -490,8 +490,8 @@ pub const fn convertible(from: Host, to: Host) -> bool {
     ))
 ))]
 pub use self::none::{
-    Ready, binary, compare, convert, from_int, min_max, mul_add, packed, ready, remainder,
-    round_to_integral, sqrt, to_int,
+    Ready, Unit, binary, compare, conversion_unit, convert, from_int, min_max, mul_add, packed,
+    ready, remainder, round_to_integral, sqrt, to_int,
 };
 
 /// The entry points of a build without a host path: each returns `None`.
@@ -535,12 +535,37 @@ mod none {
     /// `false`: this build has no binary128 unit.
     pub const QUAD: bool = false;
 
+    /// How a scalar host path reads the environment of its unit: this build
+    /// has no host unit, so every path reads nothing.
+    #[derive(Clone, Copy, Debug)]
+    pub enum Unit {
+        /// The host path reads the environment of its unit.
+        Read,
+    }
+
+    impl Unit {
+        /// Returns [`Unit::Read`]: this build has no host unit to read.
+        #[must_use]
+        #[inline]
+        pub fn read(_host: Host) -> Self {
+            Self::Read
+        }
+    }
+
+    /// Returns `to`: this build has no host unit.
+    #[must_use]
+    #[inline]
+    pub const fn conversion_unit(_from: Host, to: Host) -> Host {
+        to
+    }
+
     /// Returns `None`: this build has no host path.
     #[inline]
     pub fn compare<S: Standard<W>, const W: usize>(
         _left: S::Bits,
         _right: S::Bits,
         _env: &Env,
+        _unit: Unit,
     ) -> Option<Ordering> {
         None
     }
@@ -551,6 +576,7 @@ mod none {
         _dividend: S::Bits,
         _divisor: S::Bits,
         _env: &Env,
+        _unit: Unit,
     ) -> Option<S::Bits> {
         None
     }
@@ -562,6 +588,7 @@ mod none {
         _right: S::Bits,
         _operation: MinMax,
         _env: &Env,
+        _unit: Unit,
     ) -> Option<S::Bits> {
         None
     }
@@ -573,13 +600,18 @@ mod none {
         _right: S::Bits,
         _operation: Operation,
         _env: &Env,
+        _unit: Unit,
     ) -> Option<S::Bits> {
         None
     }
 
     /// Returns `None`: this build has no host path.
     #[inline]
-    pub fn sqrt<S: Standard<W>, const W: usize>(_value: S::Bits, _env: &Env) -> Option<S::Bits> {
+    pub fn sqrt<S: Standard<W>, const W: usize>(
+        _value: S::Bits,
+        _env: &Env,
+        _unit: Unit,
+    ) -> Option<S::Bits> {
         None
     }
 
@@ -590,6 +622,7 @@ mod none {
         _right: S::Bits,
         _addend: S::Bits,
         _env: &Env,
+        _unit: Unit,
     ) -> Option<S::Bits> {
         None
     }
@@ -627,25 +660,40 @@ mod none {
     pub fn round_to_integral<S: Standard<W>, const W: usize>(
         _value: S::Bits,
         _env: &Env,
+        _unit: Unit,
     ) -> Option<S::Bits> {
         None
     }
 
     /// Returns `None`: this build has no host path.
     #[inline]
-    pub fn to_int<S: Standard<W>, const W: usize>(_value: S::Bits, _env: &Env) -> Option<i64> {
+    pub fn to_int<S: Standard<W>, const W: usize>(
+        _value: S::Bits,
+        _env: &Env,
+        _unit: Unit,
+    ) -> Option<i64> {
         None
     }
 
     /// Returns `None`: this build has no host path.
     #[inline]
-    pub fn from_int<S: Standard<W>, const W: usize>(_value: i64, _env: &Env) -> Option<S::Bits> {
+    pub fn from_int<S: Standard<W>, const W: usize>(
+        _value: i64,
+        _env: &Env,
+        _unit: Unit,
+    ) -> Option<S::Bits> {
         None
     }
 
     /// Returns `None`: this build has no host path.
     #[inline]
-    pub fn convert(_from: Host, _to: Host, _bits: [u64; 2], _env: &Env) -> Option<[u64; 2]> {
+    pub fn convert(
+        _from: Host,
+        _to: Host,
+        _bits: [u64; 2],
+        _env: &Env,
+        _unit: Unit,
+    ) -> Option<[u64; 2]> {
         None
     }
 
@@ -906,7 +954,7 @@ mod none {
 
 #[cfg(test)]
 mod tests {
-    use super::{Host, Kind, Operation, available, convertible};
+    use super::{Host, Kind, Operation, Unit, available, convertible};
     use crate::env::Env;
     use crate::float::Float;
     use crate::format::internal::{LimbConversion, MinMax};
@@ -930,40 +978,47 @@ mod tests {
     fn claimed_paths_give_results<S: Standard<W>, const W: usize>() {
         let env = Env::IEEE;
         let host = S::HOST;
+        // One read for every scalar path, as the lanes of one `Lanes`
+        // operation take it.
+        let unit = Unit::read(host);
         let value = |integer: i64| Float::<S, W>::from_int(integer);
         let (three, two, one) = (value(3), value(2), value(1));
         let (left_bits, right_bits, addend_bits) = (three.to_bits(), two.to_bits(), one.to_bits());
+        let add = Operation::Add;
+        let minimum = MinMax::Minimum;
         let scalar = [
             (
                 Kind::Arithmetic,
-                super::binary::<S, W>(left_bits, right_bits, Operation::Add, &env).is_some(),
+                super::binary::<S, W>(left_bits, right_bits, add, &env, unit).is_some(),
             ),
             (
                 Kind::SquareRoot,
-                super::sqrt::<S, W>(left_bits, &env).is_some(),
+                super::sqrt::<S, W>(left_bits, &env, unit).is_some(),
             ),
             (
                 Kind::FusedMultiplyAdd,
-                super::mul_add::<S, W>(left_bits, right_bits, addend_bits, &env).is_some(),
+                super::mul_add::<S, W>(left_bits, right_bits, addend_bits, &env, unit).is_some(),
             ),
             (
                 Kind::RoundToIntegral,
-                super::round_to_integral::<S, W>(left_bits, &env).is_some(),
+                super::round_to_integral::<S, W>(left_bits, &env, unit).is_some(),
             ),
             (
                 Kind::ToInt,
-                super::to_int::<S, W>(left_bits, &env).is_some(),
+                super::to_int::<S, W>(left_bits, &env, unit).is_some(),
             ),
-            (Kind::FromInt, super::from_int::<S, W>(3, &env).is_some()),
+            (
+                Kind::FromInt,
+                super::from_int::<S, W>(3, &env, unit).is_some(),
+            ),
             (
                 Kind::Comparison,
-                super::compare::<S, W>(left_bits, right_bits, &env).is_some()
-                    && super::min_max::<S, W>(left_bits, right_bits, MinMax::Minimum, &env)
-                        .is_some(),
+                super::compare::<S, W>(left_bits, right_bits, &env, unit).is_some()
+                    && super::min_max::<S, W>(left_bits, right_bits, minimum, &env, unit).is_some(),
             ),
             (
                 Kind::Remainder,
-                super::remainder::<S, W>(left_bits, right_bits, &env).is_some(),
+                super::remainder::<S, W>(left_bits, right_bits, &env, unit).is_some(),
             ),
         ];
         for (kind, taken) in scalar {
@@ -1007,7 +1062,8 @@ mod tests {
         let encoding = [limbs.limb(0), limbs.limb(1)];
         for to in HOSTS {
             assert!(
-                !convertible(host, to) || super::convert(host, to, encoding, &env).is_some(),
+                !convertible(host, to)
+                    || super::convert(host, to, encoding, &env, Unit::Read).is_some(),
                 "{host:?} to {to:?}: the claimed conversion gives no result"
             );
             assert!(

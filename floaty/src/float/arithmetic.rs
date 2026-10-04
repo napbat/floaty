@@ -5,7 +5,7 @@ use super::Float;
 use crate::env::{Flags, Mode, Override};
 use crate::format::Standard;
 use crate::format::internal::{Quotient, Step};
-use crate::host::{self, Kind, Operation};
+use crate::host::{self, Kind, Operation, Unit};
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Adds `other`. Returns the sum and the flags.
@@ -51,10 +51,17 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     #[inline]
     pub fn sqrt(self) -> Self {
+        self.sqrt_in(Unit::Read)
+    }
+
+    /// Returns the square root, with the default mode, as `sqrt` does, with
+    /// the environment of the host unit from `unit`.
+    #[inline]
+    pub(crate) fn sqrt_in(self, unit: Unit) -> Self {
         if !host::available(S::HOST, Kind::SquareRoot) {
             return self.sqrt_with(M::default()).0;
         }
-        match host::sqrt::<S, W>(self.bits, &M::ENV) {
+        match host::sqrt::<S, W>(self.bits, &M::ENV, unit) {
             Some(bits) => Self::from_masked(bits),
             None => sqrt_in_engine(self),
         }
@@ -136,10 +143,17 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     #[inline]
     pub fn mul_add(self, multiplier: Self, addend: Self) -> Self {
+        self.mul_add_in(multiplier, addend, Unit::Read)
+    }
+
+    /// Returns `self * multiplier + addend` as `mul_add` does, with the
+    /// environment of the host unit from `unit`.
+    #[inline]
+    pub(crate) fn mul_add_in(self, multiplier: Self, addend: Self, unit: Unit) -> Self {
         if !host::available(S::HOST, Kind::FusedMultiplyAdd) {
             return self.mul_add_with(multiplier, addend, M::default()).0;
         }
-        match host::mul_add::<S, W>(self.bits, multiplier.bits, addend.bits, &M::ENV) {
+        match host::mul_add::<S, W>(self.bits, multiplier.bits, addend.bits, &M::ENV, unit) {
             Some(bits) => Self::from_masked(bits),
             None => mul_add_in_engine(self, multiplier, addend),
         }
@@ -171,10 +185,17 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     #[inline]
     pub fn round_to_integral(self) -> Self {
+        self.round_to_integral_in(Unit::Read)
+    }
+
+    /// Rounds to an integral value as `round_to_integral` does, with the
+    /// environment of the host unit from `unit`.
+    #[inline]
+    pub(crate) fn round_to_integral_in(self, unit: Unit) -> Self {
         if !host::available(S::HOST, Kind::RoundToIntegral) {
             return self.round_to_integral_with(M::default()).0;
         }
-        match host::round_to_integral::<S, W>(self.bits, &M::ENV) {
+        match host::round_to_integral::<S, W>(self.bits, &M::ENV, unit) {
             Some(bits) => Self::from_masked(bits),
             None => round_to_integral_in_engine(self),
         }
@@ -210,7 +231,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
         if !host::available(S::HOST, Kind::Remainder) {
             return self.remainder_with(divisor, M::default()).0;
         }
-        match host::remainder::<S, W>(self.bits, divisor.bits, &M::ENV) {
+        match host::remainder::<S, W>(self.bits, divisor.bits, &M::ENV, Unit::Read) {
             Some(bits) => Self::from_masked(bits),
             None => remainder_in_engine(self, divisor),
         }
@@ -342,14 +363,7 @@ macro_rules! operator {
 
             #[inline]
             fn $method(self, other: Self) -> Self {
-                if !host::available(S::HOST, Kind::Arithmetic) {
-                    return self.$with(other, M::default()).0;
-                }
-                let host = host::binary::<S, W>(self.bits, other.bits, Operation::$trait, &M::ENV);
-                match host {
-                    Some(bits) => Self::from_masked(bits),
-                    None => $engine(self, other),
-                }
+                self.binary_in(other, Operation::$trait, Unit::Read)
             }
         }
 
@@ -370,6 +384,33 @@ operator!(Add, add, add_with, add_in_engine);
 operator!(Sub, sub, sub_with, sub_in_engine);
 operator!(Mul, mul, mul_with, mul_in_engine);
 operator!(Div, div, div_with, div_in_engine);
+
+impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
+    /// Returns `operation` of `self` and `other`, with the default mode, as
+    /// the operators compute it, with the environment of the host unit from
+    /// `unit`.
+    #[inline]
+    pub(crate) fn binary_in(self, other: Self, operation: Operation, unit: Unit) -> Self {
+        if !host::available(S::HOST, Kind::Arithmetic) {
+            let behavior = M::default();
+            return match operation {
+                Operation::Add => self.add_with(other, behavior).0,
+                Operation::Sub => self.sub_with(other, behavior).0,
+                Operation::Mul => self.mul_with(other, behavior).0,
+                Operation::Div => self.div_with(other, behavior).0,
+            };
+        }
+        match host::binary::<S, W>(self.bits, other.bits, operation, &M::ENV, unit) {
+            Some(bits) => Self::from_masked(bits),
+            None => match operation {
+                Operation::Add => add_in_engine(self, other),
+                Operation::Sub => sub_in_engine(self, other),
+                Operation::Mul => mul_in_engine(self, other),
+                Operation::Div => div_in_engine(self, other),
+            },
+        }
+    }
+}
 
 /// The truncated remainder with the default mode of the type, as
 /// [`Float::truncated_remainder`] computes it. The operator drops the flags.

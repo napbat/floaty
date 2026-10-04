@@ -28,7 +28,7 @@ lane.
 | Term | Meaning |
 | --- | --- |
 | Packed path | One check of MXCSR for all lanes, then packed instructions. |
-| Per-lane path | `Lanes` calls the scalar operation of each lane. The scalar operation takes its scalar host path, and checks MXCSR once for each lane. |
+| Per-lane path | `Lanes` calls the scalar operation of each lane. The scalar operation takes its scalar host path. Since 2026-10-03, `Lanes` checks MXCSR once for all lanes; the figures of this record come from before, when it checked MXCSR once for each lane. |
 | Engine | The software implementation, with no host path. |
 | Exact | The instruction gives the bits of the engine for each input that the path gives it, in the default environment. The path detects every other input, such as a NaN result, and sends it to the engine. |
 | Exact with fallback | Exact after the path sends a known set of lanes to the engine, for example lanes with a subnormal value that the instruction flushes. |

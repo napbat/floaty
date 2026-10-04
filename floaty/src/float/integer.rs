@@ -4,7 +4,7 @@ use super::Float;
 use crate::env::{Flags, Mode, Override};
 use crate::exact::Unrounded;
 use crate::format::Standard;
-use crate::host::{self, Kind};
+use crate::host::{self, Kind, Unit};
 use crate::integer::{Integer, Parts, ToInt};
 
 impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
@@ -19,11 +19,18 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     #[inline]
     pub fn from_int<I: Integer>(value: I) -> Self {
+        Self::from_int_in(value, Unit::Read)
+    }
+
+    /// Converts an integer as `from_int` does, with the environment of the
+    /// host unit from `unit`.
+    #[inline]
+    pub(crate) fn from_int_in<I: Integer>(value: I, unit: Unit) -> Self {
         if !host::available(S::HOST, Kind::FromInt) {
             return Self::from_int_with(value, M::default()).0;
         }
         let host = signed_64(value.to_parts())
-            .and_then(|integer| host::from_int::<S, W>(integer, &M::ENV));
+            .and_then(|integer| host::from_int::<S, W>(integer, &M::ENV, unit));
         match host {
             Some(bits) => Self::from_masked(bits),
             None => from_int_in_engine(value),
@@ -55,10 +62,17 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     #[inline]
     pub fn to_int<I: Integer>(self) -> ToInt<I> {
+        self.to_int_in(Unit::Read)
+    }
+
+    /// Converts to an integer as `to_int` does, with the environment of the
+    /// host unit from `unit`.
+    #[inline]
+    pub(crate) fn to_int_in<I: Integer>(self, unit: Unit) -> ToInt<I> {
         if !host::available(S::HOST, Kind::ToInt) {
             return self.to_int_with(M::default()).0;
         }
-        match host::to_int::<S, W>(self.bits, &M::ENV) {
+        match host::to_int::<S, W>(self.bits, &M::ENV, unit) {
             Some(integer) => from_host_integer(integer),
             None => to_int_in_engine(self),
         }
