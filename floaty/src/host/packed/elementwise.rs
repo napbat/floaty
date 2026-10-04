@@ -311,12 +311,12 @@ fn integers<I: Isa, const C: usize, D: Direction>(x: [u32; C], direction: D) -> 
     }
 }
 
-/// Returns a chunk of encodings, or `None` when the chunk holds a NaN, which
-/// the engine selects. The test takes a slice, whose loop stays short until
-/// the function inlines into a loop of chunks of a known length.
+/// Returns `true` when a chunk of encodings holds a NaN, which the engine
+/// selects. The test takes a slice, whose loop stays short until the
+/// function inlines into a loop of chunks of a known length.
 #[inline]
-fn without_nan<const C: usize>(bits: [u32; C]) -> Option<[u32; C]> {
-    (!any_lane(bits[..].iter().copied(), nan_32)).then_some(bits)
+fn holds_nan(bits: &[u32]) -> bool {
+    any_lane(bits.iter().copied(), nan_32)
 }
 
 /// Computes the values of `values` `N` at a time, and the values past the
@@ -361,7 +361,18 @@ fn store_in<I: Isa, const N: usize>(
     each: impl FnMut(usize, usize, Option<&[u32]>),
 ) {
     I::run(move || {
-        in_value_chunks::<I, N, u32>(values, direction, without_nan, without_nan, each);
+        // A closure at each call, not a shared function: with one codegen
+        // unit, LLVM called a shared test out of line from the copy of each
+        // instruction set, and the lanes went through memory. The
+        // difference of two slices of 1,280 values then took 0.20 ns per
+        // value in x86-64-v3 on a Ryzen AI Max+ 395, against 0.05 ns.
+        in_value_chunks::<I, N, u32>(
+            values,
+            direction,
+            |bits| (!holds_nan(&bits)).then_some(bits),
+            |bits| (!holds_nan(&bits)).then_some(bits),
+            each,
+        );
     });
 }
 
