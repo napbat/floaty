@@ -607,32 +607,37 @@ assert_eq!(codes, [64, 128, 255].map(ToInt::Value)); // 63.75, 127.5, 255
 
 ### Blocks
 
-`floaty::block` runs a chain of binary32 steps for each lane of slices.
-A type that implements `Chain<IN, P>` states the steps of one lane once,
-generic over the sealed trait `Steps`: every operation of binary32 from
-binary32 values to one binary32 value. These are `+`, `-`, `*`, `/`,
-negation, `mul_add`, `sqrt`, `abs`, `copy_sign`, `next_up`, `next_down`,
-`round_to_integral`, `round_to_integral_by` a direction, `remainder`,
-`truncated_remainder`, `scale_b`, `log_b`, `exp`, `log`, `compound`,
-`hypot`, `pown`, `rootn`, `reciprocal_sqrt`, `minimum`, `maximum`,
-`minimum_number`, `maximum_number`, their four magnitude forms, `min_num`,
-and `max_num`. Each step gives the result of its entry point in the mode
-of the type, so a block gives the bits of the same steps one at a time on
-every host.
+`floaty::block` runs a chain of binary16, bfloat16, binary32, or binary64
+steps for each lane of slices. A type that implements `Chain<IN, P>`
+states the steps of one lane once, generic over the sealed trait `Steps`,
+so one chain runs in each format. The steps are every operation of the
+format from values of the format to one value of the format: `+`, `-`,
+`*`, `/`, negation, `mul_add`, `sqrt`, `abs`, `copy_sign`, `next_up`,
+`next_down`, `round_to_integral`, `round_to_integral_by` a direction,
+`remainder`, `truncated_remainder`, `scale_b`, `log_b`, `exp`, `log`,
+`compound`, `hypot`, `pown`, `rootn`, `reciprocal_sqrt`, `minimum`,
+`maximum`, `minimum_number`, `maximum_number`, their four magnitude forms,
+`min_num`, and `max_num`. Each step gives the result of its entry point in
+the mode of the type, so a block gives the bits of the same steps one at a
+time on every host.
 
 | Function | Result |
 | --- | --- |
-| `F32::map(&chain, x, p, out)` | the chain of value `i` of each slice of `x` and the parameters `p`, into element `i` of `out`; slices of the type or of `f32` |
-| `F32::evaluate(&chain, x, p)` | the chain of one lane |
+| `F32::map(&chain, x, p, out)`, and `map` of `F16`, `BF16`, and `F64` | the chain of value `i` of each slice of `x` and the parameters `p`, into element `i` of `out`; slices of the type, or of `f32` for `F32` and of `f64` for `F64` |
+| `F32::evaluate(&chain, x, p)`, and `evaluate` of `F16`, `BF16`, and `F64` | the chain of one lane |
 
 A block checks the environment and selects the instruction set once for
-the call. Its steps then run as Rust operations on `f32`, so LLVM sees the
-whole chain and computes many lanes in vector instructions. A lane whose
-result is a NaN runs the chain again in the engine, which selects the NaN
-by the rule of the mode. So does a lane with a step that the instruction
-set cannot compute exactly, and a lane where a step reads a bit of a NaN
-that can change a result that is not a NaN. The host path table lists
-these steps.
+the call. Its steps then run as Rust operations on `f32` or `f64`, so LLVM
+sees the whole chain and computes many lanes in vector instructions.
+binary16 and bfloat16 compute each step in `f32` and round it to their
+format, as their host paths do. A lane whose result is a NaN runs the
+chain again in the engine, which selects the NaN by the rule of the mode.
+So does a lane with a step that the instruction set cannot compute
+exactly, and a lane where a step reads a bit of a NaN that can change a
+result that is not a NaN. The host path table lists these steps. LLVM
+vectorizes the loop only where it inlines `apply`, so mark `apply`
+`#[inline(always)]` in a long chain, and in a binary16 chain, whose steps
+round in more instructions.
 
 ```rust
 use floaty::F32;
@@ -725,7 +730,7 @@ path.
 | Slice kernels | x86 or x86-64 with SSE2, AVX for 256 bits, and AVX-512F for 512 bits, in the build or, with `std`, on the processor; AArch64; or s390x | The kernels of `Lanes<F32, N>`: `sum`, `dot`, `distance_square`, `norm`, `dot_rows`, and `distance_square_rows` in the packed binary32 instructions, and the fused kernels with FMA. Rows of at most eight values sum four rows at a time, in the order of the kernels. bfloat16 widens by a shift, binary16 by F16C or `FCVTL` or in integer and binary32 instructions, and codes by `CVTDQ2PS`, `SCVTF`, or `CEGBR`. `convert_slice` takes the packed conversions. On s390x, each lane runs its scalar instruction, as the packed paths of s390x do. One check of the environment serves the call. With AVX-512F, the modes that round toward +∞, -∞, and zero compute each step in the 512-bit forms with the embedded rounding control of the direction, sixteen lanes at a time, and a row of at most eight values as any other row. | A NaN sum sends the call, or its row, to the engine. A chunk of `convert_slice` that holds a NaN converts one value at a time. Without AVX-512F, the modes that round toward +∞, -∞, and zero send the call to the engine. |
 | Elementwise slice operations | As the slice kernels | The views of `floaty::elementwise` in the packed binary32 instructions: `MINPS` and `MAXPS` or `FMIN` and `FMAX`, with a NaN or two zeros settled in integer instructions; `RoundToIntegral` by `ROUNDPS` with SSE4.1, `VRNDSCALEPS` with AVX-512F, `FRINT`, or `FIEBR`, and otherwise by the sum and difference with 2^23 and an exact correction of one in the direction. `store`, `to_int_slice` by `CVTPS2DQ` on x86 and x86-64, and the reductions, with one check of the environment for the call. With AVX-512F, the modes that round toward +∞, -∞, and zero compute the sum, difference, product, quotient, and code scale of each view, and `to_int_slice`, in the 512-bit forms with the embedded rounding control of the direction. | A chunk of a store that holds a NaN, and a value that `CVTPS2DQ` does not convert, go to the engine. A reduction that gives a NaN goes to the engine. `to_int_slice` on AArch64 and s390x runs the engine. Without AVX-512F, the modes that round toward +∞, -∞, and zero send the call to the engine. |
 | Double-double | The binary64 paths of the build | `+`, `-`, `*`, `/`, and `sqrt` of `Gcc` and `Qd`, with one check of the environment for all steps | |
-| Blocks | As the slice kernels | `F32::map` and `F32::evaluate` of `floaty::block`: the steps of a chain as Rust operations on `f32`, which LLVM vectorizes, after one check of the environment for the call. The fused multiply-add and the square root take intrinsics that LLVM sees on x86, x86-64, and AArch64, and `MAEBR` and `SQEBR` on s390x. `abs`, `copy_sign`, `next_up`, `next_down`, and the minimum and maximum steps select and compute on the encodings, and `log_b` reads the exponent field, of a subnormal after an exact product by 2^23. The integral steps round by the sum and difference with 2^23 and an exact correction of one in the direction, and `scale_b` multiplies by a normal power of two. Every input passes through an empty assembly block after the check, so LLVM computes no step before the check | A NaN result, `mul_add` without FMA, an integral value to odd, `scale_b` outside -126 to 127, the remainders, `exp`, `log`, `compound`, `hypot`, `pown`, `rootn`, `reciprocal_sqrt`, `copy_sign` from a NaN, and `min_num` and `max_num` of a signaling NaN: the lane runs the chain again in the engine |
+| Blocks | As the slice kernels | `map` and `evaluate` of `F16`, `BF16`, `F32`, and `F64` in `floaty::block`: the steps of a chain as Rust operations on `f32` or `f64`, which LLVM vectorizes, after one check of the environment for the call. bfloat16 computes each step in `f32` and rounds it in the integer instructions of the bfloat16 paths. binary16 computes each step in `f32` and rounds it by the sum and difference with the power of two 2^13 above its exponent, and at least 0.5, and gives the infinity from 65520 up. The binary16 `mul_add` computes in binary64 and rounds there in the same way, with 2^42 and 2^28. The fused multiply-add and the square root take intrinsics that LLVM sees on x86, x86-64, and AArch64, and `MAEBR`, `MADBR`, `SQEBR`, and `SQDBR` on s390x. LLVM does not vectorize the square root on AArch64, so a chain with `sqrt` runs one lane at a time there. `abs`, `copy_sign`, `next_up`, `next_down`, and the minimum and maximum steps select and compute on the encodings, and `log_b` reads the exponent field, of a subnormal after an exact product by 2^23 or 2^52. The integral steps round by the sum and difference with 2^23 or 2^52 and an exact correction of one in the direction, and `scale_b` multiplies by a normal power of two of the host type. Every input passes through an empty assembly block after the check, so LLVM computes no step before the check | A NaN result, `mul_add` without FMA and in bfloat16, an integral value to odd, `scale_b` outside -126 to 127 in binary16, bfloat16, and binary32 and outside -1022 to 1023 in binary64, the remainders, `exp`, `log`, `compound`, `hypot`, `pown`, `rootn`, `reciprocal_sqrt`, `copy_sign` from a NaN, and `min_num` and `max_num` of a signaling NaN: the lane runs the chain again in the engine |
 
 [docs/x86-64-acceleration.md](docs/x86-64-acceleration.md) lists the x86-64
 instructions that could give more paths, and what blocks each one.

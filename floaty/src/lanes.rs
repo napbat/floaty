@@ -20,8 +20,9 @@ use crate::integer::{Integer, ToInt};
 use crate::sealed::Sealed;
 
 /// An element of a slice that holds the values of the float type `F`: `F`
-/// itself, or `f32` for a binary32 type, whose values it holds by their
-/// bits, as `From` reads them. The trait is sealed.
+/// itself, `f32` for a binary32 type, or `f64` for a binary64 type. A host
+/// element holds each value by its bits, as `From` reads them. The trait is
+/// sealed.
 pub trait Element<F>: Sealed + Copy {
     /// Returns the elements as values of `F`.
     #[doc(hidden)]
@@ -55,6 +56,20 @@ impl<M: Mode> Element<Float<Binary<8>, 32, M>> for f32 {
     #[inline]
     fn floats_mut(elements: &mut [Self]) -> &mut [Float<Binary<8>, 32, M>] {
         host::floats_of_singles_mut(elements)
+    }
+}
+
+impl Sealed for f64 {}
+
+impl<M: Mode> Element<Float<Binary<11>, 64, M>> for f64 {
+    #[inline]
+    fn floats(elements: &[Self]) -> &[Float<Binary<11>, 64, M>] {
+        host::floats_of_doubles(elements)
+    }
+
+    #[inline]
+    fn floats_mut(elements: &mut [Self]) -> &mut [Float<Binary<11>, 64, M>] {
+        host::floats_of_doubles_mut(elements)
     }
 }
 

@@ -17,7 +17,7 @@
 
 use super::super::bits::nan_32;
 use super::super::environment::packed;
-use super::super::narrow::{SUBNORMAL_BIAS, round_to_half_lanes};
+use super::super::narrow::{HALF_QUANTUM, SUBNORMAL_BIAS, round_to_half_lanes, widen_half_lanes};
 use super::{Directed, Nearest, any_lane, chunk, chunk_mut, dispatch, isa};
 use crate::env::{Env, Rounding};
 use crate::host::{Direction, Isa, Load, Operation, Step, Term};
@@ -479,20 +479,20 @@ pub fn widen_halves<I: Isa, const N: usize>(halves: &[u16; N]) -> Option<[u32; N
         if I::HALF {
             return isa::widen_halves::<I, N>(halves);
         }
-        // The fraction of a subnormal binary16 value times 2^-24 is its
-        // magnitude, a normal binary32 value. The conversion of the fraction
-        // and the product by a power of two are exact.
+        // `widen_half_lanes` takes the magnitude of a subnormal value, its
+        // fraction times 2^-24. The conversion of the fraction and the
+        // product by a power of two are exact.
         let fractions = from_integers::<I, _, N>(halves, |bits| i32::from(bits & 0x03FF))?;
         let subnormals = encodings(with_operand::<I, N>(
             &fractions,
-            f32::from_bits(0x3380_0000),
+            f32::from_bits(HALF_QUANTUM),
             Operation::Mul,
         )?);
         let mut widened = [0; N];
         widened
             .iter_mut()
             .zip(halves.iter().zip(subnormals))
-            .for_each(|(lane, (&bits, subnormal))| *lane = widen_half_bits(bits, subnormal));
+            .for_each(|(lane, (&bits, subnormal))| *lane = widen_half_lanes(bits, subnormal));
         Some(widened)
     })
 }
@@ -523,24 +523,6 @@ pub fn narrow_halves<I: Isa, const N: usize>(singles: &[f32; N]) -> Option<[u16;
         .zip(singles.iter().zip(sums))
         .for_each(|(half, (value, sum))| *half = round_to_half_lanes(value.to_bits(), sum));
     Some(halves)
-}
-
-/// Returns the binary32 encoding of a binary16 encoding, in masks without a
-/// branch, which LLVM vectorizes. `subnormal` is the binary32 encoding of
-/// the magnitude of the value when its exponent field is zero. Otherwise
-/// the exponent field and the fraction move to their binary32 positions,
-/// and the exponent field takes the bias of binary32: 127 - 15 = 112 more
-/// for a normal value, and 255 - 31 = 224 more for an infinity or a NaN.
-#[inline]
-fn widen_half_bits(bits: u16, subnormal: u32) -> u32 {
-    let bits = u32::from(bits);
-    let sign = (bits & 0x8000) << 16;
-    let magnitude = (bits & 0x7FFF) << 13;
-    let field = bits & 0x7C00;
-    let zero_field = 0u32.wrapping_sub(u32::from(field == 0));
-    let full_field = 0u32.wrapping_sub(u32::from(field == 0x7C00));
-    let other = magnitude + (112 << 23) + (full_field & (112 << 23));
-    sign | (zero_field & subnormal) | (!zero_field & other)
 }
 
 /// Returns integers converted to binary32. `widen` gives each integer, which
