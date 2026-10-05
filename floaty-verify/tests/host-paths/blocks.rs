@@ -1,12 +1,13 @@
-//! Blocks: `map` and `evaluate` of `F32` and of `F64` give the results of
-//! the steps of each chain one at a time, through their `_with` methods in
-//! the default mode. The chains take every step of `Steps`, each rounding
-//! direction, and NaNs that the host can hold with other bits than the
-//! engine, and that a later step drops. The operands are every pair of the
-//! boundary encodings of the format, random pairs, and values next to
-//! integers and ties, with boundary and random parameters, in slices of the
-//! type and of its host type and of each length. On x86-64, a block under
-//! each MXCSR control of the host-path tests gives the results of the
+//! Blocks: `map` and `evaluate` of `F16`, `BF16`, `F32`, and `F64` give the
+//! results of the steps of each chain one at a time, through their `_with`
+//! methods in the default mode. The chains take every step of `Steps`, each
+//! rounding direction, and NaNs that the host can hold with other bits than
+//! the engine, and that a later step drops. The operands are every pair of
+//! the boundary encodings of the format and random pairs, with boundary and
+//! random parameters, in slices of the type and of its host type and of
+//! each length. The steps of one value also take every 16-bit encoding, and
+//! in the wider formats values next to integers and ties. On x86-64, a block
+//! under each MXCSR control of the host-path tests gives the results of the
 //! engine, and no unmasked exception traps: the check of the environment
 //! comes before every step.
 
@@ -15,7 +16,7 @@ mod width;
 use std::fmt::Debug;
 
 use floaty::block::{Chain, Steps};
-use floaty::{Env, F32, F64, Rounding};
+use floaty::{BF16, Env, F16, F32, F64, Rounding};
 use floaty_verify::random::SplitMix64;
 
 use self::width::Width;
@@ -340,7 +341,7 @@ fn check<T: Width, C: Chain<2, 1> + Debug>(
     let hosts =
         |values: &[T]| -> Vec<T::Host> { values.iter().map(|&value| value.into()).collect() };
     let (host_x, host_y) = (hosts(&x), hosts(&y));
-    let mut host_out = vec![T::Host::default(); pairs.len()];
+    let mut host_out = vec![T::Host::from(p); pairs.len()];
     T::map(chain, [&host_x[..], &host_y[..]], [p], &mut host_out[..]);
     for (index, &result) in host_out.iter().enumerate() {
         assert_eq!(
@@ -373,12 +374,12 @@ fn check_chains<T: Width>(seed: u64) {
     }
 }
 
-/// Checks the chains of one step in `T`, with values next to integers and
-/// ties for the integral steps.
+/// Checks the chains of one step in `T`, with the values of one operand of
+/// `T` for the steps of one value.
 fn check_value_steps<T: Width>(seed: u64) {
     let mut random = SplitMix64::new(seed);
     let mut pairs = T::pairs(&mut random);
-    pairs.extend(T::integral_values().into_iter().map(|value| (value, value)));
+    pairs.extend(T::unary_values().into_iter().map(|value| (value, value)));
     let parameters = T::parameters(&mut random);
     for step in steps::<T>() {
         let count = if step.reads_parameter() {
@@ -394,12 +395,16 @@ fn check_value_steps<T: Width>(seed: u64) {
 
 #[test]
 fn blocks_give_the_steps_one_at_a_time() {
+    check_chains::<F16>(0xB10C);
+    check_chains::<BF16>(0xB10C);
     check_chains::<F32>(0xB10C);
     check_chains::<F64>(0xB10C);
 }
 
 #[test]
 fn value_steps_give_the_steps_one_at_a_time() {
+    check_value_steps::<F16>(0x57E9);
+    check_value_steps::<BF16>(0x57E9);
     check_value_steps::<F32>(0x57E9);
     check_value_steps::<F64>(0x57E9);
 }
@@ -423,6 +428,8 @@ fn a_block_rejects_slices_of_other_lengths() {
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn blocks_read_mxcsr_before_their_steps() {
+    mxcsr_comes_first::<F16>();
+    mxcsr_comes_first::<BF16>();
     mxcsr_comes_first::<F32>();
     mxcsr_comes_first::<F64>();
 }
@@ -433,7 +440,7 @@ fn mxcsr_comes_first<T: Width>() {
     let pairs = T::exception_pairs();
     let x = pairs.map(|(x, _)| x);
     let y = pairs.map(|(_, y)| y);
-    let p = T::from(T::Host::from(-1_i8));
+    let p = T::minus_one();
     under_each_control(&Arithmetic, &arithmetic, &x, &y, p);
     under_each_control(&Fused, &fused, &x, &y, p);
     under_each_control(&Order, &order, &x, &y, p);
@@ -443,8 +450,8 @@ fn mxcsr_comes_first<T: Width>() {
         Step::NextUp,
         Step::Integral,
         Step::IntegralBy(Rounding::TiesToAway),
-        // The least scale with a normal power of two.
-        Step::ScaleB(T::SCALES[4]),
+        // A scale that makes a subnormal value of the host type underflow.
+        Step::ScaleB(-126),
         Step::LogB,
         Step::Exp,
         Step::Pick(Pick::MinimumMagnitude),

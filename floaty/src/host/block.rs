@@ -1,5 +1,6 @@
 //! The host path of blocks: the steps of a chain as Rust operations on `f32`
-//! for binary32 and on `f64` for binary64, after one check of the
+//! for binary32 and on `f64` for binary64, and on `f32` for binary16 and
+//! bfloat16, which round each step to their format, after one check of the
 //! environment, in the instruction set that the processor selects.
 //!
 //! LLVM assumes the default floating-point environment. Once the check finds
@@ -10,7 +11,8 @@
 //! a test of the environment followed by `Some(a * b + c)` multiplied and
 //! added before the test. So every value enters the block through `opaque`,
 //! an empty assembly block with side effects after the check. LLVM keeps the
-//! block after the check, and each step after the block.
+//! block after the check, and each step after the block. The module `format`
+//! states the rounding of each format.
 //!
 //! A lane whose result is a NaN goes back to the engine, which selects the
 //! NaN by the rule of the mode. No step lets the bits of a NaN decide a
@@ -28,12 +30,14 @@
 //! otherwise than the engine also taints its lane: `copy_sign` from a NaN
 //! `sign`, and `min_num` and `max_num` of a signaling NaN.
 
+mod format;
 mod native;
 
 use core::marker::PhantomData;
 use core::ops::{Add, Div, Mul, Neg, Sub};
 
-pub use self::native::{Native, Value};
+pub use self::format::{Format, Value};
+pub use self::native::Native;
 use super::Isa;
 use super::packed::{Task, run_task};
 use super::paths::ready_for;
@@ -42,26 +46,27 @@ use crate::env::Rounding;
 use crate::format::internal::MinMax;
 use crate::sealed::Sealed;
 
-/// One lane of a block in the instruction set `I`, in the host type `N`: its
-/// value, and `taint`, `true` once a step had no exact instruction.
+/// One lane of a block in the instruction set `I`, in the format `F`: its
+/// value in the host type of the format, and `taint`, `true` once a step had
+/// no exact instruction.
 #[derive(Debug)]
-pub struct Lane<I, N> {
-    value: N,
+pub struct Lane<I, F: Format> {
+    value: F::Native,
     taint: bool,
     isa: PhantomData<fn() -> I>,
 }
 
-impl<I, N: Copy> Clone for Lane<I, N> {
+impl<I, F: Format> Clone for Lane<I, F> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<I, N: Copy> Copy for Lane<I, N> {}
+impl<I, F: Format> Copy for Lane<I, F> {}
 
-impl<I, N> Sealed for Lane<I, N> {}
+impl<I, F: Format> Sealed for Lane<I, F> {}
 
-impl<I, N: Native> Lane<I, N> {
+impl<I, F: Format<Native = N>, N: Native> Lane<I, F> {
     /// Returns a lane of `value` with `taint`.
     #[inline]
     fn new(value: N, taint: bool) -> Self {
@@ -74,7 +79,7 @@ impl<I, N: Native> Lane<I, N> {
 
     /// Returns a lane of the value `value`, which keeps its bits.
     #[inline]
-    fn of<F: Value<Native = N>>(value: F) -> Self {
+    fn of<V: Value<Format = F>>(value: V) -> Self {
         Self::new(value.native(), false)
     }
 
@@ -229,15 +234,17 @@ impl<I, N: Native> Lane<I, N> {
     }
 }
 
-/// Implements an operator of `Lane` by the Rust operation on the host type.
+/// Implements an operator of `Lane` by the Rust operation on the host type,
+/// rounded to the format.
 macro_rules! lane_operator {
     ($trait:ident, $method:ident, $operator:tt) => {
-        impl<I, N: Native> $trait for Lane<I, N> {
+        impl<I, F: Format> $trait for Lane<I, F> {
             type Output = Self;
 
             #[inline]
             fn $method(self, right: Self) -> Self {
-                Self::new(self.value $operator right.value, self.taint | right.taint)
+                let value = F::round(self.value $operator right.value);
+                Self::new(value, self.taint | right.taint)
             }
         }
     };
@@ -248,7 +255,7 @@ lane_operator!(Sub, sub, -);
 lane_operator!(Mul, mul, *);
 lane_operator!(Div, div, /);
 
-impl<I, N: Native> Neg for Lane<I, N> {
+impl<I, F: Format> Neg for Lane<I, F> {
     type Output = Self;
 
     #[inline]
@@ -282,21 +289,22 @@ macro_rules! min_max_steps {
     };
 }
 
-impl<I: Isa, N: Native> Steps for Lane<I, N> {
+impl<I: Isa, F: Format<Native = N>, N: Native> Steps for Lane<I, F> {
     #[inline]
     fn mul_add(self, multiplier: Self, addend: Self) -> Self {
-        if !I::FUSED {
-            return self.tainted();
+        // SAFETY: `I::FUSED` holds only for an instruction set with FMA, and
+        // the step runs in `I::run`, from a check of the processor that found
+        // the features of `I`.
+        let value = unsafe { F::mul_add(self.value, multiplier.value, addend.value, I::FUSED) };
+        match value {
+            Some(value) => Self::new(value, self.taint | multiplier.taint | addend.taint),
+            None => self.tainted(),
         }
-        // SAFETY: `I` has FMA, and the step runs in `I::run`, from a check
-        // of the processor that found the features of `I`.
-        let value = unsafe { self.value.block_mul_add(multiplier.value, addend.value) };
-        Self::new(value, self.taint | multiplier.taint | addend.taint)
     }
 
     #[inline]
     fn sqrt(self) -> Self {
-        Self::new(self.value.block_sqrt(), self.taint)
+        Self::new(F::round(self.value.block_sqrt()), self.taint)
     }
 
     #[inline]
@@ -317,23 +325,10 @@ impl<I: Isa, N: Native> Steps for Lane<I, N> {
 
     #[inline]
     fn next_up(self) -> Self {
-        let bits = self.value.to_bits();
-        let (zero, one) = (N::Bits::from(0), N::Bits::from(1));
-        let next = if N::is_nan_bits(bits) {
-            N::NAN.to_bits()
-        } else if bits & !N::SIGN == zero {
-            // Both zeros step to the least positive subnormal.
-            one
-        } else if bits == N::INFINITY.to_bits() {
-            bits
-        } else if bits & N::SIGN == zero {
-            bits + one
-        } else {
-            // A negative value steps toward zero, -∞ to the most negative
-            // finite value, and the least negative subnormal to -0.
-            bits - one
-        };
-        self.with_bits(next)
+        if self.value.is_nan() {
+            return Self::new(N::NAN, self.taint);
+        }
+        Self::new(F::next_up(self.value), self.taint)
     }
 
     #[inline]
@@ -356,14 +351,16 @@ impl<I: Isa, N: Native> Steps for Lane<I, N> {
     #[inline]
     fn scale_b(self, scale: i32) -> Self {
         // Each scale whose biased exponent field is that of a normal value
-        // has a power of two, so one product gives `value * 2^scale`
-        // rounded once, as `scaleB` does.
+        // of the host type has a power of two, so one product gives
+        // `value * 2^scale` rounded once, as `scaleB` does, and the format
+        // rounds it as its module states.
         let bias = i32::from(N::BIAS);
         match scale.checked_add(bias) {
             Some(biased) if (1..=2 * bias).contains(&biased) => {
-                let field = u32::try_from(biased).expect("the field of a normal value is positive");
+                let field =
+                    u16::try_from(biased).expect("the field of a normal value fits 16 bits");
                 let power = N::from_bits(N::Bits::from(field) << u32::from(N::FRACTION_BITS));
-                Self::new(self.value * power, self.taint)
+                Self::new(F::round(self.value * power), self.taint)
             }
             _ => self.tainted(),
         }
@@ -458,7 +455,7 @@ pub fn map<C: Chain<IN, P>, F: Value, const IN: usize, const P: usize>(
         x.iter().all(|values| values.len() == out.len()),
         "each input holds one value for each output"
     );
-    let host = F::Native::HOST;
+    let host = F::Format::HOST;
     if !ready_for(host, &F::ENV, host.precision()) {
         return None;
     }
@@ -473,7 +470,7 @@ pub fn evaluate<C: Chain<IN, P>, F: Value, const IN: usize, const P: usize>(
     x: [F; IN],
     p: [F; P],
 ) -> Option<F> {
-    let host = F::Native::HOST;
+    let host = F::Format::HOST;
     if !ready_for(host, &F::ENV, host.precision()) {
         return None;
     }
@@ -494,7 +491,9 @@ impl<C: Chain<IN, P>, F: Value, const IN: usize, const P: usize> Task for Map<'_
     #[inline]
     fn run<I: Isa>(self) -> bool {
         let Self { chain, x, p, out } = self;
-        I::run(move || map_in::<I, C, F, IN, P>(chain, x, p, out))
+        I::run(move || {
+            map_in::<I, C, F, F::Format, <F::Format as Format>::Native, IN, P>(chain, x, p, out)
+        })
     }
 }
 
@@ -505,41 +504,40 @@ impl<C: Chain<IN, P>, F: Value, const IN: usize, const P: usize> Task for Map<'_
 /// values took 0.30 ns per value in the x86-64 build on a Ryzen AI Max+
 /// 395, against 0.11 ns with the counted loop.
 #[inline]
-fn map_in<I: Isa, C: Chain<IN, P>, F: Value, const IN: usize, const P: usize>(
+fn map_in<I, C, F, K, N, const IN: usize, const P: usize>(
     chain: &C,
     x: [&[F]; IN],
     p: [F; P],
     out: &mut [F],
-) -> bool {
+) -> bool
+where
+    I: Isa,
+    C: Chain<IN, P>,
+    F: Value<Format = K>,
+    K: Format<Native = N>,
+    N: Native,
+{
     let x = x.map(opaque);
     let p = opaque(&p);
-    let p: [Lane<I, F::Native>; P] = core::array::from_fn(|index| Lane::of(p[index]));
+    let p: [Lane<I, K>; P] = core::array::from_fn(|index| Lane::of(p[index]));
     // The top bit of `magnitude + (sign - infinity - 1)` is set exactly for
     // a NaN, a magnitude above the encoding of infinity, so the loop ORs the
     // sums and tests the top bit once. A `bool` of each lane made LLVM narrow
     // the mask of each vector to bytes: the update `x * keep + y * eta` of
     // 1,280 binary32 values took 87 ns in x86-64-v3 on a Ryzen AI Max+ 395,
     // against 69 ns.
-    let (zero, one) = (
-        <F::Native as Native>::Bits::from(0),
-        <F::Native as Native>::Bits::from(1),
-    );
-    let sign = <F::Native as Native>::SIGN;
-    let offset = sign - F::Native::INFINITY.to_bits() - one;
+    let (zero, one) = (N::Bits::from(0), N::Bits::from(1));
+    let offset = N::SIGN - N::INFINITY.to_bits() - one;
     let mut sums = zero;
     for (index, result) in out.iter_mut().enumerate() {
         // SAFETY: `map` checked that each slice holds a value for each lane.
         let values = x.map(|values| Lane::of(*unsafe { values.get_unchecked(index) }));
-        let lane = chain.apply::<Lane<I, F::Native>>(values, p);
-        let bits = if lane.taint {
-            F::Native::NAN.to_bits()
-        } else {
-            lane.value.to_bits()
-        };
-        sums = sums | ((bits & !sign) + offset);
-        *result = F::of_bits(bits);
+        let lane = chain.apply::<Lane<I, K>>(values, p);
+        let value = if lane.taint { N::NAN } else { lane.value };
+        sums = sums | ((value.to_bits() & !N::SIGN) + offset);
+        *result = F::of_native(value);
     }
-    sums & sign != zero
+    sums & N::SIGN != zero
 }
 
 /// The arguments of `evaluate` for its instruction set.
@@ -558,21 +556,37 @@ impl<C: Chain<IN, P>, F: Value, const IN: usize, const P: usize> Task
     fn run<I: Isa>(self) -> Option<F> {
         let Self { chain, x, p } = self;
         I::run(move || {
-            let (x, p) = (opaque(&x), opaque(&p));
-            let x: [Lane<I, F::Native>; IN] = core::array::from_fn(|index| Lane::of(x[index]));
-            let p: [Lane<I, F::Native>; P] = core::array::from_fn(|index| Lane::of(p[index]));
-            let lane = chain.apply::<Lane<I, F::Native>>(x, p);
-            let bits = lane.value.to_bits();
-            (!lane.taint && !F::Native::is_nan_bits(bits)).then(|| F::of_bits(bits))
+            evaluate_in::<I, C, F, F::Format, <F::Format as Format>::Native, IN, P>(chain, x, p)
         })
     }
+}
+
+/// Runs `evaluate` in the instruction set `I`.
+#[inline]
+fn evaluate_in<I, C, F, K, N, const IN: usize, const P: usize>(
+    chain: &C,
+    x: [F; IN],
+    p: [F; P],
+) -> Option<F>
+where
+    I: Isa,
+    C: Chain<IN, P>,
+    F: Value<Format = K>,
+    K: Format<Native = N>,
+    N: Native,
+{
+    let (x, p) = (opaque(&x), opaque(&p));
+    let x: [Lane<I, K>; IN] = core::array::from_fn(|index| Lane::of(x[index]));
+    let p: [Lane<I, K>; P] = core::array::from_fn(|index| Lane::of(p[index]));
+    let lane = chain.apply::<Lane<I, K>>(x, p);
+    (!lane.taint && !N::is_nan_bits(lane.value.to_bits())).then(|| F::of_native(lane.value))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Value, map};
     use crate::block::{Chain, Steps};
-    use crate::{F32, F64};
+    use crate::{BF16, F16, F32, F64};
 
     /// `x * y`.
     struct Product;
@@ -614,6 +628,28 @@ mod tests {
         ];
         for (bits, nan) in doubles {
             assert_eq!(reports(F64::from_bits(bits), one), Some(nan), "{bits:#x}");
+        }
+        let one = F16::from_bits(0x3C00);
+        let halves = [
+            (0x7BFF, false),
+            (0x7C00, false),
+            (0xFC00, false),
+            (0x7C01, true),
+            (0xFE00, true),
+        ];
+        for (bits, nan) in halves {
+            assert_eq!(reports(F16::from_bits(bits), one), Some(nan), "{bits:#x}");
+        }
+        let one = BF16::from_bits(0x3F80);
+        let bfloats = [
+            (0x7F7F, false),
+            (0x7F80, false),
+            (0xFF80, false),
+            (0x7F81, true),
+            (0xFFC0, true),
+        ];
+        for (bits, nan) in bfloats {
+            assert_eq!(reports(BF16::from_bits(bits), one), Some(nan), "{bits:#x}");
         }
     }
 }

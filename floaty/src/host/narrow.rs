@@ -3,7 +3,9 @@
 //! results round to binary16 on x86-64, in integer instructions where the
 //! host has no instruction for the rounding. The packed paths of a build
 //! without a rounding instruction round binary32 lanes to binary16 in
-//! integer instructions and one binary32 sum.
+//! integer instructions and one binary32 sum. Blocks of binary16 and
+//! bfloat16 round each step in the routines of their lanes on every host,
+//! with a few integer instructions that LLVM vectorizes.
 //!
 //! The binary16 and bfloat16 paths compute in binary32 and round twice, as
 //! the module `paths` states. These routines are the second rounding. Each
@@ -185,6 +187,104 @@ pub fn round_to_half_lanes(bits: u32, subnormal: u32) -> u16 {
     u16::from_le_bytes([low, high])
 }
 
+/// The encoding of 2^-24, the quantum of the binary16 subnormal values: the
+/// fraction of a subnormal binary16 value times 2^-24 is its magnitude.
+pub const HALF_QUANTUM: u32 = 0x3380_0000;
+
+/// Returns the binary32 encoding of a binary16 encoding, in masks without a
+/// branch, which LLVM vectorizes. `subnormal` is the binary32 encoding of
+/// the magnitude of the value when its exponent field is zero: the fraction
+/// times 2^-24 ([`HALF_QUANTUM`]), a normal binary32 value, whose conversion
+/// and product are exact. Otherwise the exponent field and the fraction move
+/// to their binary32 positions, and the exponent field takes the bias of
+/// binary32: 127 - 15 = 112 more for a normal value, and 255 - 31 = 224 more
+/// for an infinity or a NaN.
+#[inline]
+pub fn widen_half_lanes(bits: u16, subnormal: u32) -> u32 {
+    let bits = u32::from(bits);
+    let sign = (bits & 0x8000) << 16;
+    let magnitude = (bits & 0x7FFF) << 13;
+    let field = bits & 0x7C00;
+    let zero_field = 0u32.wrapping_sub(u32::from(field == 0));
+    let full_field = 0u32.wrapping_sub(u32::from(field == 0x7C00));
+    let other = magnitude + (112 << 23) + (full_field & (112 << 23));
+    sign | (zero_field & subnormal) | (!zero_field & other)
+}
+
+/// Returns the encoding of the power of two whose sum with the magnitude of
+/// a binary32 value, rounded to nearest even, rounds the magnitude to the
+/// precision of binary16: 2^13 times the power of two of the exponent of
+/// the magnitude, and at least 0.5 ([`SUBNORMAL_BIAS`]). The unit of the
+/// last place of the sum is then the unit of binary16 at that exponent, and
+/// below 2^-14 the binary16 quantum 2^-24. From 2^115 up the encoding is not
+/// that power, and `round_to_half_precision` gives the infinity.
+#[inline]
+pub fn half_precision_bias(bits: u32) -> u32 {
+    ((bits & 0x7F80_0000) + (13 << 23)).max(SUBNORMAL_BIAS)
+}
+
+/// Rounds the bits of a binary32 value to the nearest binary16 value, ties
+/// to even, and returns that value as binary32 bits, for the steps of a
+/// binary16 block. It gives `round_to_half` widened to binary32 for every
+/// value but a NaN, which gives a quiet NaN.
+///
+/// `rounded` is the encoding of `(magnitude + bias) - bias`, each rounded to
+/// nearest even by the host, with the bias of `half_precision_bias`. The sum
+/// rounds the magnitude to binary16 precision, and the difference is exact.
+/// From 65520 up, the result is the infinity. A NaN gives the NaN of the
+/// host sum, which is quiet. The few instructions keep a chain small enough
+/// that LLVM inlines it into the loop of a block and vectorizes the loop.
+#[inline]
+pub fn round_to_half_precision(bits: u32, rounded: u32) -> u32 {
+    let magnitude = bits & 0x7FFF_FFFF;
+    let result = if (0x477F_F000..=0x7F80_0000).contains(&magnitude) {
+        0x7F80_0000
+    } else {
+        rounded
+    };
+    (bits & 0x8000_0000) | result
+}
+
+/// Returns the encoding of the power of two whose sum with the magnitude of
+/// a binary64 value, rounded to nearest even, rounds the magnitude to the
+/// precision of binary16: 2^42 times the power of two of the exponent of
+/// the magnitude, and at least 2^28, whose unit in the last place is the
+/// binary16 quantum 2^-24. From 2^982 up the encoding is not that power, and
+/// `round_double_to_half_precision` gives the infinity.
+#[inline]
+pub fn double_half_precision_bias(bits: u64) -> u64 {
+    ((bits & 0x7FF0_0000_0000_0000) + (42 << 52)).max(0x41B0_0000_0000_0000)
+}
+
+/// Rounds the bits of a binary64 value to the nearest binary16 value, ties
+/// to even, and returns that value as binary32 bits, for the `mul_add` of a
+/// binary16 block. It gives `round_double_to_half` widened to binary32 for
+/// every value but a NaN, which gives a quiet NaN.
+///
+/// `rounded` is the encoding of `(magnitude + bias) - bias`, each rounded to
+/// nearest even by the host in binary64, with the bias of
+/// `double_half_precision_bias`. The sum rounds the magnitude to binary16
+/// precision, and the difference is exact. A binary16 value has at most 11
+/// bits and is normal in binary32, so the rebias of its binary64 encoding
+/// and the shift by 29 bits give its binary32 encoding exactly. From 65520
+/// up, the result is the infinity.
+#[inline]
+pub fn round_double_to_half_precision(bits: u64, rounded: u64) -> u32 {
+    let magnitude = bits & 0x7FFF_FFFF_FFFF_FFFF;
+    let single = if magnitude > 0x7FF0_0000_0000_0000 {
+        0x7FC0_0000
+    } else if magnitude >= 0x40EF_FE00_0000_0000 {
+        0x7F80_0000
+    } else if rounded == 0 {
+        0
+    } else {
+        // The exponent field moves from the bias 1023 to the bias 127.
+        let single = (rounded >> 29).wrapping_sub(896 << 23) & 0xFFFF_FFFF;
+        u32::try_from(single).expect("the mask keeps 32 bits")
+    };
+    (u32::from(bits >> 63 == 1) << 31) | single
+}
+
 /// Rounds the bits of a binary32 value to bfloat16, to nearest even, with
 /// integer instructions. x86-64 has no instruction for this rounding below
 /// `AVX512_BF16`, and `VCVTNEPS2BF16` reads a subnormal input as zero.
@@ -257,14 +357,11 @@ mod tests {
         }
     }
 
-    /// Checks the rounding of binary64 to binary16 against the engine, for
-    /// every exponent field near the range of binary16 and below it, each
-    /// pattern of the ten fraction bits that binary16 keeps, and low bits
-    /// that make the dropped part zero, a tie, or just around one.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "s390x"))]
-    #[test]
-    fn binary64_to_binary16_rounding_matches_the_engine() {
-        use crate::float::{F16, F64};
+    /// Returns binary64 encodings with every exponent field near the range
+    /// of binary16 and below it, each pattern of the ten fraction bits that
+    /// binary16 keeps, and low bits that make the dropped part zero, a tie,
+    /// or just around one, of both signs, and the special values.
+    fn doubles_near_half() -> impl Iterator<Item = u64> {
         let lows = [0, 1, (1 << 41) - 1, 1 << 41, (1 << 41) + 1, (1 << 42) - 1];
         let specials = [
             0_u64,
@@ -277,16 +374,48 @@ mod tests {
         ];
         let tops = (980_u64..=1050).flat_map(|field| (0..1024).map(move |high| (field, high)));
         let near =
-            tops.flat_map(|(field, high)| lows.map(|low| (field << 52) | (high << 42) | low));
-        for magnitude in specials.into_iter().chain(near) {
-            for bits in [magnitude, magnitude | (1 << 63)] {
-                let ours = super::round_double_to_half(bits);
-                let (engine, _) = F64::from_bits(bits).convert_with::<F16>(Env::IEEE);
-                if super::super::bits::nan_64(bits) {
-                    assert!(super::super::bits::nan_16(ours), "{bits:#018x}");
-                } else {
-                    assert_eq!(ours, engine.to_bits(), "{bits:#018x}");
-                }
+            tops.flat_map(move |(field, high)| lows.map(|low| (field << 52) | (high << 42) | low));
+        specials
+            .into_iter()
+            .chain(near)
+            .flat_map(|magnitude| [magnitude, magnitude | (1 << 63)])
+    }
+
+    /// Checks the rounding of binary64 to binary16 against the engine.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "s390x"))]
+    #[test]
+    fn binary64_to_binary16_rounding_matches_the_engine() {
+        use crate::float::{F16, F64};
+        for bits in doubles_near_half() {
+            let ours = super::round_double_to_half(bits);
+            let (engine, _) = F64::from_bits(bits).convert_with::<F16>(Env::IEEE);
+            if super::super::bits::nan_64(bits) {
+                assert!(super::super::bits::nan_16(ours), "{bits:#018x}");
+            } else {
+                assert_eq!(ours, engine.to_bits(), "{bits:#018x}");
+            }
+        }
+    }
+
+    /// Checks the rounding of binary64 to binary16 precision against the
+    /// engine. The sum of each magnitude and its bias, and the difference of
+    /// the sum and the bias, come from the engine, which the host gives in a
+    /// block.
+    #[test]
+    fn binary64_to_binary16_precision_rounding_matches_the_engine() {
+        use crate::float::{F16, F64};
+        for bits in doubles_near_half() {
+            let magnitude = F64::from_bits(bits & 0x7FFF_FFFF_FFFF_FFFF);
+            let bias = F64::from_bits(super::double_half_precision_bias(bits));
+            let (sum, _) = magnitude.add_with(bias, Env::IEEE);
+            let (rounded, _) = sum.sub_with(bias, Env::IEEE);
+            let ours = super::round_double_to_half_precision(bits, rounded.to_bits());
+            let (half, _) = F64::from_bits(bits).convert_with::<F16>(Env::IEEE);
+            let (engine, _) = half.convert_with::<F32>(Env::IEEE);
+            if super::super::bits::nan_64(bits) {
+                assert_eq!(ours & 0x7FC0_0000, 0x7FC0_0000, "{bits:#018x}");
+            } else {
+                assert_eq!(ours, engine.to_bits(), "{bits:#018x}");
             }
         }
     }
@@ -325,6 +454,28 @@ mod tests {
             let (engine, _) = F32::from_bits(bits).convert_with::<F16>(Env::IEEE);
             if super::super::bits::nan_32(bits) {
                 assert!(super::super::bits::nan_16(ours), "{bits:#010x}");
+            } else {
+                assert_eq!(ours, engine.to_bits(), "{bits:#010x}");
+            }
+        }
+    }
+
+    /// The sum of each magnitude and its bias, and the difference of the sum
+    /// and the bias, come from the engine, which the host gives in a block.
+    #[test]
+    fn binary16_precision_rounding_matches_the_engine() {
+        use crate::float::F16;
+        for bits in encodings() {
+            let magnitude = F32::from_bits(bits & 0x7FFF_FFFF);
+            let bias = F32::from_bits(super::half_precision_bias(bits));
+            let (sum, _) = magnitude.add_with(bias, Env::IEEE);
+            let (rounded, _) = sum.sub_with(bias, Env::IEEE);
+            let ours = super::round_to_half_precision(bits, rounded.to_bits());
+            let (rounded, _) = F32::from_bits(bits).convert_with::<F16>(Env::IEEE);
+            let (engine, _) = rounded.convert_with::<F32>(Env::IEEE);
+            if super::super::bits::nan_32(bits) {
+                assert!(super::super::bits::nan_32(ours), "{bits:#010x}");
+                assert_ne!(ours & 0x0040_0000, 0, "{bits:#010x}");
             } else {
                 assert_eq!(ours, engine.to_bits(), "{bits:#010x}");
             }

@@ -6,8 +6,9 @@
 //! one value at a time. A fused multiply-add has no view, and its host loop
 //! calls the `fmaf` of the C library in a build without FMA, so those rows
 //! have no such cell. The binary64 table runs the same chains in a host
-//! `f64` loop, `F64::map`, and the scalar operations of `F64`. The views
-//! take only binary32.
+//! `f64` loop, `F64::map`, and the scalar operations of `F64`, and the
+//! 16-bit table runs them in `map` and the scalar operations of `F16` and
+//! of `BF16`, which have no host type. The views take only binary32.
 
 use std::hint::black_box;
 
@@ -15,7 +16,7 @@ use floaty::block::{Chain, Steps};
 use floaty::elementwise::{
     Difference, MaximumNumber, MinimumNumber, Product, RoundToIntegral, Splat, Sum,
 };
-use floaty::{F32, F64, Lanes, Rounding};
+use floaty::{BF16, F16, F32, F64, Lanes, Rounding};
 use floaty_verify::random::SplitMix64;
 
 use super::{Table, measure};
@@ -29,6 +30,49 @@ const COLUMNS: Table<4> = Table {
 const DOUBLE_COLUMNS: Table<3> = Table {
     columns: ["host", "block", "scalar F64"],
 };
+
+/// The columns of the 16-bit table.
+const HALF_COLUMNS: Table<4> = Table {
+    columns: ["block F16", "scalar F16", "block BF16", "scalar BF16"],
+};
+
+/// A 16-bit type of the 16-bit table.
+trait Narrow: Steps {
+    /// Returns a binary32 value rounded to the type.
+    fn of(value: f32) -> Self;
+
+    /// Runs `map` of the type.
+    fn map<C: Chain<IN, P>, const IN: usize, const P: usize>(
+        chain: &C,
+        x: [&[Self]; IN],
+        p: [Self; P],
+        out: &mut [Self],
+    );
+}
+
+/// Implements `Narrow` for a 16-bit type.
+macro_rules! narrow {
+    ($($type:ty),*) => {
+        $(
+            impl Narrow for $type {
+                fn of(value: f32) -> Self {
+                    F32::from(value).convert()
+                }
+
+                fn map<C: Chain<IN, P>, const IN: usize, const P: usize>(
+                    chain: &C,
+                    x: [&[Self]; IN],
+                    p: [Self; P],
+                    out: &mut [Self],
+                ) {
+                    <$type>::map(chain, x, p, out);
+                }
+            }
+        )*
+    };
+}
+
+narrow!(F16, BF16);
 
 /// The values of a vector.
 const DIMENSION: usize = 1_280;
@@ -484,4 +528,86 @@ pub fn table() {
     quantize_row(&vectors);
     score_rows(&vectors);
     double_table(&vectors);
+    half_table(&vectors);
+}
+
+/// Measures `map` of `chain` and `chain` in the scalar steps of `T`, on the
+/// vectors rounded to `T`, with the parameters `p` rounded to `T`. The chain
+/// takes the first `IN` of the two vectors, so `IN` is 1 or 2.
+fn narrow_cells<T: Narrow, C: Chain<IN, P>, const IN: usize, const P: usize>(
+    vectors: &[Vec<f32>],
+    chain: &C,
+    p: [f32; P],
+) -> [Option<f64>; 2] {
+    let vectors: Vec<Vec<T>> = vectors
+        .iter()
+        .map(|vector| vector.iter().map(|&value| T::of(value)).collect())
+        .collect();
+    let p = p.map(T::of);
+    let mut block_out = [p[0]; DIMENSION];
+    let mut block = |x: &[T], y: &[T]| {
+        let inputs = [x, y];
+        let x: [&[T]; IN] = core::array::from_fn(|index| inputs[index]);
+        T::map(chain, x, p, &mut block_out[..]);
+    };
+    let mut scalar_out = vec![p[0]; DIMENSION];
+    let mut scalar = |x: &[T], y: &[T]| {
+        let inputs = [x, y];
+        for (lane, out) in scalar_out.iter_mut().enumerate() {
+            *out = chain.apply::<T>(core::array::from_fn(|index| inputs[index][lane]), p);
+        }
+        black_box(&scalar_out);
+    };
+    [
+        Some(per_vector(&vectors, &mut block)),
+        Some(per_vector(&vectors, &mut scalar)),
+    ]
+}
+
+/// Measures one row of the 16-bit table: `chain` in `F16` and in `BF16`.
+fn half_row<C: Chain<IN, P>, const IN: usize, const P: usize>(
+    name: &str,
+    vectors: &[Vec<f32>],
+    chain: &C,
+    p: [f32; P],
+) {
+    let [block_half, scalar_half] = narrow_cells::<F16, C, IN, P>(vectors, chain, p);
+    let [block_bfloat, scalar_bfloat] = narrow_cells::<BF16, C, IN, P>(vectors, chain, p);
+    HALF_COLUMNS.row(name, [block_half, scalar_half, block_bfloat, scalar_bfloat]);
+}
+
+/// Prints the 16-bit table, of the vectors of the binary32 table rounded to
+/// each type.
+fn half_table(vectors: &[Vec<f32>]) {
+    println!();
+    println!("Blocks in binary16 and bfloat16, nanoseconds per vector of {DIMENSION}.");
+    println!();
+    HALF_COLUMNS.header("Chain");
+    let update = [0.996_093_75, 0.003_906_25];
+    half_row("update x * keep + y * eta", vectors, &Update, update);
+    half_row("update fused", vectors, &FusedUpdate, update);
+    half_row(
+        "normalize (x - mean) * inverse * gamma + beta",
+        vectors,
+        &Normalize,
+        [0.5, 1.5, 0.75, -0.25],
+    );
+    half_row(
+        "bounds minimum_number(maximum_number(x, low), y)",
+        vectors,
+        &Bounds,
+        [-1.0],
+    );
+    half_row(
+        "quantize round_to_integral(x * inverse) * step",
+        vectors,
+        &Quantize,
+        [4.0, 0.25],
+    );
+    half_row(
+        "score sqrt(|x * a + b|) / y - c",
+        vectors,
+        &Score,
+        [0.5, 1.0, 0.25],
+    );
 }

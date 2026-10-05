@@ -1,12 +1,12 @@
-//! The binary types of the block tests, `F32` and `F64`: their host
-//! elements, their operands, their entry points, and the `_with` methods
-//! that give the steps one at a time.
+//! The binary types of the block tests, `F16`, `BF16`, `F32`, and `F64`:
+//! their host elements, their operands, their entry points, and the `_with`
+//! methods that give the steps one at a time.
 
 use std::fmt::Debug;
 use std::ops::Neg;
 
 use floaty::block::{Chain, Steps};
-use floaty::{Element, Env, F32, F64, Flags};
+use floaty::{BF16, Element, Env, F16, F32, F64, Flags};
 use floaty_verify::encodings::Layout;
 use floaty_verify::random::SplitMix64;
 
@@ -71,20 +71,44 @@ macro_rules! forward {
     };
 }
 
+/// Implements `map` and `evaluate` of a type by its entry points.
+macro_rules! entry_points {
+    () => {
+        fn map<C, E, O>(chain: &C, x: [&[E]; 2], p: [Self; 1], out: &mut [O])
+        where
+            C: Chain<2, 1>,
+            E: Element<Self>,
+            O: Element<Self>,
+        {
+            Self::map(chain, x, p, out);
+        }
+
+        fn evaluate<C: Chain<2, 1>>(chain: &C, x: [Self; 2], p: [Self; 1]) -> Self {
+            Self::evaluate(chain, x, p)
+        }
+    };
+}
+
 /// A binary type of the block tests.
 pub(super) trait Width:
     Steps + Element<Self> + Debug + Neg<Output = Self> + From<Self::Host>
 {
-    /// The host type, whose slices `map` also takes.
-    type Host: Copy + Default + Element<Self> + From<Self> + From<i8>;
+    /// The host type, whose slices `map` also takes, or the type itself
+    /// where the host has none.
+    type Host: Copy + Element<Self> + From<Self>;
 
-    /// Scales at both ends of the normal powers of two, and past them, up to
-    /// the scales that move the least subnormal value past the largest
+    /// Scales at both ends of the normal powers of two of the host type of
+    /// the lanes, past them, and at the ends of the range of the format, up
+    /// to the scales that move the least subnormal value past the largest
     /// finite value.
     const SCALES: [i32; 12];
 
     /// Returns the encoding, widened to 64 bits.
     fn bits(self) -> u64;
+
+    /// Returns -1, the parameter of the MXCSR test.
+    #[cfg(target_arch = "x86_64")]
+    fn minus_one() -> Self;
 
     /// Returns every pair of the boundary encodings, and random pairs.
     fn pairs(random: &mut SplitMix64) -> Vec<(Self, Self)>;
@@ -93,13 +117,16 @@ pub(super) trait Width:
     /// and random encodings.
     fn parameters(random: &mut SplitMix64) -> Vec<Self>;
 
-    /// Returns quarters, halves and their neighbors, and values next to
-    /// `2^(p - 1)`, from which every value is integral, of both signs.
-    fn integral_values() -> Vec<Self>;
+    /// Returns values that each step of one value takes as both operands:
+    /// every encoding of a 16-bit format, and otherwise quarters, halves and
+    /// their neighbors, and values next to `2^(p - 1)`, from which every
+    /// value is integral, of both signs.
+    fn unary_values() -> Vec<Self>;
 
-    /// Returns ten pairs that raise inexact, overflow, underflow, divide by
-    /// zero, invalid, and a subnormal operand, in the chains of the MXCSR
-    /// test.
+    /// Returns ten pairs that raise in the host type of the lanes the
+    /// exceptions that the format can raise: inexact, overflow, underflow,
+    /// divide by zero, invalid, and a subnormal operand, in the chains of the
+    /// MXCSR test.
     #[cfg(target_arch = "x86_64")]
     fn exception_pairs() -> [(Self, Self); 10];
 
@@ -133,6 +160,160 @@ where
         .collect()
 }
 
+/// Returns `edges` and their negations as values of a type.
+fn signed<T: Copy + std::ops::BitOr<Output = T>, F>(
+    edges: &[T],
+    sign: T,
+    value: impl Fn(T) -> F,
+) -> Vec<F> {
+    edges
+        .iter()
+        .flat_map(|&bits| [bits, bits | sign])
+        .map(value)
+        .collect()
+}
+
+/// Returns the encodings of `bits`, then six random encodings of 16 bits.
+fn halves_with_random(random: &mut SplitMix64, bits: [u16; 10]) -> Vec<u16> {
+    let mut bits = bits.to_vec();
+    bits.extend(
+        (0..6).map(|_| u16::try_from(random.next_u64() >> 48).expect("the shift keeps 16 bits")),
+    );
+    bits
+}
+
+impl Width for F16 {
+    type Host = Self;
+
+    const SCALES: [i32; 12] = [
+        i32::MIN,
+        -150,
+        -127,
+        -126,
+        -40,
+        -25,
+        -1,
+        0,
+        1,
+        40,
+        127,
+        i32::MAX,
+    ];
+
+    fn bits(self) -> u64 {
+        u64::from(self.to_bits())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn minus_one() -> Self {
+        Self::from_bits(0xBC00)
+    }
+
+    fn pairs(random: &mut SplitMix64) -> Vec<(Self, Self)> {
+        pairs_of(random, Layout::BINARY16, Self::from_bits)
+    }
+
+    fn parameters(random: &mut SplitMix64) -> Vec<Self> {
+        let bits = [
+            0, 0x8000, 0x3C00, 0xBC00, 1, 0x7BFF, 0x7C00, 0xFC00, 0x7E00, 0x7C01,
+        ];
+        halves_with_random(random, bits)
+            .into_iter()
+            .map(Self::from_bits)
+            .collect()
+    }
+
+    fn unary_values() -> Vec<Self> {
+        (0..=u16::MAX).map(Self::from_bits).collect()
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn exception_pairs() -> [(Self, Self); 10] {
+        [
+            (0x3C00, 0x4200),
+            (0x7BFF, 0x7BFF),
+            (0x0400, 0x0400),
+            (0x3C00, 0),
+            (0, 0),
+            (0x7C00, 0xFC00),
+            (0x0001, 0x4000),
+            (0xBC00, 0x3C00),
+            (0x7C01, 0x3C00),
+            (0xC200, 0x8000),
+        ]
+        .map(|(x, y)| (Self::from_bits(x), Self::from_bits(y)))
+    }
+
+    entry_points!();
+    steps_with!(forward);
+}
+
+impl Width for BF16 {
+    type Host = Self;
+
+    const SCALES: [i32; 12] = [
+        i32::MIN,
+        -300,
+        -150,
+        -127,
+        -126,
+        -1,
+        0,
+        1,
+        127,
+        128,
+        277,
+        i32::MAX,
+    ];
+
+    fn bits(self) -> u64 {
+        u64::from(self.to_bits())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn minus_one() -> Self {
+        Self::from_bits(0xBF80)
+    }
+
+    fn pairs(random: &mut SplitMix64) -> Vec<(Self, Self)> {
+        pairs_of(random, Layout::BFLOAT16, Self::from_bits)
+    }
+
+    fn parameters(random: &mut SplitMix64) -> Vec<Self> {
+        let bits = [
+            0, 0x8000, 0x3F80, 0xBF80, 1, 0x7F7F, 0x7F80, 0xFF80, 0x7FC0, 0x7F81,
+        ];
+        halves_with_random(random, bits)
+            .into_iter()
+            .map(Self::from_bits)
+            .collect()
+    }
+
+    fn unary_values() -> Vec<Self> {
+        (0..=u16::MAX).map(Self::from_bits).collect()
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn exception_pairs() -> [(Self, Self); 10] {
+        [
+            (0x3F80, 0x4040),
+            (0x7F7F, 0x7F7F),
+            (0x0DA2, 0x0DA2),
+            (0x3F80, 0),
+            (0, 0),
+            (0x7F80, 0xFF80),
+            (0x0001, 0x4000),
+            (0xBF80, 0x3F80),
+            (0x7F81, 0x3F80),
+            (0xC040, 0x8000),
+        ]
+        .map(|(x, y)| (Self::from_bits(x), Self::from_bits(y)))
+    }
+
+    entry_points!();
+    steps_with!(forward);
+}
+
 impl Width for F32 {
     type Host = f32;
 
@@ -153,6 +334,11 @@ impl Width for F32 {
 
     fn bits(self) -> u64 {
         u64::from(self.to_bits())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn minus_one() -> Self {
+        Self::from_bits(0xBF80_0000)
     }
 
     fn pairs(random: &mut SplitMix64) -> Vec<(Self, Self)> {
@@ -179,7 +365,7 @@ impl Width for F32 {
         bits.into_iter().map(Self::from_bits).collect()
     }
 
-    fn integral_values() -> Vec<Self> {
+    fn unary_values() -> Vec<Self> {
         let edges: [u32; 14] = [
             0x3E80_0000,
             0x3EFF_FFFF,
@@ -196,11 +382,7 @@ impl Width for F32 {
             0x4B00_0000,
             0x4B00_0001,
         ];
-        edges
-            .into_iter()
-            .flat_map(|bits| [bits, bits | 0x8000_0000])
-            .map(Self::from_bits)
-            .collect()
+        signed(&edges, 0x8000_0000, Self::from_bits)
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -220,19 +402,7 @@ impl Width for F32 {
         .map(|(x, y)| (Self::from_bits(x), Self::from_bits(y)))
     }
 
-    fn map<C, E, O>(chain: &C, x: [&[E]; 2], p: [Self; 1], out: &mut [O])
-    where
-        C: Chain<2, 1>,
-        E: Element<Self>,
-        O: Element<Self>,
-    {
-        Self::map(chain, x, p, out);
-    }
-
-    fn evaluate<C: Chain<2, 1>>(chain: &C, x: [Self; 2], p: [Self; 1]) -> Self {
-        Self::evaluate(chain, x, p)
-    }
-
+    entry_points!();
     steps_with!(forward);
 }
 
@@ -258,6 +428,11 @@ impl Width for F64 {
         self.to_bits()
     }
 
+    #[cfg(target_arch = "x86_64")]
+    fn minus_one() -> Self {
+        Self::from_bits(0xBFF0_0000_0000_0000)
+    }
+
     fn pairs(random: &mut SplitMix64) -> Vec<(Self, Self)> {
         pairs_of(random, Layout::BINARY64, Self::from_bits)
     }
@@ -279,7 +454,7 @@ impl Width for F64 {
         bits.into_iter().map(Self::from_bits).collect()
     }
 
-    fn integral_values() -> Vec<Self> {
+    fn unary_values() -> Vec<Self> {
         let edges: [u64; 14] = [
             0x3FD0_0000_0000_0000,
             0x3FDF_FFFF_FFFF_FFFF,
@@ -296,11 +471,7 @@ impl Width for F64 {
             0x4330_0000_0000_0000,
             0x4330_0000_0000_0001,
         ];
-        edges
-            .into_iter()
-            .flat_map(|bits| [bits, bits | 0x8000_0000_0000_0000])
-            .map(Self::from_bits)
-            .collect()
+        signed(&edges, 0x8000_0000_0000_0000, Self::from_bits)
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -320,18 +491,6 @@ impl Width for F64 {
         .map(|(x, y)| (Self::from_bits(x), Self::from_bits(y)))
     }
 
-    fn map<C, E, O>(chain: &C, x: [&[E]; 2], p: [Self; 1], out: &mut [O])
-    where
-        C: Chain<2, 1>,
-        E: Element<Self>,
-        O: Element<Self>,
-    {
-        Self::map(chain, x, p, out);
-    }
-
-    fn evaluate<C: Chain<2, 1>>(chain: &C, x: [Self; 2], p: [Self; 1]) -> Self {
-        Self::evaluate(chain, x, p)
-    }
-
+    entry_points!();
     steps_with!(forward);
 }

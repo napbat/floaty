@@ -1,13 +1,10 @@
 //! The host types of the lanes of a block, `f32` and `f64`, with the
-//! encoding and the constants of their formats, and the binary types of
-//! floaty that a block computes in them.
+//! encoding and the constants of their formats, and the instructions of
+//! their fused multiply-add and square root.
 
+use core::fmt::Debug;
 use core::ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Shl, Sub};
 
-use crate::env::{Env, Mode};
-use crate::float::Float;
-use crate::format::Binary;
-use crate::host::Host;
 use crate::host::environment::{
     block_mul_add_f32, block_mul_add_f64, block_sqrt_f32, block_sqrt_f64,
 };
@@ -17,6 +14,7 @@ use crate::host::environment::{
 /// instructions of the fused multiply-add and the square root.
 pub trait Native:
     Copy
+    + Debug
     + PartialOrd
     + From<i16>
     + Add<Output = Self>
@@ -29,7 +27,7 @@ pub trait Native:
     type Bits: Copy
         + Eq
         + Ord
-        + From<u32>
+        + From<u16>
         + Not<Output = Self::Bits>
         + BitAnd<Output = Self::Bits>
         + BitOr<Output = Self::Bits>
@@ -37,8 +35,6 @@ pub trait Native:
         + Sub<Output = Self::Bits>
         + Shl<u32, Output = Self::Bits>;
 
-    /// The host kind of the format, whose unit the block checks.
-    const HOST: Host;
     /// The fraction bits of the encoding.
     const FRACTION_BITS: u8;
     /// The bias of the exponent field.
@@ -91,7 +87,6 @@ pub trait Native:
 impl Native for f32 {
     type Bits = u32;
 
-    const HOST: Host = Host::Single;
     const FRACTION_BITS: u8 = 23;
     const BIAS: i16 = 127;
     const SIGN: u32 = 0x8000_0000;
@@ -136,7 +131,6 @@ impl Native for f32 {
 impl Native for f64 {
     type Bits = u64;
 
-    const HOST: Host = Host::Double;
     const FRACTION_BITS: u8 = 52;
     const BIAS: i16 = 1023;
     const SIGN: u64 = 0x8000_0000_0000_0000;
@@ -175,53 +169,5 @@ impl Native for f64 {
     unsafe fn block_mul_add(self, multiplier: Self, addend: Self) -> Self {
         // SAFETY: the caller guarantees the fused multiply-add.
         unsafe { block_mul_add_f64(self, multiplier, addend) }
-    }
-}
-
-/// A binary type of floaty that a block computes on the host unit: the
-/// binary32 and binary64 types, in each mode.
-pub trait Value: Copy {
-    /// The host type of the lanes.
-    type Native: Native;
-
-    /// The environment of the mode.
-    const ENV: Env;
-
-    /// Returns the value in the host type, with its bits.
-    fn native(self) -> Self::Native;
-
-    /// Returns the value of the encoding `bits`.
-    fn of_bits(bits: <Self::Native as Native>::Bits) -> Self;
-}
-
-impl<M: Mode> Value for Float<Binary<8>, 32, M> {
-    type Native = f32;
-
-    const ENV: Env = M::ENV;
-
-    #[inline]
-    fn native(self) -> f32 {
-        f32::from_bits(self.to_bits())
-    }
-
-    #[inline]
-    fn of_bits(bits: u32) -> Self {
-        Self::from_bits(bits)
-    }
-}
-
-impl<M: Mode> Value for Float<Binary<11>, 64, M> {
-    type Native = f64;
-
-    const ENV: Env = M::ENV;
-
-    #[inline]
-    fn native(self) -> f64 {
-        f64::from_bits(self.to_bits())
-    }
-
-    #[inline]
-    fn of_bits(bits: u64) -> Self {
-        Self::from_bits(bits)
     }
 }

@@ -1,25 +1,27 @@
-//! Blocks: a chain of binary32 or binary64 steps for each lane of slices,
-//! with one check of the environment and one selection of the instruction
-//! set for the whole call.
+//! Blocks: a chain of binary16, bfloat16, binary32, or binary64 steps for
+//! each lane of slices, with one check of the environment and one selection
+//! of the instruction set for the whole call.
 //!
 //! A [`Chain`] states the steps of one lane once, generic over [`Steps`], so
-//! one chain runs in binary32 and in binary64. [`Float::map`] runs the chain
-//! for each lane of slices, and [`Float::evaluate`] runs it for one lane.
-//! Each step gives the result of its entry point in the mode of the type:
-//! every operation of the format from values of the format to one value of
-//! the format. So a block gives the bits of the same steps one at a time, on
+//! one chain runs in each of the formats. [`Float::map`] runs the chain for
+//! each lane of slices, and [`Float::evaluate`] runs it for one lane. Each
+//! step gives the result of its entry point in the mode of the type: every
+//! operation of the format from values of the format to one value of the
+//! format. So a block gives the bits of the same steps one at a time, on
 //! every host.
 //!
 //! Where the build has a host path, and the mode and the environment allow
 //! it, the steps run as Rust operations on `f32` or `f64` after one check of
-//! the environment, in the instruction set that the processor selects. LLVM
-//! then sees the whole chain and computes many lanes in vector
-//! instructions. A lane whose result is a NaN runs the chain again in the
-//! engine, which selects the NaN by the rule of the mode. So does a lane
-//! with a step that no instruction of the set computes exactly, such as
-//! `exp`, or `mul_add` where the instruction set has no fused multiply-add,
-//! and a lane where a step reads a bit of a NaN that can change a result
-//! that is not a NaN. Elsewhere every lane runs the steps of the type.
+//! the environment, in the instruction set that the processor selects.
+//! binary16 and bfloat16 compute each step in `f32` and round it to their
+//! format, as their host paths do. LLVM then sees the whole chain and
+//! computes many lanes in vector instructions. A lane whose result is a NaN
+//! runs the chain again in the engine, which selects the NaN by the rule of
+//! the mode. So does a lane with a step that no instruction of the set
+//! computes exactly, such as `exp`, or `mul_add` where the instruction set
+//! has no fused multiply-add, and a lane where a step reads a bit of a NaN
+//! that can change a result that is not a NaN. Elsewhere every lane runs the
+//! steps of the type.
 //!
 //! ```
 //! use floaty::block::{Chain, Steps};
@@ -61,6 +63,12 @@ use crate::host;
 use crate::lanes::Element;
 use crate::sealed::Sealed;
 
+/// The binary16 type of the mode `M`.
+type Half<M> = Float<Binary<5>, 16, M>;
+
+/// The bfloat16 type of the mode `M`.
+type BFloat<M> = Float<Binary<8>, 16, M>;
+
 /// The binary32 type of the mode `M`.
 type Single<M> = Float<Binary<8>, 32, M>;
 
@@ -70,9 +78,9 @@ type Double<M> = Float<Binary<11>, 64, M>;
 /// The steps of a [`Chain`]: every operation of a binary format from values
 /// of the format to one value of the format, each rounded once to nearest
 /// even as its entry point rounds. Each step names the method of [`Float`]
-/// that gives its result. The binary32 and binary64 types of floaty
-/// implement the trait, and so do the lane types of the host path of a
-/// block. The trait is sealed.
+/// that gives its result. The binary16, bfloat16, binary32, and binary64
+/// types of floaty implement the trait, and so do the lane types of the
+/// host path of a block. The trait is sealed.
 pub trait Steps:
     Sealed
     + Copy
@@ -271,7 +279,7 @@ macro_rules! binary_steps {
     };
 }
 
-binary_steps!(Single, Double);
+binary_steps!(Half, BFloat, Single, Double);
 
 /// The steps of one lane of a block, over `IN` values of the lane and `P`
 /// parameters of the whole call.
@@ -279,6 +287,13 @@ binary_steps!(Single, Double);
 /// A chain is a function of its values and parameters. It must reach its
 /// result only through the steps of `S`: a block runs it once on the host
 /// unit, and again in the engine for a lane that needs it.
+///
+/// LLVM vectorizes the loop of a block only where it inlines `apply` into
+/// the loop. Mark `apply` `#[inline(always)]` in a long chain, and in a
+/// chain of binary16 steps, which round in more instructions: the binary16
+/// chain `sqrt(|x * a + b|) / y - c` of 1,280 values took 25,145 ns in
+/// x86-64-v3 on a Ryzen AI Max+ 395 without the attribute, and 3,238 ns
+/// with it.
 pub trait Chain<const IN: usize, const P: usize> {
     /// Returns the result of a lane from its values `x` and the parameters
     /// `p`.
@@ -340,7 +355,7 @@ macro_rules! blocks {
     };
 }
 
-blocks!(Single, Double);
+blocks!(Half, BFloat, Single, Double);
 
 /// Writes the result of `chain` in the steps of the type into each element
 /// of `out` that `select` accepts.
