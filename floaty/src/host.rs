@@ -8,7 +8,8 @@
 //! `None`. The slice kernels and the elementwise slice operations of `Lanes`,
 //! and blocks, also take a larger instruction set that the processor has, in
 //! a build with the feature `std`, as `packed::dispatch` states. `block`
-//! runs the steps of a chain as Rust operations on `f32`, as it states.
+//! runs the steps of a chain as Rust operations on `f32` and `f64`, as it
+//! states.
 //!
 //! A path serves only entry points that return no flags, in a mode that
 //! `compatible` in `paths` accepts. That function names every field of
@@ -44,6 +45,24 @@ pub fn floats_of_singles<M: Mode>(values: &[f32]) -> &[Float<Binary<8>, 32, M>] 
 #[must_use]
 pub fn floats_of_singles_mut<M: Mode>(values: &mut [f32]) -> &mut [Float<Binary<8>, 32, M>] {
     // SAFETY: as in `floats_of_singles`. The slice keeps the unique borrow.
+    unsafe { core::slice::from_raw_parts_mut(values.as_mut_ptr().cast(), values.len()) }
+}
+
+/// Returns host binary64 values as binary64 values of floaty, which have
+/// their layout. Each value keeps its bits.
+#[must_use]
+pub fn floats_of_doubles<M: Mode>(values: &[f64]) -> &[Float<Binary<11>, 64, M>] {
+    // SAFETY: `Float` is `repr(transparent)` over its encoding, a `u64`,
+    // which has the size and the alignment of an `f64`. Every bit pattern is
+    // a binary64 encoding, and the slice keeps the length and the lifetime.
+    unsafe { core::slice::from_raw_parts(values.as_ptr().cast(), values.len()) }
+}
+
+/// Returns host binary64 values as binary64 values of floaty to write, as
+/// `floats_of_doubles` returns them to read.
+#[must_use]
+pub fn floats_of_doubles_mut<M: Mode>(values: &mut [f64]) -> &mut [Float<Binary<11>, 64, M>] {
+    // SAFETY: as in `floats_of_doubles`. The slice keeps the unique borrow.
     unsafe { core::slice::from_raw_parts_mut(values.as_mut_ptr().cast(), values.len()) }
 }
 
@@ -281,7 +300,8 @@ pub trait Isa: Sealed {
     /// integers, with the integer indefinite `i32::MIN` in a lane that the
     /// scalar conversion must decide.
     const INTEGERS: bool;
-    /// `true` when the instruction set has a binary32 fused multiply-add.
+    /// `true` when the instruction set has a binary32 and binary64 fused
+    /// multiply-add.
     const FUSED: bool;
 
     /// Returns `f()`, computed with the features of the instruction set.
@@ -532,28 +552,25 @@ mod none {
     /// `None`.
     pub mod block {
         use crate::block::Chain;
-        use crate::env::Mode;
-        use crate::float::Float;
-        use crate::format::Binary;
 
         /// Returns `None`: this build has no host path.
         #[inline]
-        pub fn map<C: Chain<IN, P>, M: Mode, const IN: usize, const P: usize>(
+        pub fn map<C: Chain<IN, P>, F, const IN: usize, const P: usize>(
             _chain: &C,
-            _x: [&[Float<Binary<8>, 32, M>]; IN],
-            _p: [Float<Binary<8>, 32, M>; P],
-            _out: &mut [Float<Binary<8>, 32, M>],
+            _x: [&[F]; IN],
+            _p: [F; P],
+            _out: &mut [F],
         ) -> Option<bool> {
             None
         }
 
         /// Returns `None`: this build has no host path.
         #[inline]
-        pub fn evaluate<C: Chain<IN, P>, M: Mode, const IN: usize, const P: usize>(
+        pub fn evaluate<C: Chain<IN, P>, F, const IN: usize, const P: usize>(
             _chain: &C,
-            _x: [Float<Binary<8>, 32, M>; IN],
-            _p: [Float<Binary<8>, 32, M>; P],
-        ) -> Option<Float<Binary<8>, 32, M>> {
+            _x: [F; IN],
+            _p: [F; P],
+        ) -> Option<F> {
             None
         }
     }

@@ -1,28 +1,30 @@
-//! Blocks: `F32::map` and `F32::evaluate` give the results of the steps of
-//! each chain one at a time, through their `_with` methods in the default
-//! mode. The chains take every step of `Steps`, each rounding direction,
-//! and NaNs that the host can hold with other bits than the engine, and that
-//! a later step drops. The operands are every pair of the boundary encodings
-//! of binary32, random pairs, and values next to integers and ties, with
-//! boundary and random parameters, in slices of `F32` and of `f32` and of
-//! each length. On x86-64, a block under each MXCSR control of the host-path
-//! tests gives the results of the engine, and no unmasked exception traps:
-//! the check of the environment comes before every step.
+//! Blocks: `map` and `evaluate` of `F32` and of `F64` give the results of
+//! the steps of each chain one at a time, through their `_with` methods in
+//! the default mode. The chains take every step of `Steps`, each rounding
+//! direction, and NaNs that the host can hold with other bits than the
+//! engine, and that a later step drops. The operands are every pair of the
+//! boundary encodings of the format, random pairs, and values next to
+//! integers and ties, with boundary and random parameters, in slices of the
+//! type and of its host type and of each length. On x86-64, a block under
+//! each MXCSR control of the host-path tests gives the results of the
+//! engine, and no unmasked exception traps: the check of the environment
+//! comes before every step.
+
+mod width;
 
 use std::fmt::Debug;
 
 use floaty::block::{Chain, Steps};
-use floaty::{Env, F32, Rounding};
-use floaty_verify::encodings::Layout;
+use floaty::{Env, F32, F64, Rounding};
 use floaty_verify::random::SplitMix64;
 
-use super::operands::{boundary_pairs, random_pairs};
+use self::width::Width;
 
-/// The steps one at a time take the default mode of `F32`.
+/// The steps one at a time take the default mode of `F32` and `F64`.
 const IEEE: Env = Env::IEEE;
 
 /// The steps of a chain one at a time, from its values and parameter.
-type OneAtATime<'a> = &'a dyn Fn(F32, F32, F32) -> F32;
+type OneAtATime<'a, T> = &'a dyn Fn(T, T, T) -> T;
 
 /// `(x + y) * x - y / x`: the four operators.
 #[derive(Debug)]
@@ -35,7 +37,7 @@ impl Chain<2, 1> for Arithmetic {
 }
 
 /// `Arithmetic` one step at a time.
-fn arithmetic(x: F32, y: F32, _p: F32) -> F32 {
+fn arithmetic<T: Width>(x: T, y: T, _p: T) -> T {
     let product = x.add_with(y, IEEE).0.mul_with(x, IEEE).0;
     product.sub_with(y.div_with(x, IEEE).0, IEEE).0
 }
@@ -52,7 +54,7 @@ impl Chain<2, 1> for Fused {
 }
 
 /// `Fused` one step at a time.
-fn fused(x: F32, y: F32, p: F32) -> F32 {
+fn fused<T: Width>(x: T, y: T, p: T) -> T {
     -x.mul_add_with(y, p, IEEE).0.abs().sqrt_with(IEEE).0
 }
 
@@ -69,7 +71,7 @@ impl Chain<2, 1> for Order {
 }
 
 /// `Order` one step at a time.
-fn order(x: F32, y: F32, p: F32) -> F32 {
+fn order<T: Width>(x: T, y: T, p: T) -> T {
     let low = x.minimum_with(y, IEEE).0.maximum_number_with(p, IEEE).0;
     low.minimum_number_with(-x, IEEE).0.maximum_with(y, IEEE).0
 }
@@ -87,7 +89,7 @@ impl Chain<2, 1> for Dropped {
 }
 
 /// `Dropped` one step at a time.
-fn dropped(x: F32, y: F32, p: F32) -> F32 {
+fn dropped<T: Width>(x: T, y: T, p: T) -> T {
     let quotient = x.div_with(y, IEEE).0;
     let larger = quotient
         .maximum_number_with(x.mul_add_with(y, p, IEEE).0, IEEE)
@@ -142,7 +144,7 @@ impl Pick {
     }
 
     /// Returns the step of `x` and `y` through its `_with` method.
-    fn with(self, x: F32, y: F32) -> F32 {
+    fn with<T: Width>(self, x: T, y: T) -> T {
         let (result, _) = match self {
             Self::Minimum => x.minimum_with(y, IEEE),
             Self::Maximum => x.maximum_with(y, IEEE),
@@ -225,7 +227,7 @@ impl Chain<2, 1> for Step {
 
 impl Step {
     /// Returns the steps of the chain one at a time.
-    fn one_at_a_time(self, x: F32, y: F32, p: F32) -> F32 {
+    fn one_at_a_time<T: Width>(self, x: T, y: T, p: T) -> T {
         match self {
             Self::CopySign => x.copy_sign(y.div_with(p, IEEE).0),
             Self::NextUp => x.next_up_with(IEEE).0,
@@ -270,10 +272,10 @@ const ROUNDINGS: [Rounding; 8] = [
     Rounding::ToOdd,
 ];
 
-/// Returns the chains of one step: each step, each rounding direction,
-/// scales at both ends of the binary32 powers of two and past them, and
-/// each minimum and maximum step with numbers and with NaNs.
-fn steps() -> Vec<Step> {
+/// Returns the chains of one step of `T`: each step, each rounding
+/// direction, the scales of `T`, and each minimum and maximum step with
+/// numbers and with NaNs.
+fn steps<T: Width>() -> Vec<Step> {
     let mut steps = vec![
         Step::CopySign,
         Step::NextUp,
@@ -288,23 +290,7 @@ fn steps() -> Vec<Step> {
         Step::ReciprocalSqrt,
     ];
     steps.extend(ROUNDINGS.map(Step::IntegralBy));
-    steps.extend(
-        [
-            i32::MIN,
-            -300,
-            -150,
-            -127,
-            -126,
-            -1,
-            0,
-            1,
-            127,
-            128,
-            277,
-            i32::MAX,
-        ]
-        .map(Step::ScaleB),
-    );
+    steps.extend(T::SCALES.map(Step::ScaleB));
     steps.extend(
         [0, 3]
             .into_iter()
@@ -318,78 +304,56 @@ fn steps() -> Vec<Step> {
     steps
 }
 
-/// Returns pairs of values next to an integer or a tie, of both signs, for
-/// the integral steps: quarters, halves and their neighbors, and values
-/// next to 2^23, from which every value is integral.
-fn integral_pairs() -> Vec<(u32, u32)> {
-    let edges: [u32; 14] = [
-        0x3E80_0000,
-        0x3EFF_FFFF,
-        0x3F00_0000,
-        0x3F00_0001,
-        0x3F40_0000,
-        0x3F7F_FFFF,
-        0x3FC0_0000,
-        0x4020_0000,
-        0x4060_0000,
-        0x4A80_0001,
-        0x4AFF_FFFE,
-        0x4AFF_FFFF,
-        0x4B00_0000,
-        0x4B00_0001,
-    ];
-    edges
-        .into_iter()
-        .flat_map(|bits| [bits, bits | 0x8000_0000])
-        .map(|x| (x, 0x3F80_0000))
-        .collect()
-}
-
 /// Checks the block of `chain` against `steps`, one step at a time, for
-/// each pair of `pairs` and the parameter `p`: `map` over slices of `F32`
-/// and of `f32`, of every length up to the pairs, and `evaluate` of each
-/// pair.
-fn check<C: Chain<2, 1> + Debug>(chain: &C, steps: OneAtATime<'_>, pairs: &[(u32, u32)], p: F32) {
-    let x: Vec<F32> = pairs.iter().map(|&(x, _)| F32::from_bits(x)).collect();
-    let y: Vec<F32> = pairs.iter().map(|&(_, y)| F32::from_bits(y)).collect();
-    let expected: Vec<u32> = x
+/// each pair of `pairs` and the parameter `p`: `map` over slices of `T`
+/// and of its host type, of every length up to the pairs, and `evaluate`
+/// of each pair.
+fn check<T: Width, C: Chain<2, 1> + Debug>(
+    chain: &C,
+    steps: OneAtATime<'_, T>,
+    pairs: &[(T, T)],
+    p: T,
+) {
+    let x: Vec<T> = pairs.iter().map(|&(x, _)| x).collect();
+    let y: Vec<T> = pairs.iter().map(|&(_, y)| y).collect();
+    let expected: Vec<u64> = x
         .iter()
         .zip(&y)
-        .map(|(&x, &y)| steps(x, y, p).to_bits())
+        .map(|(&x, &y)| steps(x, y, p).bits())
         .collect();
     let context = |index: usize| {
         format!(
             "{chain:?} {:#x} {:#x} {:#x}",
-            x[index].to_bits(),
-            y[index].to_bits(),
-            p.to_bits()
+            x[index].bits(),
+            y[index].bits(),
+            p.bits()
         )
     };
     for length in [0, 1, 2, 7, 8, 9, 31, 32, 33, 100, pairs.len()] {
         let length = length.min(pairs.len());
-        let mut out = vec![F32::from_bits(0); length];
-        F32::map(chain, [&x[..length], &y[..length]], [p], &mut out[..]);
+        let mut out = vec![p; length];
+        T::map(chain, [&x[..length], &y[..length]], [p], &mut out[..]);
         for (index, result) in out.iter().enumerate() {
-            assert_eq!(result.to_bits(), expected[index], "map {}", context(index));
+            assert_eq!(result.bits(), expected[index], "map {}", context(index));
         }
     }
     let hosts =
-        |values: &[F32]| -> Vec<f32> { values.iter().map(|&value| f32::from(value)).collect() };
+        |values: &[T]| -> Vec<T::Host> { values.iter().map(|&value| value.into()).collect() };
     let (host_x, host_y) = (hosts(&x), hosts(&y));
-    let mut host_out = vec![0.0_f32; pairs.len()];
-    F32::map(chain, [&host_x[..], &host_y[..]], [p], &mut host_out[..]);
-    for (index, result) in host_out.iter().enumerate() {
+    let mut host_out = vec![T::Host::default(); pairs.len()];
+    T::map(chain, [&host_x[..], &host_y[..]], [p], &mut host_out[..]);
+    for (index, &result) in host_out.iter().enumerate() {
         assert_eq!(
-            result.to_bits(),
+            T::from(result).bits(),
             expected[index],
-            "map f32 {}",
+            "map host {}",
             context(index)
         );
     }
     for (index, (&x, &y)) in x.iter().zip(&y).enumerate() {
-        let result = F32::evaluate(chain, [x, y], [p]);
+        let result = T::evaluate(chain, [x, y], [p]);
         assert_eq!(
-            result.to_bits(),
+            result.bits(),
             expected[index],
             "evaluate {}",
             context(index)
@@ -397,40 +361,11 @@ fn check<C: Chain<2, 1> + Debug>(chain: &C, steps: OneAtATime<'_>, pairs: &[(u32
     }
 }
 
-/// Returns the operand pairs: every pair of the boundary encodings, and
-/// random pairs.
-fn pairs(random: &mut SplitMix64) -> Vec<(u32, u32)> {
-    let mut pairs = boundary_pairs::<u32>(Layout::BINARY32);
-    pairs.extend(random_pairs::<u32>(random, Layout::BINARY32, 4_000));
-    pairs
-}
-
-/// Returns the parameters: zeros, ones, the extremes, infinities, NaNs, and
-/// random encodings.
-fn parameters(random: &mut SplitMix64) -> Vec<F32> {
-    let mut bits = vec![
-        0,
-        0x8000_0000,
-        0x3F80_0000,
-        0xBF80_0000,
-        1,
-        0x7F7F_FFFF,
-        0x7F80_0000,
-        0xFF80_0000,
-        0x7FC0_0000,
-        0x7F80_0001,
-    ];
-    bits.extend(
-        (0..6).map(|_| u32::try_from(random.next_u64() >> 32).expect("the shift keeps 32 bits")),
-    );
-    bits.into_iter().map(F32::from_bits).collect()
-}
-
-#[test]
-fn blocks_give_the_steps_one_at_a_time() {
-    let mut random = SplitMix64::new(0xB10C);
-    let pairs = pairs(&mut random);
-    for p in parameters(&mut random) {
+/// Checks the chains of the four kinds of steps in `T`.
+fn check_chains<T: Width>(seed: u64) {
+    let mut random = SplitMix64::new(seed);
+    let pairs = T::pairs(&mut random);
+    for p in T::parameters(&mut random) {
         check(&Arithmetic, &arithmetic, &pairs, p);
         check(&Fused, &fused, &pairs, p);
         check(&Order, &order, &pairs, p);
@@ -438,13 +373,14 @@ fn blocks_give_the_steps_one_at_a_time() {
     }
 }
 
-#[test]
-fn value_steps_give_the_steps_one_at_a_time() {
-    let mut random = SplitMix64::new(0x57E9);
-    let mut pairs = pairs(&mut random);
-    pairs.extend(integral_pairs());
-    let parameters = parameters(&mut random);
-    for step in steps() {
+/// Checks the chains of one step in `T`, with values next to integers and
+/// ties for the integral steps.
+fn check_value_steps<T: Width>(seed: u64) {
+    let mut random = SplitMix64::new(seed);
+    let mut pairs = T::pairs(&mut random);
+    pairs.extend(T::integral_values().into_iter().map(|value| (value, value)));
+    let parameters = T::parameters(&mut random);
+    for step in steps::<T>() {
         let count = if step.reads_parameter() {
             parameters.len()
         } else {
@@ -454,6 +390,18 @@ fn value_steps_give_the_steps_one_at_a_time() {
             check(&step, &|x, y, p| step.one_at_a_time(x, y, p), &pairs, p);
         }
     }
+}
+
+#[test]
+fn blocks_give_the_steps_one_at_a_time() {
+    check_chains::<F32>(0xB10C);
+    check_chains::<F64>(0xB10C);
+}
+
+#[test]
+fn value_steps_give_the_steps_one_at_a_time() {
+    check_value_steps::<F32>(0x57E9);
+    check_value_steps::<F64>(0x57E9);
 }
 
 #[test]
@@ -475,23 +423,17 @@ fn a_block_rejects_slices_of_other_lengths() {
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn blocks_read_mxcsr_before_their_steps() {
-    // Inexact, overflow, underflow, divide by zero, invalid, and a
-    // subnormal operand, in each chain.
-    let pairs: [(u32, u32); 10] = [
-        (0x3F80_0000, 0x4040_0000),
-        (0x7F7F_FFFF, 0x7F7F_FFFF),
-        (0x0DA2_4260, 0x0DA2_4260),
-        (0x3F80_0000, 0),
-        (0, 0),
-        (0x7F80_0000, 0xFF80_0000),
-        (0x0000_0001, 0x4000_0000),
-        (0xBF80_0000, 0x3F80_0000),
-        (0x7F80_0001, 0x3F80_0000),
-        (0xC040_0000, 0x8000_0000),
-    ];
-    let x = pairs.map(|(x, _)| F32::from_bits(x));
-    let y = pairs.map(|(_, y)| F32::from_bits(y));
-    let p = F32::from_bits(0xBF80_0000);
+    mxcsr_comes_first::<F32>();
+    mxcsr_comes_first::<F64>();
+}
+
+/// Checks the chains of `blocks_read_mxcsr_before_their_steps` in `T`.
+#[cfg(target_arch = "x86_64")]
+fn mxcsr_comes_first<T: Width>() {
+    let pairs = T::exception_pairs();
+    let x = pairs.map(|(x, _)| x);
+    let y = pairs.map(|(_, y)| y);
+    let p = T::from(T::Host::from(-1_i8));
     under_each_control(&Arithmetic, &arithmetic, &x, &y, p);
     under_each_control(&Fused, &fused, &x, &y, p);
     under_each_control(&Order, &order, &x, &y, p);
@@ -501,7 +443,8 @@ fn blocks_read_mxcsr_before_their_steps() {
         Step::NextUp,
         Step::Integral,
         Step::IntegralBy(Rounding::TiesToAway),
-        Step::ScaleB(-126),
+        // The least scale with a normal power of two.
+        Step::ScaleB(T::SCALES[4]),
         Step::LogB,
         Step::Exp,
         Step::Pick(Pick::MinimumMagnitude),
@@ -515,34 +458,34 @@ fn blocks_read_mxcsr_before_their_steps() {
 /// Checks `map` of `chain` and `evaluate` of its first lane against
 /// `steps`, under each MXCSR control of the host-path tests.
 #[cfg(target_arch = "x86_64")]
-fn under_each_control<C: Chain<2, 1> + Debug>(
+fn under_each_control<T: Width, C: Chain<2, 1> + Debug>(
     chain: &C,
-    steps: OneAtATime<'_>,
-    x: &[F32; 10],
-    y: &[F32; 10],
-    p: F32,
+    steps: OneAtATime<'_, T>,
+    x: &[T; 10],
+    y: &[T; 10],
+    p: T,
 ) {
     use floaty_verify::x86::{MXCSR_HOST_PATH_CONTROLS, with_mxcsr};
 
     for control in MXCSR_HOST_PATH_CONTROLS {
-        let mut out = [F32::from_bits(0); 10];
+        let mut out = [p; 10];
         let first = with_mxcsr(control, || {
-            F32::map(chain, [&x[..], &y[..]], [p], &mut out[..]);
-            F32::evaluate(chain, [x[0], y[0]], [p])
+            T::map(chain, [&x[..], &y[..]], [p], &mut out[..]);
+            T::evaluate(chain, [x[0], y[0]], [p])
         });
         assert_eq!(
-            first.to_bits(),
-            steps(x[0], y[0], p).to_bits(),
+            first.bits(),
+            steps(x[0], y[0], p).bits(),
             "{chain:?} evaluate under {control:#x}"
         );
         for (index, result) in out.iter().enumerate() {
             let expected = steps(x[index], y[index], p);
             assert_eq!(
-                result.to_bits(),
-                expected.to_bits(),
+                result.bits(),
+                expected.bits(),
                 "{chain:?} {:#x} {:#x} under {control:#x}",
-                x[index].to_bits(),
-                y[index].to_bits()
+                x[index].bits(),
+                y[index].bits()
             );
         }
     }

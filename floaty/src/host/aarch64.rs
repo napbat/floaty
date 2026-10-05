@@ -174,27 +174,53 @@ pub fn mul_add_f32(left: f32, right: f32, addend: f32) -> Option<f32> {
 }
 
 /// Returns the square root of a binary32 value for the steps of a block, by
-/// an operation that LLVM sees: `FSQRT`.
+/// an operation that LLVM sees: `FSQRT`. LLVM does not vectorize the
+/// intrinsic, so a loop of steps with a square root stays scalar.
 #[inline]
-pub fn block_sqrt(value: f32) -> f32 {
+pub fn block_sqrt_f32(value: f32) -> f32 {
     use core::arch::aarch64::{vdup_n_f32, vget_lane_f32, vsqrt_f32};
     // SAFETY: the intrinsics need NEON, which every AArch64 target has. Both
     // lanes hold the value, so lane 0 holds its square root.
     unsafe { vget_lane_f32::<0>(vsqrt_f32(vdup_n_f32(value))) }
 }
 
-/// Returns `left * right + addend`, rounded once, for the steps of a block,
-/// by an operation that LLVM sees: `FMADD`, or `FMLA` in a vectorized loop.
+/// Returns the square root of a binary64 value for the steps of a block, by
+/// an operation that LLVM sees: `FSQRT`. LLVM does not vectorize the
+/// intrinsic, so a loop of steps with a square root stays scalar.
+#[inline]
+pub fn block_sqrt_f64(value: f64) -> f64 {
+    use core::arch::aarch64::{vdup_n_f64, vget_lane_f64, vsqrt_f64};
+    // SAFETY: the intrinsics need NEON, which every AArch64 target has.
+    unsafe { vget_lane_f64::<0>(vsqrt_f64(vdup_n_f64(value))) }
+}
+
+/// Returns `left * right + addend` of binary32 values, rounded once, for the
+/// steps of a block, by an operation that LLVM sees: `FMADD`, or `FMLA` in a
+/// vectorized loop.
 ///
 /// # Safety
 ///
 /// None beyond the call: every AArch64 processor has the instruction. The
 /// function is unsafe as on x86, where a processor can lack FMA.
 #[inline]
-pub unsafe fn block_mul_add(left: f32, right: f32, addend: f32) -> f32 {
+pub unsafe fn block_mul_add_f32(left: f32, right: f32, addend: f32) -> f32 {
     use core::arch::aarch64::{vdup_n_f32, vfmas_lane_f32};
     // SAFETY: the intrinsics need NEON, which every AArch64 target has.
     unsafe { vfmas_lane_f32::<0>(addend, left, vdup_n_f32(right)) }
+}
+
+/// Returns `left * right + addend` of binary64 values, rounded once, for the
+/// steps of a block, by an operation that LLVM sees: `FMADD`, or `FMLA` in a
+/// vectorized loop.
+///
+/// # Safety
+///
+/// None beyond the call, as for `block_mul_add_f32`.
+#[inline]
+pub unsafe fn block_mul_add_f64(left: f64, right: f64, addend: f64) -> f64 {
+    use core::arch::aarch64::{vdup_n_f64, vfmad_lane_f64};
+    // SAFETY: the intrinsics need NEON, which every AArch64 target has.
+    unsafe { vfmad_lane_f64::<0>(addend, left, vdup_n_f64(right)) }
 }
 
 /// Returns `left * right + addend`, rounded once, by `FMADD`.

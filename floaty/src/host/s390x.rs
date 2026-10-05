@@ -197,19 +197,26 @@ pub fn mul_add_f32(left: f32, right: f32, addend: f32) -> Option<f32> {
 /// `SQEBR`. LLVM does not see the instruction, and the build has no vector
 /// form of the steps, so a loop of steps stays scalar.
 #[inline]
-pub fn block_sqrt(value: f32) -> f32 {
+pub fn block_sqrt_f32(value: f32) -> f32 {
     sqrt_f32(value)
 }
 
-/// Returns `left * right + addend`, rounded once, for the steps of a block,
-/// by `MAEBR`, as `block_sqrt` takes `SQEBR`.
+/// Returns the square root of a binary64 value for the steps of a block, by
+/// `SQDBR`, as `block_sqrt_f32` takes `SQEBR`.
+#[inline]
+pub fn block_sqrt_f64(value: f64) -> f64 {
+    sqrt_f64(value)
+}
+
+/// Returns `left * right + addend` of binary32 values, rounded once, for the
+/// steps of a block, by `MAEBR`, as `block_sqrt_f32` takes `SQEBR`.
 ///
 /// # Safety
 ///
 /// None beyond the call: every s390x processor has the instruction. The
 /// function is unsafe as on x86, where a processor can lack FMA.
 #[inline]
-pub unsafe fn block_mul_add(left: f32, right: f32, addend: f32) -> f32 {
+pub unsafe fn block_mul_add_f32(left: f32, right: f32, addend: f32) -> f32 {
     maebr(left, right, addend)
 }
 
@@ -227,6 +234,17 @@ fn madbr(left: f64, right: f64, mut addend: f64) -> f64 {
 #[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack FMA.
 pub fn mul_add_f64(left: f64, right: f64, addend: f64) -> Option<f64> {
     Some(madbr(left, right, addend))
+}
+
+/// Returns `left * right + addend` of binary64 values, rounded once, for the
+/// steps of a block, by `MADBR`.
+///
+/// # Safety
+///
+/// None beyond the call, as for `block_mul_add_f32`.
+#[inline]
+pub unsafe fn block_mul_add_f64(left: f64, right: f64, addend: f64) -> f64 {
+    madbr(left, right, addend)
 }
 
 /// Returns a binary16 value widened exactly to binary32, by the integer

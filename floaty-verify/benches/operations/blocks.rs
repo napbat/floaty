@@ -1,10 +1,13 @@
-//! The table of blocks, in nanoseconds per vector of 1,280 values.
+//! The tables of blocks, in nanoseconds per vector of 1,280 values.
 //!
-//! Each row compares a host `f32` loop of the same steps, the views of
-//! `floaty::elementwise` where they express the chain, `F32::map` of the
-//! chain, and a loop of the scalar operations of `F32`, one value at a time.
-//! A fused multiply-add has no view, and its host loop calls the `fmaf` of
-//! the C library in a build without FMA, so those rows have no such cell.
+//! Each row of the binary32 table compares a host `f32` loop of the same
+//! steps, the views of `floaty::elementwise` where they express the chain,
+//! `F32::map` of the chain, and a loop of the scalar operations of `F32`,
+//! one value at a time. A fused multiply-add has no view, and its host loop
+//! calls the `fmaf` of the C library in a build without FMA, so those rows
+//! have no such cell. The binary64 table runs the same chains in a host
+//! `f64` loop, `F64::map`, and the scalar operations of `F64`. The views
+//! take only binary32.
 
 use std::hint::black_box;
 
@@ -12,14 +15,19 @@ use floaty::block::{Chain, Steps};
 use floaty::elementwise::{
     Difference, MaximumNumber, MinimumNumber, Product, RoundToIntegral, Splat, Sum,
 };
-use floaty::{F32, Lanes, Rounding};
+use floaty::{F32, F64, Lanes, Rounding};
 use floaty_verify::random::SplitMix64;
 
 use super::{Table, measure};
 
-/// The columns of the table.
+/// The columns of the binary32 table.
 const COLUMNS: Table<4> = Table {
     columns: ["host", "views x 32", "block", "scalar F32"],
+};
+
+/// The columns of the binary64 table.
+const DOUBLE_COLUMNS: Table<3> = Table {
+    columns: ["host", "block", "scalar F64"],
 };
 
 /// The values of a vector.
@@ -107,7 +115,7 @@ fn vectors(seed: u64) -> Vec<Vec<f32>> {
 
 /// Measures one call of `operation` per pair of vectors, cycling through
 /// the vectors, in nanoseconds per call.
-fn per_vector(vectors: &[Vec<f32>], mut operation: impl FnMut(&[f32], &[f32])) -> f64 {
+fn per_vector<T>(vectors: &[Vec<T>], mut operation: impl FnMut(&[T], &[T])) -> f64 {
     measure(|| {
         for (x, y) in vectors
             .iter()
@@ -122,14 +130,61 @@ fn per_vector(vectors: &[Vec<f32>], mut operation: impl FnMut(&[f32], &[f32])) -
 
 /// One measured operation on two vectors, or `None` for a cell that the row
 /// does not have.
-type Cell<'a> = Option<&'a mut dyn FnMut(&[f32], &[f32])>;
+type Cell<'a, T> = Option<&'a mut dyn FnMut(&[T], &[T])>;
 
-/// Measures the cells of one row that it has.
-fn row(name: &str, vectors: &[Vec<f32>], cells: [Cell<'_>; 4]) {
+/// Measures the cells of one row of the binary32 table that it has.
+fn row(name: &str, vectors: &[Vec<f32>], cells: [Cell<'_, f32>; 4]) {
     COLUMNS.row(
         name,
         cells.map(|cell| cell.map(|operation| per_vector(vectors, operation))),
     );
+}
+
+/// Measures one row of the binary64 table: `host`, where the row has a host
+/// loop, `F64::map` of `chain`, and `chain` in the scalar steps of `F64`.
+/// The chain takes the first `IN` of the two vectors, so `IN` is 1 or 2.
+fn double_row<C: Chain<IN, P>, const IN: usize, const P: usize>(
+    name: &str,
+    vectors: &[Vec<f64>],
+    chain: &C,
+    p: [F64; P],
+    host: Cell<'_, f64>,
+) {
+    let mut block_out = vec![0.0_f64; DIMENSION];
+    let mut block = |x: &[f64], y: &[f64]| {
+        let inputs = [x, y];
+        let x: [&[f64]; IN] = core::array::from_fn(|index| inputs[index]);
+        F64::map(chain, x, p, &mut block_out[..]);
+    };
+    let mut scalar_out = vec![0.0_f64; DIMENSION];
+    let mut scalar = |x: &[f64], y: &[f64]| {
+        let inputs = [x, y];
+        for (lane, out) in scalar_out.iter_mut().enumerate() {
+            let values = core::array::from_fn(|index| F64::from(inputs[index][lane]));
+            *out = f64::from(chain.apply::<F64>(values, p));
+        }
+        black_box(&scalar_out);
+    };
+    DOUBLE_COLUMNS.row(
+        name,
+        [
+            host.map(|operation| per_vector(vectors, operation)),
+            Some(per_vector(vectors, &mut block)),
+            Some(per_vector(vectors, &mut scalar)),
+        ],
+    );
+}
+
+/// Returns a host loop that writes `step` of each pair of values of two
+/// vectors.
+fn host_loop(step: impl Fn(f64, f64) -> f64) -> impl FnMut(&[f64], &[f64]) {
+    let mut out = vec![0.0_f64; DIMENSION];
+    move |x: &[f64], y: &[f64]| {
+        for (o, (&x, &y)) in out.iter_mut().zip(x.iter().zip(y)) {
+            *o = step(x, y);
+        }
+        black_box(&out);
+    }
 }
 
 /// Measures the k-means update, each step rounded.
@@ -355,7 +410,67 @@ fn score_rows(vectors: &[Vec<f32>]) {
     );
 }
 
-/// Prints the table.
+/// Prints the binary64 table, of the vectors of the binary32 table.
+fn double_table(vectors: &[Vec<f32>]) {
+    let vectors: Vec<Vec<f64>> = vectors
+        .iter()
+        .map(|vector| vector.iter().map(|&value| f64::from(value)).collect())
+        .collect();
+    println!();
+    println!("Blocks in binary64, nanoseconds per vector of {DIMENSION}.");
+    println!();
+    DOUBLE_COLUMNS.header("Chain");
+    let (keep, eta) = (0.996_093_75, 0.003_906_25);
+    double_row(
+        "update x * keep + y * eta",
+        &vectors,
+        &Update,
+        [keep, eta].map(F64::from),
+        Some(&mut host_loop(|x, y| x * keep + y * eta)),
+    );
+    double_row(
+        "update fused",
+        &vectors,
+        &FusedUpdate,
+        [keep, eta].map(F64::from),
+        None,
+    );
+    let (mean, inverse, gamma, beta) = (0.5, 1.5, 0.75, -0.25);
+    double_row(
+        "normalize (x - mean) * inverse * gamma + beta",
+        &vectors,
+        &Normalize,
+        [mean, inverse, gamma, beta].map(F64::from),
+        Some(&mut host_loop(|x, _| (x - mean) * inverse * gamma + beta)),
+    );
+    let low = -1.0;
+    double_row(
+        "bounds minimum_number(maximum_number(x, low), y)",
+        &vectors,
+        &Bounds,
+        [F64::from(low)],
+        Some(&mut host_loop(|x, y| x.max(low).min(y))),
+    );
+    let (inverse, step) = (4.0, 0.25);
+    double_row(
+        "quantize round_to_integral(x * inverse) * step",
+        &vectors,
+        &Quantize,
+        [inverse, step].map(F64::from),
+        Some(&mut host_loop(|x, _| {
+            (x * inverse).round_ties_even() * step
+        })),
+    );
+    double_row(
+        "score sqrt(|x * a + b|) / y - c",
+        &vectors,
+        &Score,
+        [0.5, 1.0, 0.25].map(F64::from),
+        None,
+    );
+}
+
+/// Prints the tables.
 pub fn table() {
     println!();
     println!("Blocks, nanoseconds per vector of {DIMENSION}.");
@@ -368,4 +483,5 @@ pub fn table() {
     bounds_row(&vectors);
     quantize_row(&vectors);
     score_rows(&vectors);
+    double_table(&vectors);
 }

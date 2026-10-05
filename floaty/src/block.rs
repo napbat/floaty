@@ -1,17 +1,18 @@
-//! Blocks: a chain of binary32 steps for each lane of slices, with one check
-//! of the environment and one selection of the instruction set for the
-//! whole call.
+//! Blocks: a chain of binary32 or binary64 steps for each lane of slices,
+//! with one check of the environment and one selection of the instruction
+//! set for the whole call.
 //!
-//! A [`Chain`] states the steps of one lane once, generic over [`Steps`].
-//! [`Float::map`] runs the chain for each lane of slices, and
-//! [`Float::evaluate`] runs it for one lane. Each step gives the result of
-//! its entry point in the mode of the type: every operation of binary32 from
-//! binary32 values to one binary32 value. So a block gives the bits of the
-//! same steps one at a time, on every host.
+//! A [`Chain`] states the steps of one lane once, generic over [`Steps`], so
+//! one chain runs in binary32 and in binary64. [`Float::map`] runs the chain
+//! for each lane of slices, and [`Float::evaluate`] runs it for one lane.
+//! Each step gives the result of its entry point in the mode of the type:
+//! every operation of the format from values of the format to one value of
+//! the format. So a block gives the bits of the same steps one at a time, on
+//! every host.
 //!
 //! Where the build has a host path, and the mode and the environment allow
-//! it, the steps run as Rust operations on `f32` after one check of the
-//! environment, in the instruction set that the processor selects. LLVM
+//! it, the steps run as Rust operations on `f32` or `f64` after one check of
+//! the environment, in the instruction set that the processor selects. LLVM
 //! then sees the whole chain and computes many lanes in vector
 //! instructions. A lane whose result is a NaN runs the chain again in the
 //! engine, which selects the NaN by the rule of the mode. So does a lane
@@ -21,8 +22,8 @@
 //! that is not a NaN. Elsewhere every lane runs the steps of the type.
 //!
 //! ```
-//! use floaty::F32;
 //! use floaty::block::{Chain, Steps};
+//! use floaty::{F32, F64};
 //!
 //! /// `(x - mean) * scale + offset`, with the product and the sum rounded
 //! /// once.
@@ -42,6 +43,13 @@
 //!
 //! let one = F32::evaluate(&Normalize, [F32::from(1.5_f32)], parameters);
 //! assert_eq!(one.to_bits(), 3.0_f32.to_bits());
+//!
+//! // The same chain in binary64.
+//! let x = [1.5_f64, 2.5, -0.5];
+//! let parameters = [0.5_f64, 2.0, 1.0].map(F64::from);
+//! let mut out = [0.0_f64; 3];
+//! F64::map(&Normalize, [&x[..]], parameters, &mut out[..]);
+//! assert_eq!(out, [3.0, 5.0, -1.0]);
 //! ```
 
 use core::ops::{Add, Div, Mul, Neg, Sub};
@@ -56,11 +64,15 @@ use crate::sealed::Sealed;
 /// The binary32 type of the mode `M`.
 type Single<M> = Float<Binary<8>, 32, M>;
 
-/// The steps of a [`Chain`]: every operation of binary32 from binary32
-/// values to one binary32 value, each rounded once to nearest even as its
-/// entry point rounds. Each step names the method of [`Float`] that gives
-/// its result. The binary32 types of floaty implement the trait, and so does
-/// the lane type of the host path of a block. The trait is sealed.
+/// The binary64 type of the mode `M`.
+type Double<M> = Float<Binary<11>, 64, M>;
+
+/// The steps of a [`Chain`]: every operation of a binary format from values
+/// of the format to one value of the format, each rounded once to nearest
+/// even as its entry point rounds. Each step names the method of [`Float`]
+/// that gives its result. The binary32 and binary64 types of floaty
+/// implement the trait, and so do the lane types of the host path of a
+/// block. The trait is sealed.
 pub trait Steps:
     Sealed
     + Copy
@@ -201,8 +213,8 @@ pub trait Steps:
     fn maximum_magnitude_number(self, other: Self) -> Self;
 }
 
-/// Implements each step of [`Steps`] for a binary32 type by its entry
-/// point, the method of the same name.
+/// Implements each step of [`Steps`] by its entry point, the method of the
+/// same name.
 macro_rules! entry_points {
     ($($name:ident($($argument:ident: $type:ty),*);)*) => {
         $(
@@ -214,43 +226,52 @@ macro_rules! entry_points {
     };
 }
 
-impl<M: Mode> Steps for Single<M> {
-    entry_points! {
-        mul_add(multiplier: Self, addend: Self);
-        sqrt();
-        abs();
-        copy_sign(sign: Self);
-        next_up();
-        next_down();
-        round_to_integral();
-        remainder(divisor: Self);
-        truncated_remainder(divisor: Self);
-        scale_b(scale: i32);
-        log_b();
-        exp();
-        log();
-        compound(n: i64);
-        hypot(other: Self);
-        pown(n: i64);
-        rootn(n: i64);
-        reciprocal_sqrt();
-        minimum(other: Self);
-        maximum(other: Self);
-        minimum_number(other: Self);
-        maximum_number(other: Self);
-        min_num(other: Self);
-        max_num(other: Self);
-        minimum_magnitude(other: Self);
-        maximum_magnitude(other: Self);
-        minimum_magnitude_number(other: Self);
-        maximum_magnitude_number(other: Self);
-    }
+/// Implements [`Steps`] for each binary type of floaty in each mode.
+macro_rules! binary_steps {
+    ($($type:ident),*) => {
+        $(
+            impl<M: Mode> Steps for $type<M> {
+                entry_points! {
+                    mul_add(multiplier: Self, addend: Self);
+                    sqrt();
+                    abs();
+                    copy_sign(sign: Self);
+                    next_up();
+                    next_down();
+                    round_to_integral();
+                    remainder(divisor: Self);
+                    truncated_remainder(divisor: Self);
+                    scale_b(scale: i32);
+                    log_b();
+                    exp();
+                    log();
+                    compound(n: i64);
+                    hypot(other: Self);
+                    pown(n: i64);
+                    rootn(n: i64);
+                    reciprocal_sqrt();
+                    minimum(other: Self);
+                    maximum(other: Self);
+                    minimum_number(other: Self);
+                    maximum_number(other: Self);
+                    min_num(other: Self);
+                    max_num(other: Self);
+                    minimum_magnitude(other: Self);
+                    maximum_magnitude(other: Self);
+                    minimum_magnitude_number(other: Self);
+                    maximum_magnitude_number(other: Self);
+                }
 
-    #[inline]
-    fn round_to_integral_by(self, rounding: Rounding) -> Self {
-        self.round_to_integral_with(rounding).0
-    }
+                #[inline]
+                fn round_to_integral_by(self, rounding: Rounding) -> Self {
+                    self.round_to_integral_with(rounding).0
+                }
+            }
+        )*
+    };
 }
+
+binary_steps!(Single, Double);
 
 /// The steps of one lane of a block, over `IN` values of the lane and `P`
 /// parameters of the whole call.
@@ -264,60 +285,71 @@ pub trait Chain<const IN: usize, const P: usize> {
     fn apply<S: Steps>(&self, x: [S; IN], p: [S; P]) -> S;
 }
 
-impl<M: Mode> Float<Binary<8>, 32, M> {
-    /// Writes the result of `chain` for lane `i` into `out[i]`: the chain
-    /// takes value `i` of each slice of `x`, and the parameters `p`. The
-    /// call checks the environment and selects the instruction set once, as
-    /// the [module](crate::block) states. Each result is the result of the
-    /// steps of the type.
-    ///
-    /// # Panics
-    ///
-    /// Panics when a slice of `x` and `out` differ in length.
-    pub fn map<C, E, O, const IN: usize, const P: usize>(
-        chain: &C,
-        x: [&[E]; IN],
-        p: [Self; P],
-        out: &mut [O],
-    ) where
-        C: Chain<IN, P>,
-        E: Element<Self>,
-        O: Element<Self>,
-    {
-        let x = x.map(E::floats);
-        let out = O::floats_mut(out);
-        assert!(
-            x.iter().all(|values| values.len() == out.len()),
-            "each input holds one value for each output"
-        );
-        match host::block::map(chain, x, p, out) {
-            Some(false) => {}
-            Some(true) => replay(chain, x, p, out, Self::is_nan),
-            None => replay(chain, x, p, out, |_| true),
-        }
-    }
+/// Implements the entry points of blocks for each binary type of floaty in
+/// each mode.
+macro_rules! blocks {
+    ($($type:ident),*) => {
+        $(
+            impl<M: Mode> $type<M> {
+                /// Writes the result of `chain` for lane `i` into `out[i]`:
+                /// the chain takes value `i` of each slice of `x`, and the
+                /// parameters `p`. The call checks the environment and
+                /// selects the instruction set once, as the
+                /// [module](crate::block) states. Each result is the result
+                /// of the steps of the type.
+                ///
+                /// # Panics
+                ///
+                /// Panics when a slice of `x` and `out` differ in length.
+                pub fn map<C, E, O, const IN: usize, const P: usize>(
+                    chain: &C,
+                    x: [&[E]; IN],
+                    p: [Self; P],
+                    out: &mut [O],
+                ) where
+                    C: Chain<IN, P>,
+                    E: Element<Self>,
+                    O: Element<Self>,
+                {
+                    let x = x.map(E::floats);
+                    let out = O::floats_mut(out);
+                    assert!(
+                        x.iter().all(|values| values.len() == out.len()),
+                        "each input holds one value for each output"
+                    );
+                    match host::block::map(chain, x, p, out) {
+                        Some(false) => {}
+                        Some(true) => replay(chain, x, p, out, Self::is_nan),
+                        None => replay(chain, x, p, out, |_| true),
+                    }
+                }
 
-    /// Returns the result of `chain` for the values `x` and the parameters
-    /// `p`, with one check of the environment, as [`map`](Self::map) gives
-    /// it for one lane.
-    #[must_use]
-    pub fn evaluate<C: Chain<IN, P>, const IN: usize, const P: usize>(
-        chain: &C,
-        x: [Self; IN],
-        p: [Self; P],
-    ) -> Self {
-        host::block::evaluate(chain, x, p).unwrap_or_else(|| chain.apply(x, p))
-    }
+                /// Returns the result of `chain` for the values `x` and the
+                /// parameters `p`, with one check of the environment, as
+                /// [`map`](Self::map) gives it for one lane.
+                #[must_use]
+                pub fn evaluate<C: Chain<IN, P>, const IN: usize, const P: usize>(
+                    chain: &C,
+                    x: [Self; IN],
+                    p: [Self; P],
+                ) -> Self {
+                    host::block::evaluate(chain, x, p).unwrap_or_else(|| chain.apply(x, p))
+                }
+            }
+        )*
+    };
 }
+
+blocks!(Single, Double);
 
 /// Writes the result of `chain` in the steps of the type into each element
 /// of `out` that `select` accepts.
-fn replay<C: Chain<IN, P>, M: Mode, const IN: usize, const P: usize>(
+fn replay<C: Chain<IN, P>, F: Steps, const IN: usize, const P: usize>(
     chain: &C,
-    x: [&[Single<M>]; IN],
-    p: [Single<M>; P],
-    out: &mut [Single<M>],
-    select: impl Fn(Single<M>) -> bool,
+    x: [&[F]; IN],
+    p: [F; P],
+    out: &mut [F],
+    select: impl Fn(F) -> bool,
 ) {
     for (index, result) in out.iter_mut().enumerate() {
         if select(*result) {
