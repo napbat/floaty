@@ -1,5 +1,6 @@
 //! The run-time selection of the instruction set of the slice kernels, the
-//! elementwise slice operations, and `convert_chunks`.
+//! elementwise slice operations, `convert_chunks`, and blocks, which run a
+//! `Task` in the set.
 //!
 //! Each entry point runs in `Build` unless the processor has a larger
 //! instruction set than the build enables. It then runs generic over that
@@ -28,12 +29,34 @@ mod x86;
 
 use super::super::environment::packed;
 use super::super::paths::ready_in_direction;
-use super::super::{Host, Kind, Load, Step, Term};
+use super::super::{Host, Isa, Kind, Load, Step, Term};
 use super::{Build, available, convert_chunks_on, elementwise, kernel};
 use crate::env::{Env, Mode, Rounding};
 use crate::float::{Float, FloatType};
 use crate::format::Standard;
 use crate::format::internal::MinMax;
+
+/// Code generic over the instruction set, which `run_task` runs in the set
+/// of this processor. A closure cannot be generic, so a type holds the
+/// arguments of the code.
+pub trait Task {
+    /// The result of the code.
+    type Output;
+
+    /// Runs the code in the instruction set `I`. The code calls `I::run` to
+    /// take the features of the set.
+    fn run<I: Isa>(self) -> Self::Output;
+}
+
+/// Runs `task` in the instruction set of this processor.
+#[inline]
+pub fn run_task<T: Task>(task: T) -> T::Output {
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
+    if let Some(selected) = x86::selected() {
+        return selected.run_task(task);
+    }
+    task.run::<Build>()
+}
 
 /// Returns `true` when the slice kernels with a fused step have a host path
 /// on this processor: in the build, or in the instruction set that the

@@ -180,10 +180,37 @@ macro_rules! fused {
 /// Returns `left * right + addend` of binary32 values, rounded once, by
 /// `MAEBR`.
 #[inline]
-#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack FMA.
-pub fn mul_add_f32(left: f32, right: f32, mut addend: f32) -> Option<f32> {
+fn maebr(left: f32, right: f32, mut addend: f32) -> f32 {
     fused!("maebr {addend}, {left}, {right}", left, right, addend);
-    Some(addend)
+    addend
+}
+
+/// Returns `left * right + addend` of binary32 values, rounded once, by
+/// `MAEBR`.
+#[inline]
+#[allow(clippy::unnecessary_wraps)] // The signature is that of x86-64, where a build can lack FMA.
+pub fn mul_add_f32(left: f32, right: f32, addend: f32) -> Option<f32> {
+    Some(maebr(left, right, addend))
+}
+
+/// Returns the square root of a binary32 value for the steps of a block, by
+/// `SQEBR`. LLVM does not see the instruction, and the build has no vector
+/// form of the steps, so a loop of steps stays scalar.
+#[inline]
+pub fn block_sqrt(value: f32) -> f32 {
+    sqrt_f32(value)
+}
+
+/// Returns `left * right + addend`, rounded once, for the steps of a block,
+/// by `MAEBR`, as `block_sqrt` takes `SQEBR`.
+///
+/// # Safety
+///
+/// None beyond the call: every s390x processor has the instruction. The
+/// function is unsafe as on x86, where a processor can lack FMA.
+#[inline]
+pub unsafe fn block_mul_add(left: f32, right: f32, addend: f32) -> f32 {
+    maebr(left, right, addend)
 }
 
 /// Returns `left * right + addend` of binary64 values, rounded once, by

@@ -28,7 +28,7 @@ mod isa;
 mod kernel;
 mod order;
 
-pub use self::dispatch::fused_kernels;
+pub use self::dispatch::{Task, fused_kernels, run_task};
 #[cfg(feature = "override-host-level")]
 pub use self::dispatch::{level, levels};
 use self::isa::Build;

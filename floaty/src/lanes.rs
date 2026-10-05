@@ -26,11 +26,20 @@ pub trait Element<F>: Sealed + Copy {
     /// Returns the elements as values of `F`.
     #[doc(hidden)]
     fn floats(elements: &[Self]) -> &[F];
+
+    /// Returns the elements as values of `F` to write.
+    #[doc(hidden)]
+    fn floats_mut(elements: &mut [Self]) -> &mut [F];
 }
 
 impl<S: Standard<W>, const W: usize, M: Mode> Element<Self> for Float<S, W, M> {
     #[inline]
     fn floats(elements: &[Self]) -> &[Self] {
+        elements
+    }
+
+    #[inline]
+    fn floats_mut(elements: &mut [Self]) -> &mut [Self] {
         elements
     }
 }
@@ -41,6 +50,11 @@ impl<M: Mode> Element<Float<Binary<8>, 32, M>> for f32 {
     #[inline]
     fn floats(elements: &[Self]) -> &[Float<Binary<8>, 32, M>] {
         host::floats_of_singles(elements)
+    }
+
+    #[inline]
+    fn floats_mut(elements: &mut [Self]) -> &mut [Float<Binary<8>, 32, M>] {
+        host::floats_of_singles_mut(elements)
     }
 }
 

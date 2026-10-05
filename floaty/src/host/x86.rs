@@ -298,6 +298,42 @@ pub fn mul_add_f64(_left: f64, _right: f64, _addend: f64) -> Option<f64> {
     None
 }
 
+/// Returns the square root of a binary32 value for the steps of a block, by
+/// an operation that LLVM sees: `SQRTSS`, or a packed form in a vectorized
+/// loop.
+#[inline]
+pub fn block_sqrt(value: f32) -> f32 {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_cvtss_f32, _mm_set_ss, _mm_sqrt_ss};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_cvtss_f32, _mm_set_ss, _mm_sqrt_ss};
+    // SAFETY: the intrinsics need SSE, which the build enables.
+    unsafe { _mm_cvtss_f32(_mm_sqrt_ss(_mm_set_ss(value))) }
+}
+
+/// Returns `left * right + addend`, rounded once, for the steps of a block,
+/// by an operation that LLVM sees: `VFMADD213SS`, or a packed form in a
+/// vectorized loop.
+///
+/// # Safety
+///
+/// The processor must have FMA.
+#[inline]
+pub unsafe fn block_mul_add(left: f32, right: f32, addend: f32) -> f32 {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::{_mm_cvtss_f32, _mm_fmadd_ss, _mm_set_ss};
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::{_mm_cvtss_f32, _mm_fmadd_ss, _mm_set_ss};
+    // SAFETY: the caller guarantees FMA, and the build enables SSE.
+    unsafe {
+        _mm_cvtss_f32(_mm_fmadd_ss(
+            _mm_set_ss(left),
+            _mm_set_ss(right),
+            _mm_set_ss(addend),
+        ))
+    }
+}
+
 /// Returns a binary16 value widened exactly to binary32, by `VCVTPH2PS`.
 #[cfg(target_feature = "f16c")]
 #[inline]

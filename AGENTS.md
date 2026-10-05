@@ -38,10 +38,10 @@ crate documentation records each rule of its behavior. The
   Send every other input, and every NaN result, to the engine.
 - Select a host path at compile time with `cfg(target_arch)` and
   `cfg(target_feature)`. Only the slice kernels, the elementwise slice
-  operations, and `convert_slice` of `Lanes` also select an instruction set
-  at run time, in `host/packed/dispatch`. Keep that check behind the feature
-  `std`, run it once, and keep its answer in an atomic. Do not detect the
-  processor anywhere else.
+  operations, and `convert_slice` of `Lanes`, and blocks, also select an
+  instruction set at run time, in `host/packed/dispatch`. Keep that check
+  behind the feature `std`, run it once, and keep its answer in an atomic.
+  Do not detect the processor anywhere else.
 - Give each instruction set of `dispatch` the bits of `Build`. Run the
   generic code of a set inside `Isa::run`, which compiles it with the
   features of the set behind `#[target_feature]`, and tie the `SAFETY`
@@ -57,6 +57,13 @@ crate documentation records each rule of its behavior. The
 - Run every floating-point instruction of a host path in inline assembly.
   Test a NaN with integer instructions on the bits. LLVM can move a Rust
   float operation above the check of the environment.
+- Blocks are the one exception: their steps run as Rust operations on
+  `f32` and as `core::arch` intrinsics, so LLVM vectorizes the chain. A
+  block must check the environment first, and pass every input through the
+  empty assembly block of `host/block.rs` after the check. Send each lane
+  with a NaN result, and each lane with a step without an exact
+  instruction, to the engine. Add a step only where no bit of a NaN can
+  decide a result that is not a NaN, or taint the lane.
 - Put code for one architecture, such as inline assembly and `core::arch`
   intrinsics, behind `cfg(target_arch)` in `floaty` and in its tests. Every
   crate must build for each target of the gates.

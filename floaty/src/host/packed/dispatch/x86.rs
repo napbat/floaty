@@ -225,6 +225,15 @@ impl Selected {
         matches!(self.0, Level::V4)
     }
 
+    /// Runs `task` in the instruction set.
+    #[inline]
+    pub fn run_task<T: super::Task>(self, task: T) -> T::Output {
+        match self.0 {
+            Level::V3 => task.run::<V3>(),
+            Level::V4 => task.run::<V4>(),
+        }
+    }
+
     /// Runs `accumulate_on` in the instruction set.
     #[inline]
     pub fn accumulate<const N: usize>(
@@ -342,6 +351,7 @@ impl Isa for V3 {
     const EXTRA_WIDE: bool = false;
     const HALF: bool = true;
     const INTEGERS: bool = true;
+    const FUSED: bool = true;
 
     #[inline]
     fn run<R>(f: impl FnOnce() -> R) -> R {
@@ -467,6 +477,7 @@ impl Isa for V4 {
     const EXTRA_WIDE: bool = true;
     const HALF: bool = true;
     const INTEGERS: bool = true;
+    const FUSED: bool = true;
 
     #[inline]
     fn run<R>(f: impl FnOnce() -> R) -> R {
