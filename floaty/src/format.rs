@@ -125,6 +125,26 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     #[doc(hidden)]
     fn log<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
 
+    /// Returns `2^value`, with certified rounding.
+    #[cfg(feature = "alloc")]
+    #[doc(hidden)]
+    fn exp2<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
+
+    /// Returns `log2(value)`, with certified rounding.
+    #[cfg(feature = "alloc")]
+    #[doc(hidden)]
+    fn log2<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
+
+    /// Returns the sine in radians, with certified rounding.
+    #[cfg(feature = "alloc")]
+    #[doc(hidden)]
+    fn sin<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
+
+    /// Returns the cosine in radians, with certified rounding.
+    #[cfg(feature = "alloc")]
+    #[doc(hidden)]
+    fn cos<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
+
     /// Returns `left * right + addend`, rounded once.
     #[doc(hidden)]
     fn mul_add<B: Behavior>(

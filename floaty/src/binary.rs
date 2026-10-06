@@ -6,6 +6,8 @@ use core::marker::PhantomData;
 mod algebraic;
 mod arithmetic;
 mod augmented;
+#[cfg(feature = "alloc")]
+mod base_two;
 mod compare;
 mod convert;
 mod elementary;
@@ -16,6 +18,8 @@ mod power;
 mod reduction;
 mod remainder;
 mod scale;
+#[cfg(feature = "alloc")]
+mod trigonometric;
 
 use crate::env::{Behavior, Env, Flags, TotalOrder};
 use crate::exact::{self, RoundingTarget, Target, Unrounded};
@@ -652,6 +656,38 @@ where
     fn log<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
         let env = behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::log(value.to_limbs(), behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn exp2<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = behavior.env();
+        let (bits, flags) = Layout::<E, Enc, W>::exp2(value.to_limbs(), behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn log2<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = behavior.env();
+        let (bits, flags) = Layout::<E, Enc, W>::log2(value.to_limbs(), behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn sin<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = behavior.env();
+        let (bits, flags) = Layout::<E, Enc, W>::sin(value.to_limbs(), behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn cos<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let env = behavior.env();
+        let (bits, flags) = Layout::<E, Enc, W>::cos(value.to_limbs(), behavior);
         let bits = Layout::<E, Enc, W>::saturated(bits, &env);
         (Self::Bits::from_limbs(bits), flags)
     }

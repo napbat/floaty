@@ -10,6 +10,9 @@ repository.workspace = true
 readme = "../README.md"
 
 [features]
+# Enables certified exp2, log2, sin, and cos with adaptive precision.
+# Ordinary inputs use stack arithmetic. Hard cases can allocate.
+alloc = []
 # Checks the processor once, at the first call, for a larger instruction set
 # than the build enables, for the slice kernels and the elementwise slice
 # operations of `Lanes`. The check needs the standard library.

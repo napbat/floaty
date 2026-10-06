@@ -138,6 +138,104 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
         (Self::from_masked(bits), flags)
     }
 
+    /// Returns `2^self`, with the default mode.
+    ///
+    /// Requires the `alloc` feature. See [`Self::exp2_with`].
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn exp2(self) -> Self {
+        self.exp2_with(M::default()).0
+    }
+
+    /// Returns `2^self`, correctly rounded, and the exception flags.
+    ///
+    /// Both signed zeros give 1. Positive infinity gives positive infinity;
+    /// negative infinity gives positive zero. NaNs follow the behavior's NaN
+    /// rule. Representable powers of two are exact. Other results report
+    /// inexact, overflow, and underflow as required by the behavior.
+    ///
+    /// Requires the `alloc` feature. Stack arithmetic handles ordinary
+    /// arguments. If its interval cannot certify rounding, the operation
+    /// allocates working storage and increases precision until it can.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn exp2_with(self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::exp2(self.bits, behavior.apply::<M>());
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Returns the base-2 logarithm, with the default mode.
+    ///
+    /// Requires the `alloc` feature. See [`Self::log2_with`].
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn log2(self) -> Self {
+        self.log2_with(M::default()).0
+    }
+
+    /// Returns the base-2 logarithm, correctly rounded, and the exception flags.
+    ///
+    /// Powers of two give exact integer results. Both signed zeros give
+    /// negative infinity and signal divide-by-zero. Negative nonzero values
+    /// signal invalid. Positive infinity gives positive infinity. NaNs follow
+    /// the behavior's NaN rule.
+    ///
+    /// Requires the `alloc` feature. As with [`Self::exp2_with`], working
+    /// storage grows only when the stack interval cannot certify rounding.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn log2_with(self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::log2(self.bits, behavior.apply::<M>());
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Returns the sine in radians, with the default mode.
+    ///
+    /// Requires the `alloc` feature. See [`Self::sin_with`].
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn sin(self) -> Self {
+        self.sin_with(M::default()).0
+    }
+
+    /// Returns the sine in radians, correctly rounded, and the exception flags.
+    ///
+    /// Signed zero is preserved. Infinities signal invalid. NaNs follow the
+    /// behavior's NaN rule. Nonzero finite results signal inexact.
+    ///
+    /// Requires the `alloc` feature. Ordinary inputs use stack arithmetic.
+    /// Large arguments or hard rounding cases allocate adaptive working
+    /// storage. Range reduction retains the exact input bits.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn sin_with(self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::sin(self.bits, behavior.apply::<M>());
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Returns the cosine in radians, with the default mode.
+    ///
+    /// Requires the `alloc` feature. See [`Self::cos_with`].
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn cos(self) -> Self {
+        self.cos_with(M::default()).0
+    }
+
+    /// Returns the cosine in radians, correctly rounded, and the exception flags.
+    ///
+    /// Both signed zeros give 1 exactly. Infinities signal invalid. NaNs
+    /// follow the behavior's NaN rule. Nonzero finite arguments signal inexact.
+    ///
+    /// Requires the `alloc` feature. Allocation and range reduction follow
+    /// [`Self::sin_with`].
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn cos_with(self, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::cos(self.bits, behavior.apply::<M>());
+        (Self::from_masked(bits), flags)
+    }
+
     /// Returns `self * multiplier + addend`, rounded once, with the default
     /// mode.
     #[must_use]

@@ -5,6 +5,8 @@ use core::cmp::Ordering;
 use core::marker::PhantomData;
 
 mod arithmetic;
+#[cfg(feature = "alloc")]
+mod base_two;
 mod codec;
 mod compare;
 mod convert;
@@ -15,6 +17,8 @@ mod integral;
 mod payload;
 mod round;
 mod scale;
+#[cfg(feature = "alloc")]
+mod trigonometric;
 
 /// The limbs of an exact decimal result: twice the storage limbs `L`. An
 /// addition is the exception: its sums stay in the storage limbs.
@@ -340,6 +344,30 @@ where
 
     fn log<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
         let (bits, flags) = DecimalLayout::<Enc, W>::log(value.to_limbs(), behavior);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn exp2<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = DecimalLayout::<Enc, W>::exp2(value.to_limbs(), behavior);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn log2<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = DecimalLayout::<Enc, W>::log2(value.to_limbs(), behavior);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn sin<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = DecimalLayout::<Enc, W>::sin(value.to_limbs(), behavior);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    #[cfg(feature = "alloc")]
+    fn cos<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+        let (bits, flags) = DecimalLayout::<Enc, W>::cos(value.to_limbs(), behavior);
         (Self::Bits::from_limbs(bits), flags)
     }
 

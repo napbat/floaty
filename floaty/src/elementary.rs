@@ -28,9 +28,20 @@
 //! on a grid. Its module computes those results without a ball.
 
 mod ball;
+#[cfg(feature = "alloc")]
+mod base_two;
 mod compound;
 mod constants;
+#[cfg(feature = "alloc")]
+mod dynamic;
 mod series;
+#[cfg(feature = "alloc")]
+mod trigonometric;
+
+#[cfg(feature = "alloc")]
+pub(crate) use base_two::{exp2, log2};
+#[cfg(feature = "alloc")]
+pub(crate) use trigonometric::{cos, sin};
 
 pub(crate) use self::compound::compound;
 
@@ -142,6 +153,39 @@ trait Function {
     /// Returns the ball of the value at the width `W`, or `None` when the
     /// width cannot bound it.
     fn ball<W: Widen>(&self) -> Option<Ball<W>>;
+}
+
+/// A function that can refine its interval beyond the stack working widths.
+#[cfg(feature = "alloc")]
+trait CertifiedFunction: Function {
+    /// Returns a truncation certified by an adaptive-precision interval.
+    fn refine<W: Limbs>(&self, target: &Target) -> Unrounded<W>;
+}
+
+/// Tries a stack width without discarding its error bound.
+#[cfg(feature = "alloc")]
+fn certified_at<L: Limbs, W: Widen>(
+    function: &impl Function,
+    target: &Target,
+) -> Option<Unrounded<L>> {
+    let value = truncate(&function.ball::<W>()?, target)?;
+    Some(Unrounded {
+        negative: value.negative,
+        exponent: value.exponent,
+        significand: value.significand.resize(),
+        sticky: value.sticky,
+    })
+}
+
+/// Refines until the interval proves the result's rounding bits.
+#[cfg(feature = "alloc")]
+fn certified_ziv<L: Elementary, F: CertifiedFunction>(
+    function: &F,
+    target: &Target,
+) -> Unrounded<L::Second> {
+    certified_at::<L::Second, L::First>(function, target)
+        .or_else(|| certified_at::<L::Second, L::Second>(function, target))
+        .unwrap_or_else(|| function.refine::<L::Second>(target))
 }
 
 /// The function `e^x`.

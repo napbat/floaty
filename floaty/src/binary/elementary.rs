@@ -19,7 +19,7 @@ where
     Width<W>: Storage,
 {
     /// Returns the format of a result of `exp` or `log`.
-    fn elementary_target() -> Target {
+    pub(super) fn elementary_target() -> Target {
         let reach = i64::from(Self::EMAX).max(i64::from(Self::PRECISION) - i64::from(Self::EMIN));
         Target {
             radix: Radix::Binary,

@@ -9,6 +9,9 @@ license.workspace = true
 repository.workspace = true
 build = "build/main.rs"
 
+[features]
+alloc = ["floaty/alloc"]
+
 [dependencies]
 # The host-path tests run the slice paths in each instruction set of the
 # processor, which `FLOATY_HOST_LEVEL` selects.

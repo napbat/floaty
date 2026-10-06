@@ -48,9 +48,13 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   or maximum reduction, or a kernel reads a view in one pass.
 - **Fast where possible.** Where the build targets a floating-point unit
   that gives the same bits, the operations without flags use it.
-- **Small.** `no_std`, no `alloc`, no dependencies, and no `unsafe` code
-  outside the host paths. The optional feature `std` adds one check of the
-  processor for the slice paths.
+- **Small.** `no_std`, no allocation by default, no dependencies, and no
+  `unsafe` code outside the host paths. The optional feature `std` adds one
+  check of the processor for the slice paths. The optional feature `alloc`
+  adds correctly rounded `exp2`, `log2`, `sin`, and `cos` for binary and
+  decimal formats. These functions first use stack arithmetic. If that
+  arithmetic cannot certify the result, they allocate intervals and
+  increase the precision until the intervals decide the rounding.
 
 ## Installation
 
@@ -519,6 +523,8 @@ such as `hypot`, `pown`, `compound`, and the augmented operations, and those
 of the decimal formats alone, such as `quantize`. `pown`, `rootn`, and
 `compound` take one exponent for each lane. The augmented operations return
 the heads and the tails as two `Lanes`.
+With the `alloc` feature, `Lanes` also has `exp2`, `log2`, `sin`, and `cos`,
+with the same rounding and flags as the scalar operations.
 
 ```rust
 use floaty::{Env, F32, Flags, Lanes};
@@ -854,6 +860,7 @@ decNumber.
 | Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in the six directions of TestFloat, under four NaN rules |
 | MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, with FTZ, DAZ, and saturation, and with unsupported operands, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, from binary32, binary64, x87 extended, and binary128 to them, and between every binary format and the decimal formats, in every behavior of the conversion tests. The truncated remainder. `hypot`, the reciprocal square root, `pown`, and `rootn`, against `mpfr_hypot`, `mpfr_rec_sqrt`, `mpfr_pow_si`, and `mpfr_rootn_si`, and the rounded steps of `pown` past `|n| = 64`. The augmented operations, whose tail `mpfr_sum` rounds. The sums of the reduction operations, with `mpfr_sum` and `mpfr_dot`, and each step of the scaled products. The NaN payload operations of every binary format, by floaty's rule. The operations of `DoubleDouble` on its exact value, by their rules, with exact rationals. Each binary64 step of the other `DoubleDouble` operations, in the behaviors that libgcc and QD do not define. |
 | MPFR, through `rug`, with published worst cases | `exp` and `log` of every binary and decimal format, against `mpfr_exp` and `mpfr_log` at a precision that grows until its bounds decide the rounding, in every behavior of the operation tests for the binary formats and of the conversion tests for the decimal formats. Every FP8, FP6, FP4, binary16, and bfloat16 encoding. The binary64 worst cases of Lefèvre and Muller, and the decimal64 `exp` worst cases of Lefèvre, Stehlé, and Zimmermann. |
+| MPFR, through `rug`, with `alloc` | `exp2` and `log2` at binary64 and decimal BID/DPD rounding boundaries. `sin` and `cos` at binary64 quadrant boundaries, subnormal inputs, and the largest finite input. Decimal trigonometric inputs reach `10^6000`. Directed bounds certify the expected results and flags across rounding behaviors. |
 | GMP and MPFR, through `rug` | `compound` of every binary format, in every behavior of the operation tests: every FP8, FP6, and FP4 encoding with 24 exponents from `i64::MIN` to `i64::MAX`, every binary16 and bfloat16 encoding with three, and samples of the other formats with arguments next to -1, next to the thresholds of the range, and with exact powers. GMP gives an exact power, or the exact power `x^n` for a large `x`. Every other power takes bounds from `mpfr_log1p`, `mpfr_mul_si`, and `mpfr_exp`, at a precision that grows until the bounds decide the rounding. `mpfr_compound_si` of MPFR 4.2.2 gives a wrong bound in a hard case, which a comment in the oracle records. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, `scale_b`, and `log_b` against `ilogb` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
@@ -896,8 +903,8 @@ The minimum supported Rust version is 1.89. The crate uses edition 2024.
 
 ## Limitations
 
-- No transcendental functions other than `exp` and `log`, such as `sin` and
-  `pow`.
+- No general `pow` or transcendental functions other than `exp`, `log`,
+  and the `alloc`-gated `exp2`, `log2`, `sin`, and `cos`.
 - No text parsing or printing, in decimal or in hexadecimal.
 - No `const fn` evaluation. The engine uses traits, which a `const fn` on
   stable Rust cannot call.

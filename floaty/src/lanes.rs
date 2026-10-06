@@ -268,6 +268,74 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         self.map_with(|lane| lane.log_with(behavior))
     }
 
+    /// Returns `2^x` of each lane with the default mode.
+    /// Requires the `alloc` feature, as [`Float::exp2`] does.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn exp2(self) -> Self {
+        self.map(Float::exp2)
+    }
+
+    /// Returns `2^x` of each lane and the union of the exception flags.
+    /// Requires the `alloc` feature, as [`Float::exp2_with`] does.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn exp2_with(self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.map_with(|lane| lane.exp2_with(behavior))
+    }
+
+    /// Returns the base-2 logarithm of each lane with the default mode.
+    /// Requires the `alloc` feature, as [`Float::log2`] does.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn log2(self) -> Self {
+        self.map(Float::log2)
+    }
+
+    /// Returns the base-2 logarithm of each lane and the union of the flags.
+    /// Requires the `alloc` feature, as [`Float::log2_with`] does.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn log2_with(self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.map_with(|lane| lane.log2_with(behavior))
+    }
+
+    /// Returns the sine in radians of each lane with the default mode.
+    /// Requires the `alloc` feature, as [`Float::sin`] does.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn sin(self) -> Self {
+        self.map(Float::sin)
+    }
+
+    /// Returns the sine in radians of each lane and the union of the flags.
+    /// Requires the `alloc` feature, as [`Float::sin_with`] does.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn sin_with(self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.map_with(|lane| lane.sin_with(behavior))
+    }
+
+    /// Returns the cosine in radians of each lane with the default mode.
+    /// Requires the `alloc` feature, as [`Float::cos`] does.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn cos(self) -> Self {
+        self.map(Float::cos)
+    }
+
+    /// Returns the cosine in radians of each lane and the union of the flags.
+    /// Requires the `alloc` feature, as [`Float::cos_with`] does.
+    #[cfg(feature = "alloc")]
+    #[must_use]
+    pub fn cos_with(self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.map_with(|lane| lane.cos_with(behavior))
+    }
+
     /// Returns `self * multiplier + addend` of each triple of lanes, each
     /// rounded once, with the default mode.
     #[must_use]
