@@ -18,7 +18,7 @@
 use super::super::bits::nan_32;
 use super::super::environment::packed;
 use super::super::narrow::{HALF_QUANTUM, SUBNORMAL_BIAS, round_to_half_lanes, widen_half_lanes};
-use super::{Directed, Nearest, any_lane, chunk, chunk_mut, dispatch, isa};
+use super::{Directed, Nearest, Task, any_lane, chunk, chunk_mut, dispatch, isa, run_task};
 use crate::env::{Env, Rounding};
 use crate::host::{Direction, Isa, Load, Operation, Step, Term};
 
@@ -35,31 +35,51 @@ pub fn accumulate<const N: usize>(
     env: &Env,
 ) -> Option<u32> {
     let rounding = dispatch::direction(env)?;
-    dispatch::accumulate::<N>(x, y, term, step, rounding)
+    run_task(Accumulate::<_, _, N> {
+        x,
+        y,
+        term,
+        step,
+        rounding,
+    })
 }
 
-/// Returns the sum of `accumulate` in the instruction set `I`, in an
-/// environment that allows the path, with each step rounded in the
-/// direction `rounding`. The match comes before `sum_vectors`, whose loop
-/// runs with the features of `I` for one term and step.
-#[inline]
-pub(super) fn accumulate_on<I: Isa, const N: usize>(
-    x: impl Load,
-    y: impl Load,
+/// The arguments of `accumulate`, which its task sums in the instruction
+/// set of the processor, in an environment that allows the path, with each
+/// step rounded in the direction `rounding`. The match comes before
+/// `sum_vectors`, whose loop runs with the features of the set for one term
+/// and step.
+struct Accumulate<X, Y, const N: usize> {
+    x: X,
+    y: Y,
     term: Term,
     step: Step,
     rounding: Rounding,
-) -> Option<u32> {
-    // A sum of values has no product, so its step has no effect.
-    match (term, step) {
-        (Term::Value, _) => sum_vectors::<I, N, Sum>(x, y, rounding),
-        (Term::Product, Step::Separate) => sum_vectors::<I, N, Product>(x, y, rounding),
-        (Term::Product, Step::Fused) => sum_vectors::<I, N, FusedProduct>(x, y, rounding),
-        (Term::SquareDifference, Step::Separate) => {
-            sum_vectors::<I, N, SquareDifference>(x, y, rounding)
-        }
-        (Term::SquareDifference, Step::Fused) => {
-            sum_vectors::<I, N, FusedSquareDifference>(x, y, rounding)
+}
+
+impl<X: Load, Y: Load, const N: usize> Task for Accumulate<X, Y, N> {
+    type Output = Option<u32>;
+
+    #[inline]
+    fn run<I: Isa>(self) -> Option<u32> {
+        let Self {
+            x,
+            y,
+            term,
+            step,
+            rounding,
+        } = self;
+        // A sum of values has no product, so its step has no effect.
+        match (term, step) {
+            (Term::Value, _) => sum_vectors::<I, N, Sum>(x, y, rounding),
+            (Term::Product, Step::Separate) => sum_vectors::<I, N, Product>(x, y, rounding),
+            (Term::Product, Step::Fused) => sum_vectors::<I, N, FusedProduct>(x, y, rounding),
+            (Term::SquareDifference, Step::Separate) => {
+                sum_vectors::<I, N, SquareDifference>(x, y, rounding)
+            }
+            (Term::SquareDifference, Step::Fused) => {
+                sum_vectors::<I, N, FusedSquareDifference>(x, y, rounding)
+            }
         }
     }
 }
@@ -81,28 +101,55 @@ pub fn accumulate_rows<const N: usize>(
     each: impl FnMut(usize, Option<u32>),
 ) -> Option<()> {
     let rounding = dispatch::direction(env)?;
-    dispatch::rows::<N>(rows, query, row_count, term, rounding, each);
+    run_task(AccumulateRows::<_, _, _, N> {
+        rows,
+        query,
+        row_count,
+        term,
+        rounding,
+        each,
+    });
     Some(())
 }
 
-/// Calls `each` for each row as `accumulate_rows` does, in the instruction
-/// set `I`, in an environment that allows the path, with each step rounded
-/// in the direction `rounding`. The match comes before `sum_rows`, whose
-/// loop runs with the features of `I` for one term.
-#[inline]
-pub(super) fn rows_on<I: Isa, const N: usize>(
-    rows: impl Load,
-    query: impl Load,
+/// The arguments of `accumulate_rows`, whose task calls `each` for each row
+/// in the instruction set of the processor, in an environment that allows
+/// the path, with each step rounded in the direction `rounding`. The match
+/// comes before `sum_rows`, whose loop runs with the features of the set
+/// for one term.
+struct AccumulateRows<R, Q, E, const N: usize> {
+    rows: R,
+    query: Q,
     row_count: usize,
     term: Term,
     rounding: Rounding,
-    each: impl FnMut(usize, Option<u32>),
-) {
-    match term {
-        Term::Value => sum_rows::<I, N, Sum>(rows, query, row_count, rounding, each),
-        Term::Product => sum_rows::<I, N, Product>(rows, query, row_count, rounding, each),
-        Term::SquareDifference => {
-            sum_rows::<I, N, SquareDifference>(rows, query, row_count, rounding, each);
+    each: E,
+}
+
+impl<R, Q, E, const N: usize> Task for AccumulateRows<R, Q, E, N>
+where
+    R: Load,
+    Q: Load,
+    E: FnMut(usize, Option<u32>),
+{
+    type Output = ();
+
+    #[inline]
+    fn run<I: Isa>(self) {
+        let Self {
+            rows,
+            query,
+            row_count,
+            term,
+            rounding,
+            each,
+        } = self;
+        match term {
+            Term::Value => sum_rows::<I, N, Sum>(rows, query, row_count, rounding, each),
+            Term::Product => sum_rows::<I, N, Product>(rows, query, row_count, rounding, each),
+            Term::SquareDifference => {
+                sum_rows::<I, N, SquareDifference>(rows, query, row_count, rounding, each);
+            }
         }
     }
 }

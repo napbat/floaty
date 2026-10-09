@@ -20,11 +20,8 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use super::super::super::environment::packed::{avx512, wide};
-use super::super::super::{Isa, Load, Operation, Step, Term};
-use super::super::{convert_chunks_on, elementwise, kernel};
-use crate::env::{Mode, Rounding};
-use crate::float::{Float, FloatType};
-use crate::format::Standard;
+use super::super::super::{Isa, Operation};
+use crate::env::Rounding;
 use crate::format::internal::MinMax;
 use crate::sealed::Sealed;
 
@@ -197,17 +194,6 @@ unsafe fn run_v4<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Calls the entry point `$function` with the instruction set of
-/// `$selected` as its first generic argument.
-macro_rules! in_selected {
-    ($selected:expr, $($path:ident)::+::<$($generic:tt),+>($($argument:expr),*)) => {
-        match $selected.0 {
-            Level::V3 => $($path)::+::<V3, $($generic),+>($($argument),*),
-            Level::V4 => $($path)::+::<V4, $($generic),+>($($argument),*),
-        }
-    };
-}
-
 impl Selected {
     /// Returns the name of the instruction set: `v3` or `v4`.
     #[cfg(feature = "override-host-level")]
@@ -232,86 +218,6 @@ impl Selected {
             Level::V3 => task.run::<V3>(),
             Level::V4 => task.run::<V4>(),
         }
-    }
-
-    /// Runs `accumulate_on` in the instruction set.
-    #[inline]
-    pub fn accumulate<const N: usize>(
-        self,
-        x: impl Load,
-        y: impl Load,
-        term: Term,
-        step: Step,
-        rounding: Rounding,
-    ) -> Option<u32> {
-        in_selected!(self, kernel::accumulate_on::<N>(x, y, term, step, rounding))
-    }
-
-    /// Runs `rows_on` in the instruction set.
-    #[inline]
-    pub fn rows<const N: usize>(
-        self,
-        rows: impl Load,
-        query: impl Load,
-        row_count: usize,
-        term: Term,
-        rounding: Rounding,
-        each: impl FnMut(usize, Option<u32>),
-    ) {
-        in_selected!(
-            self,
-            kernel::rows_on::<N>(rows, query, row_count, term, rounding, each)
-        );
-    }
-
-    /// Runs `store_on` in the instruction set.
-    #[inline]
-    pub fn store<const N: usize>(
-        self,
-        values: impl Load,
-        rounding: Rounding,
-        each: impl FnMut(usize, usize, Option<&[u32]>),
-    ) {
-        in_selected!(self, elementwise::store_on::<N>(values, rounding, each));
-    }
-
-    /// Runs `to_int_on` in the instruction set.
-    #[inline]
-    pub fn to_int<const N: usize>(
-        self,
-        values: impl Load,
-        rounding: Rounding,
-        each: impl FnMut(usize, usize, Option<&[i32]>),
-    ) {
-        in_selected!(self, elementwise::to_int_on::<N>(values, rounding, each));
-    }
-
-    /// Runs `reduce_on` in the instruction set.
-    #[inline]
-    pub fn reduce<const N: usize>(
-        self,
-        values: impl Load,
-        operation: MinMax,
-        rounding: Rounding,
-    ) -> Option<u32> {
-        in_selected!(
-            self,
-            elementwise::reduce_on::<N>(values, operation, rounding)
-        )
-    }
-
-    /// Runs `convert_chunks_on` in the instruction set.
-    #[inline]
-    pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, T: FloatType, const N: usize>(
-        self,
-        values: &[Float<S, W, M>],
-        out: &mut [T],
-        fallback: impl FnMut(&[Float<S, W, M>], &mut [T]),
-    ) {
-        in_selected!(
-            self,
-            convert_chunks_on::<S, W, M, T, N>(values, out, fallback)
-        );
     }
 }
 

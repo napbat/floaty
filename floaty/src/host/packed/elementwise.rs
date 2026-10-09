@@ -19,7 +19,7 @@
 use super::super::bits::nan_32;
 use super::super::environment::packed;
 use super::kernel::{encodings, singles};
-use super::{Directed, Nearest, any_lane, chunk, chunk_mut, dispatch, isa};
+use super::{Directed, Nearest, Task, any_lane, chunk, chunk_mut, dispatch, isa, run_task};
 use crate::env::{Env, Rounding};
 use crate::format::internal::MinMax;
 use crate::host::{Direction, Isa, Load, Operation};
@@ -332,27 +332,42 @@ pub fn store<const N: usize>(
     each: impl FnMut(usize, usize, Option<&[u32]>),
 ) -> Option<()> {
     let rounding = ready(env)?;
-    dispatch::store::<N>(values, rounding, each);
+    run_task(Store::<_, _, N> {
+        values,
+        rounding,
+        each,
+    });
     Some(())
 }
 
-/// Calls `each` for each chunk as `store` does, in the instruction set `I`,
-/// with its features, in an environment that allows the path, rounding in
-/// the direction `rounding`.
-#[inline]
-pub(super) fn store_on<I: Isa, const N: usize>(
-    values: impl Load,
+/// The arguments of `store`, whose task calls `each` for each chunk in the
+/// instruction set of the processor, with its features, in an environment
+/// that allows the path, rounding in the direction `rounding`.
+struct Store<V, E, const N: usize> {
+    values: V,
     rounding: Rounding,
-    each: impl FnMut(usize, usize, Option<&[u32]>),
-) {
-    if rounding == Rounding::TiesToEven {
-        store_in::<I, N>(values, Nearest, each);
-    } else {
-        store_in::<I, N>(values, Directed(rounding), each);
+    each: E,
+}
+
+impl<V: Load, E: FnMut(usize, usize, Option<&[u32]>), const N: usize> Task for Store<V, E, N> {
+    type Output = ();
+
+    #[inline]
+    fn run<I: Isa>(self) {
+        let Self {
+            values,
+            rounding,
+            each,
+        } = self;
+        if rounding == Rounding::TiesToEven {
+            store_in::<I, N>(values, Nearest, each);
+        } else {
+            store_in::<I, N>(values, Directed(rounding), each);
+        }
     }
 }
 
-/// Calls `each` as `store_on` does, in the copy of the loop for the
+/// Calls `each` as the task of `store` does, in the copy of the loop for the
 /// direction type of `direction`.
 #[inline]
 fn store_in<I: Isa, const N: usize>(
@@ -393,27 +408,42 @@ pub fn to_int<const N: usize>(
         return None;
     }
     let rounding = ready(env)?;
-    dispatch::to_int::<N>(values, rounding, each);
+    run_task(ToInt::<_, _, N> {
+        values,
+        rounding,
+        each,
+    });
     Some(())
 }
 
-/// Calls `each` for each chunk as `to_int` does, in the instruction set `I`,
-/// with its features, in an environment that allows the path, rounding in
-/// the direction `rounding`.
-#[inline]
-pub(super) fn to_int_on<I: Isa, const N: usize>(
-    values: impl Load,
+/// The arguments of `to_int`, whose task calls `each` for each chunk in the
+/// instruction set of the processor, with its features, in an environment
+/// that allows the path, rounding in the direction `rounding`.
+struct ToInt<V, E, const N: usize> {
+    values: V,
     rounding: Rounding,
-    each: impl FnMut(usize, usize, Option<&[i32]>),
-) {
-    if rounding == Rounding::TiesToEven {
-        to_int_in::<I, N>(values, Nearest, each);
-    } else {
-        to_int_in::<I, N>(values, Directed(rounding), each);
+    each: E,
+}
+
+impl<V: Load, E: FnMut(usize, usize, Option<&[i32]>), const N: usize> Task for ToInt<V, E, N> {
+    type Output = ();
+
+    #[inline]
+    fn run<I: Isa>(self) {
+        let Self {
+            values,
+            rounding,
+            each,
+        } = self;
+        if rounding == Rounding::TiesToEven {
+            to_int_in::<I, N>(values, Nearest, each);
+        } else {
+            to_int_in::<I, N>(values, Directed(rounding), each);
+        }
     }
 }
 
-/// Calls `each` as `to_int_on` does, in the copy of the loop for the
+/// Calls `each` as the task of `to_int` does, in the copy of the loop for the
 /// direction type of `direction`.
 #[inline]
 fn to_int_in<I: Isa, const N: usize>(
@@ -501,7 +531,11 @@ fn in_rest<I: Isa, const W: usize, T>(
 #[inline]
 pub fn reduce<const N: usize>(values: impl Load, operation: MinMax, env: &Env) -> Option<u32> {
     let rounding = ready(env)?;
-    dispatch::reduce::<N>(values, operation, rounding)
+    run_task(Reduce::<_, N> {
+        values,
+        operation,
+        rounding,
+    })
 }
 
 /// The lanes of a reduction, on a boundary of 64 bytes: the line of the
@@ -514,25 +548,36 @@ pub fn reduce<const N: usize>(values: impl Load, operation: MinMax, env: &Env) -
 #[repr(C, align(64))]
 struct Aligned<T>(T);
 
-/// Returns the result of `reduce` in the instruction set `I`, with its
-/// features, in an environment that allows the path. The minimum and
-/// maximum select a value, and the loads of `values` round in the direction
-/// `rounding`.
-#[inline]
-pub(super) fn reduce_on<I: Isa, const N: usize>(
-    values: impl Load,
+/// The arguments of `reduce`, whose task gives its result in the
+/// instruction set of the processor, with its features, in an environment
+/// that allows the path. The minimum and maximum select a value, and the
+/// loads of `values` round in the direction `rounding`.
+struct Reduce<V, const N: usize> {
+    values: V,
     operation: MinMax,
     rounding: Rounding,
-) -> Option<u32> {
-    if rounding == Rounding::TiesToEven {
-        reduce_in::<I, N>(values, operation, Nearest)
-    } else {
-        reduce_in::<I, N>(values, operation, Directed(rounding))
+}
+
+impl<V: Load, const N: usize> Task for Reduce<V, N> {
+    type Output = Option<u32>;
+
+    #[inline]
+    fn run<I: Isa>(self) -> Option<u32> {
+        let Self {
+            values,
+            operation,
+            rounding,
+        } = self;
+        if rounding == Rounding::TiesToEven {
+            reduce_in::<I, N>(values, operation, Nearest)
+        } else {
+            reduce_in::<I, N>(values, operation, Directed(rounding))
+        }
     }
 }
 
-/// Returns the result of `reduce_on` in the copy of the loop for the
-/// direction type of `direction`.
+/// Returns the result of the task of `reduce` in the copy of the loop for
+/// the direction type of `direction`.
 #[inline]
 fn reduce_in<I: Isa, const N: usize>(
     values: impl Load,
