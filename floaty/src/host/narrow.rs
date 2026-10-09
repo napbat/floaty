@@ -43,12 +43,19 @@ pub fn widen_half_bits(bits: u16) -> u32 {
 }
 
 /// Rounds the bits of a binary32 value to binary16, to nearest even, with
-/// integer instructions, for a build without a rounding instruction.
+/// integer instructions, for the scalar paths of a build without a rounding
+/// instruction.
 ///
 /// A value at or above 65520, the midpoint between the largest finite value
 /// and 2^16, gives the infinity. A normal result rebiases the exponent and
 /// rounds away the low 13 bits, as `round_to_bfloat` rounds away 16. A NaN
 /// gives a quiet NaN, which the caller sends to the engine.
+///
+/// `round_to_half_lanes` gives the same bits from one binary32 sum, but the
+/// scalar paths keep this rounding without a sum. Through
+/// `round_to_half_lanes` and one `ADDSS`, in the default x86-64 build on a
+/// Ryzen AI Max+ 395, binary16 `+` took 6.4 ns against 6.2 ns, and `+` of
+/// `Lanes<F16, 8>` took 3.7 ns per lane against 3.3 ns.
 #[cfg(any(
     all(
         any(target_arch = "x86", target_arch = "x86_64"),
