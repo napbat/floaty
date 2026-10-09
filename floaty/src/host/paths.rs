@@ -7,6 +7,7 @@
 //! binary64 in integer instructions, the conversions between bfloat16 and
 //! binary32 in integer instructions, and `from_int` of an integer that
 //! binary32 or binary64 holds exactly. The mode must still allow the path.
+//! The module `readiness` holds the rule of whether a path may run.
 //!
 //! Every floating-point instruction of a path runs in inline assembly, and
 //! the NaN tests use integer instructions. LLVM assumes the default
@@ -26,47 +27,25 @@
 //! 2^-40` rounds to `1 + 2^-11` in binary32, and then to 1, not to
 //! `1 + 2^-10`. So those operations take no path through binary32.
 
+mod readiness;
+
 use core::cmp::Ordering;
 
+pub use self::readiness::{Unit, conversion_unit, host_path};
+use self::readiness::{compatible, ready_for_arithmetic_in, ready_for_in, ready_for_integral_in};
+pub(super) use self::readiness::{
+    ready_for, ready_for_arithmetic, ready_for_integral, ready_in_direction,
+};
 use super::Operation;
 use super::bits::{
     min_max_differs, min_max_differs_64, min_max_differs_128, nan_16, nan_32, nan_64, order,
 };
-use super::environment::{self, default_environment};
+use super::environment;
 use crate::env::{Env, Rounding};
 use crate::format::Standard;
 use crate::format::internal::{LimbConversion, MinMax};
 use crate::host::Host;
 use crate::limbs::Limbs;
-
-/// Returns `true` when the host unit gives the results of `env` for a format
-/// of `precision` bits.
-#[inline]
-const fn compatible(env: &Env, precision: u32) -> bool {
-    // Every field is named, so a new field of `Env` needs a decision here.
-    // Tininess changes only flags, the NaN rule applies only to a NaN result,
-    // and the total order applies to no arithmetic. Saturation changes the
-    // result of an overflow, which the host unit carries to an infinity.
-    let Env {
-        rounding,
-        flush_to_zero,
-        denormals_are_zero,
-        tininess: _,
-        nan: _,
-        precision: limit,
-        saturate,
-        total_order: _,
-    } = *env;
-    let full_precision = match limit {
-        None => true,
-        Some(limit) => limit.get() >= precision,
-    };
-    matches!(rounding, Rounding::TiesToEven)
-        && !flush_to_zero
-        && !denormals_are_zero
-        && !saturate
-        && full_precision
-}
 
 /// Returns the host value of a binary32 encoding.
 #[inline]
@@ -181,124 +160,6 @@ fn limb_pair_encoding<S: Standard<W>, const W: usize>(result: [u64; 2]) -> S::Bi
     S::Bits::from_limbs(result.resize())
 }
 
-/// How a scalar host path learns whether the floating-point environment of
-/// its unit is the default. A host path reads the environment for each
-/// operation by default. A `Lanes` operation that runs a scalar host path in
-/// each lane reads it once for all lanes: no code between the lanes changes
-/// the environment, and `STMXCSR` takes about 20 cycles on a Ryzen AI Max+
-/// 395, more than the operation. The x87 unit reads its control word for
-/// each operation either way, because that read is fast.
-#[derive(Clone, Copy, Debug)]
-pub enum Unit {
-    /// The host path reads the environment of its unit.
-    Read,
-    /// One read found the environment of the unit of every host kind but x87
-    /// extended: `true` when it is the default.
-    Known(bool),
-}
-
-impl Unit {
-    /// Reads once the environment of the unit that computes the host kind
-    /// `host`, for the scalar host paths of the lanes of one operation. x87
-    /// extended and a kind without a host unit keep [`Unit::Read`].
-    #[must_use]
-    #[inline]
-    pub fn read(host: Host) -> Self {
-        match host {
-            Host::None | Host::Extended => Self::Read,
-            Host::Single | Host::Double | Host::Half | Host::BFloat | Host::Quad => {
-                Self::Known(default_environment())
-            }
-        }
-    }
-
-    /// Returns `true` when the environment of the unit of every host kind
-    /// but x87 extended is the default, as one read found it, or from a read
-    /// now.
-    #[inline]
-    fn default_environment(self) -> bool {
-        match self {
-            Self::Read => default_environment(),
-            Self::Known(default) => default,
-        }
-    }
-}
-
-/// Returns the host kind whose unit converts the host kind `from` to `to`:
-/// the x87 unit converts to and from x87 extended precision.
-#[must_use]
-#[inline]
-pub const fn conversion_unit(from: Host, to: Host) -> Host {
-    if matches!(from, Host::Extended) {
-        from
-    } else {
-        to
-    }
-}
-
-/// Returns `true` when the mode and the environment of the host unit that
-/// computes the host kind `host` allow a host path for a format of
-/// `precision` bits. The x87 unit computes x87 extended precision, and the
-/// SSE unit, the AArch64 unit, or the s390x unit computes the other kinds.
-#[inline]
-pub(super) fn ready_for(host: Host, env: &Env, precision: u32) -> bool {
-    ready_for_in(host, env, precision, Unit::Read)
-}
-
-/// Returns `true` when `ready_for` allows the path, with the environment of
-/// the unit from `unit`.
-#[inline]
-fn ready_for_in(host: Host, env: &Env, precision: u32, unit: Unit) -> bool {
-    let unit = match host {
-        Host::Extended => environment::x87_environment(),
-        Host::None | Host::Half | Host::BFloat | Host::Single | Host::Double | Host::Quad => {
-            unit.default_environment()
-        }
-    };
-    compatible(env, precision) && unit
-}
-
-/// Returns the rounding direction of `env` when `ready_for` allows a host
-/// path of `host` for a format of `precision` bits in `env` rounded to
-/// nearest even, and the direction is one of IEEE 754 that the instructions
-/// of a path can take from their encoding: to nearest even, toward +∞,
-/// toward -∞, or toward zero. Returns `None` otherwise. The packed paths of
-/// the slice operations round in the other three directions only in the
-/// forms with a rounding control, as `packed::dispatch::direction` checks.
-#[inline]
-pub(super) fn ready_in_direction(host: Host, env: &Env, precision: u32) -> Option<Rounding> {
-    let direction = matches!(
-        env.rounding,
-        Rounding::TiesToEven
-            | Rounding::TowardPositive
-            | Rounding::TowardNegative
-            | Rounding::TowardZero
-    );
-    let nearest = env.with_rounding(Rounding::TiesToEven);
-    (direction && ready_for(host, &nearest, precision)).then_some(env.rounding)
-}
-
-/// Returns `true` when `ready_for` allows a host path whose instructions
-/// round to the precision of the unit: `+`, `-`, `*`, `/`, and `sqrt`. The
-/// x87 unit must then compute at the 64-bit precision too, which its other
-/// paths do not need, as `x87_environment` states.
-#[inline]
-pub(super) fn ready_for_arithmetic(host: Host, env: &Env, precision: u32) -> bool {
-    ready_for_arithmetic_in(host, env, precision, Unit::Read)
-}
-
-/// Returns `true` when `ready_for_arithmetic` allows the path, with the
-/// environment of the unit from `unit`.
-#[inline]
-fn ready_for_arithmetic_in(host: Host, env: &Env, precision: u32, unit: Unit) -> bool {
-    match host {
-        Host::Extended => compatible(env, precision) && environment::x87_full_precision(),
-        Host::None | Host::Half | Host::BFloat | Host::Single | Host::Double | Host::Quad => {
-            ready_for_in(host, env, precision, unit)
-        }
-    }
-}
-
 /// Returns the result of `operation` from the host unit, or `None` when the
 /// path does not apply or the result is a NaN.
 #[inline]
@@ -403,28 +264,6 @@ pub fn mul_add<S: Standard<W>, const W: usize>(
             double_encoding::<S, W>(environment::mul_add_f64(a, b, double::<S, W>(addend))?)
         }
     }
-}
-
-/// Returns `true` when the mode and the environment of the host unit allow a
-/// rounding to an integral value in the direction of `env`. The instructions
-/// take the direction in their encoding, not from the environment, so every
-/// other field must allow a host path, and the environment must round to
-/// nearest even.
-#[inline]
-pub(super) fn ready_for_integral(host: Host, env: &Env, precision: u32) -> bool {
-    ready_for_integral_in(host, env, precision, Unit::Read)
-}
-
-/// Returns `true` when `ready_for_integral` allows the path, with the
-/// environment of the unit from `unit`.
-#[inline]
-fn ready_for_integral_in(host: Host, env: &Env, precision: u32, unit: Unit) -> bool {
-    ready_for_in(
-        host,
-        &env.with_rounding(Rounding::TiesToEven),
-        precision,
-        unit,
-    )
 }
 
 /// Returns the value rounded to an integral value in the rounding direction
@@ -914,33 +753,5 @@ impl Ready {
         let [a, b, c] = [left, right, addend].map(f64::from_bits);
         let bits = environment::mul_add_f64(a, b, c)?.to_bits();
         (!nan_64(bits)).then_some(bits)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use core::num::NonZeroU32;
-
-    use super::compatible;
-    use crate::env::{Env, Rounding};
-
-    #[test]
-    fn only_a_behavior_that_the_host_matches_is_compatible() {
-        assert!(compatible(&Env::IEEE, 53));
-        assert!(compatible(&Env::X86_SSE, 24));
-        assert!(compatible(&Env::X87, 53));
-        assert!(!compatible(&Env::X87, 113));
-        assert!(!compatible(
-            &Env::IEEE.with_rounding(Rounding::TowardZero),
-            24
-        ));
-        assert!(!compatible(&Env::IEEE.with_flush_to_zero(true), 24));
-        assert!(!compatible(&Env::IEEE.with_denormals_are_zero(true), 24));
-        // The host unit carries an overflow to an infinity.
-        assert!(!compatible(&Env::IEEE.with_saturate(true), 24));
-        assert!(!compatible(
-            &Env::IEEE.with_precision(NonZeroU32::new(52)),
-            53
-        ));
     }
 }

@@ -3,7 +3,7 @@
 use core::fmt::{self, Debug, Formatter};
 use core::marker::PhantomData;
 
-use crate::env::{Behavior, Env, Flags, Mode, Override, mode};
+use crate::env::{Behavior, Env, Flags, HostPath, Mode, Override, mode};
 use crate::exact::{Exact, Unrounded};
 use crate::format::internal::{LimbConversion, Source};
 use crate::format::{B11Fnuz, Bid, Binary, Decimal, Dpd, Finite, Fnuz, NoInf, Standard, X87};
@@ -94,6 +94,30 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     pub fn with_mode<Other: Mode>(self) -> Float<S, W, Other> {
         Float::from_masked(self.bits)
+    }
+
+    /// Returns whether the host paths of the type run on this thread, and
+    /// otherwise what sends its operations to the engine, as [`HostPath`]
+    /// states. The build, the format, and the mode of the type are
+    /// constants. The call reads the environment of the host unit, as an
+    /// operation does. The answer changes no result: the host paths and the
+    /// engine give the same bits.
+    ///
+    /// ```
+    /// use floaty::env::HostPath;
+    /// use floaty::{F8E4M3, F32};
+    ///
+    /// // FP8 has no host kind, so its operations take the engine.
+    /// assert_eq!(F8E4M3::host_path(), HostPath::Unavailable);
+    ///
+    /// // binary32 runs on the host where the build and the thread allow it.
+    /// if let HostPath::Environment = F32::host_path() {
+    ///     eprintln!("the floating-point environment of this thread is not the default");
+    /// }
+    /// ```
+    #[must_use]
+    pub fn host_path() -> HostPath {
+        host::host_path(S::HOST, &M::ENV, S::PRECISION)
     }
 
     /// Rounds an exact value to this format.

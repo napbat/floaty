@@ -21,7 +21,9 @@
 //! computes exactly, such as `exp`, or `mul_add` where the instruction set
 //! has no fused multiply-add, and a lane where a step reads a bit of a NaN
 //! that can change a result that is not a NaN. Elsewhere every lane runs the
-//! steps of the type.
+//! steps of the type. `map` returns a [`Report`] of how many lanes the
+//! engine computed, and [`Float::host_path`] tells why a call took no host
+//! path at all.
 //!
 //! ```
 //! use floaty::block::{Chain, Steps};
@@ -300,6 +302,54 @@ pub trait Chain<const IN: usize, const P: usize> {
     fn apply<S: Steps>(&self, x: [S; IN], p: [S; P]) -> S;
 }
 
+/// The lanes of one call of [`Float::map`]: how many the call had, and how
+/// many the engine computed. The engine computes every lane of a call that
+/// takes no host path, as [`Float::host_path`] states why. Otherwise it
+/// computes each lane whose result is a NaN, and each lane with a step that
+/// the instruction set cannot compute exactly, as the [module](crate::block)
+/// states. The results are the same either way: the counts show only the
+/// speed.
+///
+/// ```
+/// use floaty::F32;
+/// use floaty::block::{Chain, Steps};
+///
+/// /// `exp(x)`, which no instruction computes.
+/// struct Exp;
+///
+/// impl Chain<1, 0> for Exp {
+///     fn apply<S: Steps>(&self, [x]: [S; 1], []: [S; 0]) -> S {
+///         x.exp()
+///     }
+/// }
+///
+/// let x = [0.0_f32, 1.0];
+/// let mut out = [0.0_f32; 2];
+/// let report = F32::map(&Exp, [&x[..]], [], &mut out[..]);
+/// assert_eq!(report.lane_count(), 2);
+/// assert_eq!(report.engine_lane_count(), 2);
+/// assert_eq!(out[0], 1.0);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Report {
+    lane_count: usize,
+    engine_lane_count: usize,
+}
+
+impl Report {
+    /// Returns the count of lanes of the call: the length of `out`.
+    #[must_use]
+    pub fn lane_count(&self) -> usize {
+        self.lane_count
+    }
+
+    /// Returns the count of lanes whose result the engine computed.
+    #[must_use]
+    pub fn engine_lane_count(&self) -> usize {
+        self.engine_lane_count
+    }
+}
+
 /// Implements the entry points of blocks for each binary type of floaty in
 /// each mode.
 macro_rules! blocks {
@@ -311,7 +361,8 @@ macro_rules! blocks {
                 /// parameters `p`. The call checks the environment and
                 /// selects the instruction set once, as the
                 /// [module](crate::block) states. Each result is the result
-                /// of the steps of the type.
+                /// of the steps of the type. Returns the [`Report`] of the
+                /// lanes that the engine computed.
                 ///
                 /// # Panics
                 ///
@@ -321,7 +372,8 @@ macro_rules! blocks {
                     x: [&[E]; IN],
                     p: [Self; P],
                     out: &mut [O],
-                ) where
+                ) -> Report
+                where
                     C: Chain<IN, P>,
                     E: Element<Self>,
                     O: Element<Self>,
@@ -332,10 +384,14 @@ macro_rules! blocks {
                         x.iter().all(|values| values.len() == out.len()),
                         "each input holds one value for each output"
                     );
-                    match host::block::map(chain, x, p, out) {
-                        Some(false) => {}
+                    let engine_lane_count = match host::block::map(chain, x, p, out) {
+                        Some(false) => 0,
                         Some(true) => replay(chain, x, p, out, Self::is_nan),
                         None => replay(chain, x, p, out, |_| true),
+                    };
+                    Report {
+                        lane_count: out.len(),
+                        engine_lane_count,
                     }
                 }
 
@@ -358,17 +414,20 @@ macro_rules! blocks {
 blocks!(Half, BFloat, Single, Double);
 
 /// Writes the result of `chain` in the steps of the type into each element
-/// of `out` that `select` accepts.
+/// of `out` that `select` accepts, and returns the count of those elements.
 fn replay<C: Chain<IN, P>, F: Steps, const IN: usize, const P: usize>(
     chain: &C,
     x: [&[F]; IN],
     p: [F; P],
     out: &mut [F],
     select: impl Fn(F) -> bool,
-) {
+) -> usize {
+    let mut count = 0;
     for (index, result) in out.iter_mut().enumerate() {
         if select(*result) {
             *result = chain.apply(x.map(|values| values[index]), p);
+            count += 1;
         }
     }
+    count
 }

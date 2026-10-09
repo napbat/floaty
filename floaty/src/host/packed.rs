@@ -596,40 +596,55 @@ pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, T: FloatType, con
     if !ready_for(T::HOST, env, T::HOST.precision()) {
         return None;
     }
-    dispatch::convert_chunks::<S, W, M, T, N>(values, out, fallback);
+    run_task(ConvertChunks::<S, W, M, _, T, N> {
+        values,
+        out,
+        fallback,
+    });
     Some(())
 }
 
-/// Converts the full chunks as `convert_chunks` does, in the instruction
-/// set `I`, in an environment that allows the path. The loop runs with the
-/// features of `I`, and the conversion and the store of each chunk run in
-/// the loop: a call for each chunk would pass the encodings through memory.
-/// `T::HOST` is a constant, so the loop has the conversion of one kind.
-#[inline]
-fn convert_chunks_on<
-    I: Isa,
+/// The arguments of `convert_chunks`, whose task converts the full chunks
+/// in the instruction set of the processor, in an environment that allows
+/// the path. The loop runs with the features of the set, and the conversion
+/// and the store of each chunk run in the loop: a call for each chunk would
+/// pass the encodings through memory. `T::HOST` is a constant, so the loop
+/// has the conversion of one kind.
+struct ConvertChunks<'a, S: Standard<W>, const W: usize, M: Mode, F, T, const N: usize> {
+    values: &'a [Float<S, W, M>],
+    out: &'a mut [T],
+    fallback: F,
+}
+
+impl<S, const W: usize, M, F, T, const N: usize> Task for ConvertChunks<'_, S, W, M, F, T, N>
+where
     S: Standard<W>,
-    const W: usize,
     M: Mode,
+    F: FnMut(&[Float<S, W, M>], &mut [T]),
     T: FloatType,
-    const N: usize,
->(
-    values: &[Float<S, W, M>],
-    out: &mut [T],
-    mut fallback: impl FnMut(&[Float<S, W, M>], &mut [T]),
-) {
-    I::run(move || {
-        let chunks = values.as_chunks::<N>().0.iter();
-        for (chunk, out) in chunks.zip(out.as_chunks_mut::<N>().0) {
-            match convert_lanes::<I, S, W, M, N>(chunk, T::HOST) {
-                Some(bits) => out
-                    .iter_mut()
-                    .zip(bits)
-                    .for_each(|(result, bits)| *result = T::from_host([bits, 0])),
-                None => fallback(chunk, out),
+{
+    type Output = ();
+
+    #[inline]
+    fn run<I: Isa>(self) {
+        let Self {
+            values,
+            out,
+            mut fallback,
+        } = self;
+        I::run(move || {
+            let chunks = values.as_chunks::<N>().0.iter();
+            for (chunk, out) in chunks.zip(out.as_chunks_mut::<N>().0) {
+                match convert_lanes::<I, S, W, M, N>(chunk, T::HOST) {
+                    Some(bits) => out
+                        .iter_mut()
+                        .zip(bits)
+                        .for_each(|(result, bits)| *result = T::from_host([bits, 0])),
+                    None => fallback(chunk, out),
+                }
             }
-        }
-    });
+        });
+    }
 }
 
 /// Returns `f` of each lane: a loop, not `array::map`, which LLVM calls out

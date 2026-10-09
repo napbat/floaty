@@ -67,7 +67,7 @@ mod rounding;
 mod unpacked;
 
 pub use double_double::{Algorithm, DoubleDouble, Gcc, Qd};
-pub use env::{Env, Flags, Rounding, TotalOrder, mode};
+pub use env::{Env, Flags, HostPath, Rounding, TotalOrder, mode};
 pub use exact::Exact;
 pub use float::{
     Augmented, BF16, Class, D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd, Decoded, F4E2M1Fn,

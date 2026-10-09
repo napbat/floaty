@@ -29,12 +29,9 @@ mod x86;
 
 use super::super::environment::packed;
 use super::super::paths::ready_in_direction;
-use super::super::{Host, Isa, Kind, Load, Step, Term};
-use super::{Build, available, convert_chunks_on, elementwise, kernel};
-use crate::env::{Env, Mode, Rounding};
-use crate::float::{Float, FloatType};
-use crate::format::Standard;
-use crate::format::internal::MinMax;
+use super::super::{Host, Isa, Kind};
+use super::{Build, available};
+use crate::env::{Env, Rounding};
 
 /// Code generic over the instruction set, which `run_task` runs in the set
 /// of this processor. A closure cannot be generic, so a type holds the
@@ -111,97 +108,4 @@ pub fn levels() -> impl Iterator<Item = &'static str> {
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
     let larger: &[&'static str] = &[];
     core::iter::once("build").chain(larger.iter().copied())
-}
-
-/// Runs `accumulate_on` in the instruction set of this processor.
-#[inline]
-pub fn accumulate<const N: usize>(
-    x: impl Load,
-    y: impl Load,
-    term: Term,
-    step: Step,
-    rounding: Rounding,
-) -> Option<u32> {
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
-    if let Some(selected) = x86::selected() {
-        return selected.accumulate::<N>(x, y, term, step, rounding);
-    }
-    kernel::accumulate_on::<Build, N>(x, y, term, step, rounding)
-}
-
-/// Runs `rows_on` in the instruction set of this processor.
-#[inline]
-pub fn rows<const N: usize>(
-    rows: impl Load,
-    query: impl Load,
-    row_count: usize,
-    term: Term,
-    rounding: Rounding,
-    each: impl FnMut(usize, Option<u32>),
-) {
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
-    if let Some(selected) = x86::selected() {
-        selected.rows::<N>(rows, query, row_count, term, rounding, each);
-        return;
-    }
-    kernel::rows_on::<Build, N>(rows, query, row_count, term, rounding, each);
-}
-
-/// Runs `store_on` in the instruction set of this processor.
-#[inline]
-pub fn store<const N: usize>(
-    values: impl Load,
-    rounding: Rounding,
-    each: impl FnMut(usize, usize, Option<&[u32]>),
-) {
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
-    if let Some(selected) = x86::selected() {
-        selected.store::<N>(values, rounding, each);
-        return;
-    }
-    elementwise::store_on::<Build, N>(values, rounding, each);
-}
-
-/// Runs `to_int_on` in the instruction set of this processor.
-#[inline]
-pub fn to_int<const N: usize>(
-    values: impl Load,
-    rounding: Rounding,
-    each: impl FnMut(usize, usize, Option<&[i32]>),
-) {
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
-    if let Some(selected) = x86::selected() {
-        selected.to_int::<N>(values, rounding, each);
-        return;
-    }
-    elementwise::to_int_on::<Build, N>(values, rounding, each);
-}
-
-/// Runs `reduce_on` in the instruction set of this processor.
-#[inline]
-pub fn reduce<const N: usize>(
-    values: impl Load,
-    operation: MinMax,
-    rounding: Rounding,
-) -> Option<u32> {
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
-    if let Some(selected) = x86::selected() {
-        return selected.reduce::<N>(values, operation, rounding);
-    }
-    elementwise::reduce_on::<Build, N>(values, operation, rounding)
-}
-
-/// Runs `convert_chunks_on` in the instruction set of this processor.
-#[inline]
-pub fn convert_chunks<S: Standard<W>, const W: usize, M: Mode, T: FloatType, const N: usize>(
-    values: &[Float<S, W, M>],
-    out: &mut [T],
-    fallback: impl FnMut(&[Float<S, W, M>], &mut [T]),
-) {
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
-    if let Some(selected) = x86::selected() {
-        selected.convert_chunks::<S, W, M, T, N>(values, out, fallback);
-        return;
-    }
-    convert_chunks_on::<Build, S, W, M, T, N>(values, out, fallback);
 }

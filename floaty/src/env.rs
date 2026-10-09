@@ -743,6 +743,56 @@ pub trait Mode: Sealed + Copy + Default + 'static {
     const ENV: Env;
 }
 
+/// Whether the host paths of a float type run, from
+/// [`Float::host_path`](crate::Float::host_path).
+///
+/// A type runs its host paths only where its format has a host kind, its
+/// mode asks for no field that the host unit does not give, and the
+/// environment of the host unit of the thread is the default. Each variant
+/// but `Ready` names the first of these that fails. The results are the
+/// same in each case: only the speed changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum HostPath {
+    /// The host paths run. An operation still takes the engine where the
+    /// build has no instruction for it, as the host path table of the README
+    /// lists, and for a NaN result.
+    Ready,
+    /// The build has no host path for the format: the format has no host
+    /// kind, or the build has no host unit, as with
+    /// `--cfg floaty_engine_only` or for an architecture without a host unit.
+    Unavailable,
+    /// The mode sets the field to a value that the host unit does not give,
+    /// so the operations take the engine. A mode that rounds in another
+    /// direction still runs `round_to_integral` on the host, and with
+    /// AVX-512F the slice kernels and the elementwise slice operations toward
+    /// +∞, -∞, and zero.
+    Mode(EnvField),
+    /// The environment of the host unit of this thread is not the default:
+    /// MXCSR on x86 and x86-64, and for x87 extended the x87 control word,
+    /// with the 64-bit precision; FPCR on AArch64; or the FPC register on
+    /// s390x. floaty reads the environment, and never changes it.
+    Environment,
+}
+
+/// A field of [`Env`] that keeps a mode from the host paths, in
+/// [`HostPath::Mode`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum EnvField {
+    /// [`Env::rounding`] is not [`Rounding::TiesToEven`].
+    Rounding,
+    /// [`Env::flush_to_zero`] is set.
+    FlushToZero,
+    /// [`Env::denormals_are_zero`] is set.
+    DenormalsAreZero,
+    /// [`Env::precision`] is below the precision of the format.
+    Precision,
+    /// [`Env::saturate`] is set. The host unit carries an overflow to an
+    /// infinity.
+    Saturate,
+}
+
 pub mod mode;
 mod observe;
 
