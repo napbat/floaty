@@ -623,7 +623,7 @@ time on every host.
 
 | Function | Result |
 | --- | --- |
-| `F32::map(&chain, x, p, out)`, and `map` of `F16`, `BF16`, and `F64` | the chain of value `i` of each slice of `x` and the parameters `p`, into element `i` of `out`; slices of the type, or of `f32` for `F32` and of `f64` for `F64` |
+| `F32::map(&chain, x, p, out)`, and `map` of `F16`, `BF16`, and `F64` | the chain of value `i` of each slice of `x` and the parameters `p`, into element `i` of `out`; slices of the type, or of `f32` for `F32` and of `f64` for `F64`. Returns a `Report`: `lane_count()` and `engine_lane_count()`, the lanes that the engine computed |
 | `F32::evaluate(&chain, x, p)`, and `evaluate` of `F16`, `BF16`, and `F64` | the chain of one lane |
 
 A block checks the environment and selects the instruction set once for
@@ -634,8 +634,10 @@ format, as their host paths do. A lane whose result is a NaN runs the
 chain again in the engine, which selects the NaN by the rule of the mode.
 So does a lane with a step that the instruction set cannot compute
 exactly, and a lane where a step reads a bit of a NaN that can change a
-result that is not a NaN. The host path table lists these steps. LLVM
-vectorizes the loop only where it inlines `apply`, so mark `apply`
+result that is not a NaN. The host path table lists these steps. The
+`Report` of `map` counts those lanes: every lane when the call takes no
+host path, as `host_path` tells why, and otherwise each lane that ran again.
+LLVM vectorizes the loop only where it inlines `apply`, so mark `apply`
 `#[inline(always)]` in a long chain, and in a binary16 chain, whose steps
 round in more instructions.
 

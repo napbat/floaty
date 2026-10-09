@@ -6,17 +6,19 @@
 //! the boundary encodings of the format and random pairs, with boundary and
 //! random parameters, in slices of the type and of its host type and of
 //! each length. The steps of one value also take every 16-bit encoding, and
-//! in the wider formats values next to integers and ties. On x86-64, a block
-//! under each MXCSR control of the host-path tests gives the results of the
-//! engine, and no unmasked exception traps: the check of the environment
-//! comes before every step.
+//! in the wider formats values next to integers and ties. The report of
+//! `map` counts each lane, and in the engine at least each lane with a NaN
+//! result, and exactly those where no step needs the engine. On x86-64, a
+//! block under each MXCSR control of the host-path tests gives the results
+//! of the engine, and no unmasked exception traps: the check of the
+//! environment comes before every step.
 
 mod width;
 
 use std::fmt::Debug;
 
 use floaty::block::{Chain, Steps};
-use floaty::{BF16, Env, F16, F32, F64, Rounding};
+use floaty::{BF16, Env, F16, F32, F64, HostPath, Rounding};
 use floaty_verify::random::SplitMix64;
 
 use self::width::Width;
@@ -333,10 +335,18 @@ fn check<T: Width, C: Chain<2, 1> + Debug>(
     for length in [0, 1, 2, 7, 8, 9, 31, 32, 33, 100, pairs.len()] {
         let length = length.min(pairs.len());
         let mut out = vec![p; length];
-        T::map(chain, [&x[..length], &y[..length]], [p], &mut out[..]);
+        let report = T::map(chain, [&x[..length], &y[..length]], [p], &mut out[..]);
         for (index, result) in out.iter().enumerate() {
             assert_eq!(result.bits(), expected[index], "map {}", context(index));
         }
+        // The engine computes every lane whose result is a NaN.
+        let nan_count = out.iter().filter(|&&result| result.is_nan()).count();
+        assert_eq!(report.lane_count(), length, "{chain:?} lanes");
+        assert!(
+            (nan_count..=length).contains(&report.engine_lane_count()),
+            "{chain:?} engine lanes {} of {length}, {nan_count} NaN",
+            report.engine_lane_count()
+        );
     }
     let hosts =
         |values: &[T]| -> Vec<T::Host> { values.iter().map(|&value| value.into()).collect() };
@@ -407,6 +417,40 @@ fn value_steps_give_the_steps_one_at_a_time() {
     check_value_steps::<BF16>(0x57E9);
     check_value_steps::<F32>(0x57E9);
     check_value_steps::<F64>(0x57E9);
+}
+
+/// Checks the counts of the report of `map` in `T`. The arithmetic chain has
+/// no step that the engine must compute, so where the host paths run the
+/// engine computes exactly the lanes whose result is a NaN, and elsewhere
+/// every lane. No instruction computes `exp`, so the engine computes every
+/// lane of that chain.
+fn check_report<T: Width>(seed: u64) {
+    let mut random = SplitMix64::new(seed);
+    let pairs = T::pairs(&mut random);
+    let x: Vec<T> = pairs.iter().map(|&(x, _)| x).collect();
+    let y: Vec<T> = pairs.iter().map(|&(_, y)| y).collect();
+    for p in T::parameters(&mut random) {
+        let mut out = vec![p; pairs.len()];
+        let report = T::map(&Arithmetic, [&x[..], &y[..]], [p], &mut out[..]);
+        let nan_count = out.iter().filter(|&&result| result.is_nan()).count();
+        let expected = if T::host_path() == HostPath::Ready {
+            nan_count
+        } else {
+            pairs.len()
+        };
+        assert_eq!(report.lane_count(), pairs.len(), "{p:?}");
+        assert_eq!(report.engine_lane_count(), expected, "arithmetic {p:?}");
+        let report = T::map(&Step::Exp, [&x[..], &y[..]], [p], &mut out[..]);
+        assert_eq!(report.engine_lane_count(), pairs.len(), "exp {p:?}");
+    }
+}
+
+#[test]
+fn map_reports_the_lanes_that_the_engine_computed() {
+    check_report::<F16>(0x4E90);
+    check_report::<BF16>(0x4E90);
+    check_report::<F32>(0x4E90);
+    check_report::<F64>(0x4E90);
 }
 
 #[test]

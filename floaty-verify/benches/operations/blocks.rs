@@ -251,7 +251,9 @@ fn update_row(vectors: &[Vec<f32>]) {
         );
     };
     let mut block_out = vec![0.0_f32; DIMENSION];
-    let mut block = |x: &[f32], y: &[f32]| F32::map(&Update, [x, y], p, &mut block_out[..]);
+    let mut block = |x: &[f32], y: &[f32]| {
+        F32::map(&Update, [x, y], p, &mut block_out[..]);
+    };
     let mut scalar_out = vec![0.0_f32; DIMENSION];
     let mut scalar = |x: &[f32], y: &[f32]| {
         for (o, (&x, &y)) in scalar_out.iter_mut().zip(x.iter().zip(y)) {
@@ -275,7 +277,9 @@ fn update_row(vectors: &[Vec<f32>]) {
 fn fused_update_row(vectors: &[Vec<f32>]) {
     let p = [F32::from_bits(0x3F7F_0000), F32::from_bits(0x3B80_0000)];
     let mut block_out = vec![0.0_f32; DIMENSION];
-    let mut block = |x: &[f32], y: &[f32]| F32::map(&FusedUpdate, [x, y], p, &mut block_out[..]);
+    let mut block = |x: &[f32], y: &[f32]| {
+        F32::map(&FusedUpdate, [x, y], p, &mut block_out[..]);
+    };
     let mut scalar_out = vec![0.0_f32; DIMENSION];
     let mut scalar = |x: &[f32], y: &[f32]| {
         for (o, (&x, &y)) in scalar_out.iter_mut().zip(x.iter().zip(y)) {
@@ -314,7 +318,9 @@ fn normalize_row(vectors: &[Vec<f32>]) {
         Single::store(view, &mut views_out[..]);
     };
     let mut block_out = vec![0.0_f32; DIMENSION];
-    let mut block = |x: &[f32], _: &[f32]| F32::map(&Normalize, [x], p, &mut block_out[..]);
+    let mut block = |x: &[f32], _: &[f32]| {
+        F32::map(&Normalize, [x], p, &mut block_out[..]);
+    };
     let mut scalar_out = vec![0.0_f32; DIMENSION];
     let mut scalar = |x: &[f32], _: &[f32]| {
         for (o, &x) in scalar_out.iter_mut().zip(x) {
@@ -352,7 +358,9 @@ fn bounds_row(vectors: &[Vec<f32>]) {
         Single::store(view, &mut views_out[..]);
     };
     let mut block_out = vec![0.0_f32; DIMENSION];
-    let mut block = |x: &[f32], y: &[f32]| F32::map(&Bounds, [x, y], [low], &mut block_out[..]);
+    let mut block = |x: &[f32], y: &[f32]| {
+        F32::map(&Bounds, [x, y], [low], &mut block_out[..]);
+    };
     let mut scalar_out = vec![0.0_f32; DIMENSION];
     let mut scalar = |x: &[f32], y: &[f32]| {
         for (o, (&x, &y)) in scalar_out.iter_mut().zip(x.iter().zip(y)) {
@@ -400,8 +408,9 @@ fn quantize_row(vectors: &[Vec<f32>]) {
         );
     };
     let mut block_out = vec![0.0_f32; DIMENSION];
-    let mut block =
-        |x: &[f32], _: &[f32]| F32::map(&Quantize, [x], [inverse, step], &mut block_out[..]);
+    let mut block = |x: &[f32], _: &[f32]| {
+        F32::map(&Quantize, [x], [inverse, step], &mut block_out[..]);
+    };
     let mut scalar_out = vec![0.0_f32; DIMENSION];
     let mut scalar = |x: &[f32], _: &[f32]| {
         for (o, &x) in scalar_out.iter_mut().zip(x) {
@@ -426,7 +435,9 @@ fn quantize_row(vectors: &[Vec<f32>]) {
 fn score_rows(vectors: &[Vec<f32>]) {
     let p = [0x3F00_0000, 0x3F80_0000, 0x3E80_0000].map(F32::from_bits);
     let mut block_out = vec![0.0_f32; DIMENSION];
-    let mut block = |x: &[f32], y: &[f32]| F32::map(&Score, [x, y], p, &mut block_out[..]);
+    let mut block = |x: &[f32], y: &[f32]| {
+        F32::map(&Score, [x, y], p, &mut block_out[..]);
+    };
     let mut scalar_out = vec![0.0_f32; DIMENSION];
     let mut scalar = |x: &[f32], y: &[f32]| {
         for (o, (&x, &y)) in scalar_out.iter_mut().zip(x.iter().zip(y)) {

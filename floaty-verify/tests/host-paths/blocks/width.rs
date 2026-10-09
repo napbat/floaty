@@ -5,8 +5,8 @@
 use std::fmt::Debug;
 use std::ops::Neg;
 
-use floaty::block::{Chain, Steps};
-use floaty::{BF16, Element, Env, F16, F32, F64, Flags};
+use floaty::block::{Chain, Report, Steps};
+use floaty::{BF16, Element, Env, F16, F32, F64, Flags, HostPath};
 use floaty_verify::encodings::Layout;
 use floaty_verify::random::SplitMix64;
 
@@ -71,20 +71,29 @@ macro_rules! forward {
     };
 }
 
-/// Implements `map` and `evaluate` of a type by its entry points.
+/// Implements `map`, `evaluate`, `host_path`, and `is_nan` of a type by its
+/// entry points.
 macro_rules! entry_points {
     () => {
-        fn map<C, E, O>(chain: &C, x: [&[E]; 2], p: [Self; 1], out: &mut [O])
+        fn map<C, E, O>(chain: &C, x: [&[E]; 2], p: [Self; 1], out: &mut [O]) -> Report
         where
             C: Chain<2, 1>,
             E: Element<Self>,
             O: Element<Self>,
         {
-            Self::map(chain, x, p, out);
+            Self::map(chain, x, p, out)
         }
 
         fn evaluate<C: Chain<2, 1>>(chain: &C, x: [Self; 2], p: [Self; 1]) -> Self {
             Self::evaluate(chain, x, p)
+        }
+
+        fn host_path() -> HostPath {
+            Self::host_path()
+        }
+
+        fn is_nan(self) -> bool {
+            Self::is_nan(self)
         }
     };
 }
@@ -131,7 +140,7 @@ pub(super) trait Width:
     fn exception_pairs() -> [(Self, Self); 10];
 
     /// Returns `map` of the type.
-    fn map<C, E, O>(chain: &C, x: [&[E]; 2], p: [Self; 1], out: &mut [O])
+    fn map<C, E, O>(chain: &C, x: [&[E]; 2], p: [Self; 1], out: &mut [O]) -> Report
     where
         C: Chain<2, 1>,
         E: Element<Self>,
@@ -139,6 +148,12 @@ pub(super) trait Width:
 
     /// Returns `evaluate` of the type.
     fn evaluate<C: Chain<2, 1>>(chain: &C, x: [Self; 2], p: [Self; 1]) -> Self;
+
+    /// Returns `host_path` of the type.
+    fn host_path() -> HostPath;
+
+    /// Returns `true` when the value is a NaN.
+    fn is_nan(self) -> bool;
 
     steps_with!(declare);
 }

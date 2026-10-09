@@ -20,7 +20,8 @@
 //! - [`elementwise`]: the elementwise views, stores, integer conversions,
 //!   and reductions of `Lanes`, and the slice conversion of host values.
 //! - [`blocks`]: `map` and `evaluate` of chains of every step, in binary16,
-//!   bfloat16, binary32, and binary64, and their check of MXCSR on x86-64.
+//!   bfloat16, binary32, and binary64, the report of `map`, and their check
+//!   of MXCSR on x86-64.
 //! - [`host_path`]: `host_path` of each format, mode, and control of the
 //!   environment of the host unit.
 //! - [`levels`]: the runs of these tests in each instruction set that the
