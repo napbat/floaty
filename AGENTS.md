@@ -93,6 +93,7 @@ Run the targeted tests while you iterate. Before you hand off a Rust change,
 run all of these from the workspace root:
 
 ```text
+sh scripts/check_file_size.sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
 cargo nextest run --workspace --no-fail-fast
@@ -241,7 +242,8 @@ The workspace manifest denies these lint groups for every package:
 ## File and Module Size
 
 - Keep every hand-written source file at or below 1,000 physical lines,
-  including inline tests.
+  including inline tests. The gate `sh scripts/check_file_size.sh` checks
+  each Rust, C, C++, and Python file that Git tracks.
 - Split a file before it reaches the cap. Extract modules by responsibility,
   never by line range. A split that leaves two halves of one concept is worse
   than the oversized file.
