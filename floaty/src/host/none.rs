@@ -1,11 +1,18 @@
-//! The entry points of a build without a host path: each returns `None`.
+//! The entry points of a build without a host path: each returns `None`,
+//! and `host_path` returns [`HostPath::Unavailable`].
 
 use core::cmp::Ordering;
 
 use super::{Host, Operation};
-use crate::env::Env;
+use crate::env::{Env, HostPath};
 use crate::format::Standard;
 use crate::format::internal::MinMax;
+
+/// Returns [`HostPath::Unavailable`]: this build has no host path.
+#[must_use]
+pub fn host_path(_host: Host, _env: &Env, _precision: u32) -> HostPath {
+    HostPath::Unavailable
+}
 
 /// The block entry points of a build without a host path: each returns
 /// `None`.

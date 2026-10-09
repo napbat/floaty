@@ -58,6 +58,23 @@ pub fn with_fpcr<T>(control: u64, body: impl FnOnce() -> T) -> T {
     result
 }
 
+/// Returns FPCR. A trap enable of an exception whose trap the processor does
+/// not support reads as zero, as each trap enable field of FPCR in DDI 0601
+/// allows, so a setting that [`with_fpcr`] writes need not hold.
+#[must_use]
+pub fn fpcr() -> u64 {
+    let control: u64;
+    // SAFETY: MRS reads FPCR, and changes no memory and no other state.
+    unsafe {
+        asm!(
+            "mrs {control}, fpcr",
+            control = out(reg) control,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    control
+}
+
 /// Returns a runner that runs a body with FPCR set to `control`, by
 /// [`with_fpcr`], for the `assert_*_under` functions of
 /// [`crate::entry_points`].

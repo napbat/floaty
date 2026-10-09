@@ -106,8 +106,8 @@ mod paths;
     target_arch = "s390x"
 ))]
 pub use self::paths::{
-    Ready, Unit, binary, compare, conversion_unit, convert, from_int, min_max, mul_add, ready,
-    remainder, round_to_integral, sqrt, to_int,
+    Ready, Unit, binary, compare, conversion_unit, convert, from_int, host_path, min_max, mul_add,
+    ready, remainder, round_to_integral, sqrt, to_int,
 };
 
 #[cfg(not(floaty_engine_only))]
@@ -524,8 +524,8 @@ pub const fn convertible(from: Host, to: Host) -> bool {
     ))
 ))]
 pub use self::none::{
-    Ready, Unit, binary, block, compare, conversion_unit, convert, from_int, min_max, mul_add,
-    packed, ready, remainder, round_to_integral, sqrt, to_int,
+    Ready, Unit, binary, block, compare, conversion_unit, convert, from_int, host_path, min_max,
+    mul_add, packed, ready, remainder, round_to_integral, sqrt, to_int,
 };
 
 #[cfg(any(

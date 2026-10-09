@@ -708,6 +708,21 @@ path.
   except where `FEAT_BF16` rounds in `BFCVT`. `from_int` of an integer that
   binary32 or binary64 holds exactly does not round. The mode must still
   allow each path.
+- `host_path` of a type tells whether its host paths run on this thread,
+  and otherwise why its operations take the engine: `Unavailable` where the
+  build has no host path for the format, `Mode` with the field of `Env`
+  that the host unit does not give, or `Environment` where the setting of
+  the unit is not the default. The call costs one read of the setting, and
+  changes no result.
+
+  ```rust
+  use floaty::{F32, F8E4M3, HostPath};
+
+  assert_eq!(F8E4M3::host_path(), HostPath::Unavailable);
+  if F32::host_path() != HostPath::Ready {
+      eprintln!("binary32 takes the engine: {:?}", F32::host_path());
+  }
+  ```
 - Build with `RUSTFLAGS="--cfg floaty_engine_only"` to remove every host
   path and all `unsafe` code.
 

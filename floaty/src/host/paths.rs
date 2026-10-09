@@ -28,21 +28,22 @@
 
 use core::cmp::Ordering;
 
-use super::Operation;
 use super::bits::{
     min_max_differs, min_max_differs_64, min_max_differs_128, nan_16, nan_32, nan_64, order,
 };
 use super::environment::{self, default_environment};
-use crate::env::{Env, Rounding};
+use super::{Kind, Operation, available};
+use crate::env::{Env, EnvField, HostPath, Rounding};
 use crate::format::Standard;
 use crate::format::internal::{LimbConversion, MinMax};
 use crate::host::Host;
 use crate::limbs::Limbs;
 
-/// Returns `true` when the host unit gives the results of `env` for a format
-/// of `precision` bits.
+/// Returns the first field of `env` that the host unit does not give for a
+/// format of `precision` bits, or `None` when the unit gives the results of
+/// `env`.
 #[inline]
-const fn compatible(env: &Env, precision: u32) -> bool {
+const fn incompatible(env: &Env, precision: u32) -> Option<EnvField> {
     // Every field is named, so a new field of `Env` needs a decision here.
     // Tininess changes only flags, the NaN rule applies only to a NaN result,
     // and the total order applies to no arithmetic. Saturation changes the
@@ -57,15 +58,61 @@ const fn compatible(env: &Env, precision: u32) -> bool {
         saturate,
         total_order: _,
     } = *env;
-    let full_precision = match limit {
-        None => true,
-        Some(limit) => limit.get() >= precision,
-    };
-    matches!(rounding, Rounding::TiesToEven)
-        && !flush_to_zero
-        && !denormals_are_zero
-        && !saturate
-        && full_precision
+    if !matches!(rounding, Rounding::TiesToEven) {
+        return Some(EnvField::Rounding);
+    }
+    if flush_to_zero {
+        return Some(EnvField::FlushToZero);
+    }
+    if denormals_are_zero {
+        return Some(EnvField::DenormalsAreZero);
+    }
+    if let Some(limit) = limit
+        && limit.get() < precision
+    {
+        return Some(EnvField::Precision);
+    }
+    if saturate {
+        return Some(EnvField::Saturate);
+    }
+    None
+}
+
+/// Returns `true` when the host unit gives the results of `env` for a format
+/// of `precision` bits.
+#[inline]
+const fn compatible(env: &Env, precision: u32) -> bool {
+    incompatible(env, precision).is_none()
+}
+
+/// Returns whether the host paths of a format of the host kind `host` and of
+/// `precision` bits run in the mode `env`, with the environment of the host
+/// unit of this thread, as [`HostPath`] states. The environment is the one
+/// that the arithmetic needs, which for x87 extended includes the 64-bit
+/// precision.
+#[must_use]
+pub fn host_path(host: Host, env: &Env, precision: u32) -> HostPath {
+    let kinds = [
+        Kind::Arithmetic,
+        Kind::SquareRoot,
+        Kind::FusedMultiplyAdd,
+        Kind::RoundToIntegral,
+        Kind::ToInt,
+        Kind::FromInt,
+        Kind::Comparison,
+        Kind::Remainder,
+    ];
+    if !kinds.into_iter().any(|kind| available(host, kind)) {
+        return HostPath::Unavailable;
+    }
+    if let Some(field) = incompatible(env, precision) {
+        return HostPath::Mode(field);
+    }
+    if ready_for_arithmetic(host, env, precision) {
+        HostPath::Ready
+    } else {
+        HostPath::Environment
+    }
 }
 
 /// Returns the host value of a binary32 encoding.
@@ -921,26 +968,26 @@ impl Ready {
 mod tests {
     use core::num::NonZeroU32;
 
-    use super::compatible;
-    use crate::env::{Env, Rounding};
+    use super::incompatible;
+    use crate::env::{Env, EnvField, Rounding};
 
     #[test]
     fn only_a_behavior_that_the_host_matches_is_compatible() {
-        assert!(compatible(&Env::IEEE, 53));
-        assert!(compatible(&Env::X86_SSE, 24));
-        assert!(compatible(&Env::X87, 53));
-        assert!(!compatible(&Env::X87, 113));
-        assert!(!compatible(
-            &Env::IEEE.with_rounding(Rounding::TowardZero),
-            24
-        ));
-        assert!(!compatible(&Env::IEEE.with_flush_to_zero(true), 24));
-        assert!(!compatible(&Env::IEEE.with_denormals_are_zero(true), 24));
+        assert_eq!(incompatible(&Env::IEEE, 53), None);
+        assert_eq!(incompatible(&Env::X86_SSE, 24), None);
+        assert_eq!(incompatible(&Env::X87, 53), None);
+        let precision = Some(EnvField::Precision);
+        assert_eq!(incompatible(&Env::X87, 113), precision);
+        let toward_zero = Env::IEEE.with_rounding(Rounding::TowardZero);
+        assert_eq!(incompatible(&toward_zero, 24), Some(EnvField::Rounding));
+        let flush = Env::IEEE.with_flush_to_zero(true);
+        assert_eq!(incompatible(&flush, 24), Some(EnvField::FlushToZero));
+        let daz = Env::IEEE.with_denormals_are_zero(true);
+        assert_eq!(incompatible(&daz, 24), Some(EnvField::DenormalsAreZero));
         // The host unit carries an overflow to an infinity.
-        assert!(!compatible(&Env::IEEE.with_saturate(true), 24));
-        assert!(!compatible(
-            &Env::IEEE.with_precision(NonZeroU32::new(52)),
-            53
-        ));
+        let saturate = Env::IEEE.with_saturate(true);
+        assert_eq!(incompatible(&saturate, 24), Some(EnvField::Saturate));
+        let limited = Env::IEEE.with_precision(NonZeroU32::new(52));
+        assert_eq!(incompatible(&limited, 53), precision);
     }
 }
