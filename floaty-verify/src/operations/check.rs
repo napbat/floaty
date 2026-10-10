@@ -357,18 +357,19 @@ pub fn check_reciprocal_sqrt<S: Standard<W>, const W: usize>(
     );
 }
 
-/// Checks every function of [`Function::ALL`] on one value.
+/// Checks each function of `functions` on one value.
 ///
 /// # Panics
 ///
 /// Panics when floaty differs from the oracle.
 pub fn check_elementary<S: Standard<W>, const W: usize>(
     x: Float<S, W>,
+    functions: &[Function],
     format: &Format,
     env: &Env,
 ) {
     let operand = Operand::<8>::of(x);
-    for function in Function::ALL {
+    for &function in functions {
         check_float(
             function.floaty(x, *env),
             &elementary::expected(function, &operand, format, env),

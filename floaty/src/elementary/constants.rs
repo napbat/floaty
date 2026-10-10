@@ -88,11 +88,52 @@ const LN10: [u64; 34] = [
     0x935D_8DDD_AAA8_AC16,
 ];
 
+/// `floor(pi * 2^2174)`, least significant limb first.
+const PI: [u64; 34] = [
+    0x8AEA_7157_5D06_0C7D,
+    0xECFB_8504_58DB_EF0A,
+    0xA855_21AB_DF1C_BA64,
+    0xAD33_170D_0450_7A33,
+    0x1572_8E5A_8AAA_C42D,
+    0x15D2_2618_98FA_0510,
+    0x3995_497C_EA95_6AE5,
+    0xDE2B_CBF6_9558_1718,
+    0xB5C5_5DF0_6F4C_52C9,
+    0x9B27_83A2_EC07_A28F,
+    0xE39E_772C_180E_8603,
+    0x3290_5E46_2E36_CE3B,
+    0xF174_6C08_CA18_217C,
+    0x670C_354E_4ABC_9804,
+    0x9ED5_2907_7096_966D,
+    0x1C62_F356_2085_52BB,
+    0x8365_5D23_DCA3_AD96,
+    0x6916_3FA8_FD24_CF5F,
+    0x98DA_4836_1C55_D39A,
+    0xC200_7CB8_A163_BF05,
+    0x4928_6651_ECE4_5B3D,
+    0xAE9F_2411_7C4B_1FE6,
+    0xEE38_6BFB_5A89_9FA5,
+    0x0BFF_5CB6_F406_B7ED,
+    0xF44C_42E9_A637_ED6B,
+    0xE485_B576_625E_7EC6,
+    0x4FE1_356D_6D51_C245,
+    0x302B_0A6D_F25F_1437,
+    0xEF95_19B3_CD3A_431B,
+    0x514A_0879_8E34_04DD,
+    0x020B_BEA6_3B13_9B22,
+    0x2902_4E08_8A67_CC74,
+    0xC4C6_628B_80DC_1CD1,
+    0xC90F_DAA2_2168_C234,
+];
+
 /// The weight of the lowest bit of [`LN2`].
 const LN2_LOWEST: i64 = -2176;
 
 /// The weight of the lowest bit of [`LN10`].
 const LN10_LOWEST: i64 = -2174;
+
+/// The weight of the lowest bit of [`PI`].
+const PI_LOWEST: i64 = -2174;
 
 /// Returns `ln 2` at the width `W`. The radius covers the truncation of the
 /// table and of the width.
@@ -105,9 +146,14 @@ pub(super) fn ln10<W: Widen>() -> Ball<W> {
     Ball::new(false, LN10, LN10_LOWEST).widened(Radius::power_of_two(LN10_LOWEST))
 }
 
+/// Returns `pi` at the width `W`.
+pub(super) fn pi<W: Widen>() -> Ball<W> {
+    Ball::new(false, PI, PI_LOWEST).widened(Radius::power_of_two(PI_LOWEST))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LN2, LN10};
+    use super::{LN2, LN10, PI};
     use crate::limbs::{self, Divisor, Limbs};
 
     /// The bits below the lowest bit of a table that the series carry. Each
@@ -150,5 +196,38 @@ mod tests {
         }
         let ln10 = three_ln2.add(sum).shr(GUARD).resize::<[u64; 34]>();
         assert_eq!(ln10, LN10);
+    }
+
+    /// Returns `floor(atan(1 / n) * 2^total)` with the guard bits of
+    /// `total`, from the alternating series of `1 / ((2j + 1) n^(2j + 1))`.
+    /// The positive and the negative terms add up apart, and each floor
+    /// loses less than one unit.
+    fn atan_inverse_series(n: u64, total: u32) -> [u64; 36] {
+        let square = Divisor::new(n * n);
+        let mut power = limbs::divide_small([0_u64; 36].with_bit(total), Divisor::new(n)).0;
+        let (mut positive, mut negative) = ([0_u64; 36], [0_u64; 36]);
+        for j in 0_u64.. {
+            if power.is_zero() {
+                break;
+            }
+            let term = limbs::divide_small(power, Divisor::new(2 * j + 1)).0;
+            if j % 2 == 0 {
+                positive = positive.add(term);
+            } else {
+                negative = negative.add(term);
+            }
+            power = limbs::divide_small(power, square).0;
+        }
+        positive.sub(negative)
+    }
+
+    #[test]
+    fn pi_matches_its_series() {
+        // Machin's formula: pi = 16 atan(1/5) - 4 atan(1/239).
+        let total = 2174 + GUARD;
+        let fifth = limbs::multiply_small(atan_inverse_series(5, total), 16);
+        let part = limbs::multiply_small(atan_inverse_series(239, total), 4);
+        let pi = fifth.sub(part).shr(GUARD).resize::<[u64; 34]>();
+        assert_eq!(pi, PI);
     }
 }

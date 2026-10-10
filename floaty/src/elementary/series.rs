@@ -1,5 +1,5 @@
-//! The balls of `exp`, `e^x - 1`, `log`, `ln(1 + x)`, and the powers of 10
-//! at one working width.
+//! The balls of `exp`, `e^x - 1`, `log`, `ln(1 + x)`, `sin`, `cos`, and the
+//! powers of 10 at one working width.
 
 use super::ball::Ball;
 use super::constants::{ln2, ln10};
@@ -157,6 +157,54 @@ fn twice_atanh<W: Widen>(t: &Ball<W>) -> Ball<W> {
 pub(super) fn log_decimal<W: Widen>(c: &Ball<W>, q: i64) -> Option<Ball<W>> {
     let log_c = log(c)?;
     Some(log_c.add(&ln10::<W>().mul(&Ball::integer(q))))
+}
+
+/// Returns the ball of `sin y` for a ball of `|y|` at most 1.
+///
+/// The Taylor series alternates, and each term is below a sixth of the one
+/// before, so the rest lies below the last term, which the radius takes. The
+/// series stops at a term below `|y| 2^-(W::BITS + 8)`.
+pub(super) fn sine<W: Widen>(y: &Ball<W>) -> Ball<W> {
+    if y.center().is_zero() {
+        // `|sin y|` is at most `|y|`, within the radius of 0.
+        return y.widened(y.radius());
+    }
+    let square = y.mul(y);
+    let limit = y.center().top() - i64::from(W::BITS) - 8;
+    let mut sum = *y;
+    let mut term = *y;
+    for index in 1..=TERM_LIMIT {
+        term = term
+            .mul(&square)
+            .div_small(2 * index * (2 * index + 1))
+            .negate();
+        sum = sum.add(&term);
+        if term.upper().ceiling_log2() < limit {
+            break;
+        }
+    }
+    sum.widened(term.upper())
+}
+
+/// Returns the ball of `cos y` for a ball of `|y|` at most 1, as [`sine`]
+/// does. The series stops at a term below `2^-(W::BITS + 8)`, because
+/// `cos y` is above 1/2.
+pub(super) fn cosine<W: Widen>(y: &Ball<W>) -> Ball<W> {
+    let square = y.mul(y);
+    let limit = -i64::from(W::BITS) - 8;
+    let mut sum = Ball::one();
+    let mut term = Ball::one();
+    for index in 1..=TERM_LIMIT {
+        term = term
+            .mul(&square)
+            .div_small((2 * index - 1) * 2 * index)
+            .negate();
+        sum = sum.add(&term);
+        if term.upper().ceiling_log2() < limit {
+            break;
+        }
+    }
+    sum.widened(term.upper())
 }
 
 /// Returns the ball of `10^n` for `n >= 0`, by squaring.

@@ -284,6 +284,27 @@ fn variant_arguments(format: DecimalFormat) -> Vec<Number> {
     numbers
 }
 
+/// Returns arguments of `sinPi`, `cosPi`, and `tanPi`. The functions are
+/// exact at the quarters, here up to 6 in magnitude, which come with two
+/// neighbors on each side. Below `10^(p - 2)`, an argument of `p` digits can
+/// have two digits after the point: its reduction keeps the most digits, and
+/// a fraction of .25, .51, or .99 lies at or next to an exact value.
+fn pi_scaled_arguments(format: DecimalFormat) -> Vec<Number> {
+    let precision = format.precision;
+    let mut numbers = Vec::new();
+    for n in 1..=24_u32 {
+        let quarter = BigFloat::with_val(precision + 8, n) >> 2u32;
+        numbers.extend(around(format, &quarter, 2));
+        numbers.extend(around(format, &-quarter, 2));
+    }
+    for (below, exponent) in [(1_u32, -1), (1, -2), (49, -2), (75, -2)] {
+        for negative in [false, true] {
+            numbers.push(Number::new(negative, power(precision) - below, exponent));
+        }
+    }
+    numbers
+}
+
 /// Bad cases of `exp` for decimal64, as coefficient and exponent, from
 /// Lefèvre, Stehlé, and Zimmermann, "Worst Cases for the Exponential
 /// Function in the IEEE 754r decimal64 Format", JNAO 2006, slides 6 and 13
@@ -344,6 +365,7 @@ fn constructed(format: DecimalFormat, random: &mut SplitMix64, extra: &[(u64, i6
     numbers.extend(thresholds(format));
     numbers.extend(near_one(format, random));
     numbers.extend(variant_arguments(format));
+    numbers.extend(pi_scaled_arguments(format));
     numbers.extend(
         extra
             .iter()

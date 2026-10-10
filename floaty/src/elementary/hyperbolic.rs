@@ -117,10 +117,9 @@ pub(super) fn evaluate<L: Elementary>(
     target: &Target,
 ) -> Unrounded<L::Second> {
     let radix = target.radix;
-    // `|x| < RADIX^-half` puts `x^2` below `RADIX^-tiny`.
+    // An argument below `RADIX^-half_tiny` has `x^2` below `RADIX^-tiny`.
     let leading = leading(x, radix);
-    let half = (target.tiny() + 1) / 2;
-    if leading < -half {
+    if leading < -target.half_tiny() {
         let toward_zero = match function {
             Hyperbolic::Cosh => return near_one(false, target),
             Hyperbolic::Sinh | Hyperbolic::Atanh => false,

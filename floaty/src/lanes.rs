@@ -523,9 +523,9 @@ predicates!(
     is_canonical: "a canonical encoding",
 );
 
-/// Defines the methods that apply an exponential, a logarithm, or a
-/// hyperbolic function of `Float` to each lane, with the default mode and
-/// with a behavior.
+/// Defines the methods that apply an exponential, a logarithm, a hyperbolic
+/// function, or a function scaled by pi of `Float` to each lane, with the
+/// default mode and with a behavior.
 macro_rules! elementary {
     ($($name:ident, $name_with:ident: $summary:literal),* $(,)?) => {
         impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {
@@ -572,6 +572,9 @@ elementary!(
     asinh, asinh_with: "`asinh x`",
     acosh, acosh_with: "`acosh x`",
     atanh, atanh_with: "`atanh x`",
+    sin_pi, sin_pi_with: "`sin(pi x)`",
+    cos_pi, cos_pi_with: "`cos(pi x)`",
+    tan_pi, tan_pi_with: "`tan(pi x)`",
 );
 
 impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {

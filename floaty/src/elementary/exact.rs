@@ -197,7 +197,7 @@ fn small_power<W: Limbs>(base: u64, count: u64) -> Option<W> {
 
 /// Returns `RADIX^count` when it fits `W`. `10^count` is below
 /// `2^(4 count)`.
-fn radix_power<W: Limbs>(radix: Radix, count: u64) -> Option<W> {
+pub(super) fn radix_power<W: Limbs>(radix: Radix, count: u64) -> Option<W> {
     let bits = match radix {
         Radix::Binary => count,
         Radix::Decimal => count.checked_mul(4)?,

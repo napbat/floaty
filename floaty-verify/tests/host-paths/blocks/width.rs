@@ -48,6 +48,9 @@ macro_rules! steps_with {
             asinh_with();
             acosh_with();
             atanh_with();
+            sin_pi_with();
+            cos_pi_with();
+            tan_pi_with();
             compound_with(n: i64);
             hypot_with(other: Self);
             pown_with(n: i64);

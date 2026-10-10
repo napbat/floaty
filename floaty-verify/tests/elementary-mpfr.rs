@@ -27,6 +27,7 @@ use floaty_verify::encodings::{IntegerBit, Layout, boundary_encodings, to_limbs}
 use floaty_verify::mpfr::{Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
 use floaty_verify::operations::check;
+use floaty_verify::operations::elementary::Function;
 use floaty_verify::random::SplitMix64;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
@@ -72,7 +73,7 @@ macro_rules! every_small_encoding {
                 u8::try_from(bits).expect("the format has at most 8 bits"),
             );
             for env in &BEHAVIORS {
-                check::check_elementary(x, &format, env);
+                check::check_elementary(x, &Function::ALL, &format, env);
                 check::check_compound(x, &COUNTS, &format, env, |x, n, env| {
                     x.compound_with(n, env)
                 });
@@ -86,9 +87,9 @@ fn every_small_format_encoding() {
     floaty_verify::for_each_small_format!(every_small_encoding);
 }
 
-/// Checks every encoding of a 16-bit format, and `compound` with a few
-/// exponents.
-fn every_16_bit_encoding<const E: u32>()
+/// Checks the functions of `functions` on every encoding of a 16-bit format,
+/// and `compound` with each exponent of `counts`.
+fn every_16_bit_encoding<const E: u32>(functions: &[Function], counts: &[i64])
 where
     Binary<E>: Standard<16, Bits = u16>,
 {
@@ -96,22 +97,32 @@ where
     for bits in 0..=u16::MAX {
         let x = Float::<Binary<E>, 16>::from_bits(bits);
         for env in &BEHAVIORS {
-            check::check_elementary(x, &format, env);
-            check::check_compound(x, &[-7, 3, 1000], &format, env, |x, n, env| {
-                x.compound_with(n, env)
-            });
+            check::check_elementary(x, functions, &format, env);
+            check::check_compound(x, counts, &format, env, Float::compound_with);
         }
     }
 }
 
+// Each 16-bit format runs in two tests, which nextest runs at once: the
+// exponentials, the logarithms, and `compound`, and the other functions.
 #[test]
 fn every_binary16_encoding() {
-    every_16_bit_encoding::<5>();
+    every_16_bit_encoding::<5>(Function::EXPONENTIALS_AND_LOGARITHMS, &[-7, 3, 1000]);
+}
+
+#[test]
+fn every_binary16_encoding_hyperbolic_and_trigonometric() {
+    every_16_bit_encoding::<5>(Function::HYPERBOLIC_AND_TRIGONOMETRIC, &[]);
 }
 
 #[test]
 fn every_bfloat16_encoding() {
-    every_16_bit_encoding::<8>();
+    every_16_bit_encoding::<8>(Function::EXPONENTIALS_AND_LOGARITHMS, &[-7, 3, 1000]);
+}
+
+#[test]
+fn every_bfloat16_encoding_hyperbolic_and_trigonometric() {
+    every_16_bit_encoding::<8>(Function::HYPERBOLIC_AND_TRIGONOMETRIC, &[]);
 }
 
 /// Returns the encoding of a sign, an exponent field, and a significand. An
@@ -303,6 +314,26 @@ fn variant_arguments(layout: Layout) -> Vec<Integer> {
     exact.chain(bounds).collect()
 }
 
+/// Returns arguments of `sinPi`, `cosPi`, and `tanPi` with two neighbors on
+/// each side. The functions are exact at the quarters, here up to 6 in
+/// magnitude. From `2^(p - 3)` every argument is a multiple of a quarter,
+/// and from `2^(p + 2)` a multiple of 8.
+fn pi_scaled_arguments(layout: Layout) -> Vec<Integer> {
+    let precision = i32::try_from(layout.precision()).expect("a precision fits an i32");
+    let working = layout.precision() + 8;
+    let mut values: Vec<BigFloat> = (-24..=24)
+        .map(|n| BigFloat::with_val(working, n) >> 2u32)
+        .collect();
+    for exponent in [precision - 3, precision - 2, precision + 2] {
+        let power = BigFloat::with_val(working, 1) << exponent;
+        values.extend([-power.clone(), power]);
+    }
+    values
+        .iter()
+        .flat_map(|value| around(layout, value, 2))
+        .collect()
+}
+
 /// Returns pairs of an argument and an exponent of `compound`: every
 /// exponent of [`COUNTS`] with arguments whose `1 + x` is `m 2^-j` for an odd
 /// `m` up to 15, and with arguments next to -1, and a few exponents with the
@@ -344,15 +375,16 @@ fn compound_samples(layout: Layout) -> Vec<(Integer, i64)> {
     pairs
 }
 
-/// Checks `exp`, `log`, and `compound` on the samples of a format of the
-/// IEEE layout, and on `extra` encodings. Each sample takes one exponent of
-/// [`COUNTS`] in turn, and the pairs of [`compound_samples`] run too.
+/// Checks the functions of `functions`, and `compound` when it is given, on
+/// the samples of a format of the IEEE layout, and on `extra` encodings.
+/// Each sample takes one exponent of [`COUNTS`] in turn, and the pairs of
+/// [`compound_samples`] run too.
 fn check_format<S: Standard<W>, const W: usize>(
     layout: Layout,
     make: &dyn Fn(&Integer) -> Float<S, W>,
-    compound: &Compound<S, W>,
-    count: usize,
-    seed: u64,
+    functions: &[Function],
+    compound: Option<&Compound<S, W>>,
+    (count, seed): (usize, u64),
     extra: &[Integer],
 ) {
     let format = Format::of::<Float<S, W>>(Specials::Ieee);
@@ -362,16 +394,20 @@ fn check_format<S: Standard<W>, const W: usize>(
     encodings.extend(exp_binades(layout, &mut random));
     encodings.extend(thresholds(layout));
     encodings.extend(variant_arguments(layout));
+    encodings.extend(pi_scaled_arguments(layout));
     encodings.extend_from_slice(extra);
-    let pairs = compound_samples(layout);
+    let pairs = compound.map_or_else(Vec::new, |_| compound_samples(layout));
     for env in &BEHAVIORS {
         for (index, bits) in encodings.iter().enumerate() {
             let x = make(bits);
-            check::check_elementary(x, &format, env);
-            let n = COUNTS[index % COUNTS.len()];
-            check::check_compound(x, &[n], &format, env, compound);
+            check::check_elementary(x, functions, &format, env);
+            if let Some(compound) = compound {
+                let n = COUNTS[index % COUNTS.len()];
+                check::check_compound(x, &[n], &format, env, compound);
+            }
         }
         for (bits, n) in &pairs {
+            let compound = compound.expect("pairs exist only with compound");
             check::check_compound(make(bits), &[*n], &format, env, compound);
         }
     }
@@ -438,17 +474,17 @@ fn tf32_binary32_binary64_x87_and_binary128() {
     check_format(
         Layout::TF32,
         &|bits: &Integer| TF32::from_bits(bits.to_u32().expect("a TF32 encoding has 19 bits")),
-        &|x, n, env| x.compound_with(n, env),
-        4_000,
-        0x0F19,
+        &Function::ALL,
+        Some(&|x, n, env| x.compound_with(n, env)),
+        (4_000, 0x0F19),
         &[],
     );
     check_format(
         Layout::BINARY32,
         &|bits: &Integer| F32::from_bits(bits.to_u32().expect("a binary32 encoding fits a u32")),
-        &|x, n, env| x.compound_with(n, env),
-        4_000,
-        0x0F32,
+        &Function::ALL,
+        Some(&|x, n, env| x.compound_with(n, env)),
+        (4_000, 0x0F32),
         &[],
     );
     let worst: Vec<Integer> = EXP_WORST_CASES
@@ -459,17 +495,17 @@ fn tf32_binary32_binary64_x87_and_binary128() {
     check_format(
         Layout::BINARY64,
         &|bits: &Integer| F64::from_bits(bits.to_u64().expect("a binary64 encoding fits a u64")),
-        &|x, n, env| x.compound_with(n, env),
-        3_000,
-        0x0F64,
+        &Function::ALL,
+        Some(&|x, n, env| x.compound_with(n, env)),
+        (3_000, 0x0F64),
         &worst,
     );
     check_format(
         Layout::X87_EXTENDED,
         &|bits: &Integer| F80::from_bits(bits.to_u128().expect("an x87 encoding fits a u128")),
-        &|x, n, env| x.compound_with(n, env),
-        2_000,
-        0x0F80,
+        &Function::ALL,
+        Some(&|x, n, env| x.compound_with(n, env)),
+        (2_000, 0x0F80),
         &[],
     );
     check_format(
@@ -477,9 +513,9 @@ fn tf32_binary32_binary64_x87_and_binary128() {
         &|bits: &Integer| {
             F128::from_bits(bits.to_u128().expect("a binary128 encoding fits a u128"))
         },
-        &|x, n, env| x.compound_with(n, env),
-        1_500,
-        0x0128,
+        &Function::ALL,
+        Some(&|x, n, env| x.compound_with(n, env)),
+        (1_500, 0x0128),
         &[],
     );
 }
@@ -496,9 +532,9 @@ fn layouts_that_fill_or_cross_limbs() {
         &|bits: &Integer| {
             Float::<Binary<2>, 64>::from_bits(bits.to_u64().expect("the encoding fits a u64"))
         },
-        &|x, n, env| x.compound_with(n, env),
-        1_000,
-        0x0264,
+        &Function::ALL,
+        Some(&|x, n, env| x.compound_with(n, env)),
+        (1_000, 0x0264),
         &[],
     );
     check_format(
@@ -506,9 +542,9 @@ fn layouts_that_fill_or_cross_limbs() {
         &|bits: &Integer| {
             Float::<Binary<2>, 128>::from_bits(bits.to_u128().expect("the encoding fits a u128"))
         },
-        &|x, n, env| x.compound_with(n, env),
-        1_000,
-        0x0228,
+        &Function::ALL,
+        Some(&|x, n, env| x.compound_with(n, env)),
+        (1_000, 0x0228),
         &[],
     );
     check_format(
@@ -516,9 +552,9 @@ fn layouts_that_fill_or_cross_limbs() {
         &|bits: &Integer| {
             Float::<Binary<15>, 72>::from_bits(bits.to_u128().expect("the encoding fits a u128"))
         },
-        &|x, n, env| x.compound_with(n, env),
-        1_000,
-        0x0072,
+        &Function::ALL,
+        Some(&|x, n, env| x.compound_with(n, env)),
+        (1_000, 0x0072),
         &[],
     );
     check_format(
@@ -526,54 +562,75 @@ fn layouts_that_fill_or_cross_limbs() {
         &|bits: &Integer| {
             Float::<Binary<28>, 32>::from_bits(bits.to_u32().expect("the encoding fits a u32"))
         },
-        &|x, n, env| x.compound_with(n, env),
-        1_000,
-        0x2832,
+        &Function::ALL,
+        Some(&|x, n, env| x.compound_with(n, env)),
+        (1_000, 0x2832),
         &[],
     );
 }
 
-/// Checks one format of the wide format list.
+/// A group of functions that one wide-format test checks.
+#[derive(Clone, Copy)]
+enum Group {
+    /// The exponentials, the logarithms, and `compound`.
+    ExponentialsAndLogarithms,
+    /// The hyperbolic and the trigonometric functions.
+    HyperbolicAndTrigonometric,
+}
+
+/// Checks the functions of `$group` on one format of the wide format list
+/// when its width lies in `$widths`.
 macro_rules! wide_format {
-    ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
-        check_format(
-            Layout::ieee($width, $exponent_bits),
-            &|bits: &Integer| floaty::$alias::from_bits(to_limbs::<$limbs>(bits)),
-            &|x, n, env| x.compound_with(n, env),
-            200,
-            $width,
-            &[],
-        )
-    };
-}
-
-/// Checks one format of the wide format list up to 416 bits.
-macro_rules! narrower_wide_format {
-    ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
-        if $width <= 416 {
-            wide_format!($alias, $width, $exponent_bits, $limbs);
+    ($widths:tt, $group:tt, $alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+        if $widths.contains(&$width) {
+            let make = |bits: &Integer| floaty::$alias::from_bits(to_limbs::<$limbs>(bits));
+            let layout = Layout::ieee($width, $exponent_bits);
+            match $group {
+                Group::ExponentialsAndLogarithms => check_format(
+                    layout,
+                    &make,
+                    Function::EXPONENTIALS_AND_LOGARITHMS,
+                    Some(&|x, n, env| x.compound_with(n, env)),
+                    (200, $width),
+                    &[],
+                ),
+                Group::HyperbolicAndTrigonometric => check_format(
+                    layout,
+                    &make,
+                    Function::HYPERBOLIC_AND_TRIGONOMETRIC,
+                    None,
+                    (200, $width),
+                    &[],
+                ),
+            }
         }
     };
 }
 
-/// Checks one format of the wide format list past 416 bits.
-macro_rules! wider_wide_format {
-    ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
-        if $width > 416 {
-            wide_format!($alias, $width, $exponent_bits, $limbs);
-        }
-    };
-}
-
-// The wide formats run in two tests, which nextest runs at once. The time of
-// a check grows with the square of the limbs, so the three formats past 416
-// bits take about as long as the nine up to it.
+// The wide formats run in four tests, which nextest runs at once: two groups
+// of functions, each on two ranges of widths. The time of a check grows with
+// the square of the limbs, so the three formats past 416 bits take about as
+// long as the nine up to it.
 #[test]
 fn wide_formats_up_to_416_bits() {
-    floaty_verify::for_each_wide_format!(narrower_wide_format);
+    let group = Group::ExponentialsAndLogarithms;
+    floaty_verify::for_each_wide_format!(wide_format, (0..=416), group);
 }
 
 #[test]
 fn wide_formats_past_416_bits() {
-    floaty_verify::for_each_wide_format!(wider_wide_format);
+    let group = Group::ExponentialsAndLogarithms;
+    floaty_verify::for_each_wide_format!(wide_format, (417..=512), group);
+}
+
+#[test]
+fn wide_formats_up_to_416_bits_hyperbolic_and_trigonometric() {
+    let group = Group::HyperbolicAndTrigonometric;
+    floaty_verify::for_each_wide_format!(wide_format, (0..=416), group);
+}
+
+#[test]
+fn wide_formats_past_416_bits_hyperbolic_and_trigonometric() {
+    let group = Group::HyperbolicAndTrigonometric;
+    floaty_verify::for_each_wide_format!(wide_format, (417..=512), group);
 }

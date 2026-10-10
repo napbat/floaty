@@ -1,6 +1,7 @@
 //! The exponentials and the logarithms of IEEE 754-2019 section 9.2, in base
 //! e, 2, and 10, with their forms shifted by one, `b^x - 1` and
-//! `log_b(1 + x)`, and the hyperbolic functions and their inverses.
+//! `log_b(1 + x)`, the hyperbolic functions and their inverses, and the
+//! trigonometric functions of an argument scaled by pi.
 
 use super::Float;
 use crate::elementary::Transcendental;
@@ -507,5 +508,91 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     pub fn atanh_with(self, behavior: impl Override) -> (Self, Flags) {
         self.elementary_with(Transcendental::Atanh, behavior)
+    }
+
+    /// Returns `sin(pi self)`, with the default mode.
+    #[must_use]
+    pub fn sin_pi(self) -> Self {
+        self.sin_pi_with(M::default()).0
+    }
+
+    /// Returns `sin(pi self)`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `sinPi` does, and the flags.
+    ///
+    /// The argument reduces exactly, so a large `self` keeps every digit of
+    /// its fraction, and the result rounds once, as
+    /// [`exp_with`](Self::exp_with) does. An integer gives ±0 with the sign of
+    /// `self`, and a half-integer gives ±1, exactly. Every other finite result
+    /// is inexact. The special cases follow IEEE 754-2019 section 9.2.1: ±0
+    /// gives ±0, and ±inf gives the default NaN and signals invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let sin_pi = |bits| F64::from_bits(bits).sin_pi_with(Env::IEEE);
+    /// assert_eq!(sin_pi(0x3FE0_0000_0000_0000), (F64::from_bits(0x3FF0_0000_0000_0000), Flags::NONE));
+    /// assert_eq!(sin_pi(0xBFF0_0000_0000_0000).0.to_bits(), 0x8000_0000_0000_0000);
+    /// ```
+    #[must_use]
+    pub fn sin_pi_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::SinPi, behavior)
+    }
+
+    /// Returns `cos(pi self)`, with the default mode.
+    #[must_use]
+    pub fn cos_pi(self) -> Self {
+        self.cos_pi_with(M::default()).0
+    }
+
+    /// Returns `cos(pi self)`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `cosPi` does, and the flags.
+    ///
+    /// The result rounds once, as [`sin_pi_with`](Self::sin_pi_with) does.
+    /// An integer gives ±1, and a half-integer gives +0, exactly. Every other
+    /// finite result is inexact. The special cases follow IEEE 754-2019
+    /// section 9.2.1: ±0 gives 1, and ±inf gives the default NaN and signals
+    /// invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let cos_pi = |bits| F64::from_bits(bits).cos_pi_with(Env::IEEE);
+    /// assert_eq!(cos_pi(0xBFE0_0000_0000_0000), (F64::from_bits(0), Flags::NONE));
+    /// assert_eq!(cos_pi(0x4008_0000_0000_0000).0.to_bits(), 0xBFF0_0000_0000_0000);
+    /// ```
+    #[must_use]
+    pub fn cos_pi_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::CosPi, behavior)
+    }
+
+    /// Returns `tan(pi self)`, with the default mode.
+    #[must_use]
+    pub fn tan_pi(self) -> Self {
+        self.tan_pi_with(M::default()).0
+    }
+
+    /// Returns `tan(pi self)`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `tanPi` does, and the flags.
+    ///
+    /// The result rounds once, as [`sin_pi_with`](Self::sin_pi_with) does.
+    /// An integer gives ±0: with the sign of `self` for an even integer, and
+    /// the other sign for an odd one. `n + 1/4` gives 1 and `n - 1/4` gives
+    /// -1, exactly. `n + 1/2` gives +inf for an even `n` and -inf for an odd
+    /// `n`, and signals divide-by-zero. Every other finite result is inexact.
+    /// The special cases follow IEEE 754-2019 section 9.2.1: ±0 gives ±0, and
+    /// ±inf gives the default NaN and signals invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let tan_pi = |bits| F64::from_bits(bits).tan_pi_with(Env::IEEE);
+    /// assert_eq!(tan_pi(0x3FD0_0000_0000_0000), (F64::from_bits(0x3FF0_0000_0000_0000), Flags::NONE));
+    /// let (pole, flags) = tan_pi(0x3FE0_0000_0000_0000);
+    /// assert_eq!((pole.to_bits(), flags), (0x7FF0_0000_0000_0000, Flags::DIVIDE_BY_ZERO));
+    /// assert_eq!(tan_pi(0x3FF0_0000_0000_0000).0.to_bits(), 0x8000_0000_0000_0000);
+    /// ```
+    #[must_use]
+    pub fn tan_pi_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::TanPi, behavior)
     }
 }

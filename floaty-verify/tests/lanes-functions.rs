@@ -147,7 +147,10 @@ macro_rules! check_elementary {
             tanh, tanh_with;
             asinh, asinh_with;
             acosh, acosh_with;
-            atanh, atanh_with
+            atanh, atanh_with;
+            sin_pi, sin_pi_with;
+            cos_pi, cos_pi_with;
+            tan_pi, tan_pi_with
         );
     }};
     (@each $context:ident, $x:ident, $env:ident; $($name:ident, $name_with:ident);*) => {
