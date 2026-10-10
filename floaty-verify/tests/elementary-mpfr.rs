@@ -286,6 +286,18 @@ fn variant_arguments(layout: Layout) -> Vec<Integer> {
     for exponent in [emin, emin - precision + 1, emin - precision] {
         bounds.push(BigFloat::with_val(working, power(exponent).log10_ref()));
     }
+    // The hyperbolic functions take their tiny rule below
+    // `2^-ceil((p + 5) / 2)`, `tanh` comes within one unit of ±1 at
+    // `(p + 4) ln 2 / 2`, and `sinh` and `cosh` overflow past
+    // `ln(2 largest)`.
+    let half = i32::midpoint(precision, 6);
+    for exponent in [half - 1, half, half + 1] {
+        bounds.extend([power(-exponent), -power(-exponent)]);
+    }
+    let tanh_bound = BigFloat::with_val(working, &ln_2 * (precision + 4)) >> 1u32;
+    bounds.extend([-tanh_bound.clone(), tanh_bound]);
+    let overflow = BigFloat::with_val(working, largest.ln_ref()) + &ln_2;
+    bounds.extend([-overflow.clone(), overflow]);
     let exact = exact.iter().flat_map(|value| around(layout, value, 0));
     let bounds = bounds.iter().flat_map(|value| around(layout, value, 2));
     exact.chain(bounds).collect()

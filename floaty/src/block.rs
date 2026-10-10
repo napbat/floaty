@@ -196,6 +196,30 @@ pub trait Steps:
     #[must_use]
     fn log10_p1(self) -> Self;
 
+    /// Returns `sinh self`, as [`Float::sinh`] gives it.
+    #[must_use]
+    fn sinh(self) -> Self;
+
+    /// Returns `cosh self`, as [`Float::cosh`] gives it.
+    #[must_use]
+    fn cosh(self) -> Self;
+
+    /// Returns `tanh self`, as [`Float::tanh`] gives it.
+    #[must_use]
+    fn tanh(self) -> Self;
+
+    /// Returns `asinh self`, as [`Float::asinh`] gives it.
+    #[must_use]
+    fn asinh(self) -> Self;
+
+    /// Returns `acosh self`, as [`Float::acosh`] gives it.
+    #[must_use]
+    fn acosh(self) -> Self;
+
+    /// Returns `atanh self`, as [`Float::atanh`] gives it.
+    #[must_use]
+    fn atanh(self) -> Self;
+
     /// Returns `(1 + self)^n`, as [`Float::compound`] gives it.
     #[must_use]
     fn compound(self, n: i64) -> Self;
@@ -305,6 +329,12 @@ macro_rules! binary_steps {
                     log_p1();
                     log2_p1();
                     log10_p1();
+                    sinh();
+                    cosh();
+                    tanh();
+                    asinh();
+                    acosh();
+                    atanh();
                     compound(n: i64);
                     hypot(other: Self);
                     pown(n: i64);

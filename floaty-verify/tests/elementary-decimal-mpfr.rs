@@ -252,12 +252,30 @@ fn variant_arguments(format: DecimalFormat) -> Vec<Number> {
     // `b^x - 1` comes within one unit of -1 at `x = -(p + 2) log_b 10`.
     let units = BigFloat::with_val(working, -(digits + 2));
     let ln_10 = BigFloat::with_val(working, 10).ln();
-    for factor in [ln_10, log2_10, BigFloat::with_val(working, 1)] {
+    for factor in [ln_10.clone(), log2_10, BigFloat::with_val(working, 1)] {
         numbers.extend(around(
             format,
             &BigFloat::with_val(working, &units * &factor),
             2,
         ));
+    }
+    // The hyperbolic functions take their tiny rule below
+    // `10^-ceil((p + 3) / 2)`, `tanh` comes within one unit of ±1 at
+    // `(p + 3) ln 10 / 2`, and `sinh` and `cosh` overflow past
+    // `(emax + 1) ln 10 + ln 2`.
+    let half = i64::midpoint(digits, 4);
+    for top in [-(half + 1), -half, 1 - half] {
+        for negative in [false, true] {
+            numbers.push(Number::new(negative, 1, top));
+            numbers.push(Number::new(negative, power(precision) - 1u32, top - digits));
+        }
+    }
+    let tanh_bound = BigFloat::with_val(working, &ln_10 * (digits + 3)) >> 1u32;
+    let ln_2 = BigFloat::with_val(working, 2).ln();
+    let overflow = BigFloat::with_val(working, &ln_10 * (emax + 1)) + ln_2;
+    for bound in [tanh_bound, overflow] {
+        numbers.extend(around(format, &bound, 2));
+        numbers.extend(around(format, &-bound, 2));
     }
     numbers.retain(|number| {
         number.coefficient.to_string().len() <= usize::try_from(precision).expect("a count")

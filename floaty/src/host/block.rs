@@ -25,11 +25,11 @@
 //! and each later step carries the taint to the result: `mul_add` without
 //! FMA, `round_to_integral_by` to odd, `scale_b` with a scale that has no
 //! normal power of two, the remainders, and the steps that have no
-//! instruction: the exponentials and the logarithms, `compound`, `hypot`,
-//! `pown`, `rootn`, and `reciprocal_sqrt`. A step that reads a bit of a NaN
-//! that the lane can hold otherwise than the engine also taints its lane:
-//! `copy_sign` from a NaN `sign`, and `min_num` and `max_num` of a
-//! signaling NaN.
+//! instruction: the exponentials, the logarithms, the hyperbolic functions,
+//! `compound`, `hypot`, `pown`, `rootn`, and `reciprocal_sqrt`. A step that
+//! reads a bit of a NaN that the lane can hold otherwise than the engine
+//! also taints its lane: `copy_sign` from a NaN `sign`, and `min_num` and
+//! `max_num` of a signaling NaN.
 
 mod format;
 mod native;
@@ -406,6 +406,12 @@ impl<I: Isa, F: Format<Native = N>, N: Native> Steps for Lane<I, F> {
         log_p1();
         log2_p1();
         log10_p1();
+        sinh();
+        cosh();
+        tanh();
+        asinh();
+        acosh();
+        atanh();
         compound(_n: i64);
         hypot(_other: Self);
         pown(_n: i64);

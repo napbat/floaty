@@ -141,7 +141,13 @@ macro_rules! check_elementary {
             log10, log10_with;
             log_p1, log_p1_with;
             log2_p1, log2_p1_with;
-            log10_p1, log10_p1_with
+            log10_p1, log10_p1_with;
+            sinh, sinh_with;
+            cosh, cosh_with;
+            tanh, tanh_with;
+            asinh, asinh_with;
+            acosh, acosh_with;
+            atanh, atanh_with
         );
     }};
     (@each $context:ident, $x:ident, $env:ident; $($name:ident, $name_with:ident);*) => {

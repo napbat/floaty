@@ -1,15 +1,17 @@
 //! The exponentials and the logarithms of IEEE 754-2019 section 9.2, in base
-//! e, 2, and 10, and their forms shifted by one, `b^x - 1` and
-//! `log_b(1 + x)`, correctly rounded in every rounding direction for the
-//! binary and the decimal formats. Also `compound` for the binary formats.
+//! e, 2, and 10, their forms shifted by one, `b^x - 1` and `log_b(1 + x)`,
+//! and the hyperbolic functions and their inverses, correctly rounded in
+//! every rounding direction for the binary and the decimal formats. Also
+//! `compound` for the binary formats.
 //!
 //! The functions evaluate in ball arithmetic: a center and a radius that
 //! bounds the distance to the true value. Every step truncates its center
 //! and adds a bound on its error to the radius, so the ball holds the true
 //! value. `e^x` of a nonzero rational `x` and `ln x` of a positive rational
 //! `x` other than 1 are irrational (Lindemann), so the true value never lies
-//! on a point of a grid. The module `exact` gives the values in base 2 and
-//! 10 that are rational. When every value of the ball has one truncation to
+//! on a point of a grid, and neither does a hyperbolic function of a
+//! nonzero rational. The module `exact` gives the values in base 2 and 10
+//! that are rational. When every value of the ball has one truncation to
 //! `p + 3` bits or `p + 2` digits, that truncation with a sticky bit rounds
 //! as the true value does in every direction, with every flag. This is
 //! Ziv's strategy: otherwise the evaluation repeats at a wider precision.
@@ -35,6 +37,8 @@
 //! - An argument far past the range of the format gives an overflow or an
 //!   underflow.
 //!
+//! The module `hyperbolic` states its own arguments of this kind.
+//!
 //! `compound(x, n) = e^(n ln(1 + x))` has a rational result, which can lie
 //! on a grid. Its module computes those results without a ball.
 
@@ -42,6 +46,7 @@ mod ball;
 mod compound;
 mod constants;
 mod exact;
+mod hyperbolic;
 mod series;
 
 pub(crate) use self::compound::compound;
@@ -50,6 +55,7 @@ use core::cmp::Ordering;
 
 use self::ball::{Ball, truncation};
 use self::constants::{ln2, ln10};
+use self::hyperbolic::Hyperbolic;
 use crate::exact::Unrounded;
 use crate::limbs::{self, Limbs, Widen};
 use crate::unpacked::Unpacked;
@@ -85,7 +91,8 @@ elementary!(
     8 => 16, 32
 );
 
-/// An exponential or a logarithm of IEEE 754-2019 section 9.2.
+/// An exponential, a logarithm, or a hyperbolic function of IEEE 754-2019
+/// section 9.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transcendental {
     /// `exp`: `e^x`.
@@ -112,33 +119,67 @@ pub enum Transcendental {
     Log2P1,
     /// `log10p1`: `log_10(1 + x)`.
     Log10P1,
+    /// `sinh`.
+    Sinh,
+    /// `cosh`.
+    Cosh,
+    /// `tanh`.
+    Tanh,
+    /// `asinh`.
+    Asinh,
+    /// `acosh`.
+    Acosh,
+    /// `atanh`.
+    Atanh,
 }
 
 impl Transcendental {
-    /// Returns `true` for an exponential.
-    fn is_exponential(self) -> bool {
-        matches!(
+    /// Returns the kind of the function.
+    fn kind(self) -> Kind {
+        let (base, shifted) = match self {
+            Self::Exp | Self::Log => (Base::E, false),
+            Self::ExpM1 | Self::LogP1 => (Base::E, true),
+            Self::Exp2 | Self::Log2 => (Base::Two, false),
+            Self::Exp2M1 | Self::Log2P1 => (Base::Two, true),
+            Self::Exp10 | Self::Log10 => (Base::Ten, false),
+            Self::Exp10M1 | Self::Log10P1 => (Base::Ten, true),
+            Self::Sinh => return Kind::Hyperbolic(Hyperbolic::Sinh),
+            Self::Cosh => return Kind::Hyperbolic(Hyperbolic::Cosh),
+            Self::Tanh => return Kind::Hyperbolic(Hyperbolic::Tanh),
+            Self::Asinh => return Kind::Hyperbolic(Hyperbolic::Asinh),
+            Self::Acosh => return Kind::Hyperbolic(Hyperbolic::Acosh),
+            Self::Atanh => return Kind::Hyperbolic(Hyperbolic::Atanh),
+        };
+        if matches!(
             self,
             Self::Exp | Self::ExpM1 | Self::Exp2 | Self::Exp2M1 | Self::Exp10 | Self::Exp10M1
-        )
-    }
-
-    /// Returns `true` for a form shifted by one: `b^x - 1` or `log_b(1 + x)`.
-    fn is_shifted(self) -> bool {
-        matches!(
-            self,
-            Self::ExpM1 | Self::Exp2M1 | Self::Exp10M1 | Self::LogP1 | Self::Log2P1 | Self::Log10P1
-        )
-    }
-
-    /// Returns the base.
-    fn base(self) -> Base {
-        match self {
-            Self::Exp | Self::ExpM1 | Self::Log | Self::LogP1 => Base::E,
-            Self::Exp2 | Self::Exp2M1 | Self::Log2 | Self::Log2P1 => Base::Two,
-            Self::Exp10 | Self::Exp10M1 | Self::Log10 | Self::Log10P1 => Base::Ten,
+        ) {
+            Kind::Exponential { base, shifted }
+        } else {
+            Kind::Logarithm { base, shifted }
         }
     }
+}
+
+/// How the engine evaluates a function.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// `b^x`, or `b^x - 1` when `shifted` is set.
+    Exponential {
+        /// The base.
+        base: Base,
+        /// `true` for `b^x - 1`.
+        shifted: bool,
+    },
+    /// `log_b x`, or `log_b(1 + x)` when `shifted` is set.
+    Logarithm {
+        /// The base.
+        base: Base,
+        /// `true` for `log_b(1 + x)`.
+        shifted: bool,
+    },
+    /// A hyperbolic function or its inverse.
+    Hyperbolic(Hyperbolic),
 }
 
 /// The base of an exponential or a logarithm.
@@ -270,8 +311,11 @@ pub(crate) enum Special<L> {
         /// The sign.
         negative: bool,
     },
-    /// -inf at a pole, which signals divide-by-zero.
-    Pole,
+    /// An infinity at a pole, which signals divide-by-zero.
+    Pole {
+        /// The sign.
+        negative: bool,
+    },
     /// An argument outside the domain, which gives the default NaN and
     /// signals invalid.
     Invalid,
@@ -283,48 +327,63 @@ pub(crate) enum Special<L> {
 /// A shifted form keeps the zero of its argument. `b^-inf - 1` is -1. A
 /// logarithm of 1 is +0, of a zero is a pole, and of a negative argument is
 /// invalid. A shifted logarithm of -1 is a pole, and of an argument below -1
-/// is invalid.
+/// is invalid. The module `hyperbolic` gives the cases of the hyperbolic
+/// functions.
 pub(crate) fn special<L: Limbs>(
     function: Transcendental,
     x: Unpacked<L>,
     radix: Radix,
 ) -> Special<L> {
-    let exponential = function.is_exponential();
-    let shifted = function.is_shifted();
-    match x {
-        Unpacked::Zero { negative, .. } => match (exponential, shifted) {
-            (_, true) => Special::Zero { negative },
-            (true, false) => Special::One { negative: false },
-            (false, false) => Special::Pole,
-        },
-        Unpacked::Infinity { negative: false } => Special::Infinity { negative: false },
-        Unpacked::Infinity { negative: true } => match (exponential, shifted) {
-            (true, false) => Special::Zero { negative: false },
-            (true, true) => Special::One { negative: true },
-            (false, _) => Special::Invalid,
-        },
+    let kind = function.kind();
+    let x = match x {
+        Unpacked::Zero { negative, .. } => return kind.at_zero(negative),
+        Unpacked::Infinity { negative } => return kind.at_infinity(negative),
         Unpacked::Finite {
             negative,
             exponent,
             significand,
-        } => {
-            let x = Argument {
-                negative,
-                exponent,
-                significand,
-            };
-            if exponential {
-                return Special::Evaluate(x);
-            }
-            match (shifted, negative, compare_one(&x, radix)) {
-                (false, true, _) | (true, true, Ordering::Greater) => Special::Invalid,
-                (false, false, Ordering::Equal) => Special::Zero { negative: false },
-                (true, true, Ordering::Equal) => Special::Pole,
-                _ => Special::Evaluate(x),
-            }
-        }
+        } => Argument {
+            negative,
+            exponent,
+            significand,
+        },
         Unpacked::Nan { .. } | Unpacked::Unsupported => {
             unreachable!("the NaN rule handles every NaN and unsupported operand")
+        }
+    };
+    match kind {
+        Kind::Exponential { .. } => Special::Evaluate(x),
+        Kind::Logarithm { shifted, .. } => match (shifted, x.negative, compare_one(&x, radix)) {
+            (false, true, _) | (true, true, Ordering::Greater) => Special::Invalid,
+            (false, false, Ordering::Equal) => Special::Zero { negative: false },
+            (true, true, Ordering::Equal) => Special::Pole { negative: true },
+            _ => Special::Evaluate(x),
+        },
+        Kind::Hyperbolic(function) => hyperbolic::special(function, x, radix),
+    }
+}
+
+impl Kind {
+    /// Returns the result at a zero with the sign `negative`.
+    fn at_zero<L>(self, negative: bool) -> Special<L> {
+        match self {
+            Self::Exponential { shifted: false, .. } => Special::One { negative: false },
+            Self::Exponential { shifted: true, .. } | Self::Logarithm { shifted: true, .. } => {
+                Special::Zero { negative }
+            }
+            Self::Logarithm { shifted: false, .. } => Special::Pole { negative: true },
+            Self::Hyperbolic(function) => function.at_zero(negative),
+        }
+    }
+
+    /// Returns the result at an infinity with the sign `negative`.
+    fn at_infinity<L>(self, negative: bool) -> Special<L> {
+        match (self, negative) {
+            (Self::Hyperbolic(function), _) => function.at_infinity(negative),
+            (_, false) => Special::Infinity { negative: false },
+            (Self::Exponential { shifted: false, .. }, true) => Special::Zero { negative: false },
+            (Self::Exponential { shifted: true, .. }, true) => Special::One { negative: true },
+            (Self::Logarithm { .. }, true) => Special::Invalid,
         }
     }
 }
@@ -338,11 +397,10 @@ pub(crate) fn evaluate<L: Elementary>(
     x: &Argument<L>,
     target: &Target,
 ) -> Unrounded<L::Second> {
-    let base = function.base();
-    if function.is_exponential() {
-        exponential::<L>(x, base, function.is_shifted(), target)
-    } else {
-        logarithm::<L>(x, base, function.is_shifted(), target)
+    match function.kind() {
+        Kind::Exponential { base, shifted } => exponential::<L>(x, base, shifted, target),
+        Kind::Logarithm { base, shifted } => logarithm::<L>(x, base, shifted, target),
+        Kind::Hyperbolic(function) => hyperbolic::evaluate::<L>(function, x, target),
     }
 }
 
@@ -382,12 +440,7 @@ fn exponential<L: Elementary>(
     // `2^4 > 10`, and `10^x` does past `range`. Below that bound, `|x ln b|`
     // stays below `8 range`, as for `e^x`, far inside an `i32`.
     let factor = if base == Base::Ten { 1 } else { 4 };
-    let limit = factor * u64::from(target.range);
-    let huge = match target.radix {
-        Radix::Binary => leading >= i64::from(64 - limit.leading_zeros()),
-        Radix::Decimal => leading >= i64::from(digit_count(&[limit])),
-    };
-    if huge {
+    if past(leading, factor * u64::from(target.range), target.radix) {
         return out_of_range(!x.negative, target);
     }
     if base != Base::E
@@ -518,20 +571,40 @@ fn natural_log<L: Limbs, W: Widen>(x: &Argument<L>, radix: Radix) -> Option<Ball
     }
 }
 
-/// Returns the ball of an argument at the width `W`. A binary argument is
-/// exact. A decimal one multiplies or divides by a power of 10.
+/// Returns the ball of an argument at the width `W`.
 fn argument<L: Limbs, W: Widen>(x: &Argument<L>, radix: Radix) -> Option<Ball<W>> {
+    number(x.negative, x.significand, i64::from(x.exponent), radix)
+}
+
+/// Returns the ball of `±value * RADIX^exponent` at the width `W`. A binary
+/// number is exact. A decimal one multiplies or divides by a power of 10.
+fn number<V: Limbs, W: Widen>(
+    negative: bool,
+    value: V,
+    exponent: i64,
+    radix: Radix,
+) -> Option<Ball<W>> {
     match radix {
-        Radix::Binary => Some(Ball::new(x.negative, x.significand, i64::from(x.exponent))),
+        Radix::Binary => Some(Ball::new(negative, value, exponent)),
         Radix::Decimal => {
-            let coefficient = Ball::new(x.negative, x.significand, 0);
-            let power = series::power_of_ten::<W>(u64::from(x.exponent.unsigned_abs()));
-            if x.exponent >= 0 {
+            let coefficient = Ball::new(negative, value, 0);
+            let power = series::power_of_ten::<W>(exponent.unsigned_abs());
+            if exponent >= 0 {
                 Some(coefficient.mul(&power))
             } else {
                 coefficient.div(&power)
             }
         }
+    }
+}
+
+/// Returns `true` when an argument with the leading exponent `leading` lies
+/// at or above `limit`: `RADIX^leading` is at least `limit`, rounded up to
+/// a power of the radix.
+fn past(leading: i64, limit: u64, radix: Radix) -> bool {
+    match radix {
+        Radix::Binary => leading >= i64::from(64 - limit.leading_zeros()),
+        Radix::Decimal => leading >= i64::from(digit_count(&[limit])),
     }
 }
 

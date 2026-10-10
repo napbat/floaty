@@ -74,11 +74,23 @@ pub enum Function {
     Log2P1,
     /// `log_10(1 + x)`.
     Log10P1,
+    /// `sinh x`.
+    Sinh,
+    /// `cosh x`.
+    Cosh,
+    /// `tanh x`.
+    Tanh,
+    /// `asinh x`.
+    Asinh,
+    /// `acosh x`.
+    Acosh,
+    /// `atanh x`.
+    Atanh,
 }
 
 impl Function {
     /// Every function.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 18] = [
         Self::Exp,
         Self::ExpM1,
         Self::Exp2,
@@ -91,6 +103,12 @@ impl Function {
         Self::LogP1,
         Self::Log2P1,
         Self::Log10P1,
+        Self::Sinh,
+        Self::Cosh,
+        Self::Tanh,
+        Self::Asinh,
+        Self::Acosh,
+        Self::Atanh,
     ];
 
     /// Returns floaty's result of the function on `x` in `env`, and the
@@ -114,6 +132,12 @@ impl Function {
             Self::LogP1 => x.log_p1_with(env),
             Self::Log2P1 => x.log2_p1_with(env),
             Self::Log10P1 => x.log10_p1_with(env),
+            Self::Sinh => x.sinh_with(env),
+            Self::Cosh => x.cosh_with(env),
+            Self::Tanh => x.tanh_with(env),
+            Self::Asinh => x.asinh_with(env),
+            Self::Acosh => x.acosh_with(env),
+            Self::Atanh => x.atanh_with(env),
         }
     }
 
@@ -133,12 +157,21 @@ impl Function {
         )
     }
 
-    /// Returns the base 2 or 10, or `None` for e.
+    /// Returns `true` for a hyperbolic function or its inverse.
+    fn is_hyperbolic(self) -> bool {
+        matches!(
+            self,
+            Self::Sinh | Self::Cosh | Self::Tanh | Self::Asinh | Self::Acosh | Self::Atanh
+        )
+    }
+
+    /// Returns the base 2 or 10 of an exponential or a logarithm, or `None`
+    /// for e and the hyperbolic functions.
     fn base(self) -> Option<u32> {
         match self {
-            Self::Exp | Self::ExpM1 | Self::Log | Self::LogP1 => None,
             Self::Exp2 | Self::Exp2M1 | Self::Log2 | Self::Log2P1 => Some(2),
             Self::Exp10 | Self::Exp10M1 | Self::Log10 | Self::Log10P1 => Some(10),
+            _ => None,
         }
     }
 
@@ -159,6 +192,12 @@ impl Function {
             Self::LogP1 => value.ln_1p_round(round),
             Self::Log2P1 => value.log2_1p_round(round),
             Self::Log10P1 => value.log10_1p_round(round),
+            Self::Sinh => value.sinh_round(round),
+            Self::Cosh => value.cosh_round(round),
+            Self::Tanh => value.tanh_round(round),
+            Self::Asinh => value.asinh_round(round),
+            Self::Acosh => value.acosh_round(round),
+            Self::Atanh => value.atanh_round(round),
         };
         value
     }
@@ -166,18 +205,21 @@ impl Function {
     /// Returns the result of the special cases of IEEE 754-2019 section
     /// 9.2.1 at an operand, or [`Special::Evaluate`].
     fn special(self, x: &Shape) -> Special {
+        if self.is_hyperbolic() {
+            return self.hyperbolic_special(x);
+        }
         let (exponential, shifted) = (self.is_exponential(), self.is_shifted());
         match x {
             Shape::Zero(negative) if shifted => Special::Zero(*negative),
             Shape::Zero(_) if exponential => Special::One(false),
-            Shape::Zero(_) => Special::Pole,
+            Shape::Zero(_) => Special::Pole(true),
             Shape::Infinity(false) => Special::Infinity(false),
             Shape::Infinity(true) if !exponential => Special::Invalid,
             Shape::Infinity(true) if shifted => Special::One(true),
             Shape::Finite { .. } if exponential => Special::Evaluate,
             Shape::Finite { minus_one, .. } if shifted => match minus_one {
                 Ordering::Less => Special::Invalid,
-                Ordering::Equal => Special::Pole,
+                Ordering::Equal => Special::Pole(true),
                 Ordering::Greater => Special::Evaluate,
             },
             Shape::Finite { negative: true, .. } => Special::Invalid,
@@ -188,6 +230,35 @@ impl Function {
                 ..
             } => Special::Zero(false),
             Shape::Finite { .. } => Special::Evaluate,
+        }
+    }
+
+    /// Returns the result of the special cases of IEEE 754-2019 section
+    /// 9.2.1 for a hyperbolic function. `acosh` takes `x >= 1`, and `atanh`
+    /// takes `|x| <= 1` with poles at ±1.
+    fn hyperbolic_special(self, x: &Shape) -> Special {
+        match (self, x) {
+            (Self::Cosh, Shape::Zero(_)) => Special::One(false),
+            (Self::Acosh, Shape::Zero(_)) => Special::Invalid,
+            (_, Shape::Zero(negative)) => Special::Zero(*negative),
+            (Self::Sinh | Self::Asinh, Shape::Infinity(negative)) => Special::Infinity(*negative),
+            (Self::Cosh, Shape::Infinity(_)) | (Self::Acosh, Shape::Infinity(false)) => {
+                Special::Infinity(false)
+            }
+            (Self::Tanh, Shape::Infinity(negative)) => Special::One(*negative),
+            (_, Shape::Infinity(_)) => Special::Invalid,
+            (Self::Acosh, Shape::Finite { one, .. }) => match one {
+                Ordering::Less => Special::Invalid,
+                Ordering::Equal => Special::Zero(false),
+                Ordering::Greater => Special::Evaluate,
+            },
+            (Self::Atanh, Shape::Finite { minus_one, one, .. }) => match (minus_one, one) {
+                (Ordering::Less, _) | (_, Ordering::Greater) => Special::Invalid,
+                (Ordering::Equal, _) => Special::Pole(true),
+                (_, Ordering::Equal) => Special::Pole(false),
+                _ => Special::Evaluate,
+            },
+            (_, Shape::Finite { .. }) => Special::Evaluate,
         }
     }
 
@@ -319,8 +390,8 @@ enum Special {
     Zero(bool),
     /// An infinity with the sign.
     Infinity(bool),
-    /// -inf at a pole, with divide-by-zero.
-    Pole,
+    /// An infinity with the sign at a pole, with divide-by-zero.
+    Pole(bool),
     /// The default NaN, with invalid.
     Invalid,
 }
@@ -387,32 +458,46 @@ fn number(function: Function, x: &BigFloat, format: &Format, env: &Env) -> (Outc
         }
         Special::Zero(negative) => return exact(format.zero(negative)),
         Special::Infinity(negative) => return exact(format.infinity(negative, env)),
-        Special::Pole => {
-            let infinity = format.infinity(true, env);
+        Special::Pole(negative) => {
+            let infinity = format.infinity(negative, env);
             return (Outcome::from_value(infinity), Flags::DIVIDE_BY_ZERO);
         }
         Special::Invalid => return (default_nan(format, env), Flags::INVALID),
     }
     let far = x.clone().abs() >= binary_out_of_range(function, format);
     // MPFR takes a working precision near `|x|` bits for `b^x - 1` of a
-    // large negative `x`, so the oracle takes that value from its bound.
-    let near_minus_one = *x <= -i64::from(format.precision + 11);
-    let input = if function.is_exponential() && function.is_shifted() && near_minus_one {
-        // `b^x <= 2^x` lies below `2^-(p + 11)`, so `b^x - 1` lies above -1
-        // by less than one unit of `p + 3` bits: it truncates to all ones
-        // below 1.
+    // large negative `x`, and for `tanh` of a large `|x|`, so the oracle
+    // takes those values from their bounds.
+    let beyond = x.clone().abs() >= i64::from(format.precision + 11);
+    let below_one = function.is_exponential() && function.is_shifted() && negative;
+    let input = if (below_one || function == Function::Tanh) && beyond {
+        // `b^x <= 2^x` lies below `2^-(p + 11)`, and so does
+        // `1 - |tanh x| < 2 e^-2|x|`. So `b^x - 1` and `tanh x` lie inside
+        // ±1 by less than one unit of `p + 3` bits: each truncates to all
+        // ones below 1 in magnitude.
         Input {
-            negative: true,
+            negative,
             exponent: -i32::try_from(format.precision + 3).expect("a precision fits an i32"),
             significand: (Integer::from(1) << (format.precision + 3)) - 1u32,
             sticky: true,
         }
-    } else if function.is_exponential() && far && !(function.is_shifted() && negative) {
+    } else if far
+        && !below_one
+        && (function.is_exponential() || matches!(function, Function::Sinh | Function::Cosh))
+    {
         // A value far past the range: `2^(p + 2)` times `2^(±2^28)`, with the
-        // sticky bit.
+        // sticky bit. `b^x` overflows or underflows by the sign of `x`, and
+        // `sinh` and `cosh` overflow, `sinh` with the sign of `x`. `b^x - 1`
+        // of a negative `x` lies near -1, which MPFR bounds decide below
+        // `|x| = p + 11`.
+        let (sign, overflow) = match function {
+            Function::Sinh => (negative, true),
+            Function::Cosh => (false, true),
+            _ => (false, !negative),
+        };
         Input {
-            negative: false,
-            exponent: if negative { -(1 << 28) } else { 1 << 28 },
+            negative: sign,
+            exponent: if overflow { 1 << 28 } else { -(1 << 28) },
             significand: Integer::from(1) << (format.precision + 2),
             sticky: true,
         }
@@ -581,8 +666,8 @@ fn decimal_number(
             });
         }
         Special::Infinity(negative) => return exact(DecimalValue::Infinity { negative }),
-        Special::Pole => {
-            let infinity = DecimalValue::Infinity { negative: true };
+        Special::Pole(negative) => {
+            let infinity = DecimalValue::Infinity { negative };
             return (infinity, Flags::DIVIDE_BY_ZERO);
         }
         Special::Invalid => {
@@ -597,44 +682,76 @@ fn decimal_number(
     let negative = *x < 0;
     let bound = decimal_out_of_range(format);
     let far = x.clone().abs() >= bound;
-    // `b^x <= 2^x` lies below `2^-(4p + 16)`, below `10^-(p + 2)`, so
-    // `b^x - 1` lies above -1 by less than one unit of `p + 2` digits, as
-    // `-1 + 2^-(4p + 20)` does. MPFR takes a working precision near `|x|`
+    // `b^x <= 2^x` lies below `2^-(4p + 16)`, below `10^-(p + 2)`, and so
+    // does `1 - |tanh x| < 2 e^-2|x|` from `|x| = 2p + 12`. So `b^x - 1` and
+    // `tanh x` lie inside ±1 by less than one unit of `p + 2` digits, as
+    // `±(1 - 2^-(4p + 20))` does. MPFR takes a working precision near `|x|`
     // bits there.
     let precision = format.precision;
-    let near_minus_one = *x <= -i64::from(4 * precision + 16);
-    if function.is_exponential() && function.is_shifted() && near_minus_one {
+    let near_minus_one =
+        function.is_exponential() && function.is_shifted() && *x <= -i64::from(4 * precision + 16);
+    let near_one = function == Function::Tanh && x.clone().abs() >= 2 * precision + 12;
+    if near_minus_one || near_one {
         let tiny = BigFloat::with_val(2, 1) >> (4 * precision + 20);
-        let value = BigFloat::with_val(4 * precision + 24, &tiny - 1u32);
+        let value = BigFloat::with_val(4 * precision + 24, 1u32 - &tiny);
+        let value = if negative { -value } else { value };
         return decimal::to_decimal(&value, format, env);
     }
-    if function.is_exponential() && far && !(function.is_shifted() && negative) {
-        // `2^(±4R)` lies past the range of the format, as the value does.
+    let shifted_negative = function.is_exponential() && function.is_shifted() && negative;
+    let overflows =
+        function.is_exponential() || matches!(function, Function::Sinh | Function::Cosh);
+    if far && !shifted_negative && overflows {
+        // `2^(±4R)` lies past the range of the format, as the value does:
+        // `b^x` overflows or underflows by the sign of `x`, and `sinh` and
+        // `cosh` overflow, `sinh` with the sign of `x`.
         let scale = i32::try_from(bound).expect("a decimal bound fits an i32");
-        let value = BigFloat::with_val(2, 1) << if negative { -scale } else { scale };
+        let value = BigFloat::with_val(2, 1)
+            << if negative && function.is_exponential() {
+                -scale
+            } else {
+                scale
+            };
+        let value = if negative && function == Function::Sinh {
+            -value
+        } else {
+            value
+        };
         return decimal::to_decimal(&value, format, env);
     }
     if let Some(value) = function.rational(x) {
         return decimal::rational_to_decimal(&value, format, env);
     }
     // `e^x - 1` lies above `x`, and `ln(1 + x)` below it, by less than
-    // `x^2`. Below `|x| = 2^-(4p + 70)`, `x (1 ± 2^-(4p + 70))` lies on the
-    // same side of `x` and closer to it than one unit of `p + 2` digits, as
-    // the value does, and GMP gives its digits. MPFR bounds of a decimal
-    // argument decide such a value only at a working precision near
-    // `log2(1 / |x|)` bits.
+    // `x^2`. `sinh x` and `atanh x` lie beyond `x`, and `tanh x` and
+    // `asinh x` short of it, by less than `|x|^3`. Below
+    // `|x| = 2^-(4p + 70)`, `x ± |x| 2^-(4p + 70)` lies on the same side of
+    // `x` and closer to it than one unit of `p + 2` digits, as the value
+    // does, and GMP gives its digits. MPFR bounds of a decimal argument
+    // decide such a value only at a working precision near `log2(1 / |x|)`
+    // bits.
     let tiny = Rational::from((1, Integer::from(1) << (4 * precision + 70)));
-    if matches!(function, Function::ExpM1 | Function::LogP1) && x.clone().abs() < tiny {
-        let step = x.clone().abs() * tiny;
-        let value = if function == Function::ExpM1 {
-            x.clone() + step
-        } else {
-            x.clone() - step
+    if x.clone().abs() < tiny {
+        let step = x.clone() * tiny;
+        let value = match function {
+            Function::ExpM1 => Some(x.clone() + step.abs()),
+            Function::LogP1 => Some(x.clone() - step.abs()),
+            Function::Sinh | Function::Atanh => Some(x.clone() + step),
+            Function::Tanh | Function::Asinh => Some(x.clone() - step),
+            _ => None,
         };
-        return decimal::rational_to_decimal(&value, format, env);
+        if let Some(value) = value {
+            return decimal::rational_to_decimal(&value, format, env);
+        }
     }
+    // `cosh` is even, and increases with `|x|`, so its argument enters MPFR
+    // as `|x|`. Every other function increases with `x`.
+    let x = if function == Function::Cosh {
+        x.clone().abs()
+    } else {
+        x.clone()
+    };
     let value = decimal_truncation(format.precision, |precision, round| {
-        let argument = BigFloat::with_val_round(precision, x, round).0;
+        let argument = BigFloat::with_val_round(precision, &x, round).0;
         function.mpfr(&argument, precision, round)
     });
     decimal::to_decimal(&value, format, env)

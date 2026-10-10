@@ -42,6 +42,12 @@ macro_rules! steps_with {
             log_p1_with();
             log2_p1_with();
             log10_p1_with();
+            sinh_with();
+            cosh_with();
+            tanh_with();
+            asinh_with();
+            acosh_with();
+            atanh_with();
             compound_with(n: i64);
             hypot_with(other: Self);
             pown_with(n: i64);

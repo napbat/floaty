@@ -247,6 +247,23 @@ pub(super) fn one_plus<L: Limbs, W: Limbs>(x: &Argument<L>, radix: Radix) -> Opt
     Some((sum, exponent))
 }
 
+/// Returns `x - 1` exactly as `value * RADIX^exponent` for an argument above
+/// 1, when it fits the width `W`. A value that does not fit belongs to a
+/// large `x`, where `x - 1` keeps its digits in a ball.
+pub(super) fn minus_one<L: Limbs, W: Limbs>(x: &Argument<L>, radix: Radix) -> Option<(W, i64)> {
+    debug_assert!(!x.negative, "an argument above 1 is positive");
+    let exponent = i64::from(x.exponent);
+    let significand = x.significand.resize::<W>();
+    if exponent >= 0 {
+        let one = W::ZERO.with_bit(0);
+        return Some((scaled(significand, exponent, radix)?.sub(one), 0));
+    }
+    // `x - 1` is `(m - RADIX^k) RADIX^-k`, and `m > RADIX^k`, because
+    // `x > 1`.
+    let unit = radix_power::<W>(radix, exponent.unsigned_abs())?;
+    Some((significand.sub(unit), exponent))
+}
+
 /// Returns `value * RADIX^exponent`, a nonzero number, with every factor of
 /// the radix moved from `value` to the exponent.
 pub(super) fn stripped<W: Limbs>(value: W, exponent: i64, radix: Radix) -> (W, i64) {

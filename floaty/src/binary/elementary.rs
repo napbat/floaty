@@ -60,9 +60,9 @@ where
             Special::One { negative } => Self::signed_one(negative),
             Special::Zero { negative } => Unpacked::zero(negative),
             Special::Infinity { negative } => Unpacked::Infinity { negative },
-            Special::Pole => {
+            Special::Pole { negative } => {
                 flags |= Flags::DIVIDE_BY_ZERO;
-                Self::infinity(true, &env)
+                Self::infinity(negative, &env)
             }
             Special::Invalid => {
                 flags |= Flags::INVALID;

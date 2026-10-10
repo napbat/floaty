@@ -1,6 +1,6 @@
-//! The exponentials and the logarithms of IEEE 754-2019 section 9.2: in base
-//! e, 2, and 10, and their forms shifted by one, `b^x - 1` and
-//! `log_b(1 + x)`.
+//! The exponentials and the logarithms of IEEE 754-2019 section 9.2, in base
+//! e, 2, and 10, with their forms shifted by one, `b^x - 1` and
+//! `log_b(1 + x)`, and the hyperbolic functions and their inverses.
 
 use super::Float;
 use crate::elementary::Transcendental;
@@ -342,5 +342,170 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     pub fn log10_p1_with(self, behavior: impl Override) -> (Self, Flags) {
         self.elementary_with(Transcendental::Log10P1, behavior)
+    }
+
+    /// Returns `sinh self`, with the default mode.
+    #[must_use]
+    pub fn sinh(self) -> Self {
+        self.sinh_with(M::default()).0
+    }
+
+    /// Returns the hyperbolic sine `sinh self`, correctly rounded in the
+    /// direction of the behavior, as IEEE 754-2019 `sinh` does, and the
+    /// flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does, also
+    /// for a `self` near 0. Every finite result but that of a zero is
+    /// inexact. The special cases follow IEEE 754-2019 section 9.2.1: ±0
+    /// gives ±0, and ±inf gives ±inf.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags, Rounding};
+    ///
+    /// // sinh(2^-60) lies above 2^-60 by about 2^-183.
+    /// let x = F64::from_bits(0x3C30_0000_0000_0000);
+    /// assert_eq!(x.sinh_with(Env::IEEE), (x, Flags::INEXACT));
+    /// assert_eq!(x.sinh_with(Rounding::TowardPositive).0, x.next_up());
+    /// ```
+    #[must_use]
+    pub fn sinh_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Sinh, behavior)
+    }
+
+    /// Returns `cosh self`, with the default mode.
+    #[must_use]
+    pub fn cosh(self) -> Self {
+        self.cosh_with(M::default()).0
+    }
+
+    /// Returns the hyperbolic cosine `cosh self`, correctly rounded in the
+    /// direction of the behavior, as IEEE 754-2019 `cosh` does, and the
+    /// flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. Every
+    /// finite result but that of a zero is inexact. The special cases follow
+    /// IEEE 754-2019 section 9.2.1: ±0 gives 1, and ±inf gives +inf.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let one = F64::from_bits(0x3FF0_0000_0000_0000);
+    /// assert_eq!(F64::from_bits(0x8000_0000_0000_0000).cosh_with(Env::IEEE), (one, Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn cosh_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Cosh, behavior)
+    }
+
+    /// Returns `tanh self`, with the default mode.
+    #[must_use]
+    pub fn tanh(self) -> Self {
+        self.tanh_with(M::default()).0
+    }
+
+    /// Returns the hyperbolic tangent `tanh self`, correctly rounded in the
+    /// direction of the behavior, as IEEE 754-2019 `tanh` does, and the
+    /// flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does, also
+    /// for a `self` near 0. Every finite result but that of a zero is
+    /// inexact. The special cases follow IEEE 754-2019 section 9.2.1: ±0
+    /// gives ±0, and ±inf gives ±1.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// // tanh(20) lies below 1 by less than 2^-56, so it rounds up to 1.
+    /// let (one, flags) = F64::from_bits(0x4034_0000_0000_0000).tanh_with(Env::IEEE);
+    /// let rounded_up = Flags::INEXACT | Flags::ROUNDED_UP;
+    /// assert_eq!((one.to_bits(), flags), (0x3FF0_0000_0000_0000, rounded_up));
+    /// ```
+    #[must_use]
+    pub fn tanh_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Tanh, behavior)
+    }
+
+    /// Returns `asinh self`, with the default mode.
+    #[must_use]
+    pub fn asinh(self) -> Self {
+        self.asinh_with(M::default()).0
+    }
+
+    /// Returns the inverse hyperbolic sine `asinh self`, correctly rounded
+    /// in the direction of the behavior, as IEEE 754-2019 `asinh` does, and
+    /// the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does, also
+    /// for a `self` near 0. Every finite result but that of a zero is
+    /// inexact. The special cases follow IEEE 754-2019 section 9.2.1: ±0
+    /// gives ±0, and ±inf gives ±inf.
+    ///
+    /// ```
+    /// use floaty::{F64, Rounding};
+    ///
+    /// // asinh(2^-60) lies below 2^-60 by about 2^-183.
+    /// let x = F64::from_bits(0x3C30_0000_0000_0000);
+    /// assert_eq!(x.asinh_with(Rounding::TowardZero).0, x.next_down());
+    /// ```
+    #[must_use]
+    pub fn asinh_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Asinh, behavior)
+    }
+
+    /// Returns `acosh self`, with the default mode.
+    #[must_use]
+    pub fn acosh(self) -> Self {
+        self.acosh_with(M::default()).0
+    }
+
+    /// Returns the inverse hyperbolic cosine `acosh self`, correctly rounded
+    /// in the direction of the behavior, as IEEE 754-2019 `acosh` does, and
+    /// the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. Every
+    /// finite result but `acosh 1` is inexact. The special cases follow IEEE
+    /// 754-2019 section 9.2.1: 1 gives +0, +inf gives +inf, and a value
+    /// below 1 or -inf gives the default NaN and signals invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (zero, flags) = F64::from_bits(0x3FF0_0000_0000_0000).acosh_with(Env::IEEE);
+    /// assert_eq!((zero.to_bits(), flags), (0, Flags::NONE));
+    /// let (nan, flags) = F64::from_bits(0x3FE0_0000_0000_0000).acosh_with(Env::IEEE);
+    /// assert!(nan.is_nan() && flags == Flags::INVALID);
+    /// ```
+    #[must_use]
+    pub fn acosh_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Acosh, behavior)
+    }
+
+    /// Returns `atanh self`, with the default mode.
+    #[must_use]
+    pub fn atanh(self) -> Self {
+        self.atanh_with(M::default()).0
+    }
+
+    /// Returns the inverse hyperbolic tangent `atanh self`, correctly
+    /// rounded in the direction of the behavior, as IEEE 754-2019 `atanh`
+    /// does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does, also
+    /// for a `self` near 0. Every finite result but that of a zero is
+    /// inexact. The special cases follow IEEE 754-2019 section 9.2.1: ±0
+    /// gives ±0, ±1 gives ±inf and signals divide-by-zero, and a value
+    /// beyond ±1 or an infinity gives the default NaN and signals invalid. A
+    /// format without an infinity gives its NaN or its largest finite value
+    /// for ±inf.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (pole, flags) = F64::from_bits(0xBFF0_0000_0000_0000).atanh_with(Env::IEEE);
+    /// assert_eq!((pole.to_bits(), flags), (0xFFF0_0000_0000_0000, Flags::DIVIDE_BY_ZERO));
+    /// ```
+    #[must_use]
+    pub fn atanh_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Atanh, behavior)
     }
 }

@@ -56,9 +56,9 @@ where
             },
             Special::Zero { negative } => Self::zero(negative, 0),
             Special::Infinity { negative } => Unpacked::Infinity { negative },
-            Special::Pole => {
+            Special::Pole { negative } => {
                 flags |= Flags::DIVIDE_BY_ZERO;
-                Unpacked::Infinity { negative: true }
+                Unpacked::Infinity { negative }
             }
             Special::Invalid => {
                 flags |= Flags::INVALID;
