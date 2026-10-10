@@ -622,6 +622,36 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         (Self::new(lanes), flags)
     }
 
+    /// Returns `atan2(y, x)` of each pair of lanes `y` of `self` and `x` of
+    /// `x`, with the default mode.
+    #[must_use]
+    pub fn atan2(self, x: Self) -> Self {
+        self.zip(x, Float::atan2)
+    }
+
+    /// Returns `atan2(y, x)` of each pair of lanes, as [`Float::atan2_with`]
+    /// does, and the union of the flags.
+    #[must_use]
+    pub fn atan2_with(self, x: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(x, |y, x| y.atan2_with(x, behavior))
+    }
+
+    /// Returns `atan2(y, x) / pi` of each pair of lanes, with the default
+    /// mode.
+    #[must_use]
+    pub fn atan2_pi(self, x: Self) -> Self {
+        self.zip(x, Float::atan2_pi)
+    }
+
+    /// Returns `atan2(y, x) / pi` of each pair of lanes, as
+    /// [`Float::atan2_pi_with`] does, and the union of the flags.
+    #[must_use]
+    pub fn atan2_pi_with(self, x: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(x, |y, x| y.atan2_pi_with(x, behavior))
+    }
+
     /// Returns the absolute value of each lane. Only the sign bit changes.
     #[must_use]
     pub fn abs(self) -> Self {

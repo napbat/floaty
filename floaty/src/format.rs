@@ -6,7 +6,7 @@ use core::fmt::Debug;
 use core::hash::Hash;
 use core::marker::PhantomData;
 
-use crate::elementary::Transcendental;
+use crate::elementary::{Bivariate, Transcendental};
 use crate::env::{Behavior, Env, Flags, TotalOrder};
 use crate::exact::Unrounded;
 use crate::float::Class;
@@ -118,11 +118,20 @@ pub trait Standard<const W: usize>: Sealed + Sized + 'static {
     #[doc(hidden)]
     fn sqrt<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags);
 
-    /// Returns an exponential or a logarithm, correctly rounded.
+    /// Returns an elementary function of one argument, correctly rounded.
     #[doc(hidden)]
     fn elementary<B: Behavior>(
         value: Self::Bits,
         function: Transcendental,
+        behavior: B,
+    ) -> (Self::Bits, Flags);
+
+    /// Returns an elementary function of two arguments, correctly rounded.
+    #[doc(hidden)]
+    fn bivariate<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        function: Bivariate,
         behavior: B,
     ) -> (Self::Bits, Flags);
 

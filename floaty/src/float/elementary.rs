@@ -1,11 +1,12 @@
 //! The exponentials and the logarithms of IEEE 754-2019 section 9.2, in base
 //! e, 2, and 10, with their forms shifted by one, `b^x - 1` and
 //! `log_b(1 + x)`, the hyperbolic functions and their inverses, the
-//! trigonometric functions of an argument scaled by pi, and the inverse
-//! trigonometric functions with their forms scaled by pi.
+//! trigonometric functions of an argument scaled by pi, the inverse
+//! trigonometric functions with their forms scaled by pi, and `atan2` and
+//! `atan2Pi`.
 
 use super::Float;
-use crate::elementary::Transcendental;
+use crate::elementary::{Bivariate, Transcendental};
 use crate::env::{Flags, Mode, Override};
 use crate::format::Standard;
 
@@ -13,6 +14,18 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// Returns `function` of `self` and the flags.
     fn elementary_with(self, function: Transcendental, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) = S::elementary(self.bits, function, behavior.apply::<M>());
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Returns `function` of `self` and `other`, in that order, and the
+    /// flags.
+    fn bivariate_with(
+        self,
+        other: Self,
+        function: Bivariate,
+        behavior: impl Override,
+    ) -> (Self, Flags) {
+        let (bits, flags) = S::bivariate(self.bits, other.bits, function, behavior.apply::<M>());
         (Self::from_masked(bits), flags)
     }
 
@@ -752,5 +765,69 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     pub fn atan_pi_with(self, behavior: impl Override) -> (Self, Flags) {
         self.elementary_with(Transcendental::AtanPi, behavior)
+    }
+
+    /// Returns `atan2(self, x)`, the angle of the point `(x, self)`, with the
+    /// default mode.
+    #[must_use]
+    pub fn atan2(self, x: Self) -> Self {
+        self.atan2_with(x, M::default()).0
+    }
+
+    /// Returns `atan2(self, x)`, the angle of the point `(x, self)` in
+    /// `[-pi, pi]`, correctly rounded in the direction of the behavior, as
+    /// IEEE 754-2019 `atan2` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. Every
+    /// result other than a zero is inexact. The special cases follow IEEE
+    /// 754-2019 section 9.2.1, with the sign of `self` on each angle:
+    ///
+    /// - a zero `self` gives ±0 for `x` of the + sign, `+0` and `+inf`
+    ///   included, and ±pi for `x` of the - sign;
+    /// - a finite `self` other than zero gives ±pi/2 for a zero `x`, ±0 for
+    ///   `x = +inf`, and ±pi for `x = -inf`;
+    /// - an infinite `self` gives ±pi/2 for a finite `x`, ±pi/4 for
+    ///   `x = +inf`, and ±3pi/4 for `x = -inf`.
+    ///
+    /// A NaN operand gives a NaN by the rule of the behavior, in the operand
+    /// order `self`, `x`.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let atan2 = |y, x| F64::from_bits(y).atan2_with(F64::from_bits(x), Env::IEEE);
+    /// assert_eq!(atan2(0x3FF0_0000_0000_0000, 0x3FF0_0000_0000_0000), (F64::from_bits(0x3FE9_21FB_5444_2D18), Flags::INEXACT));
+    /// assert_eq!(atan2(0, 0x8000_0000_0000_0000).0.to_bits(), 0x4009_21FB_5444_2D18);
+    /// ```
+    #[must_use]
+    pub fn atan2_with(self, x: Self, behavior: impl Override) -> (Self, Flags) {
+        self.bivariate_with(x, Bivariate::Atan2, behavior)
+    }
+
+    /// Returns `atan2(self, x) / pi`, with the default mode.
+    #[must_use]
+    pub fn atan2_pi(self, x: Self) -> Self {
+        self.atan2_pi_with(x, M::default()).0
+    }
+
+    /// Returns `atan2(self, x) / pi`, in `[-1, 1]`, correctly rounded in the
+    /// direction of the behavior, as IEEE 754-2019 `atan2Pi` does, and the
+    /// flags.
+    ///
+    /// The special cases are those of [`atan2_with`](Self::atan2_with), with
+    /// pi as 1: ±1, ±1/2, ±1/4, and ±3/4 are exact. `|self| = |x|` also gives
+    /// ±1/4 or ±3/4 exactly. Every other result other than a zero is
+    /// inexact.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let atan2_pi = |y, x| F64::from_bits(y).atan2_pi_with(F64::from_bits(x), Env::IEEE);
+    /// assert_eq!(atan2_pi(0x4000_0000_0000_0000, 0xC000_0000_0000_0000), (F64::from_bits(0x3FE8_0000_0000_0000), Flags::NONE));
+    /// assert_eq!(atan2_pi(0x8000_0000_0000_0000, 0).0.to_bits(), 0x8000_0000_0000_0000);
+    /// ```
+    #[must_use]
+    pub fn atan2_pi_with(self, x: Self, behavior: impl Override) -> (Self, Flags) {
+        self.bivariate_with(x, Bivariate::Atan2Pi, behavior)
     }
 }

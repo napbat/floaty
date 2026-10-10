@@ -44,8 +44,10 @@
 //! arguments of this kind.
 //!
 //! `compound(x, n) = e^(n ln(1 + x))` has a rational result, which can lie
-//! on a grid. Its module computes those results without a ball.
+//! on a grid. Its module computes those results without a ball. The module
+//! `atan2` gives the functions of two arguments.
 
+mod atan2;
 mod ball;
 mod compound;
 mod constants;
@@ -55,6 +57,7 @@ mod inverse;
 mod series;
 mod trigonometric;
 
+pub(crate) use self::atan2::Outcome;
 pub(crate) use self::compound::compound;
 
 use core::cmp::Ordering;
@@ -98,6 +101,15 @@ elementary!(
     7 => 14, 28,
     8 => 16, 32
 );
+
+/// A function of two arguments of IEEE 754-2019 section 9.2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bivariate {
+    /// `atan2(y, x)`: the angle of the point `(x, y)`.
+    Atan2,
+    /// `atan2Pi(y, x)`: `atan2(y, x) / pi`.
+    Atan2Pi,
+}
 
 /// An elementary function of IEEE 754-2019 section 9.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -485,6 +497,18 @@ pub(crate) fn angle<L: Elementary>(
     target: &Target,
 ) -> Unrounded<L::Second> {
     inverse::angle::<L>(eighths, scaled, target)
+}
+
+/// Returns `function` of two operands that are not NaNs, in the order of
+/// IEEE 754-2019: `y` first. The value is exact, or truncated for the
+/// rounding routine of the format as [`evaluate`] truncates a value.
+pub(crate) fn bivariate<L: Elementary>(
+    function: Bivariate,
+    y: &Unpacked<L>,
+    x: &Unpacked<L>,
+    target: &Target,
+) -> Outcome<L::Second> {
+    atan2::atan2::<L>(function == Bivariate::Atan2Pi, y, x, target)
 }
 
 /// Returns `b^x`, or `b^x - 1` when `minus_one` is set.

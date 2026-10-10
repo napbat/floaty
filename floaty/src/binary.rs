@@ -17,7 +17,7 @@ mod reduction;
 mod remainder;
 mod scale;
 
-use crate::elementary::Transcendental;
+use crate::elementary::{Bivariate, Transcendental};
 use crate::env::{Behavior, Env, Flags, TotalOrder};
 use crate::exact::{self, RoundingTarget, Target, Unrounded};
 use crate::float::Class;
@@ -650,6 +650,19 @@ where
     ) -> (Self::Bits, Flags) {
         let env = behavior.env();
         let (bits, flags) = Layout::<E, Enc, W>::elementary(value.to_limbs(), function, behavior);
+        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn bivariate<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        function: Bivariate,
+        behavior: B,
+    ) -> (Self::Bits, Flags) {
+        let env = behavior.env();
+        let (bits, flags) =
+            Layout::<E, Enc, W>::bivariate(left.to_limbs(), right.to_limbs(), function, behavior);
         let bits = Layout::<E, Enc, W>::saturated(bits, &env);
         (Self::Bits::from_limbs(bits), flags)
     }

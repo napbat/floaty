@@ -34,8 +34,10 @@
 //! cases. A decimal result that is exact takes the exponent nearest 0, by
 //! the rule of floaty.
 
+mod atan2;
 mod decimal;
 
+pub use self::atan2::{Bivariate, expected_atan2, expected_decimal_atan2};
 pub use self::decimal::expected_decimal;
 
 use core::cmp::Ordering;

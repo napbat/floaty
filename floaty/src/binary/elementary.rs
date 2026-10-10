@@ -1,5 +1,5 @@
-//! The exponentials, the logarithms, and `compound` of IEEE 754-2019 section
-//! 9.2 for the binary formats.
+//! The exponentials, the logarithms, the trigonometric functions, `atan2`,
+//! and `compound` of IEEE 754-2019 section 9.2 for the binary formats.
 //!
 //! The special cases follow section 9.2.1. The other arguments take the
 //! truncation of `crate::elementary`, which the rounding routine rounds once.
@@ -8,7 +8,8 @@ use core::cmp::Ordering;
 
 use super::Layout;
 use crate::elementary::{
-    self, Argument, Elementary, Radix, Special, Target, Transcendental, compare_one,
+    self, Argument, Bivariate, Elementary, Outcome, Radix, Special, Target, Transcendental,
+    compare_one,
 };
 use crate::env::{Behavior, Flags};
 use crate::format::{Encoding, Storage, Width};
@@ -74,6 +75,27 @@ where
             }
         };
         Self::exact(result, flags)
+    }
+
+    /// Returns `function` of `left` and `right`, in the operand order of
+    /// IEEE 754-2019, correctly rounded, and the flags.
+    pub fn bivariate<L: Elementary, B: Behavior>(
+        left: L,
+        right: L,
+        function: Bivariate,
+        behavior: B,
+    ) -> (L, Flags) {
+        let env = behavior.env();
+        let mut flags = Flags::NONE;
+        let y = Self::operand(left, &env, &mut flags);
+        let x = Self::operand(right, &env, &mut flags);
+        if let Some((nan, special)) = nan::special(&y, &x, &env) {
+            return Self::exact(nan, flags | special);
+        }
+        match elementary::bivariate(function, &y, &x, &Self::elementary_target()) {
+            Outcome::Zero { negative } => Self::exact(Unpacked::zero(negative), flags),
+            Outcome::Truncated(truncated) => Self::finish(&truncated, behavior, flags),
+        }
     }
 
     /// Returns `(1 + value)^n`, correctly rounded, and the flags.

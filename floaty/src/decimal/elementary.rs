@@ -1,5 +1,5 @@
-//! The exponentials and the logarithms of IEEE 754-2019 section 9.2 for the
-//! decimal formats.
+//! The exponentials, the logarithms, the trigonometric functions, and
+//! `atan2` of IEEE 754-2019 section 9.2 for the decimal formats.
 //!
 //! The special cases follow section 9.2.1. An exact result takes the
 //! exponent nearest 0, as `logB` and a conversion from an integer do: the
@@ -11,7 +11,9 @@
 //! once.
 
 use super::DecimalLayout;
-use crate::elementary::{self, Elementary, Radix, Special, Target, Transcendental};
+use crate::elementary::{
+    self, Bivariate, Elementary, Outcome, Radix, Special, Target, Transcendental,
+};
 use crate::env::{Behavior, Flags};
 use crate::format::{DecimalEncoding, Storage, Width};
 use crate::nan::{self, default_nan};
@@ -70,5 +72,27 @@ where
             }
         };
         Self::exact(result, flags)
+    }
+
+    /// Returns `function` of `left` and `right`, in the operand order of
+    /// IEEE 754-2019, correctly rounded, and the flags. A zero result has the
+    /// exponent 0.
+    pub fn bivariate<L: Elementary, B: Behavior>(
+        left: L,
+        right: L,
+        function: Bivariate,
+        behavior: B,
+    ) -> (L, Flags) {
+        let env = behavior.env();
+        let mut flags = Flags::NONE;
+        let y = Self::operand(left, &env, &mut flags);
+        let x = Self::operand(right, &env, &mut flags);
+        if let Some((nan, special)) = nan::special(&y, &x, &env) {
+            return Self::exact(nan, flags | special);
+        }
+        match elementary::bivariate(function, &y, &x, &Self::elementary_target()) {
+            Outcome::Zero { negative } => Self::exact(Self::zero(negative, 0), flags),
+            Outcome::Truncated(truncated) => Self::finish(&truncated, 0, behavior, flags),
+        }
     }
 }

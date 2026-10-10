@@ -13,7 +13,7 @@ use crate::encodings::Layout;
 use super::algebraic;
 use super::augmented::{self, Augmentation};
 use super::compare::{self, MinMax};
-use super::elementary::{self, Function};
+use super::elementary::{self, Bivariate, Function};
 use super::integral::{self, IntegerValue, to_int_value};
 use super::payload::{self, Payload};
 use super::{
@@ -400,6 +400,54 @@ pub fn check_decimal_elementary<S: Standard<W>, const W: usize>(
             (DecimalValue::from_decoded(result.decode::<2>()), flags),
             elementary::expected_decimal(function, &operand, format, env),
             "{function:?} {x:?} {env:?}"
+        );
+    }
+}
+
+/// Checks `atan2` and `atan2Pi` on one pair of values, `y` first.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_atan2<S: Standard<W>, const W: usize>(
+    y: Float<S, W>,
+    x: Float<S, W>,
+    format: &Format,
+    env: &Env,
+) {
+    let (left, right) = (Operand::<8>::of(y), Operand::<8>::of(x));
+    for function in Bivariate::ALL {
+        check_float(
+            function.floaty(y, x, *env),
+            &elementary::expected_atan2(function, &left, &right, format, env),
+            &|| format!("{function:?} {y:?} {x:?} {env:?}"),
+        );
+    }
+}
+
+/// Checks `atan2` and `atan2Pi` on one pair of values of a decimal format,
+/// `y` first.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_decimal_atan2<S: Standard<W>, const W: usize>(
+    y: Float<S, W>,
+    x: Float<S, W>,
+    format: DecimalFormat,
+    env: &Env,
+) {
+    let (left, right) = (Operand::<2>::of(y), Operand::<2>::of(x));
+    for function in Bivariate::ALL {
+        let (result, flags) = function.floaty(y, x, *env);
+        assert!(
+            result.is_canonical(),
+            "{function:?} {y:?} {x:?} {env:?}: {result:?} is canonical"
+        );
+        assert_eq!(
+            (DecimalValue::from_decoded(result.decode::<2>()), flags),
+            elementary::expected_decimal_atan2(function, &left, &right, format, env),
+            "{function:?} {y:?} {x:?} {env:?}"
         );
     }
 }

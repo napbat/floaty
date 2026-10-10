@@ -256,6 +256,14 @@ pub trait Steps:
     #[must_use]
     fn atan_pi(self) -> Self;
 
+    /// Returns `atan2(self, x)`, as [`Float::atan2`] gives it.
+    #[must_use]
+    fn atan2(self, x: Self) -> Self;
+
+    /// Returns `atan2(self, x) / pi`, as [`Float::atan2_pi`] gives it.
+    #[must_use]
+    fn atan2_pi(self, x: Self) -> Self;
+
     /// Returns `(1 + self)^n`, as [`Float::compound`] gives it.
     #[must_use]
     fn compound(self, n: i64) -> Self;
@@ -380,6 +388,8 @@ macro_rules! binary_steps {
                     asin_pi();
                     acos_pi();
                     atan_pi();
+                    atan2(x: Self);
+                    atan2_pi(x: Self);
                     compound(n: i64);
                     hypot(other: Self);
                     pown(n: i64);

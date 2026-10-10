@@ -25,48 +25,37 @@ fn decimal_out_of_range(format: DecimalFormat) -> i64 {
     4 * (reach + 3)
 }
 
-/// Returns the expected result of `function` on a decimal operand, and the
-/// flags.
+/// A decimal operand as the oracle reads it.
+pub(super) enum DecimalRead {
+    /// A NaN, which the NaN rule selects from.
+    Nan(Nan),
+    /// A number, with its value when it is finite and nonzero.
+    Number(Shape, Option<Rational>),
+}
+
+/// Reads a decimal operand: a subnormal signals denormal input, and is a
+/// zero under DAZ.
 ///
 /// # Panics
 ///
 /// Panics for an unsupported encoding, which a decimal format does not have.
-#[must_use]
-pub fn expected_decimal(
-    function: Function,
-    x: &Operand<2>,
-    format: DecimalFormat,
-    env: &Env,
-) -> (DecimalValue, Flags) {
-    let mut flags = if x.subnormal {
-        Flags::DENORMAL_INPUT
-    } else {
-        Flags::NONE
-    };
-    let (shape, value) = match x.decoded {
+pub(super) fn read_decimal(x: &Operand<2>, env: &Env, flags: &mut Flags) -> DecimalRead {
+    if x.subnormal {
+        *flags |= Flags::DENORMAL_INPUT;
+    }
+    match x.decoded {
         Decoded::Nan {
             negative,
             signaling,
             payload,
-        } => {
-            let offered = Nan {
-                negative,
-                signaling,
-                payload: Integer::from_digits(&payload, Order::Lsf),
-            };
-            let nan = select_nan(&[offered], env);
-            if signaling {
-                flags |= Flags::INVALID;
-            }
-            let value = DecimalValue::Nan {
-                negative: nan.negative,
-                payload: nan.payload,
-            };
-            return (value, flags);
-        }
-        Decoded::Zero { negative, .. } => (Shape::Zero(negative), None),
+        } => DecimalRead::Nan(Nan {
+            negative,
+            signaling,
+            payload: Integer::from_digits(&payload, Order::Lsf),
+        }),
+        Decoded::Zero { negative, .. } => DecimalRead::Number(Shape::Zero(negative), None),
         Decoded::Finite { negative, .. } if x.subnormal && env.denormals_are_zero => {
-            (Shape::Zero(negative), None)
+            DecimalRead::Number(Shape::Zero(negative), None)
         }
         Decoded::Finite {
             negative,
@@ -81,12 +70,49 @@ pub fn expected_decimal(
                 Rational::from((coefficient, power))
             };
             let value = if negative { -magnitude } else { magnitude };
-            (Shape::finite(&value), Some(value))
+            DecimalRead::Number(Shape::finite(&value), Some(value))
         }
-        Decoded::Infinity { negative } => (Shape::Infinity(negative), None),
+        Decoded::Infinity { negative } => DecimalRead::Number(Shape::Infinity(negative), None),
         Decoded::Unsupported => panic!("a decimal format has no unsupported encoding"),
+    }
+}
+
+/// Returns the NaN that the rule selects from the NaN operands, in operand
+/// order, and invalid for a signaling one. At least one operand is a NaN.
+pub(super) fn decimal_nan(nans: &[Nan], env: &Env) -> (DecimalValue, Flags) {
+    let nan = select_nan(nans, env);
+    let flags = if nans.iter().any(|nan| nan.signaling) {
+        Flags::INVALID
+    } else {
+        Flags::NONE
     };
-    let (value, more) = decimal_number(function, &shape, value.as_ref(), format, env);
+    let value = DecimalValue::Nan {
+        negative: nan.negative,
+        payload: nan.payload,
+    };
+    (value, flags)
+}
+
+/// Returns the expected result of `function` on a decimal operand, and the
+/// flags.
+///
+/// # Panics
+///
+/// Panics for an unsupported encoding, which a decimal format does not have.
+#[must_use]
+pub fn expected_decimal(
+    function: Function,
+    x: &Operand<2>,
+    format: DecimalFormat,
+    env: &Env,
+) -> (DecimalValue, Flags) {
+    let mut flags = Flags::NONE;
+    let (value, more) = match read_decimal(x, env, &mut flags) {
+        DecimalRead::Nan(nan) => decimal_nan(&[nan], env),
+        DecimalRead::Number(shape, value) => {
+            decimal_number(function, &shape, value.as_ref(), format, env)
+        }
+    };
     (value, flags | more)
 }
 
@@ -278,7 +304,10 @@ fn decimal_stand_in(
 /// # Panics
 ///
 /// Panics when the working precision reaches [`PRECISION_LIMIT`].
-fn decimal_truncation(precision: u32, evaluate: impl Fn(u32, Round) -> BigFloat) -> BigFloat {
+pub(super) fn decimal_truncation(
+    precision: u32,
+    evaluate: impl Fn(u32, Round) -> BigFloat,
+) -> BigFloat {
     let mut working = 4 * precision + 64;
     loop {
         let (low, high) = (evaluate(working, Round::Down), evaluate(working, Round::Up));

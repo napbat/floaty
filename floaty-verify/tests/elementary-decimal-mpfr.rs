@@ -1,4 +1,4 @@
-//! Compares the exponentials and the logarithms of decimal32, decimal64, and
+//! Compares the elementary functions of decimal32, decimal64, and
 //! decimal128, in BID and in DPD, with the MPFR oracle in
 //! `floaty_verify::operations::elementary`, in every behavior of
 //! `TO_DECIMAL_BEHAVIORS`.
@@ -11,6 +11,7 @@
 //! whole range. [`variant_arguments`] adds the exact powers and logarithms
 //! in base 2 and 10, and the arguments next to each bound of the other
 //! functions. The Intel decimal library converts each BID argument to DPD.
+//! `atan2` and `atan2Pi` run the pairs of [`atan2_pairs`].
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -459,4 +460,95 @@ fn decimal64() {
 #[test]
 fn decimal128() {
     check_width!(D128Bid, D128Dpd, Bid128, u128, 2_000, 0xDEC_E128, &[]);
+}
+
+/// Returns the pairs of `atan2`, `y` first, as BID encodings: the zeros, the
+/// infinities, the NaNs, ±1 in two cohorts, ±3, ±1/2, and the extremes of
+/// the format against each other, random pairs, and pairs whose quotient
+/// `|y| / |x|` lies next to each bound of the shortcuts: `10^-(p + 3)`, its
+/// reciprocal, and `2^-(4p + 70)` of the oracle. `|y| = |x|` also runs in
+/// other cohorts.
+fn atan2_pairs(format: DecimalFormat, random: &mut SplitMix64, count: usize) -> Vec<(u128, u128)> {
+    let digits = i64::from(format.precision);
+    let (lowest, highest) = format.exponents();
+    let largest = power(format.precision) - 1u32;
+    let numbers = [
+        Number::new(false, 1, 0),
+        Number::new(false, 10, -1),
+        Number::new(false, 3, 0),
+        Number::new(false, 5, -1),
+        Number::new(false, 1, lowest),
+        Number::new(false, 1, 1 - i64::from(format.emax)),
+        Number::new(false, largest, highest),
+    ];
+    let mut values = specials(format);
+    for number in &numbers {
+        let encoding = bid(format, number);
+        values.extend([encoding, encoding | (1 << (width(format) - 1))]);
+    }
+    let mut pairs: Vec<(u128, u128)> = values
+        .iter()
+        .flat_map(|&y| values.iter().map(move |&x| (y, x)))
+        .collect();
+    pairs.extend((0..count).map(|_| {
+        // A leading digit from `10^(lowest + p)` keeps every exponent of the
+        // coefficient in the range.
+        let number = |random: &mut SplitMix64| {
+            let span = u64::try_from(highest - lowest - digits).expect("the range is positive");
+            let top = lowest + digits + i64::try_from(random.below(span)).expect("an exponent");
+            let negative = random.below(2) == 1;
+            bid(format, &with_top(format, random, negative, top))
+        };
+        (number(random), number(random))
+    }));
+    let mut quotients = vec![
+        (Number::new(false, 25, -1), Number::new(false, 250, -2)),
+        (Number::new(false, 1, 0), Number::new(false, 100, -2)),
+    ];
+    // `2^-(4p + 70)` lies near `10^-k` with `k = (4p + 70) log10(2)`.
+    let oracle = (4 * digits + 70) * 30_103 / 100_000;
+    let bounds = (digits + 1..=digits + 5).chain(oracle - 2..=oracle + 2);
+    for k in bounds {
+        for (y, x) in [(1, 1), (3, 3), (1, 3)] {
+            quotients.push((Number::new(false, y, -k), Number::new(false, x, 0)));
+            quotients.push((Number::new(false, y, k), Number::new(false, x, 0)));
+        }
+    }
+    for (y, x) in quotients {
+        let (y, x) = (bid(format, &y), bid(format, &x));
+        let sign = 1 << (width(format) - 1);
+        pairs.extend([(y, x), (y, x | sign), (y | sign, x), (y | sign, x | sign)]);
+    }
+    pairs
+}
+
+/// Checks `atan2` and `atan2Pi` of one decimal width in BID and in DPD.
+macro_rules! check_atan2_width {
+    ($bid:ty, $dpd:ty, $intel:ty, $bits:ty, $count:literal, $seed:literal) => {{
+        let format = DecimalFormat::of::<$bid>();
+        let mut random = SplitMix64::new($seed);
+        let narrow = |bits: u128| <$bits>::try_from(bits).expect("the encoding has the width");
+        let both = |bits: u128| {
+            let bits = narrow(bits);
+            let dpd = <$intel as IntelFormat>::to_dpd(bits);
+            (<$bid>::from_bits(bits), <$dpd>::from_bits(dpd))
+        };
+        let pairs: Vec<_> = atan2_pairs(format, &mut random, $count)
+            .into_iter()
+            .map(|(y, x)| (both(y), both(x)))
+            .collect();
+        for env in &TO_DECIMAL_BEHAVIORS {
+            for &((y_bid, y_dpd), (x_bid, x_dpd)) in &pairs {
+                check::check_decimal_atan2(y_bid, x_bid, format, env);
+                check::check_decimal_atan2(y_dpd, x_dpd, format, env);
+            }
+        }
+    }};
+}
+
+#[test]
+fn atan2_of_every_width() {
+    check_atan2_width!(D32Bid, D32Dpd, Bid32, u32, 500, 0xA2_D032);
+    check_atan2_width!(D64Bid, D64Dpd, Bid64, u64, 500, 0xA2_D064);
+    check_atan2_width!(D128Bid, D128Dpd, Bid128, u128, 500, 0xA2_D128);
 }

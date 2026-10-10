@@ -3,12 +3,12 @@
 //! flags of the lanes, on every target. The scalar operations pass the
 //! oracle tests.
 //!
-//! The functions are the exponentials and the logarithms of every format;
-//! `log_b`, `hypot`, `reciprocal_sqrt`, `pown`, `rootn`, `compound`, the
-//! augmented operations, and the NaN payload operations of the binary
-//! formats; and the quantum operations, `log_b`, and the NaN payload
-//! operations of the decimal formats. Each lane of `pown`, `rootn`, and
-//! `compound` takes its own exponent.
+//! The functions are the elementary functions of every format, with `atan2`
+//! and `atan2Pi`; `log_b`, `hypot`, `reciprocal_sqrt`, `pown`, `rootn`,
+//! `compound`, the augmented operations, and the NaN payload operations of
+//! the binary formats; and the quantum operations, `log_b`, and the NaN
+//! payload operations of the decimal formats. Each lane of `pown`, `rootn`,
+//! and `compound` takes its own exponent.
 
 use floaty::env::Rounding;
 use floaty::format::Standard;
@@ -172,6 +172,36 @@ macro_rules! check_elementary {
     };
 }
 
+/// Checks `atan2` and `atan2Pi` of `Lanes` of one type on the lanes `y` and
+/// `x`, `y` first.
+macro_rules! check_atan2 {
+    ($context:expr, $y:expr, $x:expr, $env:expr) => {{
+        let (context, y, x, env) = ($context, $y, $x, $env);
+        check(
+            &|| context("atan2"),
+            y,
+            env,
+            (&|lanes| lanes.atan2(Lanes::new(x)), &|lanes, env| {
+                lanes.atan2_with(Lanes::new(x), env)
+            }),
+            (&|y, lane| y.atan2(x[lane]), &|y, lane, env| {
+                y.atan2_with(x[lane], env)
+            }),
+        );
+        check(
+            &|| context("atan2_pi"),
+            y,
+            env,
+            (&|lanes| lanes.atan2_pi(Lanes::new(x)), &|lanes, env| {
+                lanes.atan2_pi_with(Lanes::new(x), env)
+            }),
+            (&|y, lane| y.atan2_pi(x[lane]), &|y, lane, env| {
+                y.atan2_pi_with(x[lane], env)
+            }),
+        );
+    }};
+}
+
 /// Checks the functions of `Lanes` of one binary type and lane count
 /// against the scalar functions of each lane.
 macro_rules! binary_functions_match {
@@ -192,6 +222,7 @@ macro_rules! binary_functions_match {
                     )
                 };
                 check_elementary!(context, x, env);
+                check_atan2!(context, x, y, env);
                 check(
                     &|| context("log_b"),
                     x,
@@ -339,6 +370,7 @@ macro_rules! decimal_functions_match {
                     )
                 };
                 check_elementary!(context, x, env);
+                check_atan2!(context, x, y, env);
                 check(
                     &|| context("log_b"),
                     x,

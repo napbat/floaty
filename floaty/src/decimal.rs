@@ -27,7 +27,7 @@ type Wide<L> = <L as Widen>::Double;
 
 use self::digits::power_of_ten_u128;
 use self::round::DecimalTarget;
-use crate::elementary::Transcendental;
+use crate::elementary::{Bivariate, Transcendental};
 use crate::env::{Behavior, Env, Flags, TotalOrder};
 use crate::exact::Unrounded;
 use crate::float::Class;
@@ -341,6 +341,21 @@ where
     ) -> (Self::Bits, Flags) {
         let (bits, flags) =
             DecimalLayout::<Enc, W>::elementary(value.to_limbs(), function, behavior);
+        (Self::Bits::from_limbs(bits), flags)
+    }
+
+    fn bivariate<B: Behavior>(
+        left: Self::Bits,
+        right: Self::Bits,
+        function: Bivariate,
+        behavior: B,
+    ) -> (Self::Bits, Flags) {
+        let (bits, flags) = DecimalLayout::<Enc, W>::bivariate(
+            left.to_limbs(),
+            right.to_limbs(),
+            function,
+            behavior,
+        );
         (Self::Bits::from_limbs(bits), flags)
     }
 
