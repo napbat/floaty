@@ -238,36 +238,6 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         self.map_with(|lane| lane.sqrt_with(behavior))
     }
 
-    /// Returns `e^x` of each lane, with the default mode. Each lane takes
-    /// [`Float::exp`].
-    #[must_use]
-    pub fn exp(self) -> Self {
-        self.map(Float::exp)
-    }
-
-    /// Returns `e^x` of each lane, correctly rounded, and the union of the
-    /// flags.
-    #[must_use]
-    pub fn exp_with(self, behavior: impl Override) -> (Self, Flags) {
-        let behavior = behavior.apply::<M>();
-        self.map_with(|lane| lane.exp_with(behavior))
-    }
-
-    /// Returns the natural logarithm of each lane, with the default mode.
-    /// Each lane takes [`Float::log`].
-    #[must_use]
-    pub fn log(self) -> Self {
-        self.map(Float::log)
-    }
-
-    /// Returns the natural logarithm of each lane, correctly rounded, and the
-    /// union of the flags.
-    #[must_use]
-    pub fn log_with(self, behavior: impl Override) -> (Self, Flags) {
-        let behavior = behavior.apply::<M>();
-        self.map_with(|lane| lane.log_with(behavior))
-    }
-
     /// Returns `self * multiplier + addend` of each triple of lanes, each
     /// rounded once, with the default mode.
     #[must_use]
@@ -553,6 +523,70 @@ predicates!(
     is_canonical: "a canonical encoding",
 );
 
+/// Defines the methods that apply an exponential, a logarithm, a hyperbolic
+/// function, a trigonometric function or its form scaled by pi, or an
+/// inverse trigonometric function of `Float` to each lane, with the default
+/// mode and with a behavior.
+macro_rules! elementary {
+    ($($name:ident, $name_with:ident: $summary:literal),* $(,)?) => {
+        impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {
+            $(
+                #[doc = concat!(
+                    "Returns ", $summary, " of each lane, with the default mode. Each lane ",
+                    "takes [`Float::", stringify!($name), "`]."
+                )]
+                #[must_use]
+                pub fn $name(self) -> Self {
+                    self.map(Float::$name)
+                }
+
+                #[doc = concat!(
+                    "Returns ", $summary, " of each lane, correctly rounded, and the union ",
+                    "of the flags."
+                )]
+                #[must_use]
+                pub fn $name_with(self, behavior: impl Override) -> (Self, Flags) {
+                    let behavior = behavior.apply::<M>();
+                    self.map_with(|lane| lane.$name_with(behavior))
+                }
+            )*
+        }
+    };
+}
+
+elementary!(
+    exp, exp_with: "`e^x`",
+    exp_m1, exp_m1_with: "`e^x - 1`",
+    exp2, exp2_with: "`2^x`",
+    exp2_m1, exp2_m1_with: "`2^x - 1`",
+    exp10, exp10_with: "`10^x`",
+    exp10_m1, exp10_m1_with: "`10^x - 1`",
+    log, log_with: "the natural logarithm `ln x`",
+    log2, log2_with: "`log_2 x`",
+    log10, log10_with: "`log_10 x`",
+    log_p1, log_p1_with: "`ln(1 + x)`",
+    log2_p1, log2_p1_with: "`log_2(1 + x)`",
+    log10_p1, log10_p1_with: "`log_10(1 + x)`",
+    sinh, sinh_with: "`sinh x`",
+    cosh, cosh_with: "`cosh x`",
+    tanh, tanh_with: "`tanh x`",
+    asinh, asinh_with: "`asinh x`",
+    acosh, acosh_with: "`acosh x`",
+    atanh, atanh_with: "`atanh x`",
+    sin, sin_with: "`sin x`",
+    cos, cos_with: "`cos x`",
+    tan, tan_with: "`tan x`",
+    sin_pi, sin_pi_with: "`sin(pi x)`",
+    cos_pi, cos_pi_with: "`cos(pi x)`",
+    tan_pi, tan_pi_with: "`tan(pi x)`",
+    asin, asin_with: "`asin x`",
+    acos, acos_with: "`acos x`",
+    atan, atan_with: "`atan x`",
+    asin_pi, asin_pi_with: "`asin(x) / pi`",
+    acos_pi, acos_pi_with: "`acos(x) / pi`",
+    atan_pi, atan_pi_with: "`atan(x) / pi`",
+);
+
 impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {
     /// Applies `operation`, which returns flags, to each lane, and returns
     /// the lanes and the union of the flags.
@@ -590,6 +624,65 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
     ) -> (Self, Flags) {
         let (lanes, flags) = self.pairs_with(other, operation);
         (Self::new(lanes), flags)
+    }
+
+    /// Returns `atan2(y, x)` of each pair of lanes `y` of `self` and `x` of
+    /// `x`, with the default mode.
+    #[must_use]
+    pub fn atan2(self, x: Self) -> Self {
+        self.zip(x, Float::atan2)
+    }
+
+    /// Returns `atan2(y, x)` of each pair of lanes, as [`Float::atan2_with`]
+    /// does, and the union of the flags.
+    #[must_use]
+    pub fn atan2_with(self, x: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(x, |y, x| y.atan2_with(x, behavior))
+    }
+
+    /// Returns `atan2(y, x) / pi` of each pair of lanes, with the default
+    /// mode.
+    #[must_use]
+    pub fn atan2_pi(self, x: Self) -> Self {
+        self.zip(x, Float::atan2_pi)
+    }
+
+    /// Returns `atan2(y, x) / pi` of each pair of lanes, as
+    /// [`Float::atan2_pi_with`] does, and the union of the flags.
+    #[must_use]
+    pub fn atan2_pi_with(self, x: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(x, |y, x| y.atan2_pi_with(x, behavior))
+    }
+
+    /// Returns `x^y` of each pair of lanes `x` of `self` and `y` of `y`, with
+    /// the default mode.
+    #[must_use]
+    pub fn pow(self, y: Self) -> Self {
+        self.zip(y, Float::pow)
+    }
+
+    /// Returns `x^y` of each pair of lanes, as [`Float::pow_with`] does, and
+    /// the union of the flags.
+    #[must_use]
+    pub fn pow_with(self, y: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(y, |x, y| x.pow_with(y, behavior))
+    }
+
+    /// Returns `e^(y ln x)` of each pair of lanes, with the default mode.
+    #[must_use]
+    pub fn powr(self, y: Self) -> Self {
+        self.zip(y, Float::powr)
+    }
+
+    /// Returns `e^(y ln x)` of each pair of lanes, as [`Float::powr_with`]
+    /// does, and the union of the flags.
+    #[must_use]
+    pub fn powr_with(self, y: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(y, |x, y| x.powr_with(y, behavior))
     }
 
     /// Returns the absolute value of each lane. Only the sign bit changes.

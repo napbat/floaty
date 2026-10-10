@@ -361,6 +361,27 @@ impl<W: Widen> Big<W> {
         (number, error.add(remainder))
     }
 
+    /// Returns the truncated square root of a positive number and a bound on
+    /// its error. The mantissa moves up by `W::BITS` bits, or one bit less,
+    /// to an even exponent, so the root keeps `W::BITS` bits.
+    pub(super) fn sqrt(&self) -> (Self, Radius) {
+        let shift = if (self.exponent - i64::from(W::BITS)) % 2 == 0 {
+            W::BITS
+        } else {
+            W::BITS - 1
+        };
+        let wide = self.mantissa.resize::<W::Double>().shl(shift);
+        let (root, inexact) = limbs::square_root_of_double::<W>(wide);
+        let exponent = (self.exponent - i64::from(shift)) / 2;
+        let (number, error) = Big::new(false, root, exponent);
+        let rest = if inexact {
+            Radius::power_of_two(exponent)
+        } else {
+            Radius::ZERO
+        };
+        (number, error.add(rest))
+    }
+
     /// Returns the nearest integer, ties away from zero. The magnitude must
     /// be below 2^62.
     pub(super) fn round_to_i64(&self) -> i64 {
@@ -539,6 +560,27 @@ impl<W: Widen> Ball<W> {
             .scale(1)
             .div_lower(lower, exponent)
             .add(error);
+        Some(Self { center, radius })
+    }
+
+    /// Returns the square root, or `None` when the ball comes within half its
+    /// center of zero.
+    ///
+    /// With `a = x + d` and `|d|` at most `x / 2`, `|sqrt(a) - sqrt(x)|` is
+    /// `|d| / (sqrt(a) + sqrt(x))`, at most `|d| / sqrt(x)`. The truncated
+    /// root of the center is at most `sqrt(x)`.
+    #[must_use]
+    pub(super) fn sqrt(&self) -> Option<Self> {
+        if self.center.is_zero() || self.center.negative {
+            return None;
+        }
+        let (lower, exponent) = self.center.lower();
+        if self.radius.scale(1).ceiling_log2() >= exponent + i64::from(lower.ilog2()) {
+            return None;
+        }
+        let (center, error) = self.center.sqrt();
+        let (root, root_exponent) = center.lower();
+        let radius = self.radius.div_lower(root, root_exponent).add(error);
         Some(Self { center, radius })
     }
 }

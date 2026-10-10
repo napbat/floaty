@@ -25,10 +25,13 @@
 //! and each later step carries the taint to the result: `mul_add` without
 //! FMA, `round_to_integral_by` to odd, `scale_b` with a scale that has no
 //! normal power of two, the remainders, and the steps that have no
-//! instruction: `exp`, `log`, `compound`, `hypot`, `pown`, `rootn`, and
-//! `reciprocal_sqrt`. A step that reads a bit of a NaN that the lane can hold
-//! otherwise than the engine also taints its lane: `copy_sign` from a NaN
-//! `sign`, and `min_num` and `max_num` of a signaling NaN.
+//! instruction: the exponentials, the logarithms, the hyperbolic functions,
+//! the trigonometric functions and their forms scaled by pi, the inverse
+//! trigonometric functions, `atan2`, `atan2_pi`, `pow`, `powr`, `compound`,
+//! `hypot`, `pown`, `rootn`, and `reciprocal_sqrt`.
+//! A step that reads a bit of a NaN that the lane can hold otherwise than
+//! the engine also taints its lane: `copy_sign` from a NaN `sign`, and
+//! `min_num` and `max_num` of a signaling NaN.
 
 mod format;
 mod native;
@@ -394,7 +397,39 @@ impl<I: Isa, F: Format<Native = N>, N: Native> Steps for Lane<I, F> {
         remainder(_divisor: Self);
         truncated_remainder(_divisor: Self);
         exp();
+        exp_m1();
+        exp2();
+        exp2_m1();
+        exp10();
+        exp10_m1();
         log();
+        log2();
+        log10();
+        log_p1();
+        log2_p1();
+        log10_p1();
+        sinh();
+        cosh();
+        tanh();
+        asinh();
+        acosh();
+        atanh();
+        sin();
+        cos();
+        tan();
+        sin_pi();
+        cos_pi();
+        tan_pi();
+        asin();
+        acos();
+        atan();
+        asin_pi();
+        acos_pi();
+        atan_pi();
+        atan2(_x: Self);
+        atan2_pi(_x: Self);
+        pow(_y: Self);
+        powr(_y: Self);
         compound(_n: i64);
         hypot(_other: Self);
         pown(_n: i64);

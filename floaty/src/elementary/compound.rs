@@ -14,6 +14,7 @@
 //! `e^(n ln(1 + x))` for every other result.
 
 use super::ball::Ball;
+use super::exact::{clamped, integer_power, one_plus, stripped};
 use super::{
     Argument, Elementary, Function, Radix, Target, leading, near_one, out_of_range, series, ziv,
 };
@@ -142,7 +143,8 @@ fn exact_power<L: Elementary>(
     n: i64,
     target: &Target,
 ) -> Option<Unrounded<L::Second>> {
-    let (odd, exponent) = one_plus::<L, L::Second>(x)?;
+    let (sum, lowest) = one_plus::<L, L::Second>(x, Radix::Binary)?;
+    let (odd, exponent) = stripped(sum, lowest, Radix::Binary);
     let scale = i128::from(exponent) * i128::from(n);
     let one = L::Second::ZERO.with_bit(0);
     if odd == one {
@@ -185,66 +187,4 @@ fn exact_power<L: Elementary>(
             sticky: !rest.is_zero(),
         }
     })
-}
-
-/// Returns `1 + x` as `M 2^E` with `M` odd, when `1 + x` fits the width `W`
-/// with a bit to spare. `x` is above -1.
-fn one_plus<L: Limbs, W: Limbs>(x: &Argument<L>) -> Option<(W, i64)> {
-    let length = x.significand.bit_length();
-    let exponent = i64::from(x.exponent);
-    let (sum, lowest) = if exponent >= 0 {
-        // `x` is at least 1, so it is positive: `1 + x` is the integer
-        // `m 2^e + 1`.
-        debug_assert!(
-            !x.negative,
-            "an argument above -1 and at least 1 is positive"
-        );
-        if i64::from(length) + exponent >= i64::from(W::BITS) - 1 {
-            return None;
-        }
-        let shift = u32::try_from(exponent).ok()?;
-        (x.significand.resize::<W>().shl(shift).increment(), 0)
-    } else {
-        // `1 + x` is `(2^k ± m) 2^-k`, and `m < 2^k`, because `|x| < 1`.
-        let shift = u32::try_from(-exponent).ok()?;
-        if shift >= W::BITS - 1 {
-            return None;
-        }
-        let power = W::ZERO.with_bit(shift);
-        let m = x.significand.resize::<W>();
-        let sum = if x.negative {
-            power.sub(m)
-        } else {
-            power.add(m)
-        };
-        (sum, exponent)
-    };
-    let zeros = (0..W::BITS)
-        .find(|&position| sum.bit(position))
-        .expect("1 + x is not zero");
-    Some((sum.shr(zeros), lowest + i64::from(zeros)))
-}
-
-/// Returns `base^count`, which must fit `W`, by squaring.
-fn integer_power<W: Limbs>(base: W, count: u64) -> W {
-    let mut result = W::ZERO.with_bit(0);
-    let mut square = base;
-    let mut rest = count;
-    loop {
-        if rest & 1 == 1 {
-            result = limbs::multiply_fit(result, square);
-        }
-        rest >>= 1;
-        if rest == 0 {
-            return result;
-        }
-        square = limbs::multiply_fit(square, square);
-    }
-}
-
-/// Returns an exponent of a result, clamped far past the range of the format,
-/// where a clamped exponent rounds as the true one does.
-fn clamped(exponent: i128, target: &Target) -> i32 {
-    let bound = 2 * i128::from(target.range) + i128::from(target.precision);
-    i32::try_from(exponent.clamp(-bound, bound)).expect("the bound fits an i32")
 }

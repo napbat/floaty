@@ -13,7 +13,7 @@ use crate::encodings::Layout;
 use super::algebraic;
 use super::augmented::{self, Augmentation};
 use super::compare::{self, MinMax};
-use super::elementary::{self, Function};
+use super::elementary::{self, Bivariate, Function};
 use super::integral::{self, IntegerValue, to_int_value};
 use super::payload::{self, Payload};
 use super::{
@@ -357,46 +357,41 @@ pub fn check_reciprocal_sqrt<S: Standard<W>, const W: usize>(
     );
 }
 
-/// Checks `exp_with` and `log_with` on one value.
+/// Checks each function of `functions` on one value.
 ///
 /// # Panics
 ///
 /// Panics when floaty differs from the oracle.
 pub fn check_elementary<S: Standard<W>, const W: usize>(
     x: Float<S, W>,
+    functions: &[Function],
     format: &Format,
     env: &Env,
 ) {
     let operand = Operand::<8>::of(x);
-    for function in Function::ALL {
-        let ours = match function {
-            Function::Exp => x.exp_with(*env),
-            Function::Log => x.log_with(*env),
-        };
+    for &function in functions {
         check_float(
-            ours,
+            function.floaty(x, *env),
             &elementary::expected(function, &operand, format, env),
             &|| format!("{function:?} {x:?} {env:?}"),
         );
     }
 }
 
-/// Checks `exp_with` and `log_with` on one value of a decimal format.
+/// Checks each function of `functions` on one value of a decimal format.
 ///
 /// # Panics
 ///
 /// Panics when floaty differs from the oracle.
 pub fn check_decimal_elementary<S: Standard<W>, const W: usize>(
     x: Float<S, W>,
+    functions: &[Function],
     format: DecimalFormat,
     env: &Env,
 ) {
     let operand = Operand::<2>::of(x);
-    for function in Function::ALL {
-        let (result, flags) = match function {
-            Function::Exp => x.exp_with(*env),
-            Function::Log => x.log_with(*env),
-        };
+    for &function in functions {
+        let (result, flags) = function.floaty(x, *env);
         assert!(
             result.is_canonical(),
             "{function:?} {x:?} {env:?}: {result:?} is canonical"
@@ -405,6 +400,57 @@ pub fn check_decimal_elementary<S: Standard<W>, const W: usize>(
             (DecimalValue::from_decoded(result.decode::<2>()), flags),
             elementary::expected_decimal(function, &operand, format, env),
             "{function:?} {x:?} {env:?}"
+        );
+    }
+}
+
+/// Checks each function of `functions` on one pair of values, in the operand
+/// order of IEEE 754-2019: `y` first for `atan2`, and `x` first for `pow`.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_bivariate<S: Standard<W>, const W: usize>(
+    first: Float<S, W>,
+    second: Float<S, W>,
+    functions: &[Bivariate],
+    format: &Format,
+    env: &Env,
+) {
+    let (left, right) = (Operand::<8>::of(first), Operand::<8>::of(second));
+    for &function in functions {
+        check_float(
+            function.floaty(first, second, *env),
+            &elementary::expected_bivariate(function, &left, &right, format, env),
+            &|| format!("{function:?} {first:?} {second:?} {env:?}"),
+        );
+    }
+}
+
+/// Checks each function of `functions` on one pair of values of a decimal
+/// format, in the operand order of IEEE 754-2019.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_decimal_bivariate<S: Standard<W>, const W: usize>(
+    first: Float<S, W>,
+    second: Float<S, W>,
+    functions: &[Bivariate],
+    format: DecimalFormat,
+    env: &Env,
+) {
+    let (left, right) = (Operand::<2>::of(first), Operand::<2>::of(second));
+    for &function in functions {
+        let (result, flags) = function.floaty(first, second, *env);
+        assert!(
+            result.is_canonical(),
+            "{function:?} {first:?} {second:?} {env:?}: {result:?} is canonical"
+        );
+        assert_eq!(
+            (DecimalValue::from_decoded(result.decode::<2>()), flags),
+            elementary::expected_decimal_bivariate(function, &left, &right, format, env),
+            "{function:?} {first:?} {second:?} {env:?}"
         );
     }
 }

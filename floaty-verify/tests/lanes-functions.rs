@@ -3,12 +3,12 @@
 //! flags of the lanes, on every target. The scalar operations pass the
 //! oracle tests.
 //!
-//! The functions are `exp` and `log` of every format; `log_b`, `hypot`,
-//! `reciprocal_sqrt`, `pown`, `rootn`, `compound`, the augmented operations,
-//! and the NaN payload operations of the binary formats; and the quantum
-//! operations, `log_b`, and the NaN payload operations of the decimal
-//! formats. Each lane of `pown`, `rootn`, and `compound` takes its own
-//! exponent.
+//! The functions are the elementary functions of every format, with `atan2`
+//! and `atan2Pi`; `log_b`, `hypot`, `reciprocal_sqrt`, `pown`, `rootn`,
+//! `compound`, the augmented operations, and the NaN payload operations of
+//! the binary formats; and the quantum operations, `log_b`, and the NaN
+//! payload operations of the decimal formats. Each lane of `pown`, `rootn`,
+//! and `compound` takes its own exponent.
 
 use floaty::env::Rounding;
 use floaty::format::Standard;
@@ -123,25 +123,86 @@ fn check_augmented<S: Standard<W>, const W: usize, const N: usize>(
     assert_eq!(actual, expected, "{}", context());
 }
 
-/// Checks `exp` and `log` of `Lanes` of one type on the lanes `x`.
+/// Checks the exponentials and the logarithms of `Lanes` of one type on the
+/// lanes `x`.
 macro_rules! check_elementary {
     ($context:expr, $x:expr, $env:expr) => {{
         let (context, x, env) = ($context, $x, $env);
-        check(
-            &|| context("exp"),
-            x,
-            env,
-            (&|lanes| lanes.exp(), &|lanes, env| lanes.exp_with(env)),
-            (&|x, _| x.exp(), &|x, _, env| x.exp_with(env)),
-        );
-        check(
-            &|| context("log"),
-            x,
-            env,
-            (&|lanes| lanes.log(), &|lanes, env| lanes.log_with(env)),
-            (&|x, _| x.log(), &|x, _, env| x.log_with(env)),
+        check_elementary!(
+            @each context, x, env;
+            exp, exp_with;
+            exp_m1, exp_m1_with;
+            exp2, exp2_with;
+            exp2_m1, exp2_m1_with;
+            exp10, exp10_with;
+            exp10_m1, exp10_m1_with;
+            log, log_with;
+            log2, log2_with;
+            log10, log10_with;
+            log_p1, log_p1_with;
+            log2_p1, log2_p1_with;
+            log10_p1, log10_p1_with;
+            sinh, sinh_with;
+            cosh, cosh_with;
+            tanh, tanh_with;
+            asinh, asinh_with;
+            acosh, acosh_with;
+            atanh, atanh_with;
+            sin, sin_with;
+            cos, cos_with;
+            tan, tan_with;
+            sin_pi, sin_pi_with;
+            cos_pi, cos_pi_with;
+            tan_pi, tan_pi_with;
+            asin, asin_with;
+            acos, acos_with;
+            atan, atan_with;
+            asin_pi, asin_pi_with;
+            acos_pi, acos_pi_with;
+            atan_pi, atan_pi_with
         );
     }};
+    (@each $context:ident, $x:ident, $env:ident; $($name:ident, $name_with:ident);*) => {
+        $(
+            check(
+                &|| $context(stringify!($name)),
+                $x,
+                $env,
+                (&|lanes| lanes.$name(), &|lanes, env| lanes.$name_with(env)),
+                (&|x, _| x.$name(), &|x, _, env| x.$name_with(env)),
+            );
+        )*
+    };
+}
+
+/// Checks the functions of two arguments of `Lanes` of one type on the lanes
+/// `first` and `second`: `atan2`, `atan2_pi`, `pow`, and `powr`.
+macro_rules! check_atan2 {
+    ($context:expr, $first:expr, $second:expr, $env:expr) => {{
+        let (context, first, second, env) = ($context, $first, $second, $env);
+        check_atan2!(
+            @each context, first, second, env;
+            atan2, atan2_with;
+            atan2_pi, atan2_pi_with;
+            pow, pow_with;
+            powr, powr_with
+        );
+    }};
+    (@each $context:ident, $first:ident, $second:ident, $env:ident; $($name:ident, $name_with:ident);*) => {
+        $(
+            check(
+                &|| $context(stringify!($name)),
+                $first,
+                $env,
+                (&|lanes| lanes.$name(Lanes::new($second)), &|lanes, env| {
+                    lanes.$name_with(Lanes::new($second), env)
+                }),
+                (&|value, lane| value.$name($second[lane]), &|value, lane, env| {
+                    value.$name_with($second[lane], env)
+                }),
+            );
+        )*
+    };
 }
 
 /// Checks the functions of `Lanes` of one binary type and lane count
@@ -164,6 +225,7 @@ macro_rules! binary_functions_match {
                     )
                 };
                 check_elementary!(context, x, env);
+                check_atan2!(context, x, y, env);
                 check(
                     &|| context("log_b"),
                     x,
@@ -311,6 +373,7 @@ macro_rules! decimal_functions_match {
                     )
                 };
                 check_elementary!(context, x, env);
+                check_atan2!(context, x, y, env);
                 check(
                     &|| context("log_b"),
                     x,

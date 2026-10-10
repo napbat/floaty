@@ -93,6 +93,7 @@ Run the targeted tests while you iterate. Before you hand off a Rust change,
 run all of these from the workspace root:
 
 ```text
+sh scripts/check_file_size.sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic
 cargo nextest run --workspace --no-fail-fast
@@ -241,7 +242,8 @@ The workspace manifest denies these lint groups for every package:
 ## File and Module Size
 
 - Keep every hand-written source file at or below 1,000 physical lines,
-  including inline tests.
+  including inline tests. The gate `sh scripts/check_file_size.sh` checks
+  each Rust, C, C++, and Python file that Git tracks.
 - Split a file before it reaches the cap. Extract modules by responsibility,
   never by line range. A split that leaves two halves of one concept is worse
   than the oversized file.
@@ -309,6 +311,7 @@ Never hand-edit a generated file. Change its generator and run it again.
 | --- | --- |
 | `floaty-verify/data/fp8-reference.txt`, `fp8-from-f16.bin`, `fp8-arithmetic.bin`, and `fp8-operations.bin` | `floaty-verify/scripts/generate_fp8_reference.py floaty-verify/data`, as its docstring states |
 | `floaty-verify/data/mx-reference.txt`, `mx-from-f16.bin`, `mx-arithmetic.bin`, and `mx-e8m0.bin` | `floaty-verify/scripts/generate_mx_reference.py floaty-verify/data`, as its docstring states |
+| `floaty/src/elementary/two_over_pi.bin` | `cargo run -p floaty-verify --release --bin generate-two-over-pi -- floaty/src/elementary/two_over_pi.bin`, as the generator's documentation states |
 
 ## Tests
 

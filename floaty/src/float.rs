@@ -15,8 +15,10 @@ use crate::unpacked::Unpacked;
 
 mod arithmetic;
 mod binary;
+mod bivariate;
 mod compare;
 mod decimal;
+mod elementary;
 mod integer;
 mod reduction;
 

@@ -152,9 +152,137 @@ pub trait Steps:
     #[must_use]
     fn exp(self) -> Self;
 
+    /// Returns `e^self - 1`, as [`Float::exp_m1`] gives it.
+    #[must_use]
+    fn exp_m1(self) -> Self;
+
+    /// Returns `2^self`, as [`Float::exp2`] gives it.
+    #[must_use]
+    fn exp2(self) -> Self;
+
+    /// Returns `2^self - 1`, as [`Float::exp2_m1`] gives it.
+    #[must_use]
+    fn exp2_m1(self) -> Self;
+
+    /// Returns `10^self`, as [`Float::exp10`] gives it.
+    #[must_use]
+    fn exp10(self) -> Self;
+
+    /// Returns `10^self - 1`, as [`Float::exp10_m1`] gives it.
+    #[must_use]
+    fn exp10_m1(self) -> Self;
+
     /// Returns the natural logarithm, as [`Float::log`] gives it.
     #[must_use]
     fn log(self) -> Self;
+
+    /// Returns the base-2 logarithm, as [`Float::log2`] gives it.
+    #[must_use]
+    fn log2(self) -> Self;
+
+    /// Returns the base-10 logarithm, as [`Float::log10`] gives it.
+    #[must_use]
+    fn log10(self) -> Self;
+
+    /// Returns `ln(1 + self)`, as [`Float::log_p1`] gives it.
+    #[must_use]
+    fn log_p1(self) -> Self;
+
+    /// Returns `log_2(1 + self)`, as [`Float::log2_p1`] gives it.
+    #[must_use]
+    fn log2_p1(self) -> Self;
+
+    /// Returns `log_10(1 + self)`, as [`Float::log10_p1`] gives it.
+    #[must_use]
+    fn log10_p1(self) -> Self;
+
+    /// Returns `sinh self`, as [`Float::sinh`] gives it.
+    #[must_use]
+    fn sinh(self) -> Self;
+
+    /// Returns `cosh self`, as [`Float::cosh`] gives it.
+    #[must_use]
+    fn cosh(self) -> Self;
+
+    /// Returns `tanh self`, as [`Float::tanh`] gives it.
+    #[must_use]
+    fn tanh(self) -> Self;
+
+    /// Returns `asinh self`, as [`Float::asinh`] gives it.
+    #[must_use]
+    fn asinh(self) -> Self;
+
+    /// Returns `acosh self`, as [`Float::acosh`] gives it.
+    #[must_use]
+    fn acosh(self) -> Self;
+
+    /// Returns `atanh self`, as [`Float::atanh`] gives it.
+    #[must_use]
+    fn atanh(self) -> Self;
+
+    /// Returns `sin self`, as [`Float::sin`] gives it.
+    #[must_use]
+    fn sin(self) -> Self;
+
+    /// Returns `cos self`, as [`Float::cos`] gives it.
+    #[must_use]
+    fn cos(self) -> Self;
+
+    /// Returns `tan self`, as [`Float::tan`] gives it.
+    #[must_use]
+    fn tan(self) -> Self;
+
+    /// Returns `sin(pi self)`, as [`Float::sin_pi`] gives it.
+    #[must_use]
+    fn sin_pi(self) -> Self;
+
+    /// Returns `cos(pi self)`, as [`Float::cos_pi`] gives it.
+    #[must_use]
+    fn cos_pi(self) -> Self;
+
+    /// Returns `tan(pi self)`, as [`Float::tan_pi`] gives it.
+    #[must_use]
+    fn tan_pi(self) -> Self;
+
+    /// Returns `asin self`, as [`Float::asin`] gives it.
+    #[must_use]
+    fn asin(self) -> Self;
+
+    /// Returns `acos self`, as [`Float::acos`] gives it.
+    #[must_use]
+    fn acos(self) -> Self;
+
+    /// Returns `atan self`, as [`Float::atan`] gives it.
+    #[must_use]
+    fn atan(self) -> Self;
+
+    /// Returns `asin(self) / pi`, as [`Float::asin_pi`] gives it.
+    #[must_use]
+    fn asin_pi(self) -> Self;
+
+    /// Returns `acos(self) / pi`, as [`Float::acos_pi`] gives it.
+    #[must_use]
+    fn acos_pi(self) -> Self;
+
+    /// Returns `atan(self) / pi`, as [`Float::atan_pi`] gives it.
+    #[must_use]
+    fn atan_pi(self) -> Self;
+
+    /// Returns `atan2(self, x)`, as [`Float::atan2`] gives it.
+    #[must_use]
+    fn atan2(self, x: Self) -> Self;
+
+    /// Returns `atan2(self, x) / pi`, as [`Float::atan2_pi`] gives it.
+    #[must_use]
+    fn atan2_pi(self, x: Self) -> Self;
+
+    /// Returns `self^y`, as [`Float::pow`] gives it.
+    #[must_use]
+    fn pow(self, y: Self) -> Self;
+
+    /// Returns `e^(y ln self)`, as [`Float::powr`] gives it.
+    #[must_use]
+    fn powr(self, y: Self) -> Self;
 
     /// Returns `(1 + self)^n`, as [`Float::compound`] gives it.
     #[must_use]
@@ -254,7 +382,39 @@ macro_rules! binary_steps {
                     scale_b(scale: i32);
                     log_b();
                     exp();
+                    exp_m1();
+                    exp2();
+                    exp2_m1();
+                    exp10();
+                    exp10_m1();
                     log();
+                    log2();
+                    log10();
+                    log_p1();
+                    log2_p1();
+                    log10_p1();
+                    sinh();
+                    cosh();
+                    tanh();
+                    asinh();
+                    acosh();
+                    atanh();
+                    sin();
+                    cos();
+                    tan();
+                    sin_pi();
+                    cos_pi();
+                    tan_pi();
+                    asin();
+                    acos();
+                    atan();
+                    asin_pi();
+                    acos_pi();
+                    atan_pi();
+                    atan2(x: Self);
+                    atan2_pi(x: Self);
+                    pow(y: Self);
+                    powr(y: Self);
                     compound(n: i64);
                     hypot(other: Self);
                     pown(n: i64);

@@ -1,5 +1,5 @@
-//! Compares `exp` and `log` of decimal32, decimal64, and decimal128, in BID
-//! and in DPD, with the MPFR oracle in
+//! Compares the elementary functions of decimal32, decimal64, and
+//! decimal128, in BID and in DPD, with the MPFR oracle in
 //! `floaty_verify::operations::elementary`, in every behavior of
 //! `TO_DECIMAL_BEHAVIORS`.
 //!
@@ -8,7 +8,10 @@
 //! threshold, and arguments next to the thresholds where `exp` overflows,
 //! becomes tiny, and rounds to zero. For `log`, they are arguments next to 1,
 //! 1 in each cohort, powers of ten, subnormals, and random values in the
-//! whole range. The Intel decimal library converts each BID argument to DPD.
+//! whole range. [`variant_arguments`] adds the exact powers and logarithms
+//! in base 2 and 10, and the arguments next to each bound of the other
+//! functions. The Intel decimal library converts each BID argument to DPD.
+//! `atan2` and `atan2Pi` run the pairs of [`atan2_pairs`].
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -17,6 +20,7 @@ use floaty::{D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd};
 use floaty_verify::intel_decimal::{Bid32, Bid64, Bid128, Format as IntelFormat};
 use floaty_verify::mpfr::decimal::{DecimalFormat, TO_DECIMAL_BEHAVIORS};
 use floaty_verify::operations::check;
+use floaty_verify::operations::elementary::{Bivariate, Function};
 use floaty_verify::random::SplitMix64;
 use rug::float::Round;
 use rug::{Float as BigFloat, Integer};
@@ -170,6 +174,176 @@ fn near_one(format: DecimalFormat, random: &mut SplitMix64) -> Vec<Number> {
     numbers
 }
 
+/// Returns arguments of the functions in base 2 and 10 and of the shifted
+/// forms: the integers up to 40 in magnitude, two of them in other members
+/// of their cohorts, and the integers next to where `10^x` and `2^x`
+/// overflow and underflow, which give exact powers; powers of 10 and 2, and
+/// the values one below them, which give exact logarithms; and the arguments
+/// next to -1, to the tiny bound `10^-(p + 3)`, to where `b^x - 1` comes
+/// within one unit of -1, and to the large bound `10^(p + 3)` of
+/// `log_b(1 + x)`.
+fn variant_arguments(format: DecimalFormat) -> Vec<Number> {
+    let precision = format.precision;
+    let digits = i64::from(precision);
+    let (lowest, highest) = format.exponents();
+    let emax = i64::from(format.emax);
+    let emin = 1 - emax;
+    let working = 8 * precision + 64;
+    let integer = |n: i64| Number::new(n < 0, n.unsigned_abs(), 0);
+    let mut numbers: Vec<Number> = (-40..=40).filter(|n| *n != 0).map(integer).collect();
+    numbers.extend([Number::new(false, 3, 1), Number::new(true, 200, -2)]);
+    numbers.extend(
+        [
+            emax - 1,
+            emax,
+            emax + 1,
+            emin - digits,
+            emin - digits + 1,
+            emin,
+        ]
+        .map(integer),
+    );
+    // `2^x` overflows near `(emax + 1) log2 10`, and rounds to the smallest
+    // subnormal or to zero near `(emin - p + 1) log2 10`.
+    let log2_10 = BigFloat::with_val(working, 10).log2();
+    for exponent in [emax + 1, emin - digits + 1] {
+        let threshold = BigFloat::with_val(working, &log2_10 * Integer::from(exponent));
+        let floor = threshold
+            .floor()
+            .to_integer()
+            .and_then(|floor| floor.to_i64())
+            .expect("a threshold fits an i64");
+        numbers.extend((floor - 1..=floor + 2).map(integer));
+    }
+    numbers.extend(
+        (-30..=30)
+            .chain([lowest, emin, highest])
+            .map(|k| Number::new(false, 1, k)),
+    );
+    numbers.extend((digits + 2..=digits + 4).map(|k| Number::new(false, 1, k)));
+    for k in 1..=precision {
+        let nines = power(k) - 1u32;
+        numbers.push(Number::new(true, nines.clone(), -i64::from(k)));
+        numbers.push(Number::new(false, nines, 0));
+    }
+    for k in 1..=40_u32 {
+        let two = Integer::from(Integer::u_pow_u(2, k));
+        let five = Integer::from(Integer::u_pow_u(5, k));
+        let one_below = power(k) - &five;
+        let k = i64::from(k);
+        numbers.push(Number::new(true, one_below, -k));
+        numbers.push(Number::new(false, two.clone() - 1u32, 0));
+        numbers.push(Number::new(false, five, -k));
+        numbers.push(Number::new(false, two, 0));
+    }
+    numbers.extend([
+        Number::new(true, 1, 0),
+        Number::new(true, power(precision) - 1u32, -digits),
+        Number::new(true, power(precision - 1) + 1u32, 1 - digits),
+    ]);
+    for top in [-(digits + 4), -(digits + 3), -(digits + 2)] {
+        for negative in [false, true] {
+            numbers.push(Number::new(negative, 1, top));
+            numbers.push(Number::new(
+                negative,
+                power(precision) - 1u32,
+                top - digits + 1,
+            ));
+        }
+    }
+    // `b^x - 1` comes within one unit of -1 at `x = -(p + 2) log_b 10`.
+    let units = BigFloat::with_val(working, -(digits + 2));
+    let ln_10 = BigFloat::with_val(working, 10).ln();
+    for factor in [ln_10.clone(), log2_10, BigFloat::with_val(working, 1)] {
+        numbers.extend(around(
+            format,
+            &BigFloat::with_val(working, &units * &factor),
+            2,
+        ));
+    }
+    // The hyperbolic functions take their tiny rule below
+    // `10^-ceil((p + 3) / 2)`, `tanh` comes within one unit of ±1 at
+    // `(p + 3) ln 10 / 2`, and `sinh` and `cosh` overflow past
+    // `(emax + 1) ln 10 + ln 2`.
+    let half = i64::midpoint(digits, 4);
+    for top in [-(half + 1), -half, 1 - half] {
+        for negative in [false, true] {
+            numbers.push(Number::new(negative, 1, top));
+            numbers.push(Number::new(negative, power(precision) - 1u32, top - digits));
+        }
+    }
+    let tanh_bound = BigFloat::with_val(working, &ln_10 * (digits + 3)) >> 1u32;
+    let ln_2 = BigFloat::with_val(working, 2).ln();
+    let overflow = BigFloat::with_val(working, &ln_10 * (emax + 1)) + ln_2;
+    for bound in [tanh_bound, overflow] {
+        numbers.extend(around(format, &bound, 2));
+        numbers.extend(around(format, &-bound, 2));
+    }
+    numbers.retain(|number| {
+        number.coefficient.to_string().len() <= usize::try_from(precision).expect("a count")
+            && (lowest..=highest).contains(&number.exponent)
+    });
+    numbers
+}
+
+/// Returns arguments of `sinPi`, `cosPi`, and `tanPi`. The functions are
+/// exact at the quarters, here up to 6 in magnitude, which come with two
+/// neighbors on each side. Below `10^(p - 2)`, an argument of `p` digits can
+/// have two digits after the point: its reduction keeps the most digits, and
+/// a fraction of .25, .51, or .99 lies at or next to an exact value.
+fn pi_scaled_arguments(format: DecimalFormat) -> Vec<Number> {
+    let precision = format.precision;
+    let mut numbers = Vec::new();
+    for n in 1..=24_u32 {
+        let quarter = BigFloat::with_val(precision + 8, n) >> 2u32;
+        numbers.extend(around(format, &quarter, 2));
+        numbers.extend(around(format, &-quarter, 2));
+    }
+    for (below, exponent) in [(1_u32, -1), (1, -2), (49, -2), (75, -2)] {
+        for negative in [false, true] {
+            numbers.push(Number::new(negative, power(precision) - below, exponent));
+        }
+    }
+    numbers
+}
+
+/// Returns arguments of the inverse trigonometric functions: ±1/2 and
+/// ±sqrt(1/2) with two neighbors on each side, where `asinPi` and `acosPi`
+/// are multiples of 1/6 and the form of `asin` reflects, and the arguments
+/// next to ±10^(p + 3), from which `|atanPi|` comes within one unit of 1/2.
+fn inverse_arguments(format: DecimalFormat) -> Vec<Number> {
+    let precision = format.precision;
+    let working = 4 * precision + 64;
+    let half = BigFloat::with_val(working, 1) >> 1u32;
+    let root = BigFloat::with_val(working, half.sqrt_ref());
+    let mut numbers = Vec::new();
+    for value in [half, root] {
+        numbers.extend(around(format, &value, 2));
+        numbers.extend(around(format, &-value, 2));
+    }
+    let top = i64::from(precision) + 3;
+    for negative in [false, true] {
+        numbers.push(Number::new(negative, 1, top));
+        numbers.push(Number::new(negative, power(precision) - 1u32, 3));
+    }
+    numbers
+}
+
+/// Returns arguments of `sin`, `cos`, and `tan` next to the multiples
+/// `±k pi / 2` up to `k = 8`, with two neighbors on each side, where the
+/// reduction keeps the fewest digits.
+fn circular_arguments(format: DecimalFormat) -> Vec<Number> {
+    let working = 4 * format.precision + 64;
+    let pi = BigFloat::with_val(working, rug::float::Constant::Pi);
+    let mut numbers = Vec::new();
+    for k in 1..=8_u32 {
+        let multiple = BigFloat::with_val(working, &pi * k) >> 1u32;
+        numbers.extend(around(format, &multiple, 2));
+        numbers.extend(around(format, &-multiple, 2));
+    }
+    numbers
+}
+
 /// Bad cases of `exp` for decimal64, as coefficient and exponent, from
 /// Lefèvre, Stehlé, and Zimmermann, "Worst Cases for the Exponential
 /// Function in the IEEE 754r decimal64 Format", JNAO 2006, slides 6 and 13
@@ -229,6 +403,10 @@ fn constructed(format: DecimalFormat, random: &mut SplitMix64, extra: &[(u64, i6
     }
     numbers.extend(thresholds(format));
     numbers.extend(near_one(format, random));
+    numbers.extend(variant_arguments(format));
+    numbers.extend(pi_scaled_arguments(format));
+    numbers.extend(inverse_arguments(format));
+    numbers.extend(circular_arguments(format));
     numbers.extend(
         extra
             .iter()
@@ -251,9 +429,10 @@ fn random_bits(random: &mut SplitMix64, width: u32) -> u128 {
     bits >> (128 - width)
 }
 
-/// Checks one decimal width in BID and in DPD.
+/// Checks the functions of `$functions` on one decimal width in BID and in
+/// DPD.
 macro_rules! check_width {
-    ($bid:ty, $dpd:ty, $intel:ty, $bits:ty, $count:literal, $seed:literal, $extra:expr) => {{
+    ($functions:expr, $bid:ty, $dpd:ty, $intel:ty, $bits:ty, $count:literal, $seed:literal, $extra:expr) => {{
         let format = DecimalFormat::of::<$bid>();
         let mut random = SplitMix64::new($seed);
         let narrow = |bits: u128| <$bits>::try_from(bits).expect("the encoding has the width");
@@ -271,32 +450,254 @@ macro_rules! check_width {
         }));
         for env in &TO_DECIMAL_BEHAVIORS {
             for &(bid, dpd) in &values {
-                check::check_decimal_elementary(bid, format, env);
-                check::check_decimal_elementary(dpd, format, env);
+                check::check_decimal_elementary(bid, $functions, format, env);
+                check::check_decimal_elementary(dpd, $functions, format, env);
+            }
+        }
+    }};
+}
+
+// Each width runs in two tests, which nextest runs at once: the exponentials
+// and the logarithms, and the other functions.
+#[test]
+fn decimal32() {
+    let functions = Function::EXPONENTIALS_AND_LOGARITHMS;
+    check_width!(
+        functions,
+        D32Bid,
+        D32Dpd,
+        Bid32,
+        u32,
+        2_000,
+        0xDEC_E032,
+        &[]
+    );
+}
+
+#[test]
+fn decimal32_hyperbolic_and_trigonometric() {
+    let functions = Function::HYPERBOLIC_AND_TRIGONOMETRIC;
+    check_width!(
+        functions,
+        D32Bid,
+        D32Dpd,
+        Bid32,
+        u32,
+        2_000,
+        0xDEC_E032,
+        &[]
+    );
+}
+
+#[test]
+fn decimal64() {
+    let (functions, extra) = (
+        Function::EXPONENTIALS_AND_LOGARITHMS,
+        &DECIMAL64_EXP_WORST_CASES,
+    );
+    check_width!(
+        functions, D64Bid, D64Dpd, Bid64, u64, 2_000, 0xDEC_E064, extra
+    );
+}
+
+#[test]
+fn decimal64_hyperbolic_and_trigonometric() {
+    let (functions, extra) = (
+        Function::HYPERBOLIC_AND_TRIGONOMETRIC,
+        &DECIMAL64_EXP_WORST_CASES,
+    );
+    check_width!(
+        functions, D64Bid, D64Dpd, Bid64, u64, 2_000, 0xDEC_E064, extra
+    );
+}
+
+#[test]
+fn decimal128() {
+    let functions = Function::EXPONENTIALS_AND_LOGARITHMS;
+    check_width!(
+        functions,
+        D128Bid,
+        D128Dpd,
+        Bid128,
+        u128,
+        2_000,
+        0xDEC_E128,
+        &[]
+    );
+}
+
+#[test]
+fn decimal128_hyperbolic_and_trigonometric() {
+    let functions = Function::HYPERBOLIC_AND_TRIGONOMETRIC;
+    check_width!(
+        functions,
+        D128Bid,
+        D128Dpd,
+        Bid128,
+        u128,
+        2_000,
+        0xDEC_E128,
+        &[]
+    );
+}
+
+/// Returns the pairs of `atan2`, `y` first, as BID encodings: the zeros, the
+/// infinities, the NaNs, ±1 in two cohorts, ±3, ±1/2, and the extremes of
+/// the format against each other, random pairs, and pairs whose quotient
+/// `|y| / |x|` lies next to each bound of the shortcuts: `10^-(p + 3)`, its
+/// reciprocal, and `2^-(4p + 70)` of the oracle. `|y| = |x|` also runs in
+/// other cohorts.
+fn atan2_pairs(format: DecimalFormat, random: &mut SplitMix64, count: usize) -> Vec<(u128, u128)> {
+    let digits = i64::from(format.precision);
+    let (lowest, highest) = format.exponents();
+    let largest = power(format.precision) - 1u32;
+    let numbers = [
+        Number::new(false, 1, 0),
+        Number::new(false, 10, -1),
+        Number::new(false, 3, 0),
+        Number::new(false, 5, -1),
+        Number::new(false, 1, lowest),
+        Number::new(false, 1, 1 - i64::from(format.emax)),
+        Number::new(false, largest, highest),
+    ];
+    let mut values = specials(format);
+    for number in &numbers {
+        let encoding = bid(format, number);
+        values.extend([encoding, encoding | (1 << (width(format) - 1))]);
+    }
+    let mut pairs: Vec<(u128, u128)> = values
+        .iter()
+        .flat_map(|&y| values.iter().map(move |&x| (y, x)))
+        .collect();
+    pairs.extend((0..count).map(|_| {
+        // A leading digit from `10^(lowest + p)` keeps every exponent of the
+        // coefficient in the range.
+        let number = |random: &mut SplitMix64| {
+            let span = u64::try_from(highest - lowest - digits).expect("the range is positive");
+            let top = lowest + digits + i64::try_from(random.below(span)).expect("an exponent");
+            let negative = random.below(2) == 1;
+            bid(format, &with_top(format, random, negative, top))
+        };
+        (number(random), number(random))
+    }));
+    let mut quotients = vec![
+        (Number::new(false, 25, -1), Number::new(false, 250, -2)),
+        (Number::new(false, 1, 0), Number::new(false, 100, -2)),
+    ];
+    // `2^-(4p + 70)` lies near `10^-k` with `k = (4p + 70) log10(2)`.
+    let oracle = (4 * digits + 70) * 30_103 / 100_000;
+    let bounds = (digits + 1..=digits + 5).chain(oracle - 2..=oracle + 2);
+    for k in bounds {
+        for (y, x) in [(1, 1), (3, 3), (1, 3)] {
+            quotients.push((Number::new(false, y, -k), Number::new(false, x, 0)));
+            quotients.push((Number::new(false, y, k), Number::new(false, x, 0)));
+        }
+    }
+    for (y, x) in quotients {
+        let (y, x) = (bid(format, &y), bid(format, &x));
+        let sign = 1 << (width(format) - 1);
+        pairs.extend([(y, x), (y, x | sign), (y | sign, x), (y | sign, x | sign)]);
+    }
+    pairs
+}
+
+/// Returns pairs of `pow` and `powr`, `x` first, as BID encodings: bases
+/// with exact powers and roots, such as 4, 9, 32, 1/2, and 1/25, bases next
+/// to 1, and negative bases, against integer, half, quarter, fifth, tenth,
+/// huge, and tiny exponents.
+fn power_pairs(format: DecimalFormat) -> Vec<(u128, u128)> {
+    let number = |negative, coefficient: u64, exponent| {
+        bid(format, &Number::new(negative, coefficient, exponent))
+    };
+    let mut bases: Vec<u128> = [
+        (2, 0),
+        (3, 0),
+        (4, 0),
+        (9, 0),
+        (32, 0),
+        (5, -1),
+        (4, -2),
+        (25, -1),
+        (1, 2),
+        (1_000_001, -6),
+        (9_999_999, -7),
+    ]
+    .map(|(coefficient, exponent)| number(false, coefficient, exponent))
+    .to_vec();
+    bases.extend([number(true, 2, 0), number(true, 8, 0), number(true, 5, -1)]);
+    let mut exponents: Vec<u128> = (1..=3)
+        .flat_map(|n| [number(false, n, 0), number(true, n, 0)])
+        .collect();
+    exponents.extend(
+        [
+            (5, -1),
+            (25, -2),
+            (15, -1),
+            (2, -1),
+            (1, -1),
+            (25, -1),
+            (1, 20),
+            (1, -30),
+            (3_333_333, -7),
+            (1_000, 0),
+        ]
+        .iter()
+        .flat_map(|&(coefficient, exponent)| {
+            [
+                number(false, coefficient, exponent),
+                number(true, coefficient, exponent),
+            ]
+        }),
+    );
+    bases
+        .iter()
+        .flat_map(|&x| exponents.iter().map(move |&y| (x, y)))
+        .collect()
+}
+
+/// Checks the functions of `$functions` of one decimal width in BID and in
+/// DPD on the pairs of [`atan2_pairs`] and, for `pow` and `powr`, of
+/// [`power_pairs`].
+macro_rules! check_pairs_width {
+    ($functions:expr, $bid:ty, $dpd:ty, $intel:ty, $bits:ty, $count:literal, $seed:literal) => {{
+        let format = DecimalFormat::of::<$bid>();
+        let mut random = SplitMix64::new($seed);
+        let narrow = |bits: u128| <$bits>::try_from(bits).expect("the encoding has the width");
+        let both = |bits: u128| {
+            let bits = narrow(bits);
+            let dpd = <$intel as IntelFormat>::to_dpd(bits);
+            (<$bid>::from_bits(bits), <$dpd>::from_bits(dpd))
+        };
+        let functions: &[Bivariate] = $functions;
+        let mut pairs = atan2_pairs(format, &mut random, $count);
+        if functions.contains(&Bivariate::Pow) {
+            pairs.extend(power_pairs(format));
+        }
+        let pairs: Vec<_> = pairs
+            .into_iter()
+            .map(|(first, second)| (both(first), both(second)))
+            .collect();
+        for env in &TO_DECIMAL_BEHAVIORS {
+            for &((first_bid, first_dpd), (second_bid, second_dpd)) in &pairs {
+                check::check_decimal_bivariate(first_bid, second_bid, functions, format, env);
+                check::check_decimal_bivariate(first_dpd, second_dpd, functions, format, env);
             }
         }
     }};
 }
 
 #[test]
-fn decimal32() {
-    check_width!(D32Bid, D32Dpd, Bid32, u32, 2_000, 0xDEC_E032, &[]);
+fn atan2_of_every_width() {
+    let functions = &Bivariate::ATAN2;
+    check_pairs_width!(functions, D32Bid, D32Dpd, Bid32, u32, 500, 0xA2_D032);
+    check_pairs_width!(functions, D64Bid, D64Dpd, Bid64, u64, 500, 0xA2_D064);
+    check_pairs_width!(functions, D128Bid, D128Dpd, Bid128, u128, 500, 0xA2_D128);
 }
 
 #[test]
-fn decimal64() {
-    check_width!(
-        D64Bid,
-        D64Dpd,
-        Bid64,
-        u64,
-        2_000,
-        0xDEC_E064,
-        &DECIMAL64_EXP_WORST_CASES
-    );
-}
-
-#[test]
-fn decimal128() {
-    check_width!(D128Bid, D128Dpd, Bid128, u128, 2_000, 0xDEC_E128, &[]);
+fn power_of_every_width() {
+    let functions = &Bivariate::POWER;
+    check_pairs_width!(functions, D32Bid, D32Dpd, Bid32, u32, 500, 0xB0_D032);
+    check_pairs_width!(functions, D64Bid, D64Dpd, Bid64, u64, 500, 0xB0_D064);
+    check_pairs_width!(functions, D128Bid, D128Dpd, Bid128, u128, 500, 0xB0_D128);
 }
