@@ -1,9 +1,9 @@
 //! The exponentials and the logarithms of IEEE 754-2019 section 9.2, in base
 //! e, 2, and 10, with their forms shifted by one, `b^x - 1` and
 //! `log_b(1 + x)`, the hyperbolic functions and their inverses, the
-//! trigonometric functions of an argument scaled by pi, the inverse
-//! trigonometric functions with their forms scaled by pi, and `atan2` and
-//! `atan2Pi`.
+//! trigonometric functions and their forms of an argument scaled by pi, the
+//! inverse trigonometric functions with their forms scaled by pi, and
+//! `atan2` and `atan2Pi`.
 
 use super::Float;
 use crate::elementary::{Bivariate, Transcendental};
@@ -522,6 +522,88 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     pub fn atanh_with(self, behavior: impl Override) -> (Self, Flags) {
         self.elementary_with(Transcendental::Atanh, behavior)
+    }
+
+    /// Returns `sin self`, with the default mode.
+    #[must_use]
+    pub fn sin(self) -> Self {
+        self.sin_with(M::default()).0
+    }
+
+    /// Returns `sin self`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `sin` does, and the flags.
+    ///
+    /// The argument reduces exactly against the bits of 2/pi, so a large
+    /// `self` keeps its digits, and the result rounds once, as
+    /// [`exp_with`](Self::exp_with) does. Every finite result other than a
+    /// zero is inexact. The special cases follow IEEE 754-2019 section 9.2.1:
+    /// ±0 gives ±0, and ±inf gives the default NaN and signals invalid. An
+    /// argument of `2^(2^22)` or more, past binary512, lies past the bits of
+    /// the reduction, and gives the default NaN and signals invalid too.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let sin = |bits| F64::from_bits(bits).sin_with(Env::IEEE);
+    /// assert_eq!(sin(0x3FF0_0000_0000_0000), (F64::from_bits(0x3FEA_ED54_8F09_0CEE), Flags::INEXACT));
+    /// // 10^22, which reduces against 2/pi.
+    /// assert_eq!(sin(0x4480_F0CF_064D_D592).0.to_bits(), 0xBFEB_453A_B76B_F397);
+    /// ```
+    #[must_use]
+    pub fn sin_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Sin, behavior)
+    }
+
+    /// Returns `cos self`, with the default mode.
+    #[must_use]
+    pub fn cos(self) -> Self {
+        self.cos_with(M::default()).0
+    }
+
+    /// Returns `cos self`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `cos` does, and the flags.
+    ///
+    /// The result rounds once, as [`sin_with`](Self::sin_with) does. ±0
+    /// gives 1 exactly. Every other finite result is inexact. ±inf, and an
+    /// argument of `2^(2^22)` or more, give the default NaN and signal
+    /// invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let cos = |bits| F64::from_bits(bits).cos_with(Env::IEEE);
+    /// let rounded_up = Flags::INEXACT | Flags::ROUNDED_UP;
+    /// assert_eq!(cos(0x3FF0_0000_0000_0000), (F64::from_bits(0x3FE1_4A28_0FB5_068C), rounded_up));
+    /// ```
+    #[must_use]
+    pub fn cos_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Cos, behavior)
+    }
+
+    /// Returns `tan self`, with the default mode.
+    #[must_use]
+    pub fn tan(self) -> Self {
+        self.tan_with(M::default()).0
+    }
+
+    /// Returns `tan self`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `tan` does, and the flags.
+    ///
+    /// The result rounds once, as [`sin_with`](Self::sin_with) does. Every
+    /// finite result other than a zero is inexact. ±0 gives ±0, and ±inf, and
+    /// an argument of `2^(2^22)` or more, give the default NaN and signal
+    /// invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let tan = |bits| F64::from_bits(bits).tan_with(Env::IEEE);
+    /// let rounded_up = Flags::INEXACT | Flags::ROUNDED_UP;
+    /// assert_eq!(tan(0x3FF0_0000_0000_0000), (F64::from_bits(0x3FF8_EB24_5CBE_E3A6), rounded_up));
+    /// ```
+    #[must_use]
+    pub fn tan_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Tan, behavior)
     }
 
     /// Returns `sin(pi self)`, with the default mode.

@@ -356,6 +356,24 @@ fn inverse_arguments(layout: Layout) -> Vec<Integer> {
         .collect()
 }
 
+/// Returns arguments of `sin`, `cos`, and `tan` with two neighbors on each
+/// side: the multiples `±k pi / 2` up to `k = 8`, next to which the reduction
+/// keeps the fewest digits, and `±2^(2^22)`, past the bits of 2/pi of
+/// floaty, where the layout holds it.
+fn circular_arguments(layout: Layout) -> Vec<Integer> {
+    let working = layout.precision() + 64;
+    let pi = BigFloat::with_val(working, rug::float::Constant::Pi);
+    let mut values: Vec<BigFloat> = (1..=8_u32)
+        .map(|k| BigFloat::with_val(working, &pi * k) >> 1u32)
+        .collect();
+    values.push(BigFloat::with_val(working, 1) << (1_u32 << 22));
+    values
+        .iter()
+        .flat_map(|value| [value.clone(), -value.clone()])
+        .flat_map(|value| around(layout, &value, 2))
+        .collect()
+}
+
 /// Returns pairs of an argument and an exponent of `compound`: every
 /// exponent of [`COUNTS`] with arguments whose `1 + x` is `m 2^-j` for an odd
 /// `m` up to 15, and with arguments next to -1, and a few exponents with the
@@ -418,6 +436,7 @@ fn check_format<S: Standard<W>, const W: usize>(
     encodings.extend(variant_arguments(layout));
     encodings.extend(pi_scaled_arguments(layout));
     encodings.extend(inverse_arguments(layout));
+    encodings.extend(circular_arguments(layout));
     encodings.extend_from_slice(extra);
     let pairs = compound.map_or_else(Vec::new, |_| compound_samples(layout));
     for env in &BEHAVIORS {
@@ -492,6 +511,13 @@ const LOG_WORST_CASES: [u64; 12] = [
     0x40FD_E7CD_6751_029A,
 ];
 
+/// The binary64 argument closest to a multiple of `pi / 2` relative to its
+/// size, `6381956970095103 * 2^797`, `4.687e-19` from the multiple, as
+/// J.-M. Muller lists it in "Elementary Functions: Algorithms and
+/// Implementation", 3rd edition, 2016, chapter 11. Its reduction keeps the
+/// fewest digits of any binary64 argument.
+const REDUCTION_WORST_CASE: u64 = 0x7506_AC5B_262C_A1FF;
+
 #[test]
 fn tf32_binary32_binary64_x87_and_binary128() {
     check_format(
@@ -513,6 +539,7 @@ fn tf32_binary32_binary64_x87_and_binary128() {
     let worst: Vec<Integer> = EXP_WORST_CASES
         .iter()
         .chain(&LOG_WORST_CASES)
+        .chain(&[REDUCTION_WORST_CASE])
         .map(|&bits| Integer::from(bits))
         .collect();
     check_format(

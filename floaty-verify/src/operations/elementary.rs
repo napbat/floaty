@@ -41,6 +41,8 @@ pub use self::atan2::{Bivariate, expected_atan2, expected_decimal_atan2};
 pub use self::decimal::expected_decimal;
 
 use core::cmp::Ordering;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use floaty::format::Standard;
 use floaty::{Env, Flags, Float};
@@ -50,8 +52,20 @@ use rug::{Float as BigFloat, Integer, Rational};
 use super::{Outcome, default_nan, special_operands};
 use crate::mpfr::{self, Format, Input, Operand, Read};
 
+/// The exponent `2^22`: floaty's bits of 2/pi reach every argument of `sin`,
+/// `cos`, and `tan` below `2^(2^22)`.
+const REDUCTION_REACH: i32 = 1 << 22;
+
+thread_local! {
+    /// The truncation of each binary value that MPFR bounds, by function,
+    /// argument, and precision. Each behavior of a test reads the same
+    /// truncation, and `sin` near `2^(2^22)` takes MPFR about 25 ms.
+    static TRUNCATIONS: RefCell<HashMap<(Function, Integer, i32, u32), Input>> =
+        RefCell::new(HashMap::new());
+}
+
 /// A function of the oracle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Function {
     /// `e^x`.
     Exp,
@@ -95,6 +109,12 @@ pub enum Function {
     CosPi,
     /// `tan(pi x)`.
     TanPi,
+    /// `sin x`.
+    Sin,
+    /// `cos x`.
+    Cos,
+    /// `tan x`.
+    Tan,
     /// `asin x`.
     Asin,
     /// `acos x`.
@@ -111,7 +131,7 @@ pub enum Function {
 
 impl Function {
     /// Every function.
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 30] = [
         Self::Exp,
         Self::ExpM1,
         Self::Exp2,
@@ -133,6 +153,9 @@ impl Function {
         Self::SinPi,
         Self::CosPi,
         Self::TanPi,
+        Self::Sin,
+        Self::Cos,
+        Self::Tan,
         Self::Asin,
         Self::Acos,
         Self::Atan,
@@ -179,6 +202,9 @@ impl Function {
             Self::SinPi => x.sin_pi_with(env),
             Self::CosPi => x.cos_pi_with(env),
             Self::TanPi => x.tan_pi_with(env),
+            Self::Sin => x.sin_with(env),
+            Self::Cos => x.cos_with(env),
+            Self::Tan => x.tan_with(env),
             Self::Asin => x.asin_with(env),
             Self::Acos => x.acos_with(env),
             Self::Atan => x.atan_with(env),
@@ -226,10 +252,18 @@ impl Function {
         )
     }
 
+    /// Returns `true` for `sin`, `cos`, or `tan`.
+    fn is_circular(self) -> bool {
+        matches!(self, Self::Sin | Self::Cos | Self::Tan)
+    }
+
     /// Returns `true` for a function that increases with `x`: every function
-    /// but `cosh`, the functions scaled by pi, `acos`, and `acosPi`.
+    /// but `cosh`, the trigonometric functions and their forms scaled by pi,
+    /// `acos`, and `acosPi`.
     fn is_increasing(self) -> bool {
-        !self.is_pi_scaled() && !matches!(self, Self::Cosh | Self::Acos | Self::AcosPi)
+        !self.is_pi_scaled()
+            && !self.is_circular()
+            && !matches!(self, Self::Cosh | Self::Acos | Self::AcosPi)
     }
 
     /// Returns the base 2 or 10 of an exponential or a logarithm, or `None`
@@ -268,6 +302,9 @@ impl Function {
             Self::SinPi => value.sin_pi_round(round),
             Self::CosPi => value.cos_pi_round(round),
             Self::TanPi => value.tan_pi_round(round),
+            Self::Sin => value.sin_round(round),
+            Self::Cos => value.cos_round(round),
+            Self::Tan => value.tan_round(round),
             Self::Asin => value.asin_round(round),
             Self::Acos => value.acos_round(round),
             Self::Atan => value.atan_round(round),
@@ -281,9 +318,9 @@ impl Function {
     /// Returns the result of the special cases of IEEE 754-2019 section
     /// 9.2.1 at an operand, or [`Special::Evaluate`].
     fn special(self, x: &Shape) -> Special {
-        if self.is_pi_scaled() {
+        if self.is_pi_scaled() || self.is_circular() {
             return match x {
-                Shape::Zero(_) if self == Self::CosPi => Special::One(false),
+                Shape::Zero(_) if matches!(self, Self::CosPi | Self::Cos) => Special::One(false),
                 Shape::Zero(negative) => Special::Zero(*negative),
                 Shape::Infinity(_) => Special::Invalid,
                 Shape::Finite { .. } => Special::Evaluate,
@@ -661,6 +698,16 @@ fn number(function: Function, x: &BigFloat, format: &Format, env: &Env) -> (Outc
             return (Outcome::from_value(value), flags);
         }
     }
+    // floaty's bits of 2/pi reach arguments below `2^(2^22)`. A larger
+    // argument of `sin`, `cos`, or `tan`, which only a format of 24 exponent
+    // bits or more holds, gives the default NaN and signals invalid, by the
+    // rule of floaty.
+    if function.is_circular()
+        && x.get_exp()
+            .is_some_and(|exponent| exponent > REDUCTION_REACH)
+    {
+        return (default_nan(format, env), Flags::INVALID);
+    }
     let far = x.clone().abs() >= binary_out_of_range(function, format);
     // MPFR takes a working precision near `|x|` bits for `b^x - 1` of a
     // large negative `x`, and for `tanh` of a large `|x|`, so the oracle
@@ -706,12 +753,26 @@ fn number(function: Function, x: &BigFloat, format: &Format, env: &Env) -> (Outc
             sticky: false,
         }
     } else {
-        truncation(format.precision, |precision, round| {
-            function.mpfr(x, precision, round)
-        })
+        cached_truncation(function, x, format.precision)
     };
     let (value, flags) = mpfr::round(&input, format, env);
     (Outcome::from_value(value), flags)
+}
+
+/// Returns the [`truncation`] of `function` at a binary value through
+/// [`TRUNCATIONS`].
+fn cached_truncation(function: Function, x: &BigFloat, precision: u32) -> Input {
+    let evaluate = || truncation(precision, |working, round| function.mpfr(x, working, round));
+    let Some((significand, exponent)) = x.to_integer_exp() else {
+        return evaluate();
+    };
+    let key = (function, significand, exponent, precision);
+    if let Some(input) = TRUNCATIONS.with_borrow(|map| map.get(&key).cloned()) {
+        return input;
+    }
+    let input = evaluate();
+    TRUNCATIONS.with_borrow_mut(|map| map.insert(key, input.clone()));
+    input
 }
 
 /// Returns the truncation of a value to `precision + 3` bits, with the

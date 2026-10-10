@@ -6,6 +6,9 @@
 //! rational result exactly, and [`decimal::to_decimal`] rounds a binary
 //! value strictly inside the truncation interval of an irrational one.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use floaty::{Decoded, Env, Flags};
 use rug::float::Round;
 use rug::integer::Order;
@@ -14,6 +17,15 @@ use rug::{Float as BigFloat, Integer, Rational};
 use super::{Function, PRECISION_LIMIT, Shape, Special, quarter, reverse};
 use crate::mpfr::decimal::{self, DecimalFormat, DecimalValue};
 use crate::mpfr::{Nan, Operand, select_nan};
+
+thread_local! {
+    /// The binary value inside the truncation interval of each decimal value
+    /// that MPFR bounds, by function, argument, and precision. Each behavior
+    /// and each encoding of a test reads the same value, and `sin` near
+    /// `10^6144` takes MPFR about a millisecond at each bound.
+    static TRUNCATIONS: RefCell<HashMap<(Function, Rational, u32), BigFloat>> =
+        RefCell::new(HashMap::new());
+}
 
 /// Returns the bound `4 R` past which an argument of an exponential
 /// overflows or underflows a decimal format, with
@@ -166,13 +178,18 @@ fn decimal_number(
     } else {
         x.clone()
     };
+    let key = (function, x, format.precision);
+    if let Some(value) = TRUNCATIONS.with_borrow(|map| map.get(&key).cloned()) {
+        return decimal::to_decimal(&value, format, env);
+    }
+    let x = &key.1;
     let value = decimal_truncation(format.precision, |precision, round| {
-        let argument = BigFloat::with_val_round(precision, &x, round).0;
+        let argument = BigFloat::with_val_round(precision, x, round).0;
         let value = function.mpfr(&argument, precision, round);
         if function.is_increasing() {
             return value;
         }
-        let other = BigFloat::with_val_round(precision, &x, reverse(round)).0;
+        let other = BigFloat::with_val_round(precision, x, reverse(round)).0;
         let other = function.mpfr(&other, precision, round);
         match round {
             Round::Down if other < value => other,
@@ -180,7 +197,9 @@ fn decimal_number(
             _ => value,
         }
     });
-    decimal::to_decimal(&value, format, env)
+    let result = decimal::to_decimal(&value, format, env);
+    TRUNCATIONS.with_borrow_mut(|map| map.insert(key, value));
+    result
 }
 
 /// Returns the decimal result of a special case, or `None` to evaluate.
@@ -264,11 +283,11 @@ fn decimal_stand_in(
         return Some(decimal::to_decimal(&value, format, env));
     }
     // `e^x - 1` lies above `x`, and `ln(1 + x)` below it, by less than
-    // `x^2`. `sinh x`, `atanh x`, and `asin x` lie beyond `x`, and `tanh x`,
-    // `asinh x`, and `atan x` short of it, by less than `|x|^3`. Below
-    // `|x| = 2^-(4p + 70)`, `x ± |x| 2^-(4p + 70)` lies on the same side of
-    // `x` and closer to it than one unit of `p + 2` digits, as the value
-    // does, and GMP gives its digits.
+    // `x^2`. `sinh x`, `atanh x`, `asin x`, and `tan x` lie beyond `x`, and
+    // `tanh x`, `asinh x`, `atan x`, and `sin x` short of it, by less than
+    // `|x|^3`. Below `|x| = 2^-(4p + 70)`, `x ± |x| 2^-(4p + 70)` lies on the
+    // same side of `x` and closer to it than one unit of `p + 2` digits, as
+    // the value does, and GMP gives its digits.
     let tiny = Rational::from((1, Integer::from(1) << (4 * precision + 70)));
     let half = Rational::from((1, 2));
     // `acosPi x = 1/2 - asin(x) / pi` lies within `|x| / 3` of 1/2, and
@@ -288,8 +307,8 @@ fn decimal_stand_in(
     let value = match function {
         Function::ExpM1 => x.clone() + step.abs(),
         Function::LogP1 => x.clone() - step.abs(),
-        Function::Sinh | Function::Atanh | Function::Asin => x.clone() + step,
-        Function::Tanh | Function::Asinh | Function::Atan => x.clone() - step,
+        Function::Sinh | Function::Atanh | Function::Asin | Function::Tan => x.clone() + step,
+        Function::Tanh | Function::Asinh | Function::Atan | Function::Sin => x.clone() - step,
         Function::AcosPi => half - x.clone() / 4u32,
         _ => return None,
     };

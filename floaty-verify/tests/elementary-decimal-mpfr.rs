@@ -20,6 +20,7 @@ use floaty::{D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd};
 use floaty_verify::intel_decimal::{Bid32, Bid64, Bid128, Format as IntelFormat};
 use floaty_verify::mpfr::decimal::{DecimalFormat, TO_DECIMAL_BEHAVIORS};
 use floaty_verify::operations::check;
+use floaty_verify::operations::elementary::Function;
 use floaty_verify::random::SplitMix64;
 use rug::float::Round;
 use rug::{Float as BigFloat, Integer};
@@ -328,6 +329,21 @@ fn inverse_arguments(format: DecimalFormat) -> Vec<Number> {
     numbers
 }
 
+/// Returns arguments of `sin`, `cos`, and `tan` next to the multiples
+/// `±k pi / 2` up to `k = 8`, with two neighbors on each side, where the
+/// reduction keeps the fewest digits.
+fn circular_arguments(format: DecimalFormat) -> Vec<Number> {
+    let working = 4 * format.precision + 64;
+    let pi = BigFloat::with_val(working, rug::float::Constant::Pi);
+    let mut numbers = Vec::new();
+    for k in 1..=8_u32 {
+        let multiple = BigFloat::with_val(working, &pi * k) >> 1u32;
+        numbers.extend(around(format, &multiple, 2));
+        numbers.extend(around(format, &-multiple, 2));
+    }
+    numbers
+}
+
 /// Bad cases of `exp` for decimal64, as coefficient and exponent, from
 /// Lefèvre, Stehlé, and Zimmermann, "Worst Cases for the Exponential
 /// Function in the IEEE 754r decimal64 Format", JNAO 2006, slides 6 and 13
@@ -390,6 +406,7 @@ fn constructed(format: DecimalFormat, random: &mut SplitMix64, extra: &[(u64, i6
     numbers.extend(variant_arguments(format));
     numbers.extend(pi_scaled_arguments(format));
     numbers.extend(inverse_arguments(format));
+    numbers.extend(circular_arguments(format));
     numbers.extend(
         extra
             .iter()
@@ -412,9 +429,10 @@ fn random_bits(random: &mut SplitMix64, width: u32) -> u128 {
     bits >> (128 - width)
 }
 
-/// Checks one decimal width in BID and in DPD.
+/// Checks the functions of `$functions` on one decimal width in BID and in
+/// DPD.
 macro_rules! check_width {
-    ($bid:ty, $dpd:ty, $intel:ty, $bits:ty, $count:literal, $seed:literal, $extra:expr) => {{
+    ($functions:expr, $bid:ty, $dpd:ty, $intel:ty, $bits:ty, $count:literal, $seed:literal, $extra:expr) => {{
         let format = DecimalFormat::of::<$bid>();
         let mut random = SplitMix64::new($seed);
         let narrow = |bits: u128| <$bits>::try_from(bits).expect("the encoding has the width");
@@ -432,34 +450,95 @@ macro_rules! check_width {
         }));
         for env in &TO_DECIMAL_BEHAVIORS {
             for &(bid, dpd) in &values {
-                check::check_decimal_elementary(bid, format, env);
-                check::check_decimal_elementary(dpd, format, env);
+                check::check_decimal_elementary(bid, $functions, format, env);
+                check::check_decimal_elementary(dpd, $functions, format, env);
             }
         }
     }};
 }
 
+// Each width runs in two tests, which nextest runs at once: the exponentials
+// and the logarithms, and the other functions.
 #[test]
 fn decimal32() {
-    check_width!(D32Bid, D32Dpd, Bid32, u32, 2_000, 0xDEC_E032, &[]);
+    let functions = Function::EXPONENTIALS_AND_LOGARITHMS;
+    check_width!(
+        functions,
+        D32Bid,
+        D32Dpd,
+        Bid32,
+        u32,
+        2_000,
+        0xDEC_E032,
+        &[]
+    );
+}
+
+#[test]
+fn decimal32_hyperbolic_and_trigonometric() {
+    let functions = Function::HYPERBOLIC_AND_TRIGONOMETRIC;
+    check_width!(
+        functions,
+        D32Bid,
+        D32Dpd,
+        Bid32,
+        u32,
+        2_000,
+        0xDEC_E032,
+        &[]
+    );
 }
 
 #[test]
 fn decimal64() {
+    let (functions, extra) = (
+        Function::EXPONENTIALS_AND_LOGARITHMS,
+        &DECIMAL64_EXP_WORST_CASES,
+    );
     check_width!(
-        D64Bid,
-        D64Dpd,
-        Bid64,
-        u64,
-        2_000,
-        0xDEC_E064,
-        &DECIMAL64_EXP_WORST_CASES
+        functions, D64Bid, D64Dpd, Bid64, u64, 2_000, 0xDEC_E064, extra
+    );
+}
+
+#[test]
+fn decimal64_hyperbolic_and_trigonometric() {
+    let (functions, extra) = (
+        Function::HYPERBOLIC_AND_TRIGONOMETRIC,
+        &DECIMAL64_EXP_WORST_CASES,
+    );
+    check_width!(
+        functions, D64Bid, D64Dpd, Bid64, u64, 2_000, 0xDEC_E064, extra
     );
 }
 
 #[test]
 fn decimal128() {
-    check_width!(D128Bid, D128Dpd, Bid128, u128, 2_000, 0xDEC_E128, &[]);
+    let functions = Function::EXPONENTIALS_AND_LOGARITHMS;
+    check_width!(
+        functions,
+        D128Bid,
+        D128Dpd,
+        Bid128,
+        u128,
+        2_000,
+        0xDEC_E128,
+        &[]
+    );
+}
+
+#[test]
+fn decimal128_hyperbolic_and_trigonometric() {
+    let functions = Function::HYPERBOLIC_AND_TRIGONOMETRIC;
+    check_width!(
+        functions,
+        D128Bid,
+        D128Dpd,
+        Bid128,
+        u128,
+        2_000,
+        0xDEC_E128,
+        &[]
+    );
 }
 
 /// Returns the pairs of `atan2`, `y` first, as BID encodings: the zeros, the

@@ -311,6 +311,7 @@ Never hand-edit a generated file. Change its generator and run it again.
 | --- | --- |
 | `floaty-verify/data/fp8-reference.txt`, `fp8-from-f16.bin`, `fp8-arithmetic.bin`, and `fp8-operations.bin` | `floaty-verify/scripts/generate_fp8_reference.py floaty-verify/data`, as its docstring states |
 | `floaty-verify/data/mx-reference.txt`, `mx-from-f16.bin`, `mx-arithmetic.bin`, and `mx-e8m0.bin` | `floaty-verify/scripts/generate_mx_reference.py floaty-verify/data`, as its docstring states |
+| `floaty/src/elementary/two_over_pi.bin` | `cargo run -p floaty-verify --release --bin generate-two-over-pi -- floaty/src/elementary/two_over_pi.bin`, as the generator's documentation states |
 
 ## Tests
 

@@ -524,8 +524,9 @@ predicates!(
 );
 
 /// Defines the methods that apply an exponential, a logarithm, a hyperbolic
-/// function, a function scaled by pi, or an inverse trigonometric function
-/// of `Float` to each lane, with the default mode and with a behavior.
+/// function, a trigonometric function or its form scaled by pi, or an
+/// inverse trigonometric function of `Float` to each lane, with the default
+/// mode and with a behavior.
 macro_rules! elementary {
     ($($name:ident, $name_with:ident: $summary:literal),* $(,)?) => {
         impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {
@@ -572,6 +573,9 @@ elementary!(
     asinh, asinh_with: "`asinh x`",
     acosh, acosh_with: "`acosh x`",
     atanh, atanh_with: "`atanh x`",
+    sin, sin_with: "`sin x`",
+    cos, cos_with: "`cos x`",
+    tan, tan_with: "`tan x`",
     sin_pi, sin_pi_with: "`sin(pi x)`",
     cos_pi, cos_pi_with: "`cos(pi x)`",
     tan_pi, tan_pi_with: "`tan(pi x)`",

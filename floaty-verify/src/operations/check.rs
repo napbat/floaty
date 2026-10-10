@@ -378,19 +378,19 @@ pub fn check_elementary<S: Standard<W>, const W: usize>(
     }
 }
 
-/// Checks every function of [`Function::ALL`] on one value of a decimal
-/// format.
+/// Checks each function of `functions` on one value of a decimal format.
 ///
 /// # Panics
 ///
 /// Panics when floaty differs from the oracle.
 pub fn check_decimal_elementary<S: Standard<W>, const W: usize>(
     x: Float<S, W>,
+    functions: &[Function],
     format: DecimalFormat,
     env: &Env,
 ) {
     let operand = Operand::<2>::of(x);
-    for function in Function::ALL {
+    for &function in functions {
         let (result, flags) = function.floaty(x, *env);
         assert!(
             result.is_canonical(),

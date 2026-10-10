@@ -148,6 +148,9 @@ macro_rules! check_elementary {
             asinh, asinh_with;
             acosh, acosh_with;
             atanh, atanh_with;
+            sin, sin_with;
+            cos, cos_with;
+            tan, tan_with;
             sin_pi, sin_pi_with;
             cos_pi, cos_pi_with;
             tan_pi, tan_pi_with;

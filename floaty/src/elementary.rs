@@ -1,10 +1,10 @@
 //! The exponentials and the logarithms of IEEE 754-2019 section 9.2, in base
 //! e, 2, and 10, their forms shifted by one, `b^x - 1` and `log_b(1 + x)`,
-//! the hyperbolic functions and their inverses, the functions scaled by pi,
-//! `sinPi`, `cosPi`, and `tanPi`, and the inverse trigonometric functions
-//! and their forms scaled by pi, correctly rounded in every rounding
-//! direction for the binary and the decimal formats. Also `compound` for the
-//! binary formats.
+//! the hyperbolic functions and their inverses, the trigonometric functions
+//! `sin`, `cos`, and `tan`, the functions scaled by pi, `sinPi`, `cosPi`,
+//! and `tanPi`, and the inverse trigonometric functions and their forms
+//! scaled by pi, correctly rounded in every rounding direction for the
+//! binary and the decimal formats. Also `compound` for the binary formats.
 //!
 //! The functions evaluate in ball arithmetic: a center and a radius that
 //! bounds the distance to the true value. Every step truncates its center
@@ -40,8 +40,9 @@
 //! - An argument far past the range of the format gives an overflow or an
 //!   underflow.
 //!
-//! The modules `hyperbolic`, `trigonometric`, and `inverse` state their own
-//! arguments of this kind.
+//! The modules `hyperbolic`, `circular`, `trigonometric`, and `inverse`
+//! state their own arguments of this kind. The module `reduction` reduces
+//! the arguments of `sin`, `cos`, and `tan` against the bits of 2/pi.
 //!
 //! `compound(x, n) = e^(n ln(1 + x))` has a rational result, which can lie
 //! on a grid. Its module computes those results without a ball. The module
@@ -49,11 +50,13 @@
 
 mod atan2;
 mod ball;
+mod circular;
 mod compound;
 mod constants;
 mod exact;
 mod hyperbolic;
 mod inverse;
+mod reduction;
 mod series;
 mod trigonometric;
 
@@ -63,6 +66,7 @@ pub(crate) use self::compound::compound;
 use core::cmp::Ordering;
 
 use self::ball::{Ball, truncation};
+use self::circular::Circular;
 use self::constants::{ln2, ln10};
 use self::hyperbolic::Hyperbolic;
 use self::inverse::Inverse;
@@ -156,6 +160,12 @@ pub enum Transcendental {
     CosPi,
     /// `tanPi`: `tan(pi x)`.
     TanPi,
+    /// `sin`.
+    Sin,
+    /// `cos`.
+    Cos,
+    /// `tan`.
+    Tan,
     /// `asin`.
     Asin,
     /// `acos`.
@@ -189,6 +199,9 @@ impl Transcendental {
             Self::SinPi => return Kind::PiScaled(PiScaled::Sin),
             Self::CosPi => return Kind::PiScaled(PiScaled::Cos),
             Self::TanPi => return Kind::PiScaled(PiScaled::Tan),
+            Self::Sin => return Kind::Circular(Circular::Sin),
+            Self::Cos => return Kind::Circular(Circular::Cos),
+            Self::Tan => return Kind::Circular(Circular::Tan),
             Self::Asin | Self::AsinPi | Self::Acos | Self::AcosPi | Self::Atan | Self::AtanPi => {
                 return self.inverse();
             }
@@ -236,6 +249,8 @@ enum Kind {
     Hyperbolic(Hyperbolic),
     /// A trigonometric function of an argument scaled by pi.
     PiScaled(PiScaled),
+    /// A trigonometric function.
+    Circular(Circular),
     /// An inverse trigonometric function, divided by pi when `scaled` is
     /// set.
     Inverse {
@@ -439,6 +454,7 @@ pub(crate) fn special<L: Limbs>(
         },
         Kind::Hyperbolic(function) => hyperbolic::special(function, x, radix),
         Kind::PiScaled(function) => trigonometric::special(function, x, radix),
+        Kind::Circular(_) => circular::special(x, radix),
         Kind::Inverse { function, scaled } => inverse::special(function, scaled, x, radix),
     }
 }
@@ -454,6 +470,7 @@ impl Kind {
             Self::Logarithm { shifted: false, .. } => Special::Pole { negative: true },
             Self::Hyperbolic(function) => function.at_zero(negative),
             Self::PiScaled(function) => function.at_zero(negative),
+            Self::Circular(function) => function.at_zero(negative),
             Self::Inverse { function, scaled } => function.at_zero(negative, scaled),
         }
     }
@@ -463,7 +480,9 @@ impl Kind {
         match (self, negative) {
             (Self::Hyperbolic(function), _) => function.at_infinity(negative),
             (Self::Inverse { function, scaled }, _) => function.at_infinity(negative, scaled),
-            (Self::PiScaled(_), _) | (Self::Logarithm { .. }, true) => Special::Invalid,
+            (Self::PiScaled(_) | Self::Circular(_), _) | (Self::Logarithm { .. }, true) => {
+                Special::Invalid
+            }
             (_, false) => Special::Infinity { negative: false },
             (Self::Exponential { shifted: false, .. }, true) => Special::Zero { negative: false },
             (Self::Exponential { shifted: true, .. }, true) => Special::One { negative: true },
@@ -485,6 +504,7 @@ pub(crate) fn evaluate<L: Elementary>(
         Kind::Logarithm { base, shifted } => logarithm::<L>(x, base, shifted, target),
         Kind::Hyperbolic(function) => hyperbolic::evaluate::<L>(function, x, target),
         Kind::PiScaled(function) => trigonometric::evaluate::<L>(function, x, target),
+        Kind::Circular(function) => circular::evaluate::<L>(function, x, target),
         Kind::Inverse { function, scaled } => inverse::evaluate::<L>(function, scaled, x, target),
     }
 }

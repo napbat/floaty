@@ -220,6 +220,18 @@ pub trait Steps:
     #[must_use]
     fn atanh(self) -> Self;
 
+    /// Returns `sin self`, as [`Float::sin`] gives it.
+    #[must_use]
+    fn sin(self) -> Self;
+
+    /// Returns `cos self`, as [`Float::cos`] gives it.
+    #[must_use]
+    fn cos(self) -> Self;
+
+    /// Returns `tan self`, as [`Float::tan`] gives it.
+    #[must_use]
+    fn tan(self) -> Self;
+
     /// Returns `sin(pi self)`, as [`Float::sin_pi`] gives it.
     #[must_use]
     fn sin_pi(self) -> Self;
@@ -379,6 +391,9 @@ macro_rules! binary_steps {
                     asinh();
                     acosh();
                     atanh();
+                    sin();
+                    cos();
+                    tan();
                     sin_pi();
                     cos_pi();
                     tan_pi();
