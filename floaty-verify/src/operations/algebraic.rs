@@ -294,10 +294,6 @@ fn default_nan(format: &Format, env: &Env) -> Outcome {
 /// computes it in GMP.
 const COMPOUND_EXACT_BITS: u64 = 1 << 16;
 
-/// The exponent of MPFR at or past which `n ln(1 + x)` puts `(1 + x)^n` past
-/// the range of every format: `|n ln(1 + x)| >= 2^24`.
-const COMPOUND_OUT_OF_RANGE: i32 = 25;
-
 /// The bound of the oracle on the exponent of an exact power. A clamped
 /// exponent rounds as the true one does.
 const COMPOUND_CLAMP: i128 = 1 << 28;
@@ -408,10 +404,9 @@ fn compound_input(x: &BigFloat, n: i64, format: &Format) -> Input {
         return input;
     }
     let estimate = BigFloat::with_val(64, x.ln_1p_ref()) * n;
-    if estimate
-        .get_exp()
-        .is_some_and(|exponent| exponent >= COMPOUND_OUT_OF_RANGE)
-    {
+    // Past `|n ln(1 + x)| = 4 R`, `(1 + x)^n` lies past `2^(±4R)`, outside
+    // the range of the format.
+    if estimate.clone().abs() >= 4 * format.reach() {
         // A value far past the range: `2^(p + 2)` times `2^(±2^28)`.
         return Input {
             negative: false,

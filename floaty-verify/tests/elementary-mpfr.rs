@@ -1,13 +1,16 @@
-//! Compares `exp`, `log`, and `compound` of the binary formats with the MPFR
-//! oracles in `floaty_verify::operations`, in every behavior of
-//! `operations::BEHAVIORS`.
+//! Compares the exponentials, the logarithms, and `compound` of the binary
+//! formats with the MPFR oracles in `floaty_verify::operations`, in every
+//! behavior of `operations::BEHAVIORS`.
 //!
 //! Every encoding of the FP8 and MX formats, binary16, and bfloat16 runs. The
 //! other formats run their boundary encodings, random encodings, arguments
 //! of `exp` in every binade from below `2^-(p + 3)` to the overflow
 //! threshold, arguments next to the thresholds where `exp` overflows,
 //! becomes tiny, and rounds to zero, and arguments next to 1 for `log`.
-//! binary64 also runs the worst cases of Lefèvre and Muller.
+//! They also run the arguments of [`variant_arguments`]: the exact powers
+//! and logarithms in base 2 and 10, and the arguments next to each bound of
+//! the other functions. binary64 also runs the worst cases of Lefèvre and
+//! Muller.
 //!
 //! `compound` runs every exponent of [`COUNTS`] on each encoding of the FP8
 //! and MX formats, and one of them on each other sample. It also runs every
@@ -233,6 +236,61 @@ fn thresholds(layout: Layout) -> Vec<Integer> {
         .collect()
 }
 
+/// Returns arguments of the functions in base 2 and 10 and of the shifted
+/// forms. The integers up to 24 in magnitude and next to where `2^x`
+/// overflows and underflows give exact powers, and powers of 2 and 10, and
+/// the values one below them, give exact logarithms. The arguments next to
+/// -1, to the tiny bound `2^-(p + 5)`, to where `b^x - 1` comes within one
+/// unit of -1, to the large bound `2^(p + 5)` of `log_b(1 + x)`, and to
+/// where `10^x` overflows and underflows, come with two neighbors on each
+/// side.
+fn variant_arguments(layout: Layout) -> Vec<Integer> {
+    let precision = i32::try_from(layout.precision()).expect("a precision fits an i32");
+    let emax = layout.ieee_bias();
+    let emin = 1 - emax;
+    let working = 2 * layout.precision() + 64;
+    let number = |value: i32| BigFloat::with_val(working, value);
+    let power = |exponent: i32| BigFloat::with_val(working, 1) << exponent;
+    let ten =
+        |exponent: u32| BigFloat::with_val(working, Integer::from(Integer::u_pow_u(10, exponent)));
+    let mut exact: Vec<BigFloat> = (-24..=24).map(number).collect();
+    exact.extend([emin - precision, emin - precision + 1, emin, emax, emax + 1].map(number));
+    exact.extend((-12..=12).chain([emin, emax]).map(power));
+    for k in (1..=8).chain([precision - 1, precision, precision + 1]) {
+        exact.push(power(k) - 1u32);
+        exact.push(power(-k) - 1u32);
+    }
+    for k in 1..=25 {
+        exact.push(ten(k));
+        exact.push(ten(k) - 1u32);
+        exact.push(BigFloat::with_val(working, ten(k).recip_ref()));
+    }
+    let mut bounds = vec![number(-1)];
+    for exponent in [precision + 4, precision + 5, precision + 6] {
+        bounds.extend([power(exponent), power(-exponent), -power(-exponent)]);
+    }
+    // `b^x - 1` comes within one unit of -1 at `x = -(p + 3) log_b 2`.
+    let units = number(precision + 3);
+    let ln_2 = BigFloat::with_val(working, 2).ln();
+    let log10_2 = BigFloat::with_val(working, 2).log10();
+    bounds.extend([
+        -units.clone(),
+        -BigFloat::with_val(working, &units * &ln_2),
+        -BigFloat::with_val(working, &units * &log10_2),
+    ]);
+    // `10^x` overflows past `log10` of the largest value, and rounds to the
+    // smallest subnormal or to zero near `log10` of `2^(emin - p + 1)`.
+    let ulp = BigFloat::with_val(working, 1) >> (layout.precision() - 1);
+    let largest = (BigFloat::with_val(working, 2) - ulp) << emax;
+    bounds.push(BigFloat::with_val(working, largest.log10_ref()));
+    for exponent in [emin, emin - precision + 1, emin - precision] {
+        bounds.push(BigFloat::with_val(working, power(exponent).log10_ref()));
+    }
+    let exact = exact.iter().flat_map(|value| around(layout, value, 0));
+    let bounds = bounds.iter().flat_map(|value| around(layout, value, 2));
+    exact.chain(bounds).collect()
+}
+
 /// Returns pairs of an argument and an exponent of `compound`: every
 /// exponent of [`COUNTS`] with arguments whose `1 + x` is `m 2^-j` for an odd
 /// `m` up to 15, and with arguments next to -1, and a few exponents with the
@@ -291,6 +349,7 @@ fn check_format<S: Standard<W>, const W: usize>(
     encodings.extend(random_encodings(layout, count, &mut random));
     encodings.extend(exp_binades(layout, &mut random));
     encodings.extend(thresholds(layout));
+    encodings.extend(variant_arguments(layout));
     encodings.extend_from_slice(extra);
     let pairs = compound_samples(layout);
     for env in &BEHAVIORS {
@@ -414,8 +473,10 @@ fn tf32_binary32_binary64_x87_and_binary128() {
 }
 
 /// Layouts whose precision fills the storage up to two bits, the least room
-/// that a storage type keeps, and a 72-bit layout whose exponent field
-/// crosses a limb boundary.
+/// that a storage type keeps, a 72-bit layout whose exponent field crosses a
+/// limb boundary, and a layout of the most exponent bits, 28, with four bits
+/// of precision. There an exponent of a value has more bits than the
+/// truncation of a result keeps.
 #[test]
 fn layouts_that_fill_or_cross_limbs() {
     check_format(
@@ -448,6 +509,16 @@ fn layouts_that_fill_or_cross_limbs() {
         0x0072,
         &[],
     );
+    check_format(
+        Layout::ieee(32, 28),
+        &|bits: &Integer| {
+            Float::<Binary<28>, 32>::from_bits(bits.to_u32().expect("the encoding fits a u32"))
+        },
+        &|x, n, env| x.compound_with(n, env),
+        1_000,
+        0x2832,
+        &[],
+    );
 }
 
 /// Checks one format of the wide format list.
@@ -464,7 +535,33 @@ macro_rules! wide_format {
     };
 }
 
+/// Checks one format of the wide format list up to 416 bits.
+macro_rules! narrower_wide_format {
+    ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+        if $width <= 416 {
+            wide_format!($alias, $width, $exponent_bits, $limbs);
+        }
+    };
+}
+
+/// Checks one format of the wide format list past 416 bits.
+macro_rules! wider_wide_format {
+    ($alias:ident, $width:literal, $exponent_bits:literal, $limbs:literal) => {
+        if $width > 416 {
+            wide_format!($alias, $width, $exponent_bits, $limbs);
+        }
+    };
+}
+
+// The wide formats run in two tests, which nextest runs at once. The time of
+// a check grows with the square of the limbs, so the three formats past 416
+// bits take about as long as the nine up to it.
 #[test]
-fn every_wide_format() {
-    floaty_verify::for_each_wide_format!(wide_format);
+fn wide_formats_up_to_416_bits() {
+    floaty_verify::for_each_wide_format!(narrower_wide_format);
+}
+
+#[test]
+fn wide_formats_past_416_bits() {
+    floaty_verify::for_each_wide_format!(wider_wide_format);
 }

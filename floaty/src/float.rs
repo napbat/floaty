@@ -17,6 +17,7 @@ mod arithmetic;
 mod binary;
 mod compare;
 mod decimal;
+mod elementary;
 mod integer;
 mod reduction;
 

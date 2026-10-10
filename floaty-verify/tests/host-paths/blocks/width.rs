@@ -31,7 +31,17 @@ macro_rules! steps_with {
             scale_b_with(scale: i32);
             log_b_with();
             exp_with();
+            exp_m1_with();
+            exp2_with();
+            exp2_m1_with();
+            exp10_with();
+            exp10_m1_with();
             log_with();
+            log2_with();
+            log10_with();
+            log_p1_with();
+            log2_p1_with();
+            log10_p1_with();
             compound_with(n: i64);
             hypot_with(other: Self);
             pown_with(n: i64);

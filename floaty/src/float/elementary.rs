@@ -1,0 +1,346 @@
+//! The exponentials and the logarithms of IEEE 754-2019 section 9.2: in base
+//! e, 2, and 10, and their forms shifted by one, `b^x - 1` and
+//! `log_b(1 + x)`.
+
+use super::Float;
+use crate::elementary::Transcendental;
+use crate::env::{Flags, Mode, Override};
+use crate::format::Standard;
+
+impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
+    /// Returns `function` of `self` and the flags.
+    fn elementary_with(self, function: Transcendental, behavior: impl Override) -> (Self, Flags) {
+        let (bits, flags) = S::elementary(self.bits, function, behavior.apply::<M>());
+        (Self::from_masked(bits), flags)
+    }
+
+    /// Returns `e^self`, with the default mode.
+    #[must_use]
+    pub fn exp(self) -> Self {
+        self.exp_with(M::default()).0
+    }
+
+    /// Returns `e^self`, correctly rounded in the direction of the behavior,
+    /// as IEEE 754-2019 `exp` does, and the flags.
+    ///
+    /// Every finite result but `e^0` is inexact. The result rounds once, so
+    /// it has every flag of a rounding: overflow, underflow, `TINY`, and
+    /// `ROUNDED_UP`. The special cases follow IEEE 754-2019 section 9.2.1:
+    /// `e^±0` is 1 and exact, `e^+inf` is +inf, and `e^-inf` is +0. A NaN
+    /// gives the NaN of the NaN rule. An exact decimal result takes the
+    /// exponent nearest 0, and an inexact decimal result keeps every digit.
+    ///
+    /// The value evaluates in ball arithmetic, which bounds every error, at
+    /// twice and then four times the bits of the storage. No input is known
+    /// that needs more. For binary64 the second precision has 256 bits, and
+    /// the published hardest cases need fewer than 160.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (e, flags) = F64::from_bits(0x3FF0_0000_0000_0000).exp_with(Env::IEEE);
+    /// assert_eq!((e.to_bits(), flags), (0x4005_BF0A_8B14_5769, Flags::INEXACT));
+    /// ```
+    #[must_use]
+    pub fn exp_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Exp, behavior)
+    }
+
+    /// Returns `e^self - 1`, with the default mode.
+    #[must_use]
+    pub fn exp_m1(self) -> Self {
+        self.exp_m1_with(M::default()).0
+    }
+
+    /// Returns `e^self - 1`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `expm1` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does, also
+    /// for a `self` near 0, where `e^self` is near 1. Every finite result but
+    /// that of a zero is inexact. The special cases follow IEEE 754-2019
+    /// section 9.2.1: ±0 gives ±0, +inf gives +inf, and -inf gives -1.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags, Rounding};
+    ///
+    /// // e^(2^-60) - 1 is 2^-60 + 2^-121 and a little more.
+    /// let x = F64::from_bits(0x3C30_0000_0000_0000);
+    /// assert_eq!(x.exp_m1_with(Env::IEEE), (x, Flags::INEXACT));
+    /// let (up, _) = x.exp_m1_with(Rounding::TowardPositive);
+    /// assert_eq!(up.to_bits(), 0x3C30_0000_0000_0001);
+    /// ```
+    #[must_use]
+    pub fn exp_m1_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::ExpM1, behavior)
+    }
+
+    /// Returns `2^self`, with the default mode.
+    #[must_use]
+    pub fn exp2(self) -> Self {
+        self.exp2_with(M::default()).0
+    }
+
+    /// Returns `2^self`, correctly rounded in the direction of the behavior,
+    /// as IEEE 754-2019 `exp2` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. An
+    /// integer `self` gives the exact value `2^self`, which signals inexact
+    /// only where the format cannot hold it. Every other finite result is
+    /// inexact. The special cases are those of `exp`: ±0 gives 1, +inf gives
+    /// +inf, and -inf gives +0.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (eight, flags) = F64::from_bits(0x4008_0000_0000_0000).exp2_with(Env::IEEE);
+    /// assert_eq!((eight.to_bits(), flags), (0x4020_0000_0000_0000, Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn exp2_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Exp2, behavior)
+    }
+
+    /// Returns `2^self - 1`, with the default mode.
+    #[must_use]
+    pub fn exp2_m1(self) -> Self {
+        self.exp2_m1_with(M::default()).0
+    }
+
+    /// Returns `2^self - 1`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `exp2m1` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_m1_with`](Self::exp_m1_with) does.
+    /// An integer `self` gives the exact value `2^self - 1`, which signals
+    /// inexact only where the format cannot hold it. Every other finite
+    /// result is inexact. The special cases are those of `expm1`: ±0 gives
+    /// ±0, +inf gives +inf, and -inf gives -1.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (half, flags) = F64::from_bits(0xBFF0_0000_0000_0000).exp2_m1_with(Env::IEEE);
+    /// assert_eq!((half.to_bits(), flags), (0xBFE0_0000_0000_0000, Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn exp2_m1_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Exp2M1, behavior)
+    }
+
+    /// Returns `10^self`, with the default mode.
+    #[must_use]
+    pub fn exp10(self) -> Self {
+        self.exp10_with(M::default()).0
+    }
+
+    /// Returns `10^self`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `exp10` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. An
+    /// integer `self` gives the exact value `10^self`, which signals inexact
+    /// only where the format cannot hold it. A binary format holds no
+    /// negative power of 10. Every other finite result is inexact. The
+    /// special cases are those of `exp`: ±0 gives 1, +inf gives +inf, and
+    /// -inf gives +0.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let exp10 = |bits| F64::from_bits(bits).exp10_with(Env::IEEE);
+    /// assert_eq!(exp10(0x4000_0000_0000_0000), (F64::from_bits(0x4059_0000_0000_0000), Flags::NONE));
+    /// assert_eq!(exp10(0xBFF0_0000_0000_0000).0.to_bits(), 0x3FB9_9999_9999_999A);
+    /// ```
+    #[must_use]
+    pub fn exp10_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Exp10, behavior)
+    }
+
+    /// Returns `10^self - 1`, with the default mode.
+    #[must_use]
+    pub fn exp10_m1(self) -> Self {
+        self.exp10_m1_with(M::default()).0
+    }
+
+    /// Returns `10^self - 1`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `exp10m1` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_m1_with`](Self::exp_m1_with) does.
+    /// An integer `self` gives the exact value `10^self - 1`, which signals
+    /// inexact only where the format cannot hold it. Every other finite
+    /// result is inexact. The special cases are those of `expm1`: ±0 gives
+    /// ±0, +inf gives +inf, and -inf gives -1.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (nines, flags) = F64::from_bits(0x4000_0000_0000_0000).exp10_m1_with(Env::IEEE);
+    /// assert_eq!((nines.to_bits(), flags), (0x4058_C000_0000_0000, Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn exp10_m1_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Exp10M1, behavior)
+    }
+
+    /// Returns `ln self`, with the default mode.
+    #[must_use]
+    pub fn log(self) -> Self {
+        self.log_with(M::default()).0
+    }
+
+    /// Returns the natural logarithm `ln self`, correctly rounded in the
+    /// direction of the behavior, as IEEE 754-2019 `log` does, and the
+    /// flags.
+    ///
+    /// Every finite result but `ln 1` is inexact, and rounds once as
+    /// [`exp_with`](Self::exp_with) does. The special cases follow IEEE
+    /// 754-2019 section 9.2.1: `ln 1` is +0 and exact, `ln ±0` is -inf and
+    /// signals divide-by-zero, `ln +inf` is +inf, and a negative value or
+    /// -inf gives the default NaN and signals invalid. A format without an
+    /// infinity gives its NaN or its largest finite value for -inf. A NaN
+    /// gives the NaN of the NaN rule. A decimal 0 has the exponent 0.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (ln2, flags) = F64::from_bits(0x4000_0000_0000_0000).log_with(Env::IEEE);
+    /// assert_eq!((ln2.to_bits(), flags), (0x3FE6_2E42_FEFA_39EF, Flags::INEXACT));
+    /// ```
+    #[must_use]
+    pub fn log_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Log, behavior)
+    }
+
+    /// Returns `log_2 self`, with the default mode.
+    #[must_use]
+    pub fn log2(self) -> Self {
+        self.log2_with(M::default()).0
+    }
+
+    /// Returns the base-2 logarithm `log_2 self`, correctly rounded in the
+    /// direction of the behavior, as IEEE 754-2019 `log2` does, and the
+    /// flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. A power
+    /// of two `2^k` gives the exact integer `k`, which signals inexact only
+    /// where the format cannot hold it. Every other finite result is
+    /// inexact. The special cases are those of [`log_with`](Self::log_with):
+    /// 1 gives +0, ±0 gives -inf and signals divide-by-zero, +inf gives +inf,
+    /// and a negative value or -inf gives the default NaN and signals
+    /// invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let log2 = |bits| F64::from_bits(bits).log2_with(Env::IEEE);
+    /// assert_eq!(log2(0x4020_0000_0000_0000), (F64::from_bits(0x4008_0000_0000_0000), Flags::NONE));
+    /// assert_eq!(log2(0x4024_0000_0000_0000).0.to_bits(), 0x400A_934F_0979_A371);
+    /// ```
+    #[must_use]
+    pub fn log2_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Log2, behavior)
+    }
+
+    /// Returns `log_10 self`, with the default mode.
+    #[must_use]
+    pub fn log10(self) -> Self {
+        self.log10_with(M::default()).0
+    }
+
+    /// Returns the base-10 logarithm `log_10 self`, correctly rounded in the
+    /// direction of the behavior, as IEEE 754-2019 `log10` does, and the
+    /// flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. A power
+    /// of ten `10^k` gives the exact integer `k`, which signals inexact only
+    /// where the format cannot hold it. Every other finite result is
+    /// inexact. The special cases are those of [`log_with`](Self::log_with).
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (three, flags) = F64::from_bits(0x408F_4000_0000_0000).log10_with(Env::IEEE);
+    /// assert_eq!((three.to_bits(), flags), (0x4008_0000_0000_0000, Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn log10_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Log10, behavior)
+    }
+
+    /// Returns `ln(1 + self)`, with the default mode.
+    #[must_use]
+    pub fn log_p1(self) -> Self {
+        self.log_p1_with(M::default()).0
+    }
+
+    /// Returns `ln(1 + self)`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `logp1` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does, also
+    /// for a `self` near 0, where `1 + self` is near 1. Every finite result
+    /// but that of a zero is inexact. The special cases follow IEEE 754-2019
+    /// section 9.2.1: ±0 gives ±0, -1 gives -inf and signals divide-by-zero,
+    /// +inf gives +inf, and a value below -1 or -inf gives the default NaN
+    /// and signals invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (ln2, flags) = F64::from_bits(0x3FF0_0000_0000_0000).log_p1_with(Env::IEEE);
+    /// assert_eq!((ln2.to_bits(), flags), (0x3FE6_2E42_FEFA_39EF, Flags::INEXACT));
+    /// ```
+    #[must_use]
+    pub fn log_p1_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::LogP1, behavior)
+    }
+
+    /// Returns `log_2(1 + self)`, with the default mode.
+    #[must_use]
+    pub fn log2_p1(self) -> Self {
+        self.log2_p1_with(M::default()).0
+    }
+
+    /// Returns `log_2(1 + self)`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `log2p1` does, and the flags.
+    ///
+    /// The result rounds once, as [`log_p1_with`](Self::log_p1_with) does.
+    /// A `self` whose `1 + self` is a power of two `2^k` gives the exact
+    /// integer `k`, which signals inexact only where the format cannot hold
+    /// it. Every other finite result is inexact. The special cases are those
+    /// of `logp1`.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (two, flags) = F64::from_bits(0x4008_0000_0000_0000).log2_p1_with(Env::IEEE);
+    /// assert_eq!((two.to_bits(), flags), (0x4000_0000_0000_0000, Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn log2_p1_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Log2P1, behavior)
+    }
+
+    /// Returns `log_10(1 + self)`, with the default mode.
+    #[must_use]
+    pub fn log10_p1(self) -> Self {
+        self.log10_p1_with(M::default()).0
+    }
+
+    /// Returns `log_10(1 + self)`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `log10p1` does, and the flags.
+    ///
+    /// The result rounds once, as [`log_p1_with`](Self::log_p1_with) does.
+    /// A `self` whose `1 + self` is a power of ten `10^k` gives the exact
+    /// integer `k`, which signals inexact only where the format cannot hold
+    /// it. Every other finite result is inexact. The special cases are those
+    /// of `logp1`.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let (two, flags) = F64::from_bits(0x4058_C000_0000_0000).log10_p1_with(Env::IEEE);
+    /// assert_eq!((two.to_bits(), flags), (0x4000_0000_0000_0000, Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn log10_p1_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Log10P1, behavior)
+    }
+}

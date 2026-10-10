@@ -1,5 +1,5 @@
-//! Compares `exp` and `log` of decimal32, decimal64, and decimal128, in BID
-//! and in DPD, with the MPFR oracle in
+//! Compares the exponentials and the logarithms of decimal32, decimal64, and
+//! decimal128, in BID and in DPD, with the MPFR oracle in
 //! `floaty_verify::operations::elementary`, in every behavior of
 //! `TO_DECIMAL_BEHAVIORS`.
 //!
@@ -8,7 +8,9 @@
 //! threshold, and arguments next to the thresholds where `exp` overflows,
 //! becomes tiny, and rounds to zero. For `log`, they are arguments next to 1,
 //! 1 in each cohort, powers of ten, subnormals, and random values in the
-//! whole range. The Intel decimal library converts each BID argument to DPD.
+//! whole range. [`variant_arguments`] adds the exact powers and logarithms
+//! in base 2 and 10, and the arguments next to each bound of the other
+//! functions. The Intel decimal library converts each BID argument to DPD.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -170,6 +172,100 @@ fn near_one(format: DecimalFormat, random: &mut SplitMix64) -> Vec<Number> {
     numbers
 }
 
+/// Returns arguments of the functions in base 2 and 10 and of the shifted
+/// forms: the integers up to 40 in magnitude, two of them in other members
+/// of their cohorts, and the integers next to where `10^x` and `2^x`
+/// overflow and underflow, which give exact powers; powers of 10 and 2, and
+/// the values one below them, which give exact logarithms; and the arguments
+/// next to -1, to the tiny bound `10^-(p + 3)`, to where `b^x - 1` comes
+/// within one unit of -1, and to the large bound `10^(p + 3)` of
+/// `log_b(1 + x)`.
+fn variant_arguments(format: DecimalFormat) -> Vec<Number> {
+    let precision = format.precision;
+    let digits = i64::from(precision);
+    let (lowest, highest) = format.exponents();
+    let emax = i64::from(format.emax);
+    let emin = 1 - emax;
+    let working = 8 * precision + 64;
+    let integer = |n: i64| Number::new(n < 0, n.unsigned_abs(), 0);
+    let mut numbers: Vec<Number> = (-40..=40).filter(|n| *n != 0).map(integer).collect();
+    numbers.extend([Number::new(false, 3, 1), Number::new(true, 200, -2)]);
+    numbers.extend(
+        [
+            emax - 1,
+            emax,
+            emax + 1,
+            emin - digits,
+            emin - digits + 1,
+            emin,
+        ]
+        .map(integer),
+    );
+    // `2^x` overflows near `(emax + 1) log2 10`, and rounds to the smallest
+    // subnormal or to zero near `(emin - p + 1) log2 10`.
+    let log2_10 = BigFloat::with_val(working, 10).log2();
+    for exponent in [emax + 1, emin - digits + 1] {
+        let threshold = BigFloat::with_val(working, &log2_10 * Integer::from(exponent));
+        let floor = threshold
+            .floor()
+            .to_integer()
+            .and_then(|floor| floor.to_i64())
+            .expect("a threshold fits an i64");
+        numbers.extend((floor - 1..=floor + 2).map(integer));
+    }
+    numbers.extend(
+        (-30..=30)
+            .chain([lowest, emin, highest])
+            .map(|k| Number::new(false, 1, k)),
+    );
+    numbers.extend((digits + 2..=digits + 4).map(|k| Number::new(false, 1, k)));
+    for k in 1..=precision {
+        let nines = power(k) - 1u32;
+        numbers.push(Number::new(true, nines.clone(), -i64::from(k)));
+        numbers.push(Number::new(false, nines, 0));
+    }
+    for k in 1..=40_u32 {
+        let two = Integer::from(Integer::u_pow_u(2, k));
+        let five = Integer::from(Integer::u_pow_u(5, k));
+        let one_below = power(k) - &five;
+        let k = i64::from(k);
+        numbers.push(Number::new(true, one_below, -k));
+        numbers.push(Number::new(false, two.clone() - 1u32, 0));
+        numbers.push(Number::new(false, five, -k));
+        numbers.push(Number::new(false, two, 0));
+    }
+    numbers.extend([
+        Number::new(true, 1, 0),
+        Number::new(true, power(precision) - 1u32, -digits),
+        Number::new(true, power(precision - 1) + 1u32, 1 - digits),
+    ]);
+    for top in [-(digits + 4), -(digits + 3), -(digits + 2)] {
+        for negative in [false, true] {
+            numbers.push(Number::new(negative, 1, top));
+            numbers.push(Number::new(
+                negative,
+                power(precision) - 1u32,
+                top - digits + 1,
+            ));
+        }
+    }
+    // `b^x - 1` comes within one unit of -1 at `x = -(p + 2) log_b 10`.
+    let units = BigFloat::with_val(working, -(digits + 2));
+    let ln_10 = BigFloat::with_val(working, 10).ln();
+    for factor in [ln_10, log2_10, BigFloat::with_val(working, 1)] {
+        numbers.extend(around(
+            format,
+            &BigFloat::with_val(working, &units * &factor),
+            2,
+        ));
+    }
+    numbers.retain(|number| {
+        number.coefficient.to_string().len() <= usize::try_from(precision).expect("a count")
+            && (lowest..=highest).contains(&number.exponent)
+    });
+    numbers
+}
+
 /// Bad cases of `exp` for decimal64, as coefficient and exponent, from
 /// Lefèvre, Stehlé, and Zimmermann, "Worst Cases for the Exponential
 /// Function in the IEEE 754r decimal64 Format", JNAO 2006, slides 6 and 13
@@ -229,6 +325,7 @@ fn constructed(format: DecimalFormat, random: &mut SplitMix64, extra: &[(u64, i6
     }
     numbers.extend(thresholds(format));
     numbers.extend(near_one(format, random));
+    numbers.extend(variant_arguments(format));
     numbers.extend(
         extra
             .iter()

@@ -152,9 +152,49 @@ pub trait Steps:
     #[must_use]
     fn exp(self) -> Self;
 
+    /// Returns `e^self - 1`, as [`Float::exp_m1`] gives it.
+    #[must_use]
+    fn exp_m1(self) -> Self;
+
+    /// Returns `2^self`, as [`Float::exp2`] gives it.
+    #[must_use]
+    fn exp2(self) -> Self;
+
+    /// Returns `2^self - 1`, as [`Float::exp2_m1`] gives it.
+    #[must_use]
+    fn exp2_m1(self) -> Self;
+
+    /// Returns `10^self`, as [`Float::exp10`] gives it.
+    #[must_use]
+    fn exp10(self) -> Self;
+
+    /// Returns `10^self - 1`, as [`Float::exp10_m1`] gives it.
+    #[must_use]
+    fn exp10_m1(self) -> Self;
+
     /// Returns the natural logarithm, as [`Float::log`] gives it.
     #[must_use]
     fn log(self) -> Self;
+
+    /// Returns the base-2 logarithm, as [`Float::log2`] gives it.
+    #[must_use]
+    fn log2(self) -> Self;
+
+    /// Returns the base-10 logarithm, as [`Float::log10`] gives it.
+    #[must_use]
+    fn log10(self) -> Self;
+
+    /// Returns `ln(1 + self)`, as [`Float::log_p1`] gives it.
+    #[must_use]
+    fn log_p1(self) -> Self;
+
+    /// Returns `log_2(1 + self)`, as [`Float::log2_p1`] gives it.
+    #[must_use]
+    fn log2_p1(self) -> Self;
+
+    /// Returns `log_10(1 + self)`, as [`Float::log10_p1`] gives it.
+    #[must_use]
+    fn log10_p1(self) -> Self;
 
     /// Returns `(1 + self)^n`, as [`Float::compound`] gives it.
     #[must_use]
@@ -254,7 +294,17 @@ macro_rules! binary_steps {
                     scale_b(scale: i32);
                     log_b();
                     exp();
+                    exp_m1();
+                    exp2();
+                    exp2_m1();
+                    exp10();
+                    exp10_m1();
                     log();
+                    log2();
+                    log10();
+                    log_p1();
+                    log2_p1();
+                    log10_p1();
                     compound(n: i64);
                     hypot(other: Self);
                     pown(n: i64);

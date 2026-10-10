@@ -1,4 +1,5 @@
-//! The balls of `exp`, `log`, and the powers of 10 at one working width.
+//! The balls of `exp`, `e^x - 1`, `log`, `ln(1 + x)`, and the powers of 10
+//! at one working width.
 
 use super::ball::Ball;
 use super::constants::{ln2, ln10};
@@ -53,14 +54,47 @@ pub(super) fn exp<W: Widen>(x: &Ball<W>) -> Ball<W> {
     sum.scale(k)
 }
 
+/// Returns the ball of `e^x - 1` for a ball of `|x|` below 2^30.
+///
+/// From `|x| = 1/2` up, `|e^x - 1|` is at least a third of the larger of
+/// `e^x` and 1, so the difference with 1 loses at most two bits. Below it,
+/// the series of `e^t - 1` runs on `t = x / 2^s` without its first term,
+/// which keeps the error relative to the value. It stops at a term below
+/// `|t| 2^-(W::BITS + 8)`, and the radius takes the rest, as in [`exp`].
+/// `s` steps of `e^(2t) - 1 = u (u + 2)`, with `u = e^t - 1`, then give the
+/// result.
+pub(super) fn exp_minus_one<W: Widen>(x: &Ball<W>) -> Ball<W> {
+    let center = x.center();
+    if center.is_zero() || center.top() >= -1 {
+        return exp(x).sub(&Ball::one());
+    }
+    let squarings = squarings::<W>();
+    let t = x.scale(-squarings);
+    let limit = t.center().top() - i64::from(W::BITS) - 8;
+    let mut sum = t;
+    let mut term = t;
+    // `|t|` is below 1/4, so each term is at most a quarter of the one before.
+    for index in 2..=TERM_LIMIT {
+        term = term.mul(&t).div_small(index);
+        sum = sum.add(&term);
+        if term.upper().ceiling_log2() < limit {
+            break;
+        }
+    }
+    sum = sum.widened(term.upper());
+    let two = Ball::integer(2);
+    for _ in 0..squarings {
+        sum = sum.mul(&sum.add(&two));
+    }
+    sum
+}
+
 /// Returns the ball of `ln y` for a ball of positive values, or `None` when
 /// the ball comes near zero.
 ///
 /// `y = m 2^e` with `m` from `1 / sqrt(2)` to `sqrt(2)`, so
 /// `t = (m - 1) / (m + 1)` is at most 0.172 in magnitude, and
-/// `ln m = 2 atanh(t)`, the sum of `2 t^(2j + 1) / (2j + 1)`. The series stops
-/// at a term below `|t| 2^-(W::BITS + 8)`. The rest is below twice that term,
-/// because `t^2` is below 0.03, and the radius takes it.
+/// `ln m = 2 atanh(t)`.
 pub(super) fn log<W: Widen>(y: &Ball<W>) -> Option<Ball<W>> {
     if !y.is_positive() {
         return None;
@@ -74,27 +108,49 @@ pub(super) fn log<W: Widen>(y: &Ball<W>) -> Option<Ball<W>> {
     let m = y.scale(-exponent);
     let one = Ball::one();
     let t = m.sub(&one).div(&m.add(&one))?;
-    let log_m = if t.center().is_zero() {
-        // `m` is within the radius of 1, and so is `t` of 0. The terms past
-        // the first are below the cube of the radius.
-        t.widened(t.radius()).scale(1)
-    } else {
-        let t2 = t.mul(&t);
-        let limit = t.center().top() - i64::from(W::BITS) - 8;
-        let mut sum = t;
-        let mut power = t;
-        let mut term = t;
-        for index in 1..=TERM_LIMIT {
-            power = power.mul(&t2);
-            term = power.div_small(2 * index + 1);
-            sum = sum.add(&term);
-            if term.upper().ceiling_log2() < limit {
-                break;
-            }
+    Some(twice_atanh(&t).add(&ln2::<W>().mul(&Ball::integer(exponent))))
+}
+
+/// Returns the ball of `ln(1 + x)` for a ball of values above -1, or `None`
+/// when the ball comes near -1.
+///
+/// From `|x| = 1/4` up, `|ln(1 + x)|` is above 0.2, so the sum `1 + x` loses
+/// at most three bits of the logarithm. Below it, `ln(1 + x) = 2 atanh(t)`
+/// with `t = x / (2 + x)`, at most 1/7 in magnitude, which keeps the error
+/// relative to the value.
+pub(super) fn log_one_plus<W: Widen>(x: &Ball<W>) -> Option<Ball<W>> {
+    let center = x.center();
+    if center.is_zero() || center.top() >= -2 {
+        return log(&Ball::one().add(x));
+    }
+    let t = x.div(&x.add(&Ball::integer(2)))?;
+    Some(twice_atanh(&t))
+}
+
+/// Returns the ball of `2 atanh(t)`, the sum of `2 t^(2j + 1) / (2j + 1)`,
+/// for a ball of `|t|` at most 0.172. The series stops at a term below
+/// `|t| 2^-(W::BITS + 8)`. The rest is below twice that term, because `t^2`
+/// is below 0.03, and the radius takes it.
+fn twice_atanh<W: Widen>(t: &Ball<W>) -> Ball<W> {
+    if t.center().is_zero() {
+        // `t` is within its radius of 0. The terms past the first are below
+        // the cube of the radius.
+        return t.widened(t.radius()).scale(1);
+    }
+    let t2 = t.mul(t);
+    let limit = t.center().top() - i64::from(W::BITS) - 8;
+    let mut sum = *t;
+    let mut power = *t;
+    let mut term = *t;
+    for index in 1..=TERM_LIMIT {
+        power = power.mul(&t2);
+        term = power.div_small(2 * index + 1);
+        sum = sum.add(&term);
+        if term.upper().ceiling_log2() < limit {
+            break;
         }
-        sum.widened(term.upper().scale(1)).scale(1)
-    };
-    Some(log_m.add(&ln2::<W>().mul(&Ball::integer(exponent))))
+    }
+    sum.widened(term.upper().scale(1)).scale(1)
 }
 
 /// Returns the ball of `ln c + q ln 10` for a positive integer `c`.

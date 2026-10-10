@@ -5,6 +5,9 @@
 //! follow from those digits by their IEEE 754 definitions, and IBM's round
 //! to prepare for shorter precision for `ToOdd`. The exponent follows the
 //! IEEE 754 preferred exponent rules, with preferred exponent 0.
+//! [`rational_to_decimal`] takes the digits of an exact rational value from
+//! GMP division instead, for a value such as `10^-3` that no binary value
+//! holds.
 //!
 //! [`convert`] adds floaty's rules for the zeros, the infinities, and the
 //! NaNs of a decimal destination.
@@ -15,7 +18,7 @@ use floaty::env::{NanPropagation, NanRule, Tininess};
 use floaty::{Decoded, Env, Flags, Rounding};
 use rug::float::Round;
 use rug::integer::Order;
-use rug::{Float as BigFloat, Integer};
+use rug::{Float as BigFloat, Integer, Rational};
 
 use super::{
     Nan, Operand, Parameters, Read, Underflow, limit_precision, overflows_to_infinity, select_nan,
@@ -277,14 +280,101 @@ fn rounds_up(rounding: Rounding, negative: bool, dropped: Dropped, kept: &Intege
 /// Panics for a zero, an infinity, or a NaN.
 #[must_use]
 pub fn to_decimal(exact: &BigFloat, format: DecimalFormat, env: &Env) -> (DecimalValue, Flags) {
+    let (_, top_plus_one, _) = leading_digits(exact, 1);
     let negative = exact.is_sign_negative();
+    round_digits(
+        negative,
+        top_plus_one - 1,
+        |kept| cut(exact, kept),
+        format,
+        env,
+    )
+}
+
+/// Returns the expected decimal result of a nonzero rational value, and the
+/// flags, by the rules of [`to_decimal`].
+///
+/// # Panics
+///
+/// Panics for a zero.
+#[must_use]
+pub fn rational_to_decimal(
+    value: &Rational,
+    format: DecimalFormat,
+    env: &Env,
+) -> (DecimalValue, Flags) {
+    let magnitude = value.clone().abs();
+    let top = decade(&magnitude);
+    let cut = |kept| rational_cut(&magnitude, top, kept);
+    round_digits(*value < 0, top, cut, format, env)
+}
+
+/// Returns `10^exponent`.
+fn power_of_ten(exponent: i64) -> Rational {
+    let power = Integer::from(Integer::u_pow_u(
+        10,
+        u32::try_from(exponent.unsigned_abs()).expect("a decimal exponent fits a u32"),
+    ));
+    if exponent >= 0 {
+        Rational::from(power)
+    } else {
+        Rational::from((1, power))
+    }
+}
+
+/// Returns the decade `e` of a positive rational: `10^e <= magnitude <
+/// 10^(e + 1)`.
+fn decade(magnitude: &Rational) -> i64 {
+    assert!(*magnitude > 0, "a decade has a positive value");
+    // The bit lengths give `log2` within one, and `log10(2) < 0.30103`.
+    let bits = i64::from(magnitude.numer().significant_bits())
+        - i64::from(magnitude.denom().significant_bits());
+    let mut top = bits * 30_103 / 100_000;
+    while power_of_ten(top) > *magnitude {
+        top -= 1;
+    }
+    while power_of_ten(top + 1) <= *magnitude {
+        top += 1;
+    }
+    top
+}
+
+/// Returns the leading `kept_digits` digits of a positive rational in the
+/// decade `top`, truncated, and where the dropped digits lie against half a
+/// unit of the last kept digit.
+fn rational_cut(magnitude: &Rational, top: i64, kept_digits: i64) -> (Integer, Dropped) {
+    if kept_digits < 0 {
+        return (Integer::ZERO, Dropped::BelowHalf);
+    }
+    let scaled = magnitude.clone() / power_of_ten(top + 1 - kept_digits);
+    let (fraction, kept) = scaled.fract_floor(Integer::new());
+    let dropped = if fraction == 0 {
+        Dropped::Nothing
+    } else {
+        match fraction.cmp(&Rational::from((1, 2))) {
+            core::cmp::Ordering::Less => Dropped::BelowHalf,
+            core::cmp::Ordering::Equal => Dropped::Half,
+            core::cmp::Ordering::Greater => Dropped::AboveHalf,
+        }
+    };
+    (kept, dropped)
+}
+
+/// Rounds a nonzero value of the decade `top` to a decimal format. `cut`
+/// returns the leading digits of a count, truncated, and where the dropped
+/// digits lie.
+fn round_digits(
+    negative: bool,
+    top: i64,
+    cut: impl Fn(i64) -> (Integer, Dropped),
+    format: DecimalFormat,
+    env: &Env,
+) -> (DecimalValue, Flags) {
     let precision = limit_precision(format.precision, env);
     let emin = i64::from(1 - format.emax);
     let (full_lowest, full_highest) = format.exponents();
-    let (_, top_plus_one, _) = leading_digits(exact, 1);
-    let top = top_plus_one - 1;
     let position = (top - i64::from(precision) + 1).max(emin - i64::from(precision) + 1);
-    let (kept, dropped) = cut(exact, top - position + 1);
+    let (kept, dropped) = cut(top - position + 1);
     let inexact = dropped != Dropped::Nothing;
     let step = rounds_up(env.rounding, negative, dropped, &kept);
     let (mut coefficient, mut exponent) = (kept + u32::from(step), position);

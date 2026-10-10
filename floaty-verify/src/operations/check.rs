@@ -357,7 +357,7 @@ pub fn check_reciprocal_sqrt<S: Standard<W>, const W: usize>(
     );
 }
 
-/// Checks `exp_with` and `log_with` on one value.
+/// Checks every function of [`Function::ALL`] on one value.
 ///
 /// # Panics
 ///
@@ -369,19 +369,16 @@ pub fn check_elementary<S: Standard<W>, const W: usize>(
 ) {
     let operand = Operand::<8>::of(x);
     for function in Function::ALL {
-        let ours = match function {
-            Function::Exp => x.exp_with(*env),
-            Function::Log => x.log_with(*env),
-        };
         check_float(
-            ours,
+            function.floaty(x, *env),
             &elementary::expected(function, &operand, format, env),
             &|| format!("{function:?} {x:?} {env:?}"),
         );
     }
 }
 
-/// Checks `exp_with` and `log_with` on one value of a decimal format.
+/// Checks every function of [`Function::ALL`] on one value of a decimal
+/// format.
 ///
 /// # Panics
 ///
@@ -393,10 +390,7 @@ pub fn check_decimal_elementary<S: Standard<W>, const W: usize>(
 ) {
     let operand = Operand::<2>::of(x);
     for function in Function::ALL {
-        let (result, flags) = match function {
-            Function::Exp => x.exp_with(*env),
-            Function::Log => x.log_with(*env),
-        };
+        let (result, flags) = function.floaty(x, *env);
         assert!(
             result.is_canonical(),
             "{function:?} {x:?} {env:?}: {result:?} is canonical"

@@ -17,6 +17,7 @@ mod reduction;
 mod remainder;
 mod scale;
 
+use crate::elementary::Transcendental;
 use crate::env::{Behavior, Env, Flags, TotalOrder};
 use crate::exact::{self, RoundingTarget, Target, Unrounded};
 use crate::float::Class;
@@ -642,16 +643,13 @@ where
         (Self::Bits::from_limbs(bits), flags)
     }
 
-    fn exp<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
+    fn elementary<B: Behavior>(
+        value: Self::Bits,
+        function: Transcendental,
+        behavior: B,
+    ) -> (Self::Bits, Flags) {
         let env = behavior.env();
-        let (bits, flags) = Layout::<E, Enc, W>::exp(value.to_limbs(), behavior);
-        let bits = Layout::<E, Enc, W>::saturated(bits, &env);
-        (Self::Bits::from_limbs(bits), flags)
-    }
-
-    fn log<B: Behavior>(value: Self::Bits, behavior: B) -> (Self::Bits, Flags) {
-        let env = behavior.env();
-        let (bits, flags) = Layout::<E, Enc, W>::log(value.to_limbs(), behavior);
+        let (bits, flags) = Layout::<E, Enc, W>::elementary(value.to_limbs(), function, behavior);
         let bits = Layout::<E, Enc, W>::saturated(bits, &env);
         (Self::Bits::from_limbs(bits), flags)
     }

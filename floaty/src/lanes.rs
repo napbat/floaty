@@ -238,36 +238,6 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         self.map_with(|lane| lane.sqrt_with(behavior))
     }
 
-    /// Returns `e^x` of each lane, with the default mode. Each lane takes
-    /// [`Float::exp`].
-    #[must_use]
-    pub fn exp(self) -> Self {
-        self.map(Float::exp)
-    }
-
-    /// Returns `e^x` of each lane, correctly rounded, and the union of the
-    /// flags.
-    #[must_use]
-    pub fn exp_with(self, behavior: impl Override) -> (Self, Flags) {
-        let behavior = behavior.apply::<M>();
-        self.map_with(|lane| lane.exp_with(behavior))
-    }
-
-    /// Returns the natural logarithm of each lane, with the default mode.
-    /// Each lane takes [`Float::log`].
-    #[must_use]
-    pub fn log(self) -> Self {
-        self.map(Float::log)
-    }
-
-    /// Returns the natural logarithm of each lane, correctly rounded, and the
-    /// union of the flags.
-    #[must_use]
-    pub fn log_with(self, behavior: impl Override) -> (Self, Flags) {
-        let behavior = behavior.apply::<M>();
-        self.map_with(|lane| lane.log_with(behavior))
-    }
-
     /// Returns `self * multiplier + addend` of each triple of lanes, each
     /// rounded once, with the default mode.
     #[must_use]
@@ -551,6 +521,50 @@ predicates!(
     is_subnormal: "a subnormal encoding",
     is_normal: "a normal value",
     is_canonical: "a canonical encoding",
+);
+
+/// Defines the methods that apply an exponential or a logarithm of `Float`
+/// to each lane, with the default mode and with a behavior.
+macro_rules! elementary {
+    ($($name:ident, $name_with:ident: $summary:literal),* $(,)?) => {
+        impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {
+            $(
+                #[doc = concat!(
+                    "Returns ", $summary, " of each lane, with the default mode. Each lane ",
+                    "takes [`Float::", stringify!($name), "`]."
+                )]
+                #[must_use]
+                pub fn $name(self) -> Self {
+                    self.map(Float::$name)
+                }
+
+                #[doc = concat!(
+                    "Returns ", $summary, " of each lane, correctly rounded, and the union ",
+                    "of the flags."
+                )]
+                #[must_use]
+                pub fn $name_with(self, behavior: impl Override) -> (Self, Flags) {
+                    let behavior = behavior.apply::<M>();
+                    self.map_with(|lane| lane.$name_with(behavior))
+                }
+            )*
+        }
+    };
+}
+
+elementary!(
+    exp, exp_with: "`e^x`",
+    exp_m1, exp_m1_with: "`e^x - 1`",
+    exp2, exp2_with: "`2^x`",
+    exp2_m1, exp2_m1_with: "`2^x - 1`",
+    exp10, exp10_with: "`10^x`",
+    exp10_m1, exp10_m1_with: "`10^x - 1`",
+    log, log_with: "the natural logarithm `ln x`",
+    log2, log2_with: "`log_2 x`",
+    log10, log10_with: "`log_10 x`",
+    log_p1, log_p1_with: "`ln(1 + x)`",
+    log2_p1, log2_p1_with: "`log_2(1 + x)`",
+    log10_p1, log10_p1_with: "`log_10(1 + x)`",
 );
 
 impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, M>, N> {

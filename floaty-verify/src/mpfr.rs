@@ -90,6 +90,14 @@ impl Format {
         limit_precision(self.precision, env)
     }
 
+    /// Returns `R = max(emax, p - emin) + 3`. Every finite value of the
+    /// format lies between `2^-R` and `2^R`, and a value past them overflows
+    /// or underflows in every rounding direction.
+    #[must_use]
+    pub fn reach(&self) -> i64 {
+        i64::from(self.emax).max(i64::from(self.precision) - i64::from(self.emin)) + 3
+    }
+
     /// Returns a zero with the sign `negative`. A format without a negative
     /// zero, `Fnuz`, gives `+0`.
     #[must_use]
