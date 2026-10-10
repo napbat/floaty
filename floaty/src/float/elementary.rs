@@ -1,7 +1,8 @@
 //! The exponentials and the logarithms of IEEE 754-2019 section 9.2, in base
 //! e, 2, and 10, with their forms shifted by one, `b^x - 1` and
-//! `log_b(1 + x)`, the hyperbolic functions and their inverses, and the
-//! trigonometric functions of an argument scaled by pi.
+//! `log_b(1 + x)`, the hyperbolic functions and their inverses, the
+//! trigonometric functions of an argument scaled by pi, and the inverse
+//! trigonometric functions with their forms scaled by pi.
 
 use super::Float;
 use crate::elementary::Transcendental;
@@ -594,5 +595,162 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     #[must_use]
     pub fn tan_pi_with(self, behavior: impl Override) -> (Self, Flags) {
         self.elementary_with(Transcendental::TanPi, behavior)
+    }
+
+    /// Returns `asin(self)`, with the default mode.
+    #[must_use]
+    pub fn asin(self) -> Self {
+        self.asin_with(M::default()).0
+    }
+
+    /// Returns `asin(self)`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `asin` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. Every
+    /// finite result other than a zero is inexact: ±1 gives ±pi/2 rounded.
+    /// The special cases follow IEEE 754-2019 section 9.2.1: ±0 gives ±0, and
+    /// an argument above 1 in magnitude, or ±inf, gives the default NaN and
+    /// signals invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let asin = |bits| F64::from_bits(bits).asin_with(Env::IEEE);
+    /// assert_eq!(asin(0x3FF0_0000_0000_0000), (F64::from_bits(0x3FF9_21FB_5444_2D18), Flags::INEXACT));
+    /// assert_eq!(asin(0x4000_0000_0000_0000).1, Flags::INVALID);
+    /// ```
+    #[must_use]
+    pub fn asin_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Asin, behavior)
+    }
+
+    /// Returns `acos(self)`, with the default mode.
+    #[must_use]
+    pub fn acos(self) -> Self {
+        self.acos_with(M::default()).0
+    }
+
+    /// Returns `acos(self)`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `acos` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. 1 gives
+    /// +0 exactly. Every other finite result is inexact: -1 gives pi rounded,
+    /// and ±0 gives pi/2 rounded. An argument above 1 in magnitude, or ±inf,
+    /// gives the default NaN and signals invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let acos = |bits| F64::from_bits(bits).acos_with(Env::IEEE);
+    /// assert_eq!(acos(0x3FF0_0000_0000_0000), (F64::from_bits(0), Flags::NONE));
+    /// assert_eq!(acos(0xBFF0_0000_0000_0000), (F64::from_bits(0x4009_21FB_5444_2D18), Flags::INEXACT));
+    /// ```
+    #[must_use]
+    pub fn acos_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Acos, behavior)
+    }
+
+    /// Returns `atan(self)`, with the default mode.
+    #[must_use]
+    pub fn atan(self) -> Self {
+        self.atan_with(M::default()).0
+    }
+
+    /// Returns `atan(self)`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `atan` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. Every
+    /// result other than a zero is inexact: ±1 gives ±pi/4 rounded, and ±inf
+    /// gives ±pi/2 rounded. The special cases follow IEEE 754-2019 section
+    /// 9.2.1: ±0 gives ±0.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let atan = |bits| F64::from_bits(bits).atan_with(Env::IEEE);
+    /// assert_eq!(atan(0x3FF0_0000_0000_0000), (F64::from_bits(0x3FE9_21FB_5444_2D18), Flags::INEXACT));
+    /// assert_eq!(atan(0xFFF0_0000_0000_0000).0.to_bits(), 0xBFF9_21FB_5444_2D18);
+    /// ```
+    #[must_use]
+    pub fn atan_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::Atan, behavior)
+    }
+
+    /// Returns `asin(self) / pi`, with the default mode.
+    #[must_use]
+    pub fn asin_pi(self) -> Self {
+        self.asin_pi_with(M::default()).0
+    }
+
+    /// Returns `asin(self) / pi`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `asinPi` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. ±1
+    /// gives ±1/2 exactly. Every other finite result other than a zero is
+    /// inexact. The special cases follow IEEE 754-2019 section 9.2.1: ±0
+    /// gives ±0, and an argument above 1 in magnitude, or ±inf, gives the
+    /// default NaN and signals invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let asin_pi = |bits| F64::from_bits(bits).asin_pi_with(Env::IEEE);
+    /// assert_eq!(asin_pi(0xBFF0_0000_0000_0000), (F64::from_bits(0xBFE0_0000_0000_0000), Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn asin_pi_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::AsinPi, behavior)
+    }
+
+    /// Returns `acos(self) / pi`, with the default mode.
+    #[must_use]
+    pub fn acos_pi(self) -> Self {
+        self.acos_pi_with(M::default()).0
+    }
+
+    /// Returns `acos(self) / pi`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `acosPi` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. 1 gives
+    /// +0, ±0 gives 1/2, and -1 gives 1, exactly. Every other finite result
+    /// is inexact. An argument above 1 in magnitude, or ±inf, gives the
+    /// default NaN and signals invalid.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let acos_pi = |bits| F64::from_bits(bits).acos_pi_with(Env::IEEE);
+    /// assert_eq!(acos_pi(0x8000_0000_0000_0000), (F64::from_bits(0x3FE0_0000_0000_0000), Flags::NONE));
+    /// assert_eq!(acos_pi(0xBFF0_0000_0000_0000), (F64::from_bits(0x3FF0_0000_0000_0000), Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn acos_pi_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::AcosPi, behavior)
+    }
+
+    /// Returns `atan(self) / pi`, with the default mode.
+    #[must_use]
+    pub fn atan_pi(self) -> Self {
+        self.atan_pi_with(M::default()).0
+    }
+
+    /// Returns `atan(self) / pi`, correctly rounded in the direction of the
+    /// behavior, as IEEE 754-2019 `atanPi` does, and the flags.
+    ///
+    /// The result rounds once, as [`exp_with`](Self::exp_with) does. ±1
+    /// gives ±1/4 exactly. Every other finite result other than a zero is
+    /// inexact. The special cases follow IEEE 754-2019 section 9.2.1: ±0
+    /// gives ±0, and ±inf gives ±1/2.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let atan_pi = |bits| F64::from_bits(bits).atan_pi_with(Env::IEEE);
+    /// assert_eq!(atan_pi(0x3FF0_0000_0000_0000), (F64::from_bits(0x3FD0_0000_0000_0000), Flags::NONE));
+    /// assert_eq!(atan_pi(0xFFF0_0000_0000_0000), (F64::from_bits(0xBFE0_0000_0000_0000), Flags::NONE));
+    /// ```
+    #[must_use]
+    pub fn atan_pi_with(self, behavior: impl Override) -> (Self, Flags) {
+        self.elementary_with(Transcendental::AtanPi, behavior)
     }
 }

@@ -26,10 +26,11 @@
 //! FMA, `round_to_integral_by` to odd, `scale_b` with a scale that has no
 //! normal power of two, the remainders, and the steps that have no
 //! instruction: the exponentials, the logarithms, the hyperbolic functions,
-//! the functions scaled by pi, `compound`, `hypot`, `pown`, `rootn`, and
-//! `reciprocal_sqrt`. A step that reads a bit of a NaN that the lane can
-//! hold otherwise than the engine also taints its lane: `copy_sign` from a
-//! NaN `sign`, and `min_num` and `max_num` of a signaling NaN.
+//! the functions scaled by pi, the inverse trigonometric functions,
+//! `compound`, `hypot`, `pown`, `rootn`, and `reciprocal_sqrt`. A step that
+//! reads a bit of a NaN that the lane can hold otherwise than the engine
+//! also taints its lane: `copy_sign` from a NaN `sign`, and `min_num` and
+//! `max_num` of a signaling NaN.
 
 mod format;
 mod native;
@@ -415,6 +416,12 @@ impl<I: Isa, F: Format<Native = N>, N: Native> Steps for Lane<I, F> {
         sin_pi();
         cos_pi();
         tan_pi();
+        asin();
+        acos();
+        atan();
+        asin_pi();
+        acos_pi();
+        atan_pi();
         compound(_n: i64);
         hypot(_other: Self);
         pown(_n: i64);

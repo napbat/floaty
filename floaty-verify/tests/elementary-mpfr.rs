@@ -334,6 +334,28 @@ fn pi_scaled_arguments(layout: Layout) -> Vec<Integer> {
         .collect()
 }
 
+/// Returns arguments of the inverse trigonometric functions with two
+/// neighbors on each side: ±1/2, where `asinPi` and `acosPi` are multiples
+/// of 1/6, ±sqrt(1/2), where the form of `asin` reflects, and
+/// ±2^-(p + 4) and ±2^(p + 4), where `acosPi` and `atanPi` come within one
+/// unit of 1/2.
+fn inverse_arguments(layout: Layout) -> Vec<Integer> {
+    let precision = i32::try_from(layout.precision()).expect("a precision fits an i32");
+    let working = layout.precision() + 8;
+    let half = BigFloat::with_val(working, 1) >> 1u32;
+    let root = BigFloat::with_val(working, half.sqrt_ref());
+    let mut values = vec![half, root];
+    values.extend(
+        [-(precision + 4), precision + 4]
+            .map(|exponent| BigFloat::with_val(working, 1) << exponent),
+    );
+    values
+        .iter()
+        .flat_map(|value| [value.clone(), -value.clone()])
+        .flat_map(|value| around(layout, &value, 2))
+        .collect()
+}
+
 /// Returns pairs of an argument and an exponent of `compound`: every
 /// exponent of [`COUNTS`] with arguments whose `1 + x` is `m 2^-j` for an odd
 /// `m` up to 15, and with arguments next to -1, and a few exponents with the
@@ -395,6 +417,7 @@ fn check_format<S: Standard<W>, const W: usize>(
     encodings.extend(thresholds(layout));
     encodings.extend(variant_arguments(layout));
     encodings.extend(pi_scaled_arguments(layout));
+    encodings.extend(inverse_arguments(layout));
     encodings.extend_from_slice(extra);
     let pairs = compound.map_or_else(Vec::new, |_| compound_samples(layout));
     for env in &BEHAVIORS {

@@ -305,6 +305,28 @@ fn pi_scaled_arguments(format: DecimalFormat) -> Vec<Number> {
     numbers
 }
 
+/// Returns arguments of the inverse trigonometric functions: ±1/2 and
+/// ±sqrt(1/2) with two neighbors on each side, where `asinPi` and `acosPi`
+/// are multiples of 1/6 and the form of `asin` reflects, and the arguments
+/// next to ±10^(p + 3), from which `|atanPi|` comes within one unit of 1/2.
+fn inverse_arguments(format: DecimalFormat) -> Vec<Number> {
+    let precision = format.precision;
+    let working = 4 * precision + 64;
+    let half = BigFloat::with_val(working, 1) >> 1u32;
+    let root = BigFloat::with_val(working, half.sqrt_ref());
+    let mut numbers = Vec::new();
+    for value in [half, root] {
+        numbers.extend(around(format, &value, 2));
+        numbers.extend(around(format, &-value, 2));
+    }
+    let top = i64::from(precision) + 3;
+    for negative in [false, true] {
+        numbers.push(Number::new(negative, 1, top));
+        numbers.push(Number::new(negative, power(precision) - 1u32, 3));
+    }
+    numbers
+}
+
 /// Bad cases of `exp` for decimal64, as coefficient and exponent, from
 /// Lefèvre, Stehlé, and Zimmermann, "Worst Cases for the Exponential
 /// Function in the IEEE 754r decimal64 Format", JNAO 2006, slides 6 and 13
@@ -366,6 +388,7 @@ fn constructed(format: DecimalFormat, random: &mut SplitMix64, extra: &[(u64, i6
     numbers.extend(near_one(format, random));
     numbers.extend(variant_arguments(format));
     numbers.extend(pi_scaled_arguments(format));
+    numbers.extend(inverse_arguments(format));
     numbers.extend(
         extra
             .iter()

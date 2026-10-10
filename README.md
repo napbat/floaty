@@ -24,8 +24,9 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   conversions up to 512 bits, `scale_b` and `log_b`, the exponentials and
   the logarithms of every format in base e, 2, and 10, with their forms
   `b^x - 1` and `log_b(1 + x)`, the hyperbolic functions and their
-  inverses, and the functions scaled by pi, `sinPi`, `cosPi`, and `tanPi`,
-  correctly rounded, `hypot`, the reciprocal square root,
+  inverses, the functions scaled by pi, `sinPi`, `cosPi`, and `tanPi`, and
+  the inverse trigonometric functions `asin`, `acos`, and `atan` with their
+  forms scaled by pi, correctly rounded, `hypot`, the reciprocal square root,
   `compound`, `pown`, and `rootn` of the binary formats, correctly rounded,
   the last two for `|n|` up to 64, the IEEE 754-2019 augmented addition,
   subtraction, and multiplication of the binary formats, `next_up` and
@@ -519,11 +520,11 @@ assert_eq!(rounded.to_bits(), 0x3FF0_0000_0000_0000);
 of the scalar operation. A `_with` method returns the union of the flags of
 the lanes, as a vector unit accumulates them. Besides the arithmetic,
 `Lanes` has the exponentials, the logarithms, the hyperbolic functions, the
-functions scaled by pi, the operations of the binary formats alone, such as
-`hypot`, `pown`, `compound`, and the augmented operations, and those of the
-decimal formats alone, such as `quantize`. `pown`, `rootn`, and `compound`
-take one exponent for each lane. The augmented operations return the heads
-and the tails as two `Lanes`.
+functions scaled by pi, the inverse trigonometric functions, the operations
+of the binary formats alone, such as `hypot`, `pown`, `compound`, and the
+augmented operations, and those of the decimal formats alone, such as
+`quantize`. `pown`, `rootn`, and `compound` take one exponent for each lane.
+The augmented operations return the heads and the tails as two `Lanes`.
 
 ```rust
 use floaty::{Env, F32, Flags, Lanes};
@@ -620,12 +621,12 @@ format from values of the format to one value of the format: `+`, `-`,
 `*`, `/`, negation, `mul_add`, `sqrt`, `abs`, `copy_sign`, `next_up`,
 `next_down`, `round_to_integral`, `round_to_integral_by` a direction,
 `remainder`, `truncated_remainder`, `scale_b`, `log_b`, the exponentials,
-the logarithms, the hyperbolic functions, the functions scaled by pi,
-`compound`, `hypot`, `pown`, `rootn`, `reciprocal_sqrt`, `minimum`,
-`maximum`, `minimum_number`, `maximum_number`, their four magnitude forms,
-`min_num`, and `max_num`. Each step gives the result of its entry point in
-the mode of the type, so a block gives the bits of the same steps one at a
-time on every host.
+the logarithms, the hyperbolic functions, the functions scaled by pi, the
+inverse trigonometric functions, `compound`, `hypot`, `pown`, `rootn`,
+`reciprocal_sqrt`, `minimum`, `maximum`, `minimum_number`,
+`maximum_number`, their four magnitude forms, `min_num`, and `max_num`.
+Each step gives the result of its entry point in the mode of the type, so a
+block gives the bits of the same steps one at a time on every host.
 
 | Function | Result |
 | --- | --- |
@@ -753,7 +754,7 @@ path.
 | Slice kernels | x86 or x86-64 with SSE2, AVX for 256 bits, and AVX-512F for 512 bits, in the build or, with `std`, on the processor; AArch64; or s390x | The kernels of `Lanes<F32, N>`: `sum`, `dot`, `distance_square`, `norm`, `dot_rows`, and `distance_square_rows` in the packed binary32 instructions, and the fused kernels with FMA. Rows of at most eight values sum four rows at a time, in the order of the kernels. bfloat16 widens by a shift, binary16 by F16C or `FCVTL` or in integer and binary32 instructions, and codes by `CVTDQ2PS`, `SCVTF`, or `CEGBR`. `convert_slice` takes the packed conversions. On s390x, each lane runs its scalar instruction, as the packed paths of s390x do. One check of the environment serves the call. With AVX-512F, the modes that round toward +∞, -∞, and zero compute each step in the 512-bit forms with the embedded rounding control of the direction, sixteen lanes at a time, and a row of at most eight values as any other row. | A NaN sum sends the call, or its row, to the engine. A chunk of `convert_slice` that holds a NaN converts one value at a time. Without AVX-512F, the modes that round toward +∞, -∞, and zero send the call to the engine. |
 | Elementwise slice operations | As the slice kernels | The views of `floaty::elementwise` in the packed binary32 instructions: `MINPS` and `MAXPS` or `FMIN` and `FMAX`, with a NaN or two zeros settled in integer instructions; `RoundToIntegral` by `ROUNDPS` with SSE4.1, `VRNDSCALEPS` with AVX-512F, `FRINT`, or `FIEBR`, and otherwise by the sum and difference with 2^23 and an exact correction of one in the direction. `store`, `to_int_slice` by `CVTPS2DQ` on x86 and x86-64, and the reductions, with one check of the environment for the call. With AVX-512F, the modes that round toward +∞, -∞, and zero compute the sum, difference, product, quotient, and code scale of each view, and `to_int_slice`, in the 512-bit forms with the embedded rounding control of the direction. | A chunk of a store that holds a NaN, and a value that `CVTPS2DQ` does not convert, go to the engine. A reduction that gives a NaN goes to the engine. `to_int_slice` on AArch64 and s390x runs the engine. Without AVX-512F, the modes that round toward +∞, -∞, and zero send the call to the engine. |
 | Double-double | The binary64 paths of the build | `+`, `-`, `*`, `/`, and `sqrt` of `Gcc` and `Qd`, with one check of the environment for all steps | |
-| Blocks | As the slice kernels | `map` and `evaluate` of `F16`, `BF16`, `F32`, and `F64` in `floaty::block`: the steps of a chain as Rust operations on `f32` or `f64`, which LLVM vectorizes, after one check of the environment for the call. bfloat16 computes each step in `f32` and rounds it in the integer instructions of the bfloat16 paths. binary16 computes each step in `f32` and rounds it by the sum and difference with the power of two 2^13 above its exponent, and at least 0.5, and gives the infinity from 65520 up. The binary16 `mul_add` computes in binary64 and rounds there in the same way, with 2^42 and 2^28. The fused multiply-add and the square root take intrinsics that LLVM sees on x86, x86-64, and AArch64, and `MAEBR`, `MADBR`, `SQEBR`, and `SQDBR` on s390x. LLVM does not vectorize the square root on AArch64, so a chain with `sqrt` runs one lane at a time there. `abs`, `copy_sign`, `next_up`, `next_down`, and the minimum and maximum steps select and compute on the encodings, and `log_b` reads the exponent field, of a subnormal after an exact product by 2^23 or 2^52. The integral steps round by the sum and difference with 2^23 or 2^52 and an exact correction of one in the direction, and `scale_b` multiplies by a normal power of two of the host type. Every input passes through an empty assembly block after the check, so LLVM computes no step before the check | A NaN result, `mul_add` without FMA and in bfloat16, an integral value to odd, `scale_b` outside -126 to 127 in binary16, bfloat16, and binary32 and outside -1022 to 1023 in binary64, the remainders, the exponentials, the logarithms, the hyperbolic functions, the functions scaled by pi, `compound`, `hypot`, `pown`, `rootn`, `reciprocal_sqrt`, `copy_sign` from a NaN, and `min_num` and `max_num` of a signaling NaN: the lane runs the chain again in the engine |
+| Blocks | As the slice kernels | `map` and `evaluate` of `F16`, `BF16`, `F32`, and `F64` in `floaty::block`: the steps of a chain as Rust operations on `f32` or `f64`, which LLVM vectorizes, after one check of the environment for the call. bfloat16 computes each step in `f32` and rounds it in the integer instructions of the bfloat16 paths. binary16 computes each step in `f32` and rounds it by the sum and difference with the power of two 2^13 above its exponent, and at least 0.5, and gives the infinity from 65520 up. The binary16 `mul_add` computes in binary64 and rounds there in the same way, with 2^42 and 2^28. The fused multiply-add and the square root take intrinsics that LLVM sees on x86, x86-64, and AArch64, and `MAEBR`, `MADBR`, `SQEBR`, and `SQDBR` on s390x. LLVM does not vectorize the square root on AArch64, so a chain with `sqrt` runs one lane at a time there. `abs`, `copy_sign`, `next_up`, `next_down`, and the minimum and maximum steps select and compute on the encodings, and `log_b` reads the exponent field, of a subnormal after an exact product by 2^23 or 2^52. The integral steps round by the sum and difference with 2^23 or 2^52 and an exact correction of one in the direction, and `scale_b` multiplies by a normal power of two of the host type. Every input passes through an empty assembly block after the check, so LLVM computes no step before the check | A NaN result, `mul_add` without FMA and in bfloat16, an integral value to odd, `scale_b` outside -126 to 127 in binary16, bfloat16, and binary32 and outside -1022 to 1023 in binary64, the remainders, the exponentials, the logarithms, the hyperbolic functions, the functions scaled by pi, the inverse trigonometric functions, `compound`, `hypot`, `pown`, `rootn`, `reciprocal_sqrt`, `copy_sign` from a NaN, and `min_num` and `max_num` of a signaling NaN: the lane runs the chain again in the engine |
 
 ## Performance
 
@@ -873,7 +874,7 @@ decNumber.
 | --- | --- |
 | Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in the six directions of TestFloat, under four NaN rules |
 | MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, with FTZ, DAZ, and saturation, and with unsupported operands, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, from binary32, binary64, x87 extended, and binary128 to them, and between every binary format and the decimal formats, in every behavior of the conversion tests. The truncated remainder. `hypot`, the reciprocal square root, `pown`, and `rootn`, against `mpfr_hypot`, `mpfr_rec_sqrt`, `mpfr_pow_si`, and `mpfr_rootn_si`, and the rounded steps of `pown` past `|n| = 64`. The augmented operations, whose tail `mpfr_sum` rounds. The sums of the reduction operations, with `mpfr_sum` and `mpfr_dot`, and each step of the scaled products. The NaN payload operations of every binary format, by floaty's rule. The operations of `DoubleDouble` on its exact value, by their rules, with exact rationals. Each binary64 step of the other `DoubleDouble` operations, in the behaviors that libgcc and QD do not define. |
-| MPFR, through `rug`, with published worst cases | The exponentials, the logarithms, the hyperbolic functions, and the functions scaled by pi of every binary and decimal format, `exp`, `expm1`, `exp2`, `exp2m1`, `exp10`, `exp10m1`, `log`, `log2`, `log10`, `logp1`, `log2p1`, `log10p1`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `sinPi`, `cosPi`, and `tanPi`, against the MPFR function of each at a precision that grows until its bounds decide the rounding, in every behavior of the operation tests for the binary formats and of the conversion tests for the decimal formats. GMP gives the rational results, the powers of 2 and 10 at an integer and the integer logarithms, exactly. The rules of IEEE 754-2019 section 9.2.1 give the exact values of the functions scaled by pi at the quarters. Every FP8, FP6, FP4, binary16, and bfloat16 encoding, and the integers, quarters, powers, and arguments next to each bound of the other formats. The binary64 worst cases of Lefèvre and Muller, and the decimal64 `exp` worst cases of Lefèvre, Stehlé, and Zimmermann. |
+| MPFR, through `rug`, with published worst cases | The exponentials, the logarithms, the hyperbolic functions, the functions scaled by pi, and the inverse trigonometric functions of every binary and decimal format, `exp`, `expm1`, `exp2`, `exp2m1`, `exp10`, `exp10m1`, `log`, `log2`, `log10`, `logp1`, `log2p1`, `log10p1`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `sinPi`, `cosPi`, `tanPi`, `asin`, `acos`, `atan`, `asinPi`, `acosPi`, and `atanPi`, against the MPFR function of each at a precision that grows until its bounds decide the rounding, in every behavior of the operation tests for the binary formats and of the conversion tests for the decimal formats. GMP gives the rational results, the powers of 2 and 10 at an integer and the integer logarithms, exactly. The rules of IEEE 754-2019 section 9.2.1 give the exact values of the functions scaled by pi at the quarters, and of `asinPi`, `acosPi`, and `atanPi` at 0, ±1, and ±inf. Every FP8, FP6, FP4, binary16, and bfloat16 encoding, and the integers, quarters, powers, and arguments next to each bound of the other formats. The binary64 worst cases of Lefèvre and Muller, and the decimal64 `exp` worst cases of Lefèvre, Stehlé, and Zimmermann. |
 | GMP and MPFR, through `rug` | `compound` of every binary format, in every behavior of the operation tests: every FP8, FP6, and FP4 encoding with 24 exponents from `i64::MIN` to `i64::MAX`, every binary16 and bfloat16 encoding with three, and samples of the other formats with arguments next to -1, next to the thresholds of the range, and with exact powers. GMP gives an exact power, or the exact power `x^n` for a large `x`. Every other power takes bounds from `mpfr_log1p`, `mpfr_mul_si`, and `mpfr_exp`, at a precision that grows until the bounds decide the rounding. `mpfr_compound_si` of MPFR 4.2.2 gives a wrong bound in a hard case, which a comment in the oracle records. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, `scale_b`, and `log_b` against `ilogb` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
@@ -916,8 +917,7 @@ The minimum supported Rust version is 1.89. The crate uses edition 2024.
 
 ## Limitations
 
-- No `sin`, `cos`, `tan`, inverse trigonometric functions, `atan2`, `pow`,
-  or `powr`.
+- No `sin`, `cos`, `tan`, `atan2`, `atan2Pi`, `pow`, or `powr`.
 - No text parsing or printing, in decimal or in hexadecimal.
 - No `const fn` evaluation. The engine uses traits, which a `const fn` on
   stable Rust cannot call.

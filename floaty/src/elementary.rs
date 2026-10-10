@@ -1,7 +1,8 @@
 //! The exponentials and the logarithms of IEEE 754-2019 section 9.2, in base
 //! e, 2, and 10, their forms shifted by one, `b^x - 1` and `log_b(1 + x)`,
-//! the hyperbolic functions and their inverses, and the functions scaled by
-//! pi, `sinPi`, `cosPi`, and `tanPi`, correctly rounded in every rounding
+//! the hyperbolic functions and their inverses, the functions scaled by pi,
+//! `sinPi`, `cosPi`, and `tanPi`, and the inverse trigonometric functions
+//! and their forms scaled by pi, correctly rounded in every rounding
 //! direction for the binary and the decimal formats. Also `compound` for the
 //! binary formats.
 //!
@@ -11,11 +12,12 @@
 //! value. `e^x` of a nonzero rational `x` and `ln x` of a positive rational
 //! `x` other than 1 are irrational (Lindemann), so the true value never lies
 //! on a point of a grid, and neither does a hyperbolic function of a
-//! nonzero rational. The modules `exact` and `trigonometric` give the values
-//! that are rational. When every value of the ball has one truncation to
-//! `p + 3` bits or `p + 2` digits, that truncation with a sticky bit rounds
-//! as the true value does in every direction, with every flag. This is
-//! Ziv's strategy: otherwise the evaluation repeats at a wider precision.
+//! nonzero rational. The modules `exact`, `trigonometric`, and `inverse`
+//! give the values that are rational. When every value of the ball has one
+//! truncation to `p + 3` bits or `p + 2` digits, that truncation with a
+//! sticky bit rounds as the true value does in every direction, with every
+//! flag. This is Ziv's strategy: otherwise the evaluation repeats at a wider
+//! precision.
 //!
 //! The first working precision has twice the bits of the storage of the
 //! format, and the second four times. For binary64 the second has 256 bits.
@@ -38,8 +40,8 @@
 //! - An argument far past the range of the format gives an overflow or an
 //!   underflow.
 //!
-//! The modules `hyperbolic` and `trigonometric` state their own arguments of
-//! this kind.
+//! The modules `hyperbolic`, `trigonometric`, and `inverse` state their own
+//! arguments of this kind.
 //!
 //! `compound(x, n) = e^(n ln(1 + x))` has a rational result, which can lie
 //! on a grid. Its module computes those results without a ball.
@@ -49,6 +51,7 @@ mod compound;
 mod constants;
 mod exact;
 mod hyperbolic;
+mod inverse;
 mod series;
 mod trigonometric;
 
@@ -59,6 +62,7 @@ use core::cmp::Ordering;
 use self::ball::{Ball, truncation};
 use self::constants::{ln2, ln10};
 use self::hyperbolic::Hyperbolic;
+use self::inverse::Inverse;
 use self::trigonometric::PiScaled;
 use crate::exact::Unrounded;
 use crate::limbs::{self, Limbs, Widen};
@@ -95,8 +99,7 @@ elementary!(
     8 => 16, 32
 );
 
-/// An exponential, a logarithm, or a hyperbolic function of IEEE 754-2019
-/// section 9.2.
+/// An elementary function of IEEE 754-2019 section 9.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transcendental {
     /// `exp`: `e^x`.
@@ -141,6 +144,18 @@ pub enum Transcendental {
     CosPi,
     /// `tanPi`: `tan(pi x)`.
     TanPi,
+    /// `asin`.
+    Asin,
+    /// `acos`.
+    Acos,
+    /// `atan`.
+    Atan,
+    /// `asinPi`: `asin(x) / pi`.
+    AsinPi,
+    /// `acosPi`: `acos(x) / pi`.
+    AcosPi,
+    /// `atanPi`: `atan(x) / pi`.
+    AtanPi,
 }
 
 impl Transcendental {
@@ -162,6 +177,9 @@ impl Transcendental {
             Self::SinPi => return Kind::PiScaled(PiScaled::Sin),
             Self::CosPi => return Kind::PiScaled(PiScaled::Cos),
             Self::TanPi => return Kind::PiScaled(PiScaled::Tan),
+            Self::Asin | Self::AsinPi | Self::Acos | Self::AcosPi | Self::Atan | Self::AtanPi => {
+                return self.inverse();
+            }
         };
         if matches!(
             self,
@@ -171,6 +189,17 @@ impl Transcendental {
         } else {
             Kind::Logarithm { base, shifted }
         }
+    }
+
+    /// Returns the kind of an inverse trigonometric function.
+    fn inverse(self) -> Kind {
+        let function = match self {
+            Self::Asin | Self::AsinPi => Inverse::Sin,
+            Self::Acos | Self::AcosPi => Inverse::Cos,
+            _ => Inverse::Tan,
+        };
+        let scaled = matches!(self, Self::AsinPi | Self::AcosPi | Self::AtanPi);
+        Kind::Inverse { function, scaled }
     }
 }
 
@@ -195,6 +224,14 @@ enum Kind {
     Hyperbolic(Hyperbolic),
     /// A trigonometric function of an argument scaled by pi.
     PiScaled(PiScaled),
+    /// An inverse trigonometric function, divided by pi when `scaled` is
+    /// set.
+    Inverse {
+        /// The function.
+        function: Inverse,
+        /// `true` for the form scaled by pi.
+        scaled: bool,
+    },
 }
 
 /// The base of an exponential or a logarithm.
@@ -340,6 +377,14 @@ pub(crate) enum Special<L> {
     /// An argument outside the domain, which gives the default NaN and
     /// signals invalid.
     Invalid,
+    /// The angle of `eighths` eighths of a turn, `eighths pi / 4`, or
+    /// `eighths / 4` when `scaled` is set, which [`angle`] gives.
+    Angle {
+        /// The signed count of eighths of a turn.
+        eighths: i8,
+        /// `true` for a function scaled by pi.
+        scaled: bool,
+    },
 }
 
 /// Returns the result of `function` at an operand that is not a NaN, or the
@@ -348,8 +393,8 @@ pub(crate) enum Special<L> {
 /// A shifted form keeps the zero of its argument. `b^-inf - 1` is -1. A
 /// logarithm of 1 is +0, of a zero is a pole, and of a negative argument is
 /// invalid. A shifted logarithm of -1 is a pole, and of an argument below -1
-/// is invalid. The module `hyperbolic` gives the cases of the hyperbolic
-/// functions.
+/// is invalid. The modules `hyperbolic`, `trigonometric`, and `inverse` give
+/// the cases of their functions.
 pub(crate) fn special<L: Limbs>(
     function: Transcendental,
     x: Unpacked<L>,
@@ -382,6 +427,7 @@ pub(crate) fn special<L: Limbs>(
         },
         Kind::Hyperbolic(function) => hyperbolic::special(function, x, radix),
         Kind::PiScaled(function) => trigonometric::special(function, x, radix),
+        Kind::Inverse { function, scaled } => inverse::special(function, scaled, x, radix),
     }
 }
 
@@ -396,6 +442,7 @@ impl Kind {
             Self::Logarithm { shifted: false, .. } => Special::Pole { negative: true },
             Self::Hyperbolic(function) => function.at_zero(negative),
             Self::PiScaled(function) => function.at_zero(negative),
+            Self::Inverse { function, scaled } => function.at_zero(negative, scaled),
         }
     }
 
@@ -403,6 +450,7 @@ impl Kind {
     fn at_infinity<L>(self, negative: bool) -> Special<L> {
         match (self, negative) {
             (Self::Hyperbolic(function), _) => function.at_infinity(negative),
+            (Self::Inverse { function, scaled }, _) => function.at_infinity(negative, scaled),
             (Self::PiScaled(_), _) | (Self::Logarithm { .. }, true) => Special::Invalid,
             (_, false) => Special::Infinity { negative: false },
             (Self::Exponential { shifted: false, .. }, true) => Special::Zero { negative: false },
@@ -425,7 +473,18 @@ pub(crate) fn evaluate<L: Elementary>(
         Kind::Logarithm { base, shifted } => logarithm::<L>(x, base, shifted, target),
         Kind::Hyperbolic(function) => hyperbolic::evaluate::<L>(function, x, target),
         Kind::PiScaled(function) => trigonometric::evaluate::<L>(function, x, target),
+        Kind::Inverse { function, scaled } => inverse::evaluate::<L>(function, scaled, x, target),
     }
+}
+
+/// Returns the angle of a [`Special::Angle`], truncated for the rounding
+/// routine of the format as [`evaluate`] truncates a value.
+pub(crate) fn angle<L: Elementary>(
+    eighths: i8,
+    scaled: bool,
+    target: &Target,
+) -> Unrounded<L::Second> {
+    inverse::angle::<L>(eighths, scaled, target)
 }
 
 /// Returns `b^x`, or `b^x - 1` when `minus_one` is set.

@@ -51,6 +51,12 @@ macro_rules! steps_with {
             sin_pi_with();
             cos_pi_with();
             tan_pi_with();
+            asin_with();
+            acos_with();
+            atan_with();
+            asin_pi_with();
+            acos_pi_with();
+            atan_pi_with();
             compound_with(n: i64);
             hypot_with(other: Self);
             pown_with(n: i64);

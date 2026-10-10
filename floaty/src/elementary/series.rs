@@ -1,8 +1,8 @@
-//! The balls of `exp`, `e^x - 1`, `log`, `ln(1 + x)`, `sin`, `cos`, and the
-//! powers of 10 at one working width.
+//! The balls of `exp`, `e^x - 1`, `log`, `ln(1 + x)`, `sin`, `cos`, `atan`,
+//! and the powers of 10 at one working width.
 
 use super::ball::Ball;
-use super::constants::{ln2, ln10};
+use super::constants::{ln2, ln10, pi};
 use crate::limbs::Widen;
 
 /// `floor(sqrt(2) * 2^63)`: a mantissa whose top 64 bits are at or above it
@@ -199,6 +199,58 @@ pub(super) fn cosine<W: Widen>(y: &Ball<W>) -> Ball<W> {
             .mul(&square)
             .div_small((2 * index - 1) * 2 * index)
             .negate();
+        sum = sum.add(&term);
+        if term.upper().ceiling_log2() < limit {
+            break;
+        }
+    }
+    sum.widened(term.upper())
+}
+
+/// Returns the ball of `atan y` for a ball of positive values, or `None`
+/// when the ball comes near zero.
+///
+/// From `y = 1` up, `atan y = pi / 2 - atan(1 / y)`, with `1 / y` at most 1.
+/// Each step of `atan t = 2 atan(t / (1 + sqrt(1 + t^2)))` then about halves
+/// the argument, until it lies below `2^-s`, with `s` from [`squarings`].
+/// The series runs there, and the `k` steps scale its ball by `2^k`, which
+/// keeps the error relative to the value.
+pub(super) fn arctangent<W: Widen>(y: &Ball<W>) -> Option<Ball<W>> {
+    let one = Ball::one();
+    let reflected = !y.center().is_zero() && y.center().top() >= 0;
+    let mut t = if reflected { one.div(y)? } else { *y };
+    let limit = -squarings::<W>();
+    let mut halvings = 0;
+    while !t.center().is_zero() && t.center().top() >= limit {
+        let root = one.add(&t.mul(&t)).sqrt()?;
+        t = t.div(&one.add(&root))?;
+        halvings += 1;
+    }
+    let value = arctangent_series(&t).scale(halvings);
+    Some(if reflected {
+        pi::<W>().scale(-1).sub(&value)
+    } else {
+        value
+    })
+}
+
+/// Returns the ball of `atan t`, the sum of `(-1)^j t^(2j + 1) / (2j + 1)`,
+/// for a ball of `|t|` below 1/2. The series alternates, and its terms
+/// decrease, so the rest lies below the last term, which the radius takes.
+/// The series stops at a term below `|t| 2^-(W::BITS + 8)`.
+fn arctangent_series<W: Widen>(t: &Ball<W>) -> Ball<W> {
+    if t.center().is_zero() {
+        // `|atan t|` is at most `|t|`, within the radius of 0.
+        return t.widened(t.radius());
+    }
+    let square = t.mul(t);
+    let limit = t.center().top() - i64::from(W::BITS) - 8;
+    let mut sum = *t;
+    let mut power = *t;
+    let mut term = *t;
+    for index in 1..=TERM_LIMIT {
+        power = power.mul(&square).negate();
+        term = power.div_small(2 * index + 1);
         sum = sum.add(&term);
         if term.upper().ceiling_log2() < limit {
             break;

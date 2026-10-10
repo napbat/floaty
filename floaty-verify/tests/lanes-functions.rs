@@ -150,7 +150,13 @@ macro_rules! check_elementary {
             atanh, atanh_with;
             sin_pi, sin_pi_with;
             cos_pi, cos_pi_with;
-            tan_pi, tan_pi_with
+            tan_pi, tan_pi_with;
+            asin, asin_with;
+            acos, acos_with;
+            atan, atan_with;
+            asin_pi, asin_pi_with;
+            acos_pi, acos_pi_with;
+            atan_pi, atan_pi_with
         );
     }};
     (@each $context:ident, $x:ident, $env:ident; $($name:ident, $name_with:ident);*) => {

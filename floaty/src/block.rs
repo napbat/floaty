@@ -232,6 +232,30 @@ pub trait Steps:
     #[must_use]
     fn tan_pi(self) -> Self;
 
+    /// Returns `asin self`, as [`Float::asin`] gives it.
+    #[must_use]
+    fn asin(self) -> Self;
+
+    /// Returns `acos self`, as [`Float::acos`] gives it.
+    #[must_use]
+    fn acos(self) -> Self;
+
+    /// Returns `atan self`, as [`Float::atan`] gives it.
+    #[must_use]
+    fn atan(self) -> Self;
+
+    /// Returns `asin(self) / pi`, as [`Float::asin_pi`] gives it.
+    #[must_use]
+    fn asin_pi(self) -> Self;
+
+    /// Returns `acos(self) / pi`, as [`Float::acos_pi`] gives it.
+    #[must_use]
+    fn acos_pi(self) -> Self;
+
+    /// Returns `atan(self) / pi`, as [`Float::atan_pi`] gives it.
+    #[must_use]
+    fn atan_pi(self) -> Self;
+
     /// Returns `(1 + self)^n`, as [`Float::compound`] gives it.
     #[must_use]
     fn compound(self, n: i64) -> Self;
@@ -350,6 +374,12 @@ macro_rules! binary_steps {
                     sin_pi();
                     cos_pi();
                     tan_pi();
+                    asin();
+                    acos();
+                    atan();
+                    asin_pi();
+                    acos_pi();
+                    atan_pi();
                     compound(n: i64);
                     hypot(other: Self);
                     pown(n: i64);

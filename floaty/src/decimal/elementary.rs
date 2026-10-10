@@ -43,10 +43,14 @@ where
         if let Some((nan, special)) = nan::special_unary(&x, &env) {
             return Self::exact(nan, flags | special);
         }
+        let target = Self::elementary_target();
         let result = match elementary::special(function, x, Radix::Decimal) {
             Special::Evaluate(argument) => {
-                let truncated =
-                    elementary::evaluate(function, &argument, &Self::elementary_target());
+                let truncated = elementary::evaluate(function, &argument, &target);
+                return Self::finish(&truncated, 0, behavior, flags);
+            }
+            Special::Angle { eighths, scaled } => {
+                let truncated = elementary::angle::<L>(eighths, scaled, &target);
                 return Self::finish(&truncated, 0, behavior, flags);
             }
             Special::One { negative } => Unpacked::Finite {

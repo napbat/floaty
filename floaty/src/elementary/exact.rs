@@ -176,7 +176,12 @@ pub(super) fn logarithm<L: Limbs, W: Limbs>(
 }
 
 /// Returns the exact value `value * RADIX^exponent`.
-fn exact<W: Limbs>(negative: bool, value: W, exponent: i64, target: &Target) -> Unrounded<W> {
+pub(super) fn exact<W: Limbs>(
+    negative: bool,
+    value: W,
+    exponent: i64,
+    target: &Target,
+) -> Unrounded<W> {
     Unrounded {
         negative,
         exponent: clamped(i128::from(exponent), target),
