@@ -25,6 +25,7 @@
 use core::cmp::Ordering;
 
 use super::ball::Ball;
+use super::bivariate::{Outcome, Point, point};
 use super::constants::pi;
 use super::exact::clamped;
 use super::inverse::angle;
@@ -35,50 +36,6 @@ use super::{
 use crate::exact::Unrounded;
 use crate::limbs::{self, Limbs, Widen};
 use crate::unpacked::Unpacked;
-
-/// The value of a function of two arguments at operands that are not NaNs.
-pub(crate) enum Outcome<W> {
-    /// An exact zero with the sign `negative`.
-    Zero {
-        /// The sign.
-        negative: bool,
-    },
-    /// A truncation for the rounding routine, or an exact value.
-    Truncated(Unrounded<W>),
-}
-
-/// An operand of `atan2` that is not a NaN, without its sign.
-enum Point<L> {
-    /// A zero.
-    Zero,
-    /// A finite nonzero argument, with its sign.
-    Finite(Argument<L>),
-    /// An infinity.
-    Infinity,
-}
-
-/// Returns the sign of an operand and its [`Point`].
-fn point<L: Limbs>(operand: &Unpacked<L>) -> (bool, Point<L>) {
-    match *operand {
-        Unpacked::Zero { negative, .. } => (negative, Point::Zero),
-        Unpacked::Infinity { negative } => (negative, Point::Infinity),
-        Unpacked::Finite {
-            negative,
-            exponent,
-            significand,
-        } => (
-            negative,
-            Point::Finite(Argument {
-                negative,
-                exponent,
-                significand,
-            }),
-        ),
-        Unpacked::Nan { .. } | Unpacked::Unsupported => {
-            unreachable!("the NaN rule handles every NaN and unsupported operand")
-        }
-    }
-}
 
 /// Returns `atan2(y, x)`, or `atan2Pi(y, x)` when `scaled` is set, for
 /// operands that are not NaNs.

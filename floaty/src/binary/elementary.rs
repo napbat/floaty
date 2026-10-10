@@ -1,5 +1,6 @@
 //! The exponentials, the logarithms, the trigonometric functions, `atan2`,
-//! and `compound` of IEEE 754-2019 section 9.2 for the binary formats.
+//! `pow`, `powr`, and `compound` of IEEE 754-2019 section 9.2 for the binary
+//! formats.
 //!
 //! The special cases follow section 9.2.1. The other arguments take the
 //! truncation of `crate::elementary`, which the rounding routine rounds once.
@@ -87,15 +88,29 @@ where
     ) -> (L, Flags) {
         let env = behavior.env();
         let mut flags = Flags::NONE;
-        let y = Self::operand(left, &env, &mut flags);
-        let x = Self::operand(right, &env, &mut flags);
-        if let Some((nan, special)) = nan::special(&y, &x, &env) {
+        let first = Self::operand(left, &env, &mut flags);
+        let second = Self::operand(right, &env, &mut flags);
+        if elementary::is_one(function, &first, &second, Radix::Binary) {
+            return Self::exact(Self::signed_one(false), flags);
+        }
+        if let Some((nan, special)) = nan::special(&first, &second, &env) {
             return Self::exact(nan, flags | special);
         }
-        match elementary::bivariate(function, &y, &x, &Self::elementary_target()) {
-            Outcome::Zero { negative } => Self::exact(Unpacked::zero(negative), flags),
-            Outcome::Truncated(truncated) => Self::finish(&truncated, behavior, flags),
-        }
+        let result =
+            match elementary::bivariate(function, &first, &second, &Self::elementary_target()) {
+                Outcome::Truncated(truncated) => return Self::finish(&truncated, behavior, flags),
+                Outcome::Zero { negative } => Unpacked::zero(negative),
+                Outcome::Infinity { negative } => Unpacked::Infinity { negative },
+                Outcome::Pole { negative } => {
+                    flags |= Flags::DIVIDE_BY_ZERO;
+                    Self::infinity(negative, &env)
+                }
+                Outcome::Invalid => {
+                    flags |= Flags::INVALID;
+                    default_nan(&env)
+                }
+            };
+        Self::exact(result, flags)
     }
 
     /// Returns `(1 + value)^n`, correctly rounded, and the flags.

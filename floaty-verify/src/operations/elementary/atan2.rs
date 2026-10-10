@@ -19,10 +19,11 @@
 use floaty::format::Standard;
 use floaty::{Env, Flags, Float};
 use rug::float::Round;
+use rug::ops::PowAssignRound;
 use rug::{Float as BigFloat, Integer, Rational};
 
 use super::decimal::{DecimalRead, decimal_nan, decimal_truncation, read_decimal};
-use super::{Shape, truncation};
+use super::{Shape, power, truncation};
 use crate::mpfr::decimal::{self, DecimalFormat, DecimalValue};
 use crate::mpfr::{self, Format, Input, Operand, Read};
 use crate::operations::{Outcome, special_operands};
@@ -34,34 +35,56 @@ pub enum Bivariate {
     Atan2,
     /// `atan2(y, x) / pi`.
     Atan2Pi,
+    /// `pow(x, y)`.
+    Pow,
+    /// `powr(x, y)`.
+    Powr,
 }
 
 impl Bivariate {
-    /// Every function of two arguments.
-    pub const ALL: [Self; 2] = [Self::Atan2, Self::Atan2Pi];
+    /// `atan2` and `atan2Pi`.
+    pub const ATAN2: [Self; 2] = [Self::Atan2, Self::Atan2Pi];
 
-    /// Returns floaty's result of the function on `y` and `x` in `env`, and
-    /// the flags.
+    /// `pow` and `powr`.
+    pub const POWER: [Self; 2] = [Self::Pow, Self::Powr];
+
+    /// Returns floaty's result of the function on its first and second
+    /// operands in `env`, `y` and `x` for `atan2`, and the flags.
     #[must_use]
     pub fn floaty<S: Standard<W>, const W: usize>(
         self,
-        y: Float<S, W>,
-        x: Float<S, W>,
+        first: Float<S, W>,
+        second: Float<S, W>,
         env: Env,
     ) -> (Float<S, W>, Flags) {
         match self {
-            Self::Atan2 => y.atan2_with(x, env),
-            Self::Atan2Pi => y.atan2_pi_with(x, env),
+            Self::Atan2 => first.atan2_with(second, env),
+            Self::Atan2Pi => first.atan2_pi_with(second, env),
+            Self::Pow => first.pow_with(second, env),
+            Self::Powr => first.powr_with(second, env),
         }
     }
 
-    /// Returns the value at `y` and `x` that MPFR rounds to `precision` bits
-    /// in the direction `round`. `y` must have at most `precision` bits.
-    fn mpfr(self, y: &BigFloat, x: &BigFloat, precision: u32, round: Round) -> BigFloat {
-        let mut value = BigFloat::with_val(precision, y);
+    /// Returns `true` for `pow` and `powr`.
+    fn is_power(self) -> bool {
+        matches!(self, Self::Pow | Self::Powr)
+    }
+
+    /// Returns the value at the first and the second operand that MPFR
+    /// rounds to `precision` bits in the direction `round`. `first` must have
+    /// at most `precision` bits.
+    pub(super) fn mpfr(
+        self,
+        first: &BigFloat,
+        second: &BigFloat,
+        precision: u32,
+        round: Round,
+    ) -> BigFloat {
+        let mut value = BigFloat::with_val(precision, first);
         let _ = match self {
-            Self::Atan2 => value.atan2_round(x, round),
-            Self::Atan2Pi => value.atan2_pi_round(x, round),
+            Self::Atan2 => value.atan2_round(second, round),
+            Self::Atan2Pi => value.atan2_pi_round(second, round),
+            Self::Pow | Self::Powr => value.pow_assign_round(second, round),
         };
         value
     }
@@ -72,8 +95,8 @@ impl Bivariate {
     fn special(self, y: &Shape, x: &Shape, equal: bool) -> Special {
         let (y_negative, x_negative) = (y.is_negative(), x.is_negative());
         let quarters = |n: i8| match self {
-            Self::Atan2 => Special::Evaluate,
             Self::Atan2Pi => Special::Quarters(if y_negative { -n } else { n }),
+            Self::Atan2 | Self::Pow | Self::Powr => Special::Evaluate,
         };
         match (y, x) {
             (Shape::Zero(_), _) | (Shape::Finite { .. }, Shape::Infinity(_)) => {
@@ -105,7 +128,7 @@ enum Special {
 
 impl Shape {
     /// Returns `true` for an operand with the sign bit set.
-    fn is_negative(&self) -> bool {
+    pub(super) fn is_negative(&self) -> bool {
         match *self {
             Self::Zero(negative) | Self::Infinity(negative) | Self::Finite { negative, .. } => {
                 negative
@@ -141,13 +164,16 @@ impl Shape {
 /// Returns the expected result of `function` on two operands of a binary
 /// format, `y` first, and the flags.
 #[must_use]
-pub fn expected_atan2<const N: usize>(
+pub fn expected_bivariate<const N: usize>(
     function: Bivariate,
     y: &Operand<N>,
     x: &Operand<N>,
     format: &Format,
     env: &Env,
 ) -> (Outcome, Flags) {
+    if function.is_power() {
+        return power::expected(function, y, x, format, env);
+    }
     let mut flags = Flags::NONE;
     let reads = [y.read(env, &mut flags), x.read(env, &mut flags)];
     if let Some((value, special)) = special_operands(&reads, format, env) {
@@ -222,13 +248,16 @@ fn binary_stand_in(
 ///
 /// Panics for an unsupported encoding, which a decimal format does not have.
 #[must_use]
-pub fn expected_decimal_atan2(
+pub fn expected_decimal_bivariate(
     function: Bivariate,
     y: &Operand<2>,
     x: &Operand<2>,
     format: DecimalFormat,
     env: &Env,
 ) -> (DecimalValue, Flags) {
+    if function.is_power() {
+        return power::expected_decimal(function, y, x, format, env);
+    }
     let mut flags = Flags::NONE;
     let reads = [
         read_decimal(y, env, &mut flags),

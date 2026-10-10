@@ -217,6 +217,10 @@ enum Step {
     Atan2,
     /// `atan2Pi(x, y)`.
     Atan2Pi,
+    /// `pow(x, y)`.
+    Pow,
+    /// `powr(x, y)`.
+    Powr,
     /// `compound(x, n)`.
     Compound(i64),
     /// `hypot(x, y)`.
@@ -279,6 +283,8 @@ impl Chain<2, 1> for Step {
             Self::AtanPi => x.atan_pi(),
             Self::Atan2 => x.atan2(y),
             Self::Atan2Pi => x.atan2_pi(y),
+            Self::Pow => x.pow(y),
+            Self::Powr => x.powr(y),
             Self::Compound(n) => x.compound(n),
             Self::Hypot => x.hypot(y),
             Self::Pown(n) => x.pown(n),
@@ -335,6 +341,8 @@ impl Step {
             Self::AtanPi => x.atan_pi_with(IEEE).0,
             Self::Atan2 => x.atan2_with(y, IEEE).0,
             Self::Atan2Pi => x.atan2_pi_with(y, IEEE).0,
+            Self::Pow => x.pow_with(y, IEEE).0,
+            Self::Powr => x.powr_with(y, IEEE).0,
             Self::Compound(n) => x.compound_with(n, IEEE).0,
             Self::Hypot => x.hypot_with(y, IEEE).0,
             Self::Pown(n) => x.pown_with(n, IEEE).0,
@@ -411,6 +419,8 @@ fn steps<T: Width>() -> Vec<Step> {
         Step::AtanPi,
         Step::Atan2,
         Step::Atan2Pi,
+        Step::Pow,
+        Step::Powr,
         Step::Hypot,
         Step::ReciprocalSqrt,
     ];

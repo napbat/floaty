@@ -1,5 +1,5 @@
-//! The exponentials, the logarithms, the trigonometric functions, and
-//! `atan2` of IEEE 754-2019 section 9.2 for the decimal formats.
+//! The exponentials, the logarithms, the trigonometric functions, `atan2`,
+//! `pow`, and `powr` of IEEE 754-2019 section 9.2 for the decimal formats.
 //!
 //! The special cases follow section 9.2.1. An exact result takes the
 //! exponent nearest 0, as `logB` and a conversion from an integer do: the
@@ -85,14 +85,35 @@ where
     ) -> (L, Flags) {
         let env = behavior.env();
         let mut flags = Flags::NONE;
-        let y = Self::operand(left, &env, &mut flags);
-        let x = Self::operand(right, &env, &mut flags);
-        if let Some((nan, special)) = nan::special(&y, &x, &env) {
+        let first = Self::operand(left, &env, &mut flags);
+        let second = Self::operand(right, &env, &mut flags);
+        if elementary::is_one(function, &first, &second, Radix::Decimal) {
+            let one = Unpacked::Finite {
+                negative: false,
+                exponent: 0,
+                significand: L::ZERO.with_bit(0),
+            };
+            return Self::exact(one, flags);
+        }
+        if let Some((nan, special)) = nan::special(&first, &second, &env) {
             return Self::exact(nan, flags | special);
         }
-        match elementary::bivariate(function, &y, &x, &Self::elementary_target()) {
-            Outcome::Zero { negative } => Self::exact(Self::zero(negative, 0), flags),
-            Outcome::Truncated(truncated) => Self::finish(&truncated, 0, behavior, flags),
-        }
+        let result =
+            match elementary::bivariate(function, &first, &second, &Self::elementary_target()) {
+                Outcome::Truncated(truncated) => {
+                    return Self::finish(&truncated, 0, behavior, flags);
+                }
+                Outcome::Zero { negative } => Self::zero(negative, 0),
+                Outcome::Infinity { negative } => Unpacked::Infinity { negative },
+                Outcome::Pole { negative } => {
+                    flags |= Flags::DIVIDE_BY_ZERO;
+                    Unpacked::Infinity { negative }
+                }
+                Outcome::Invalid => {
+                    flags |= Flags::INVALID;
+                    default_nan(&env)
+                }
+            };
+        Self::exact(result, flags)
     }
 }

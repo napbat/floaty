@@ -1,13 +1,15 @@
-//! Compares `atan2` and `atan2Pi` of the binary formats with the MPFR oracle
-//! in `floaty_verify::operations`, in every behavior of
+//! Compares `atan2`, `atan2Pi`, `pow`, and `powr` of the binary formats with
+//! the MPFR oracle in `floaty_verify::operations`, in every behavior of
 //! `operations::BEHAVIORS`.
 //!
 //! Every pair of encodings of the FP8 and MX formats runs. The other formats
 //! run each boundary encoding against zeros, ones, threes, infinities, and a
 //! NaN in both orders, random pairs of boundary encodings and of any
 //! encodings, pairs of one magnitude and next to one magnitude, and pairs
-//! whose quotient `|y| / |x|` lies next to each bound of the shortcuts of the
-//! engine: `2^-(p + 3)` and `2^(p + 4)`.
+//! whose quotient `|y| / |x|` lies next to each bound of the shortcuts of
+//! `atan2`: `2^-(p + 3)` and `2^(p + 4)`. For `pow` and `powr`, they run
+//! bases with exact powers and roots, negative bases, and bases next to 1,
+//! against integer, half, quarter, huge, and tiny exponents.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -16,38 +18,54 @@ use floaty::format::Standard;
 use floaty::{Binary, F32, F64, F80, F128, Float, TF32};
 use floaty_verify::encodings::{Layout, boundary_encodings, to_limbs};
 use floaty_verify::mpfr::{Format, Specials};
+use floaty_verify::operations::elementary::Bivariate;
 use floaty_verify::operations::{BEHAVIORS, check};
 use floaty_verify::random::SplitMix64;
 use rug::Integer;
 use rug::integer::Order;
 
-/// Checks every pair of encodings of a format of the small format lists.
+/// Every function of two arguments.
+const FUNCTIONS: [Bivariate; 4] = [
+    Bivariate::Atan2,
+    Bivariate::Atan2Pi,
+    Bivariate::Pow,
+    Bivariate::Powr,
+];
+
+/// Checks the functions of `$functions` on every pair of encodings of a
+/// format of the small format lists.
 macro_rules! every_small_pair {
-    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+    ($functions:tt, $alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
         let format = Format::of::<Float<$standard, $width>>($specials);
         let value = |bits: u16| {
             Float::<$standard, $width>::from_bits(
                 u8::try_from(bits).expect("the format has at most 8 bits"),
             )
         };
-        for y in 0..1_u16 << $width {
-            for x in 0..1_u16 << $width {
+        for first in 0..1_u16 << $width {
+            for second in 0..1_u16 << $width {
                 for env in &BEHAVIORS {
-                    check::check_atan2(value(y), value(x), &format, env);
+                    check::check_bivariate(value(first), value(second), $functions, &format, env);
                 }
             }
         }
     }};
 }
 
+// The FP8 pairs run in two tests, which nextest runs at once.
 #[test]
 fn every_fp8_pair() {
-    floaty_verify::for_each_fp8_format!(every_small_pair);
+    floaty_verify::for_each_fp8_format!(every_small_pair, (&Bivariate::ATAN2));
+}
+
+#[test]
+fn every_fp8_pair_power() {
+    floaty_verify::for_each_fp8_format!(every_small_pair, (&Bivariate::POWER));
 }
 
 #[test]
 fn every_mx_pair() {
-    floaty_verify::for_each_mx_format!(every_small_pair);
+    floaty_verify::for_each_mx_format!(every_small_pair, (&FUNCTIONS));
 }
 
 /// Returns an encoding of `width` random bits.
@@ -112,10 +130,56 @@ fn pairs<S: Standard<W>, const W: usize>(
             pairs.extend([(y, x), (y, -x), (-y, x), (-y, -x)]);
         }
     }
+    pairs.extend(power_pairs(one, three));
     pairs
 }
 
-/// Checks the pairs of [`pairs`] in every behavior.
+/// Returns pairs of `pow` and `powr`, `x` first: bases with exact powers and
+/// roots, such as 4 and 9 and 1/2, negative bases, and the bases one step
+/// from 1, against integer, half, quarter, and three-half exponents, and
+/// exponents past the precision and below its reciprocal.
+fn power_pairs<S: Standard<W>, const W: usize>(
+    one: Float<S, W>,
+    three: Float<S, W>,
+) -> Vec<(Float<S, W>, Float<S, W>)> {
+    let two = one.scale_b(1);
+    let bases = [
+        two,
+        three,
+        one.scale_b(2),
+        three.scale_b(1) + three,
+        one.scale_b(4),
+        one.scale_b(-1),
+        three.scale_b(-2),
+        one.next_up(),
+        one.next_down(),
+        -two,
+        -three,
+        -one.scale_b(-1),
+    ];
+    let mut exponents: Vec<Float<S, W>> = (-3..=3).map(Float::from_int).collect();
+    exponents.extend([
+        one.scale_b(-1),
+        -one.scale_b(-1),
+        one.scale_b(-2),
+        three.scale_b(-1),
+        three.scale_b(-2),
+        one.scale_b(60),
+        -one.scale_b(60),
+        three.scale_b(200),
+        one.scale_b(-70),
+        -one.scale_b(-70),
+        Float::from_int(1000),
+        Float::from_int(-1000),
+    ]);
+    bases
+        .iter()
+        .flat_map(|&x| exponents.iter().map(move |&y| (x, y)))
+        .collect()
+}
+
+/// Checks every function of two arguments on the pairs of [`pairs`] in
+/// every behavior.
 fn check_format<S: Standard<W>, const W: usize>(
     layout: Layout,
     make: &dyn Fn(&Integer) -> Float<S, W>,
@@ -124,8 +188,8 @@ fn check_format<S: Standard<W>, const W: usize>(
     let format = Format::of::<Float<S, W>>(Specials::Ieee);
     let pairs = pairs(layout, make, samples);
     for env in &BEHAVIORS {
-        for &(y, x) in &pairs {
-            check::check_atan2(y, x, &format, env);
+        for &(first, second) in &pairs {
+            check::check_bivariate(first, second, &FUNCTIONS, &format, env);
         }
     }
 }

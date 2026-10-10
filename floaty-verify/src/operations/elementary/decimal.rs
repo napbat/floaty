@@ -31,7 +31,7 @@ thread_local! {
 /// overflows or underflows a decimal format, with
 /// `R = max(emax, p - emin) + 3`: `b^|x| >= 2^(4R) = 16^R > 10^R`, and every
 /// finite value of the format lies between `10^-R` and `10^R`.
-fn decimal_out_of_range(format: DecimalFormat) -> i64 {
+pub(super) fn decimal_out_of_range(format: DecimalFormat) -> i64 {
     let emin = 1 - i64::from(format.emax);
     let reach = i64::from(format.emax).max(i64::from(format.precision) - emin);
     4 * (reach + 3)

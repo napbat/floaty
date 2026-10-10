@@ -20,7 +20,7 @@ use floaty::{D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd};
 use floaty_verify::intel_decimal::{Bid32, Bid64, Bid128, Format as IntelFormat};
 use floaty_verify::mpfr::decimal::{DecimalFormat, TO_DECIMAL_BEHAVIORS};
 use floaty_verify::operations::check;
-use floaty_verify::operations::elementary::Function;
+use floaty_verify::operations::elementary::{Bivariate, Function};
 use floaty_verify::random::SplitMix64;
 use rug::float::Round;
 use rug::{Float as BigFloat, Integer};
@@ -601,9 +601,65 @@ fn atan2_pairs(format: DecimalFormat, random: &mut SplitMix64, count: usize) -> 
     pairs
 }
 
-/// Checks `atan2` and `atan2Pi` of one decimal width in BID and in DPD.
-macro_rules! check_atan2_width {
-    ($bid:ty, $dpd:ty, $intel:ty, $bits:ty, $count:literal, $seed:literal) => {{
+/// Returns pairs of `pow` and `powr`, `x` first, as BID encodings: bases
+/// with exact powers and roots, such as 4, 9, 32, 1/2, and 1/25, bases next
+/// to 1, and negative bases, against integer, half, quarter, fifth, tenth,
+/// huge, and tiny exponents.
+fn power_pairs(format: DecimalFormat) -> Vec<(u128, u128)> {
+    let number = |negative, coefficient: u64, exponent| {
+        bid(format, &Number::new(negative, coefficient, exponent))
+    };
+    let mut bases: Vec<u128> = [
+        (2, 0),
+        (3, 0),
+        (4, 0),
+        (9, 0),
+        (32, 0),
+        (5, -1),
+        (4, -2),
+        (25, -1),
+        (1, 2),
+        (1_000_001, -6),
+        (9_999_999, -7),
+    ]
+    .map(|(coefficient, exponent)| number(false, coefficient, exponent))
+    .to_vec();
+    bases.extend([number(true, 2, 0), number(true, 8, 0), number(true, 5, -1)]);
+    let mut exponents: Vec<u128> = (1..=3)
+        .flat_map(|n| [number(false, n, 0), number(true, n, 0)])
+        .collect();
+    exponents.extend(
+        [
+            (5, -1),
+            (25, -2),
+            (15, -1),
+            (2, -1),
+            (1, -1),
+            (25, -1),
+            (1, 20),
+            (1, -30),
+            (3_333_333, -7),
+            (1_000, 0),
+        ]
+        .iter()
+        .flat_map(|&(coefficient, exponent)| {
+            [
+                number(false, coefficient, exponent),
+                number(true, coefficient, exponent),
+            ]
+        }),
+    );
+    bases
+        .iter()
+        .flat_map(|&x| exponents.iter().map(move |&y| (x, y)))
+        .collect()
+}
+
+/// Checks the functions of `$functions` of one decimal width in BID and in
+/// DPD on the pairs of [`atan2_pairs`] and, for `pow` and `powr`, of
+/// [`power_pairs`].
+macro_rules! check_pairs_width {
+    ($functions:expr, $bid:ty, $dpd:ty, $intel:ty, $bits:ty, $count:literal, $seed:literal) => {{
         let format = DecimalFormat::of::<$bid>();
         let mut random = SplitMix64::new($seed);
         let narrow = |bits: u128| <$bits>::try_from(bits).expect("the encoding has the width");
@@ -612,14 +668,19 @@ macro_rules! check_atan2_width {
             let dpd = <$intel as IntelFormat>::to_dpd(bits);
             (<$bid>::from_bits(bits), <$dpd>::from_bits(dpd))
         };
-        let pairs: Vec<_> = atan2_pairs(format, &mut random, $count)
+        let functions: &[Bivariate] = $functions;
+        let mut pairs = atan2_pairs(format, &mut random, $count);
+        if functions.contains(&Bivariate::Pow) {
+            pairs.extend(power_pairs(format));
+        }
+        let pairs: Vec<_> = pairs
             .into_iter()
-            .map(|(y, x)| (both(y), both(x)))
+            .map(|(first, second)| (both(first), both(second)))
             .collect();
         for env in &TO_DECIMAL_BEHAVIORS {
-            for &((y_bid, y_dpd), (x_bid, x_dpd)) in &pairs {
-                check::check_decimal_atan2(y_bid, x_bid, format, env);
-                check::check_decimal_atan2(y_dpd, x_dpd, format, env);
+            for &((first_bid, first_dpd), (second_bid, second_dpd)) in &pairs {
+                check::check_decimal_bivariate(first_bid, second_bid, functions, format, env);
+                check::check_decimal_bivariate(first_dpd, second_dpd, functions, format, env);
             }
         }
     }};
@@ -627,7 +688,16 @@ macro_rules! check_atan2_width {
 
 #[test]
 fn atan2_of_every_width() {
-    check_atan2_width!(D32Bid, D32Dpd, Bid32, u32, 500, 0xA2_D032);
-    check_atan2_width!(D64Bid, D64Dpd, Bid64, u64, 500, 0xA2_D064);
-    check_atan2_width!(D128Bid, D128Dpd, Bid128, u128, 500, 0xA2_D128);
+    let functions = &Bivariate::ATAN2;
+    check_pairs_width!(functions, D32Bid, D32Dpd, Bid32, u32, 500, 0xA2_D032);
+    check_pairs_width!(functions, D64Bid, D64Dpd, Bid64, u64, 500, 0xA2_D064);
+    check_pairs_width!(functions, D128Bid, D128Dpd, Bid128, u128, 500, 0xA2_D128);
+}
+
+#[test]
+fn power_of_every_width() {
+    let functions = &Bivariate::POWER;
+    check_pairs_width!(functions, D32Bid, D32Dpd, Bid32, u32, 500, 0xB0_D032);
+    check_pairs_width!(functions, D64Bid, D64Dpd, Bid64, u64, 500, 0xB0_D064);
+    check_pairs_width!(functions, D128Bid, D128Dpd, Bid128, u128, 500, 0xB0_D128);
 }

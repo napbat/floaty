@@ -62,6 +62,8 @@ macro_rules! steps_with {
             atan_pi_with();
             atan2_with(x: Self);
             atan2_pi_with(x: Self);
+            pow_with(y: Self);
+            powr_with(y: Self);
             compound_with(n: i64);
             hypot_with(other: Self);
             pown_with(n: i64);

@@ -175,34 +175,34 @@ macro_rules! check_elementary {
     };
 }
 
-/// Checks `atan2` and `atan2Pi` of `Lanes` of one type on the lanes `y` and
-/// `x`, `y` first.
+/// Checks the functions of two arguments of `Lanes` of one type on the lanes
+/// `first` and `second`: `atan2`, `atan2_pi`, `pow`, and `powr`.
 macro_rules! check_atan2 {
-    ($context:expr, $y:expr, $x:expr, $env:expr) => {{
-        let (context, y, x, env) = ($context, $y, $x, $env);
-        check(
-            &|| context("atan2"),
-            y,
-            env,
-            (&|lanes| lanes.atan2(Lanes::new(x)), &|lanes, env| {
-                lanes.atan2_with(Lanes::new(x), env)
-            }),
-            (&|y, lane| y.atan2(x[lane]), &|y, lane, env| {
-                y.atan2_with(x[lane], env)
-            }),
-        );
-        check(
-            &|| context("atan2_pi"),
-            y,
-            env,
-            (&|lanes| lanes.atan2_pi(Lanes::new(x)), &|lanes, env| {
-                lanes.atan2_pi_with(Lanes::new(x), env)
-            }),
-            (&|y, lane| y.atan2_pi(x[lane]), &|y, lane, env| {
-                y.atan2_pi_with(x[lane], env)
-            }),
+    ($context:expr, $first:expr, $second:expr, $env:expr) => {{
+        let (context, first, second, env) = ($context, $first, $second, $env);
+        check_atan2!(
+            @each context, first, second, env;
+            atan2, atan2_with;
+            atan2_pi, atan2_pi_with;
+            pow, pow_with;
+            powr, powr_with
         );
     }};
+    (@each $context:ident, $first:ident, $second:ident, $env:ident; $($name:ident, $name_with:ident);*) => {
+        $(
+            check(
+                &|| $context(stringify!($name)),
+                $first,
+                $env,
+                (&|lanes| lanes.$name(Lanes::new($second)), &|lanes, env| {
+                    lanes.$name_with(Lanes::new($second), env)
+                }),
+                (&|value, lane| value.$name($second[lane]), &|value, lane, env| {
+                    value.$name_with($second[lane], env)
+                }),
+            );
+        )*
+    };
 }
 
 /// Checks the functions of `Lanes` of one binary type and lane count

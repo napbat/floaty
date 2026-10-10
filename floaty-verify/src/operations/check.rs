@@ -404,50 +404,53 @@ pub fn check_decimal_elementary<S: Standard<W>, const W: usize>(
     }
 }
 
-/// Checks `atan2` and `atan2Pi` on one pair of values, `y` first.
+/// Checks each function of `functions` on one pair of values, in the operand
+/// order of IEEE 754-2019: `y` first for `atan2`, and `x` first for `pow`.
 ///
 /// # Panics
 ///
 /// Panics when floaty differs from the oracle.
-pub fn check_atan2<S: Standard<W>, const W: usize>(
-    y: Float<S, W>,
-    x: Float<S, W>,
+pub fn check_bivariate<S: Standard<W>, const W: usize>(
+    first: Float<S, W>,
+    second: Float<S, W>,
+    functions: &[Bivariate],
     format: &Format,
     env: &Env,
 ) {
-    let (left, right) = (Operand::<8>::of(y), Operand::<8>::of(x));
-    for function in Bivariate::ALL {
+    let (left, right) = (Operand::<8>::of(first), Operand::<8>::of(second));
+    for &function in functions {
         check_float(
-            function.floaty(y, x, *env),
-            &elementary::expected_atan2(function, &left, &right, format, env),
-            &|| format!("{function:?} {y:?} {x:?} {env:?}"),
+            function.floaty(first, second, *env),
+            &elementary::expected_bivariate(function, &left, &right, format, env),
+            &|| format!("{function:?} {first:?} {second:?} {env:?}"),
         );
     }
 }
 
-/// Checks `atan2` and `atan2Pi` on one pair of values of a decimal format,
-/// `y` first.
+/// Checks each function of `functions` on one pair of values of a decimal
+/// format, in the operand order of IEEE 754-2019.
 ///
 /// # Panics
 ///
 /// Panics when floaty differs from the oracle.
-pub fn check_decimal_atan2<S: Standard<W>, const W: usize>(
-    y: Float<S, W>,
-    x: Float<S, W>,
+pub fn check_decimal_bivariate<S: Standard<W>, const W: usize>(
+    first: Float<S, W>,
+    second: Float<S, W>,
+    functions: &[Bivariate],
     format: DecimalFormat,
     env: &Env,
 ) {
-    let (left, right) = (Operand::<2>::of(y), Operand::<2>::of(x));
-    for function in Bivariate::ALL {
-        let (result, flags) = function.floaty(y, x, *env);
+    let (left, right) = (Operand::<2>::of(first), Operand::<2>::of(second));
+    for &function in functions {
+        let (result, flags) = function.floaty(first, second, *env);
         assert!(
             result.is_canonical(),
-            "{function:?} {y:?} {x:?} {env:?}: {result:?} is canonical"
+            "{function:?} {first:?} {second:?} {env:?}: {result:?} is canonical"
         );
         assert_eq!(
             (DecimalValue::from_decoded(result.decode::<2>()), flags),
-            elementary::expected_decimal_atan2(function, &left, &right, format, env),
-            "{function:?} {y:?} {x:?} {env:?}"
+            elementary::expected_decimal_bivariate(function, &left, &right, format, env),
+            "{function:?} {first:?} {second:?} {env:?}"
         );
     }
 }

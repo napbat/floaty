@@ -27,8 +27,8 @@
 //! normal power of two, the remainders, and the steps that have no
 //! instruction: the exponentials, the logarithms, the hyperbolic functions,
 //! the trigonometric functions and their forms scaled by pi, the inverse
-//! trigonometric functions, `atan2`, `atan2_pi`, `compound`, `hypot`, `pown`,
-//! `rootn`, and `reciprocal_sqrt`.
+//! trigonometric functions, `atan2`, `atan2_pi`, `pow`, `powr`, `compound`,
+//! `hypot`, `pown`, `rootn`, and `reciprocal_sqrt`.
 //! A step that reads a bit of a NaN that the lane can hold otherwise than
 //! the engine also taints its lane: `copy_sign` from a NaN `sign`, and
 //! `min_num` and `max_num` of a signaling NaN.
@@ -428,6 +428,8 @@ impl<I: Isa, F: Format<Native = N>, N: Native> Steps for Lane<I, F> {
         atan_pi();
         atan2(_x: Self);
         atan2_pi(_x: Self);
+        pow(_y: Self);
+        powr(_y: Self);
         compound(_n: i64);
         hypot(_other: Self);
         pown(_n: i64);

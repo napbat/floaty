@@ -2,9 +2,10 @@
 //! e, 2, and 10, their forms shifted by one, `b^x - 1` and `log_b(1 + x)`,
 //! the hyperbolic functions and their inverses, the trigonometric functions
 //! `sin`, `cos`, and `tan`, the functions scaled by pi, `sinPi`, `cosPi`,
-//! and `tanPi`, and the inverse trigonometric functions and their forms
-//! scaled by pi, correctly rounded in every rounding direction for the
-//! binary and the decimal formats. Also `compound` for the binary formats.
+//! and `tanPi`, the inverse trigonometric functions and their forms scaled
+//! by pi, `atan2`, `atan2Pi`, `pow`, and `powr`, correctly rounded in every
+//! rounding direction for the binary and the decimal formats. Also
+//! `compound` for the binary formats.
 //!
 //! The functions evaluate in ball arithmetic: a center and a radius that
 //! bounds the distance to the true value. Every step truncates its center
@@ -40,27 +41,32 @@
 //! - An argument far past the range of the format gives an overflow or an
 //!   underflow.
 //!
-//! The modules `hyperbolic`, `circular`, `trigonometric`, and `inverse`
-//! state their own arguments of this kind. The module `reduction` reduces
-//! the arguments of `sin`, `cos`, and `tan` against the bits of 2/pi.
+//! The modules `hyperbolic`, `circular`, `trigonometric`, `inverse`,
+//! `atan2`, and `power` state their own arguments of this kind. The module
+//! `reduction` reduces the arguments of `sin`, `cos`, and `tan` against the
+//! bits of 2/pi.
 //!
-//! `compound(x, n) = e^(n ln(1 + x))` has a rational result, which can lie
-//! on a grid. Its module computes those results without a ball. The module
-//! `atan2` gives the functions of two arguments.
+//! `compound(x, n) = e^(n ln(1 + x))` and `|x|^y = e^(y ln |x|)` of `pow`
+//! and `powr` have rational results, which can lie on a grid. Their modules
+//! compute those results without a ball. The module `bivariate` gives the
+//! functions of two arguments.
 
 mod atan2;
 mod ball;
+mod bivariate;
 mod circular;
 mod compound;
 mod constants;
 mod exact;
 mod hyperbolic;
 mod inverse;
+mod power;
 mod reduction;
 mod series;
 mod trigonometric;
 
-pub(crate) use self::atan2::Outcome;
+pub use self::bivariate::Bivariate;
+pub(crate) use self::bivariate::{Outcome, bivariate, is_one};
 pub(crate) use self::compound::compound;
 
 use core::cmp::Ordering;
@@ -105,15 +111,6 @@ elementary!(
     7 => 14, 28,
     8 => 16, 32
 );
-
-/// A function of two arguments of IEEE 754-2019 section 9.2.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Bivariate {
-    /// `atan2(y, x)`: the angle of the point `(x, y)`.
-    Atan2,
-    /// `atan2Pi(y, x)`: `atan2(y, x) / pi`.
-    Atan2Pi,
-}
 
 /// An elementary function of IEEE 754-2019 section 9.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -519,18 +516,6 @@ pub(crate) fn angle<L: Elementary>(
     inverse::angle::<L>(eighths, scaled, target)
 }
 
-/// Returns `function` of two operands that are not NaNs, in the order of
-/// IEEE 754-2019: `y` first. The value is exact, or truncated for the
-/// rounding routine of the format as [`evaluate`] truncates a value.
-pub(crate) fn bivariate<L: Elementary>(
-    function: Bivariate,
-    y: &Unpacked<L>,
-    x: &Unpacked<L>,
-    target: &Target,
-) -> Outcome<L::Second> {
-    atan2::atan2::<L>(function == Bivariate::Atan2Pi, y, x, target)
-}
-
 /// Returns `b^x`, or `b^x - 1` when `minus_one` is set.
 fn exponential<L: Elementary>(
     x: &Argument<L>,
@@ -738,9 +723,17 @@ fn past(leading: i64, limit: u64, radix: Radix) -> bool {
 /// Evaluates a function at the first working width, and at the second when
 /// the first cannot decide the truncation.
 fn ziv<L: Elementary, F: Function>(function: &F, target: &Target) -> Unrounded<L::Second> {
-    let first = function
-        .ball::<L::First>()
-        .and_then(|ball| truncate(&ball, target));
+    ziv_from::<L, F>(function.ball::<L::First>(), function, target)
+}
+
+/// Evaluates a function from its ball `first` at the first working width,
+/// and at the second width when `first` cannot decide the truncation.
+fn ziv_from<L: Elementary, F: Function>(
+    first: Option<Ball<L::First>>,
+    function: &F,
+    target: &Target,
+) -> Unrounded<L::Second> {
+    let first = first.and_then(|ball| truncate(&ball, target));
     if let Some(Unrounded {
         negative,
         exponent,

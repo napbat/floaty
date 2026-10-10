@@ -36,8 +36,9 @@
 
 mod atan2;
 mod decimal;
+mod power;
 
-pub use self::atan2::{Bivariate, expected_atan2, expected_decimal_atan2};
+pub use self::atan2::{Bivariate, expected_bivariate, expected_decimal_bivariate};
 pub use self::decimal::expected_decimal;
 
 use core::cmp::Ordering;

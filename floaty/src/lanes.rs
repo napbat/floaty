@@ -656,6 +656,35 @@ impl<S: Standard<W>, const W: usize, M: Mode, const N: usize> Lanes<Float<S, W, 
         self.zip_with(x, |y, x| y.atan2_pi_with(x, behavior))
     }
 
+    /// Returns `x^y` of each pair of lanes `x` of `self` and `y` of `y`, with
+    /// the default mode.
+    #[must_use]
+    pub fn pow(self, y: Self) -> Self {
+        self.zip(y, Float::pow)
+    }
+
+    /// Returns `x^y` of each pair of lanes, as [`Float::pow_with`] does, and
+    /// the union of the flags.
+    #[must_use]
+    pub fn pow_with(self, y: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(y, |x, y| x.pow_with(y, behavior))
+    }
+
+    /// Returns `e^(y ln x)` of each pair of lanes, with the default mode.
+    #[must_use]
+    pub fn powr(self, y: Self) -> Self {
+        self.zip(y, Float::powr)
+    }
+
+    /// Returns `e^(y ln x)` of each pair of lanes, as [`Float::powr_with`]
+    /// does, and the union of the flags.
+    #[must_use]
+    pub fn powr_with(self, y: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(y, |x, y| x.powr_with(y, behavior))
+    }
+
     /// Returns the absolute value of each lane. Only the sign bit changes.
     #[must_use]
     pub fn abs(self) -> Self {
