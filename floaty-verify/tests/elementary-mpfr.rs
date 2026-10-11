@@ -27,7 +27,7 @@ use floaty_verify::encodings::{IntegerBit, Layout, boundary_encodings, to_limbs}
 use floaty_verify::mpfr::{Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
 use floaty_verify::operations::check;
-use floaty_verify::operations::elementary::Function;
+use floaty_verify::operations::elementary::{Function, half_pi_multiples};
 use floaty_verify::random::SplitMix64;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
@@ -356,22 +356,47 @@ fn inverse_arguments(layout: Layout) -> Vec<Integer> {
         .collect()
 }
 
-/// Returns arguments of `sin`, `cos`, and `tan` with two neighbors on each
-/// side: the multiples `±k pi / 2` up to `k = 8`, next to which the reduction
-/// keeps the fewest digits, and `±2^(2^22)`, past the bits of 2/pi of
-/// floaty, where the layout holds it.
+/// Returns arguments of `sin`, `cos`, and `tan` with neighbors on each side:
+/// the multiples `±k pi / 2` up to `k = 8`, next to which the reduction
+/// keeps the fewest digits, the multiples nearest an argument with a
+/// fraction in the binades `2^b` of [`fraction_binades`], from
+/// [`half_pi_multiples`], and `±2^(2^22)`, past the bits of 2/pi of floaty,
+/// where the layout holds it.
 fn circular_arguments(layout: Layout) -> Vec<Integer> {
-    let working = layout.precision() + 64;
+    let precision = layout.precision();
+    let working = 4 * precision + 128;
     let pi = BigFloat::with_val(working, rug::float::Constant::Pi);
-    let mut values: Vec<BigFloat> = (1..=8_u32)
-        .map(|k| BigFloat::with_val(working, &pi * k) >> 1u32)
+    let mut values: Vec<(BigFloat, usize)> = (1..=8_u32)
+        .map(|k| (BigFloat::with_val(working, &pi * k) >> 1u32, 2))
         .collect();
-    values.push(BigFloat::with_val(working, 1) << (1_u32 << 22));
+    for binade in fraction_binades(precision) {
+        let power = |exponent: i64| {
+            BigFloat::with_val(working, 1) << i32::try_from(exponent).expect("a binade fits")
+        };
+        let unit = power(binade - i64::from(precision) + 1);
+        let multiples = half_pi_multiples(&unit, &power(binade), &power(binade + 1), working);
+        values.extend(multiples.into_iter().map(|multiple| (multiple, 1)));
+    }
+    values.push((BigFloat::with_val(working, 1) << (1_u32 << 22), 2));
     values
         .iter()
-        .flat_map(|value| [value.clone(), -value.clone()])
-        .flat_map(|value| around(layout, &value, 2))
+        .flat_map(|(value, count)| [(value.clone(), *count), (-value.clone(), *count)])
+        .flat_map(|(value, count)| around(layout, &value, count))
         .collect()
+}
+
+/// Returns the exponents `b` of the binades `[2^b, 2^(b + 1))` whose
+/// arguments have a fraction, from 0 to `p - 2`: the lowest two, the
+/// middle, and the highest two, where a reduction by the product with a
+/// ball of `2 / pi` would lose the most bits to the size of the argument.
+fn fraction_binades(precision: u32) -> Vec<i64> {
+    let top = i64::from(precision) - 2;
+    let mut binades: Vec<i64> = [0, 1, top / 2, top - 1, top]
+        .into_iter()
+        .filter(|binade| (0..=top).contains(binade))
+        .collect();
+    binades.dedup();
+    binades
 }
 
 /// Returns pairs of an argument and an exponent of `compound`: every

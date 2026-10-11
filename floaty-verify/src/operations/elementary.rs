@@ -833,3 +833,47 @@ fn common_truncation(low: &BigFloat, high: &BigFloat, precision: u32) -> Option<
         sticky: true,
     })
 }
+
+/// Returns the multiples `k pi / 2` from `low` up to `high` whose `k` is the
+/// denominator of a convergent of `pi / (2 unit)`. A convergent `m / k`
+/// gives the least `|k pi / 2 - m unit|` of any smaller `k`, so these
+/// multiples lie nearest a point of the grid of `unit`: the arguments
+/// whose reduction cancels the most bits. `precision` must exceed twice the
+/// bits of the largest `k`.
+///
+/// # Panics
+///
+/// Panics when `unit` is not a finite positive number, whose partial
+/// quotients are not finite.
+#[must_use]
+pub fn half_pi_multiples(
+    unit: &BigFloat,
+    low: &BigFloat,
+    high: &BigFloat,
+    precision: u32,
+) -> Vec<BigFloat> {
+    let half_pi = BigFloat::with_val(precision, rug::float::Constant::Pi) >> 1u32;
+    let mut value = BigFloat::with_val(precision, &half_pi / unit);
+    // The denominators of the last two convergents, from `k_-2 = 1` and
+    // `k_-1 = 0`.
+    let (mut before, mut last) = (Integer::from(1), Integer::ZERO);
+    let mut multiples = Vec::new();
+    loop {
+        let quotient = value.clone().floor();
+        let denominator =
+            quotient.to_integer().expect("a partial quotient is finite") * &last + &before;
+        before = core::mem::replace(&mut last, denominator);
+        let multiple = BigFloat::with_val(precision, &half_pi * &last);
+        if multiple >= *high {
+            return multiples;
+        }
+        if multiple >= *low {
+            multiples.push(multiple);
+        }
+        let fraction = value - quotient;
+        if fraction.is_zero() {
+            return multiples;
+        }
+        value = fraction.recip();
+    }
+}

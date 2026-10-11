@@ -922,6 +922,21 @@ The minimum supported Rust version is 1.89. The crate uses edition 2024.
 
 ## Limitations
 
+- Correct rounding of the elementary functions rests on a heuristic, not a
+  proof. A function evaluates a ball at twice the bits of the storage of
+  the format, and then at four times. If the second ball does not decide
+  the rounding, the result rounds from the center of the ball, with no
+  flag. No input is known to do this. A build that records the margin of
+  each ball, the bits by which its radius could grow and still decide,
+  gave these results:
+  - Every binary32 input of each function of one argument: the first ball
+    decides, with at least 46 bits of margin.
+  - 6.8 billion samples of every function on binary16 to binary512 and
+    decimal32 to decimal128, with the published worst cases: the second
+    ball decides, with at least 84 bits of margin.
+  - The heuristic that the bits after a rounding point act as random bits
+    gives at least 49 bits of margin over every input and every pair of
+    those formats. binary64 and decimal64 have the least.
 - `sin`, `cos`, and `tan` of an argument of `2^(2^22)` or more give the
   default NaN and signal invalid. floaty holds the bits of 2/pi that every
   finite value of binary512 and decimal128 needs, and only a binary format

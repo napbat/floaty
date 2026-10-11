@@ -20,9 +20,10 @@ use floaty::{D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd};
 use floaty_verify::intel_decimal::{Bid32, Bid64, Bid128, Format as IntelFormat};
 use floaty_verify::mpfr::decimal::{DecimalFormat, TO_DECIMAL_BEHAVIORS};
 use floaty_verify::operations::check;
-use floaty_verify::operations::elementary::{Bivariate, Function};
+use floaty_verify::operations::elementary::{Bivariate, Function, half_pi_multiples};
 use floaty_verify::random::SplitMix64;
 use rug::float::Round;
+use rug::ops::Pow;
 use rug::{Float as BigFloat, Integer};
 
 /// A decimal value `±coefficient * 10^exponent`.
@@ -331,17 +332,45 @@ fn inverse_arguments(format: DecimalFormat) -> Vec<Number> {
 
 /// Returns arguments of `sin`, `cos`, and `tan` next to the multiples
 /// `±k pi / 2` up to `k = 8`, with two neighbors on each side, where the
-/// reduction keeps the fewest digits.
+/// reduction keeps the fewest digits, and with one neighbor the multiples
+/// nearest an argument with a fraction in the decades of
+/// [`fraction_decades`], from [`half_pi_multiples`].
 fn circular_arguments(format: DecimalFormat) -> Vec<Number> {
-    let working = 4 * format.precision + 64;
+    let working = 12 * format.precision + 128;
     let pi = BigFloat::with_val(working, rug::float::Constant::Pi);
-    let mut numbers = Vec::new();
-    for k in 1..=8_u32 {
-        let multiple = BigFloat::with_val(working, &pi * k) >> 1u32;
-        numbers.extend(around(format, &multiple, 2));
-        numbers.extend(around(format, &-multiple, 2));
+    let mut values: Vec<(BigFloat, u32)> = (1..=8_u32)
+        .map(|k| (BigFloat::with_val(working, &pi * k) >> 1u32, 2))
+        .collect();
+    let power = |exponent: i64| {
+        BigFloat::with_val(working, 10).pow(i32::try_from(exponent).expect("a decade fits"))
+    };
+    for decade in fraction_decades(format.precision) {
+        let unit = power(decade - i64::from(format.precision) + 1);
+        let multiples = half_pi_multiples(&unit, &power(decade), &power(decade + 1), working);
+        values.extend(multiples.into_iter().map(|multiple| (multiple, 1)));
     }
-    numbers
+    values
+        .iter()
+        .flat_map(|(value, steps)| {
+            let mut numbers = around(format, value, *steps);
+            numbers.extend(around(format, &-value.clone(), *steps));
+            numbers
+        })
+        .collect()
+}
+
+/// Returns the exponents `d` of the decades `[10^d, 10^(d + 1))` whose
+/// arguments have a fraction, from 0 to `p - 2`: the lowest two, the
+/// middle, and the highest two, where a reduction by the product with a
+/// ball of `2 / pi` would lose the most bits to the size of the argument.
+fn fraction_decades(precision: u32) -> Vec<i64> {
+    let top = i64::from(precision) - 2;
+    let mut decades: Vec<i64> = [0, 1, top / 2, top - 1, top]
+        .into_iter()
+        .filter(|decade| (0..=top).contains(decade))
+        .collect();
+    decades.dedup();
+    decades
 }
 
 /// Bad cases of `exp` for decimal64, as coefficient and exponent, from

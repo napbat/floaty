@@ -25,7 +25,9 @@
 //! The hardest binary64 cases that Lefèvre and Muller list ("Some Worst
 //! Cases for the Table Maker's Dilemma", 2000) need fewer than 160. No input
 //! of any format is known to need more than the second precision. If one
-//! did, the result would round from the center of the second ball.
+//! did, the result would round from the center of the second ball. The
+//! Limitations section of the README gives the margins that a measurement
+//! found.
 //!
 //! A ball cannot decide a value that lies closer to a point of the grid than
 //! its radius. So four kinds of argument take their truncation without a
