@@ -20,7 +20,7 @@ use floaty::{D32Bid, D32Dpd, D64Bid, D64Dpd, D128Bid, D128Dpd};
 use floaty_verify::intel_decimal::{Bid32, Bid64, Bid128, Format as IntelFormat};
 use floaty_verify::mpfr::decimal::{DecimalFormat, TO_DECIMAL_BEHAVIORS};
 use floaty_verify::operations::check;
-use floaty_verify::operations::elementary::{Bivariate, Function, half_pi_multiples};
+use floaty_verify::operations::elementary::{Bivariate, Function, half_pi_multiples, worst_cases};
 use floaty_verify::random::SplitMix64;
 use rug::float::Round;
 use rug::ops::Pow;
@@ -373,52 +373,6 @@ fn fraction_decades(precision: u32) -> Vec<i64> {
     decades
 }
 
-/// Bad cases of `exp` for decimal64, as coefficient and exponent, from
-/// Lefèvre, Stehlé, and Zimmermann, "Worst Cases for the Exponential
-/// Function in the IEEE 754r decimal64 Format", JNAO 2006, slides 6 and 13
-/// to 16, <https://www.vinc17.net/research/slides/jnao2006-05.pdf>.
-const DECIMAL64_EXP_WORST_CASES: [(u64, i64); 39] = [
-    (6_581_539_478_341_669, -24),
-    (2_662_858_264_545_929, -23),
-    (3_639_588_333_766_983, -23),
-    (6_036_998_017_773_271, -23),
-    (6_638_670_361_402_304, -22),
-    (9_366_572_213_364_879, -22),
-    (7_970_613_003_079_781, -21),
-    (3_089_765_552_852_523, -20),
-    (1_302_531_956_641_873, -19),
-    (2_241_856_702_421_245, -19),
-    (7_230_293_679_121_590, -19),
-    (5_259_640_428_979_129, -18),
-    (9_407_822_313_572_878, -17),
-    (1_267_914_924_960_933, -16),
-    (5_091_077_534_282_133, -16),
-    (3_359_104_074_009_002, -15),
-    (1_910_511_686_234_796, -14),
-    (2_949_551_257_293_143, -13),
-    (5_879_131_381_356_093, -13),
-    (7_906_867_968_553_504, -16),
-    (1_548_443_067_391_468, -18),
-    (2_953_379_504_777_270, -16),
-    (3_897_940_992_403_028, -24),
-    (4_230_932_991_049_603, -24),
-    (4_291_382_990_792_016, -24),
-    (4_581_289_989_505_891, -24),
-    (5_999_879_998_200_072, -25),
-    (6_000_119_998_199_928, -25),
-    (1_019_999_999_994_798, -26),
-    (1_039_999_999_994_592, -26),
-    (1_099_999_999_999_395, -27),
-    (1_199_999_999_999_280, -27),
-    (1_199_999_999_999_928, -28),
-    (1_399_999_999_999_902, -28),
-    (1_999_999_999_999_980, -29),
-    (2_999_999_999_999_955, -29),
-    (1_999_999_999_999_998, -30),
-    (3_999_999_999_999_992, -30),
-    (9_999_999_999_999_995, -31),
-];
-
 /// Returns the BID encodings of the constructed arguments of a format, and
 /// of the positive `extra` arguments, as coefficient and exponent.
 fn constructed(format: DecimalFormat, random: &mut SplitMix64, extra: &[(u64, i64)]) -> Vec<u128> {
@@ -522,7 +476,7 @@ fn decimal32_hyperbolic_and_trigonometric() {
 fn decimal64() {
     let (functions, extra) = (
         Function::EXPONENTIALS_AND_LOGARITHMS,
-        &DECIMAL64_EXP_WORST_CASES,
+        &worst_cases::DECIMAL64_EXP,
     );
     check_width!(
         functions, D64Bid, D64Dpd, Bid64, u64, 2_000, 0xDEC_E064, extra
@@ -533,7 +487,7 @@ fn decimal64() {
 fn decimal64_hyperbolic_and_trigonometric() {
     let (functions, extra) = (
         Function::HYPERBOLIC_AND_TRIGONOMETRIC,
-        &DECIMAL64_EXP_WORST_CASES,
+        &worst_cases::DECIMAL64_EXP,
     );
     check_width!(
         functions, D64Bid, D64Dpd, Bid64, u64, 2_000, 0xDEC_E064, extra

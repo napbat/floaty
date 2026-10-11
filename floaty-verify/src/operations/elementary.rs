@@ -37,6 +37,7 @@
 mod atan2;
 mod decimal;
 mod power;
+pub mod worst_cases;
 
 pub use self::atan2::{Bivariate, expected_bivariate, expected_decimal_bivariate};
 pub use self::decimal::expected_decimal;

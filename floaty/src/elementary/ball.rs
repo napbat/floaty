@@ -451,6 +451,20 @@ impl<W: Widen> Ball<W> {
         }
     }
 
+    /// Returns the ball with its radius times `2^shift`, for the margins
+    /// of the test feature `record-margins`.
+    #[cfg(feature = "record-margins")]
+    #[must_use]
+    pub(super) fn radius_shifted(self, shift: i64) -> Self {
+        Self {
+            radius: Radius {
+                exponent: self.radius.exponent + shift,
+                ..self.radius
+            },
+            ..self
+        }
+    }
+
     /// Returns an upper bound on the magnitude of every value of the ball.
     pub(super) fn upper(&self) -> Radius {
         self.center.upper().add(self.radius)

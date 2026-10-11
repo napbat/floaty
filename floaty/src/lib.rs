@@ -50,6 +50,9 @@ extern crate std;
 pub mod block;
 pub mod env;
 pub mod format;
+#[cfg(feature = "record-margins")]
+#[doc(hidden)]
+pub mod margins;
 
 mod binary;
 mod decimal;
