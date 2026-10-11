@@ -25,7 +25,9 @@
 //! The hardest binary64 cases that Lefèvre and Muller list ("Some Worst
 //! Cases for the Table Maker's Dilemma", 2000) need fewer than 160. No input
 //! of any format is known to need more than the second precision. If one
-//! did, the result would round from the center of the second ball.
+//! did, the result would round from the center of the second ball. The
+//! test feature `record-margins` records the margin of each ball, which
+//! `floaty-verify/tests/elementary-margins.rs` checks.
 //!
 //! A ball cannot decide a value that lies closer to a point of the grid than
 //! its radius. So four kinds of argument take their truncation without a
@@ -60,6 +62,8 @@ mod constants;
 mod exact;
 mod hyperbolic;
 mod inverse;
+#[cfg(feature = "record-margins")]
+mod margin;
 mod power;
 mod reduction;
 mod series;
@@ -733,6 +737,8 @@ fn ziv_from<L: Elementary, F: Function>(
     function: &F,
     target: &Target,
 ) -> Unrounded<L::Second> {
+    #[cfg(feature = "record-margins")]
+    let recorder = margin::Recorder::start(first.as_ref(), target);
     let first = first.and_then(|ball| truncate(&ball, target));
     if let Some(Unrounded {
         negative,
@@ -741,6 +747,10 @@ fn ziv_from<L: Elementary, F: Function>(
         sticky,
     }) = first
     {
+        #[cfg(feature = "record-margins")]
+        if let Some(recorder) = recorder {
+            recorder.decided(|| function.ball::<L::Second>(), target);
+        }
         return Unrounded {
             negative,
             exponent,
@@ -751,6 +761,10 @@ fn ziv_from<L: Elementary, F: Function>(
     let ball = function
         .ball::<L::Second>()
         .expect("the second width bounds every argument that the first one takes");
+    #[cfg(feature = "record-margins")]
+    if let Some(recorder) = recorder {
+        recorder.undecided(&ball, target);
+    }
     truncate(&ball, target).unwrap_or_else(|| {
         truncate(&ball.center_only(), target)
             .expect("the center of a result is a nonzero number of the working range")

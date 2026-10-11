@@ -19,6 +19,11 @@ std = []
 # `host_levels` report the sets. A value that the processor does not have
 # panics.
 override-host-level = ["std"]
+# For tests only: the module `margins` records, for each evaluation of an
+# elementary function on a thread that asks for it, the margins by which its
+# balls decide the rounding. The record of a thread needs the standard
+# library.
+record-margins = ["std"]
 
 [lints]
 workspace = true

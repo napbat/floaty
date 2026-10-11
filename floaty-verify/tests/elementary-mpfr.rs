@@ -27,7 +27,7 @@ use floaty_verify::encodings::{IntegerBit, Layout, boundary_encodings, to_limbs}
 use floaty_verify::mpfr::{Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
 use floaty_verify::operations::check;
-use floaty_verify::operations::elementary::Function;
+use floaty_verify::operations::elementary::{Function, half_pi_multiples, worst_cases};
 use floaty_verify::random::SplitMix64;
 use rug::integer::Order;
 use rug::{Float as BigFloat, Integer};
@@ -356,22 +356,47 @@ fn inverse_arguments(layout: Layout) -> Vec<Integer> {
         .collect()
 }
 
-/// Returns arguments of `sin`, `cos`, and `tan` with two neighbors on each
-/// side: the multiples `±k pi / 2` up to `k = 8`, next to which the reduction
-/// keeps the fewest digits, and `±2^(2^22)`, past the bits of 2/pi of
-/// floaty, where the layout holds it.
+/// Returns arguments of `sin`, `cos`, and `tan` with neighbors on each side:
+/// the multiples `±k pi / 2` up to `k = 8`, next to which the reduction
+/// keeps the fewest digits, the multiples nearest an argument with a
+/// fraction in the binades `2^b` of [`fraction_binades`], from
+/// [`half_pi_multiples`], and `±2^(2^22)`, past the bits of 2/pi of floaty,
+/// where the layout holds it.
 fn circular_arguments(layout: Layout) -> Vec<Integer> {
-    let working = layout.precision() + 64;
+    let precision = layout.precision();
+    let working = 4 * precision + 128;
     let pi = BigFloat::with_val(working, rug::float::Constant::Pi);
-    let mut values: Vec<BigFloat> = (1..=8_u32)
-        .map(|k| BigFloat::with_val(working, &pi * k) >> 1u32)
+    let mut values: Vec<(BigFloat, usize)> = (1..=8_u32)
+        .map(|k| (BigFloat::with_val(working, &pi * k) >> 1u32, 2))
         .collect();
-    values.push(BigFloat::with_val(working, 1) << (1_u32 << 22));
+    for binade in fraction_binades(precision) {
+        let power = |exponent: i64| {
+            BigFloat::with_val(working, 1) << i32::try_from(exponent).expect("a binade fits")
+        };
+        let unit = power(binade - i64::from(precision) + 1);
+        let multiples = half_pi_multiples(&unit, &power(binade), &power(binade + 1), working);
+        values.extend(multiples.into_iter().map(|multiple| (multiple, 1)));
+    }
+    values.push((BigFloat::with_val(working, 1) << (1_u32 << 22), 2));
     values
         .iter()
-        .flat_map(|value| [value.clone(), -value.clone()])
-        .flat_map(|value| around(layout, &value, 2))
+        .flat_map(|(value, count)| [(value.clone(), *count), (-value.clone(), *count)])
+        .flat_map(|(value, count)| around(layout, &value, count))
         .collect()
+}
+
+/// Returns the exponents `b` of the binades `[2^b, 2^(b + 1))` whose
+/// arguments have a fraction, from 0 to `p - 2`: the lowest two, the
+/// middle, and the highest two, where a reduction by the product with a
+/// ball of `2 / pi` would lose the most bits to the size of the argument.
+fn fraction_binades(precision: u32) -> Vec<i64> {
+    let top = i64::from(precision) - 2;
+    let mut binades: Vec<i64> = [0, 1, top / 2, top - 1, top]
+        .into_iter()
+        .filter(|binade| (0..=top).contains(binade))
+        .collect();
+    binades.dedup();
+    binades
 }
 
 /// Returns pairs of an argument and an exponent of `compound`: every
@@ -455,69 +480,6 @@ fn check_format<S: Standard<W>, const W: usize>(
     }
 }
 
-/// The worst cases of `exp` for binary64 of Lefèvre and Muller, "Some Worst
-/// Cases for The Table Maker's Dilemma",
-/// <https://perso.ens-lyon.fr/jean-michel.muller/TMD.html>, one for each
-/// interval of the table.
-const EXP_WORST_CASES: [u64; 33] = [
-    0xC02E_8BDB_FCD9_144E,
-    0xC017_1E0B_869B_5E79,
-    0xC000_2393_D597_6769,
-    0xBFF2_A9CA_D999_8262,
-    0xBFFC_C37E_F7DE_7501,
-    0xBFE2_2E24_FA3D_5CF9,
-    0xBFED_C2B5_DF1F_7D3D,
-    0xBFC2_90EA_09E3_6479,
-    0xBF2A_2FEF_EFD5_80DF,
-    0xBE4E_D318_EFB6_27EA,
-    0xBE04_BD46_601A_E1EF,
-    0xBD51_0000_0000_0242,
-    0xBD52_0000_0000_0288,
-    0xBCF8_0000_0000_0012,
-    0xBCC0_0000_0000_0001,
-    0x3CAF_FFFF_FFFF_FFFF,
-    0x3CFF_FFFF_FFFF_FFE0,
-    0x3DF7_FFE7_FFEE_0024,
-    0x3DF8_0017_FFED_FFDC,
-    0x3E09_E9CB_BFD6_080B,
-    0x3E5D_7A7D_8936_09E5,
-    0x3F1B_A07D_7325_0DE7,
-    0x3F4D_77FD_13D2_7FFF,
-    0x3F76_A4D1_AF9C_C989,
-    0x3FEA_CCFB_E46B_4EF0,
-    0x3FFA_CA7A_E8DA_5A7B,
-    0x3FFD_6336_A880_77AA,
-    0x4004_2EE3_C7DC_4946,
-    0x4018_3D4B_CDEB_B3F4,
-    0x4027_6E7E_5D7B_6EAC,
-    0x402A_8EAD_058B_C6B8,
-    0x4031_D5C2_DAEB_E367,
-    0x403C_44CE_0D71_6A1A,
-];
-
-/// The worst cases of `log` for binary64 from the same table.
-const LOG_WORST_CASES: [u64; 12] = [
-    0x3FF0_0000_0000_0001,
-    0x4000_0097_6581_CE4E,
-    0x4019_1A8D_FF54_0FF7,
-    0x401D_E37F_B31F_D5FC,
-    0x4022_B119_9E49_7739,
-    0x4025_5F0E_AA1B_2FC8,
-    0x4028_EDE4_92D9_6072,
-    0x4031_1867_637C_BD03,
-    0x4033_D9D7_D597_A9DD,
-    0x4037_F382_5778_AAAF,
-    0x407A_C50B_409C_8AEE,
-    0x40FD_E7CD_6751_029A,
-];
-
-/// The binary64 argument closest to a multiple of `pi / 2` relative to its
-/// size, `6381956970095103 * 2^797`, `4.687e-19` from the multiple, as
-/// J.-M. Muller lists it in "Elementary Functions: Algorithms and
-/// Implementation", 3rd edition, 2016, chapter 11. Its reduction keeps the
-/// fewest digits of any binary64 argument.
-const REDUCTION_WORST_CASE: u64 = 0x7506_AC5B_262C_A1FF;
-
 #[test]
 fn tf32_binary32_binary64_x87_and_binary128() {
     check_format(
@@ -536,10 +498,10 @@ fn tf32_binary32_binary64_x87_and_binary128() {
         (4_000, 0x0F32),
         &[],
     );
-    let worst: Vec<Integer> = EXP_WORST_CASES
+    let worst: Vec<Integer> = worst_cases::EXP
         .iter()
-        .chain(&LOG_WORST_CASES)
-        .chain(&[REDUCTION_WORST_CASE])
+        .chain(&worst_cases::LOG)
+        .chain(&[worst_cases::REDUCTION])
         .map(|&bits| Integer::from(bits))
         .collect();
     check_format(

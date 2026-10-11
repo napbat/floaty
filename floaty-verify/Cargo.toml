@@ -11,8 +11,9 @@ build = "build/main.rs"
 
 [dependencies]
 # The host-path tests run the slice paths in each instruction set of the
-# processor, which `FLOATY_HOST_LEVEL` selects.
-floaty = { workspace = true, features = ["override-host-level"] }
+# processor, which `FLOATY_HOST_LEVEL` selects. The margin tests read the
+# margins of the balls of the elementary functions.
+floaty = { workspace = true, features = ["override-host-level", "record-margins"] }
 rustc_apfloat.workspace = true
 
 # MPFR builds only for x86-64, with the other references.

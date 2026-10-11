@@ -894,8 +894,8 @@ decNumber.
 
 The normal test run tests every FP8, FP6, and FP4 operand pair of every
 operation. Ignored sweeps test every binary16 and bfloat16 operand pair of
-the host paths, every binary32 encoding, and all 318 million TestFloat
-`mulAdd` cases.
+the host paths, every binary32 encoding, all 318 million TestFloat
+`mulAdd` cases, and the margins of the balls of the elementary functions.
 MPFR computes the documented order of the slice kernels of `Lanes` one
 step at a time, in every behavior of the operation tests, for binary32,
 bfloat16, and binary16 vectors and codes, with special values among them.
@@ -922,6 +922,18 @@ The minimum supported Rust version is 1.89. The crate uses edition 2024.
 
 ## Limitations
 
+- Correct rounding of the elementary functions rests on a heuristic, not a
+  proof. A function evaluates a ball at twice the bits of the storage of
+  the format, and then at four times. If the second ball does not decide
+  the rounding, the result rounds from the center of the ball, with no
+  flag. No input is known to do this. The test feature `record-margins`
+  records the margin of each ball: the bits by which its radius can grow
+  while it still decides. `floaty-verify/tests/elementary-margins.rs`
+  checks the published worst cases and other hard cases in the normal run.
+  Its ignored sweeps check every binary32 input of each function of one
+  argument at the first ball, and random samples of every function on
+  binary16 to binary512 and decimal32 to decimal128 at both balls. They
+  print the least margin of each function.
 - `sin`, `cos`, and `tan` of an argument of `2^(2^22)` or more give the
   default NaN and signal invalid. floaty holds the bits of 2/pi that every
   finite value of binary512 and decimal128 needs, and only a binary format
