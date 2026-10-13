@@ -12,7 +12,7 @@
 
 use core::ops::RangeInclusive;
 
-use floaty::{F80, F128, Flags, Rounding, ToInt};
+use floaty::{Env, F80, F128, Flags, QuotientBits, Rounding, ToInt};
 use floaty_verify::encodings::{Layout, boundary_encodings, integer_edges, to_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
@@ -352,59 +352,173 @@ fn remainder_pairs(random: &mut SplitMix64) -> Vec<(u128, u128)> {
     pairs
 }
 
+/// The status bits that hold the low three bits of the quotient after
+/// `FPREM1` and `FPREM`: C0 holds bit 2, C3 bit 1, and C1 bit 0 (Intel SDM
+/// Volume 1, Table 8-1 on page 8-5).
+const QUOTIENT: u16 = C0 | C3 | C1;
+const C0: u16 = 1 << 8;
+const C3: u16 = 1 << 14;
+
+/// Returns C0, C3, and C1 for the low bits of a quotient.
+fn quotient_status(quotient: QuotientBits) -> u16 {
+    let bits = quotient.low_bits();
+    [(4, C0), (2, C3), (1, C1)]
+        .into_iter()
+        .filter(|&(bit, _)| bits & bit != 0)
+        .fold(0, |status, (_, flag)| status | flag)
+}
+
+/// The values of C0 and C3 before a remainder instruction: neither, and both.
+const PRESETS: [u16; 2] = [0, C0 | C3];
+
+/// A remainder of floaty with the low bits of its quotient, and the flags.
+type Recipe = fn(F80, F80, Env) -> (F80, QuotientBits, Flags);
+
+/// A remainder instruction of the harness, which runs `FPREM1` or `FPREM`
+/// until C2 is clear or for a number of steps.
+type Instruction = fn(u128, u128, u16, u16, u64) -> (u128, u16);
+
+/// Compares `instruction`, repeated until C2 is clear, with `recipe` on every
+/// pair in every setting, from each preset of C0 and C3. A NaN result keeps
+/// the preset, as [`fprem1_matches_the_ieee_remainder`] states.
+fn check_remainders(name: &str, instruction: Instruction, recipe: Recipe, seed: u64) {
+    let mut random = SplitMix64::new(seed);
+    let pairs = remainder_pairs(&mut random);
+    for setting in x86::x87_settings() {
+        for &(a, b) in &pairs {
+            let (x, y) = (F80::from_bits(a), F80::from_bits(b));
+            let (ours, quotient, flags) = recipe(x, y, setting.env());
+            for preset in PRESETS {
+                let (expected, status) =
+                    instruction(a, b, setting.control, preset, x86::PARTIAL_REMAINDER_STEPS);
+                let context = format!(
+                    "{name} {a:#x} {b:#x} {setting:?} {flags:?} preset {preset:#06x} status {status:#06x}"
+                );
+                assert_eq!(status & C2, 0, "{context}: the reduction is complete");
+                assert_eq!(ours.to_bits(), expected & MASK, "{context}: result");
+                assert_eq!(
+                    x87_arithmetic_status(flags, x.is_nan() || y.is_nan()),
+                    status & CHECKED & !C1,
+                    "{context}: flags"
+                );
+                let bits = if ours.is_nan() {
+                    preset
+                } else {
+                    quotient_status(quotient)
+                };
+                assert_eq!(status & QUOTIENT, bits, "{context}: quotient");
+            }
+        }
+    }
+}
+
 /// `FPREM1` is the IEEE 754 remainder; the harness repeats it until C2 is
 /// clear. The remainder is exact, so the rounding direction and precision
-/// control do not apply, and PE, OE, and ZE never appear.
+/// control do not apply, and PE, OE, and ZE never appear. C0, C3, and C1
+/// then hold the low bits of the whole quotient, as `remainder_quotient_with`
+/// gives them, also after partial steps. A zero dividend and an infinite
+/// divisor give the bits 0.
+///
+/// Hardware rule: a NaN result, from a NaN operand or an invalid operation,
+/// keeps C0 and C3 as earlier instructions left them, and C1 is clear. The
+/// SDM Volume 2A, revision 325383-084US, at `FPREM1` and `FPREM`, sets C0,
+/// C3, and C1 from the quotient, which such an operation does not have.
+/// floaty gives the bits 0 for a NaN result, so a consumer keeps C0 and C3.
+/// The harness sets C0 and C3 before the instruction, and the test requires
+/// that they keep those values.
 ///
 /// A tiny remainder is exact. With the underflow exception masked, the
 /// processor reports UE only for a tiny inexact result (Intel SDM Volume 1,
 /// section 4.9.1.5 on page 4-23), and the hardware shows no UE for a tiny
 /// remainder. floaty reports `TINY` for it, which `x87_status` does not map:
-/// a consumer maps it to UE only when the exception is unmasked. C1 holds a
-/// quotient bit after `FPREM1` (Table 8-1 on page 8-5), so the test does not
-/// compare it.
+/// a consumer maps it to UE only when the exception is unmasked.
 #[test]
 fn fprem1_matches_the_ieee_remainder() {
-    let mut random = SplitMix64::new(0x0087_2E31);
-    let pairs = remainder_pairs(&mut random);
-    for setting in x86::x87_settings() {
-        for &(a, b) in &pairs {
-            let (expected, status) = x86::fprem1(a, b, setting.control);
-            let (x, y) = (F80::from_bits(a), F80::from_bits(b));
-            let (ours, flags) = x.remainder_with(y, setting.env());
-            let context =
-                format!("fprem1 {a:#x} {b:#x} {setting:?} {flags:?} status {status:#06x}");
-            assert_eq!(status & C2, 0, "{context}: the reduction is complete");
-            assert_eq!(ours.to_bits(), expected & MASK, "{context}: result");
-            assert_eq!(
-                x87_arithmetic_status(flags, x.is_nan() || y.is_nan()),
-                status & CHECKED & !C1,
-                "{context}: flags"
-            );
-        }
-    }
+    let recipe: Recipe = |x, y, env| x.remainder_quotient_with(y, env);
+    check_remainders("fprem1", x86::fprem1, recipe, 0x0087_2E31);
 }
 
 /// `FPREM` is the remainder of the quotient truncated toward zero, the
 /// remainder of C `fmod`; the harness repeats it until C2 is clear. The
-/// flags follow the rules of [`fprem1_matches_the_ieee_remainder`].
+/// flags and the quotient bits follow the rules of
+/// [`fprem1_matches_the_ieee_remainder`].
 #[test]
 fn fprem_matches_the_truncated_remainder() {
-    let mut random = SplitMix64::new(0x0087_2E30);
-    let pairs = remainder_pairs(&mut random);
+    let recipe: Recipe = |x, y, env| x.truncated_remainder_quotient_with(y, env);
+    check_remainders("fprem", x86::fprem, recipe, 0x0087_2E30);
+}
+
+/// Returns the exponent field of an 80-bit encoding.
+fn exponent_field(bits: u128) -> i32 {
+    i32::try_from((bits >> 64) & 0x7FFF).expect("the x87 exponent field has 15 bits")
+}
+
+/// Returns pairs of normal values whose exponents differ by less than 200,
+/// by 60 to 69, and by anything in the range.
+fn step_pairs(random: &mut SplitMix64) -> Vec<(u128, u128)> {
+    (0..6_000)
+        .map(|index| {
+            let field = 0x0100 + random.below(0x7E00);
+            let difference = match index % 3 {
+                0 => random.below(200),
+                1 => 60 + random.below(10),
+                _ => random.below(0x7E00),
+            };
+            let divisor_field = field.saturating_sub(difference).max(1);
+            let mut normal =
+                |field| encode(random.coin_flip(), field, random.next_u64() | (1 << 63));
+            (normal(field), normal(divisor_field))
+        })
+        .collect()
+}
+
+/// One step of `FPREM1` or `FPREM` reduces completely when the exponents
+/// differ by D < 64 (Intel SDM Volume 2A, `FPREM1` and `FPREM`), as
+/// [`fprem1_matches_the_ieee_remainder`] checks. Otherwise the step is
+/// partial for both instructions: it leaves `x - y * q * 2^(D - N)`, with
+/// `q` the integer part of `x / (y * 2^(D - N))`. It sets C2 and clears C0,
+/// C3, and C1. A consumer builds the partial step as the truncated
+/// remainder by the divisor scaled with `scale_b`, which is exact. Precision
+/// control does not apply, and the step reports no flag for normal
+/// operands.
+///
+/// The SDM leaves N to the implementation, from 32 to 63. The hardware uses
+/// N = 32 + (D mod 32), as Bochs 3.0 does (`bochs/cpu/fpu/fprem.cc`, line
+/// 125). So a partial step lowers the exponent difference by a multiple of
+/// 32.
+#[test]
+fn one_partial_remainder_step_reduces_by_a_multiple_of_32() {
+    let mut random = SplitMix64::new(0x0087_2E32);
+    let pairs = step_pairs(&mut random);
+    let nearest: Recipe = |x, y, env| x.remainder_quotient_with(y, env);
+    let truncated: Recipe = |x, y, env| x.truncated_remainder_quotient_with(y, env);
+    let instructions: [(&str, Instruction, Recipe); 2] = [
+        ("fprem1", x86::fprem1, nearest),
+        ("fprem", x86::fprem, truncated),
+    ];
     for setting in x86::x87_settings() {
+        let env = setting.env();
         for &(a, b) in &pairs {
-            let (expected, status) = x86::fprem(a, b, setting.control);
             let (x, y) = (F80::from_bits(a), F80::from_bits(b));
-            let (ours, flags) = x.truncated_remainder_with(y, setting.env());
-            let context = format!("fprem {a:#x} {b:#x} {setting:?} {flags:?} status {status:#06x}");
-            assert_eq!(status & C2, 0, "{context}: the reduction is complete");
-            assert_eq!(ours.to_bits(), expected & MASK, "{context}: result");
-            assert_eq!(
-                x87_arithmetic_status(flags, x.is_nan() || y.is_nan()),
-                status & CHECKED & !C1,
-                "{context}: flags"
-            );
+            let difference = exponent_field(a) - exponent_field(b);
+            for (name, instruction, complete) in instructions {
+                let (ours, bits) = if difference < 64 {
+                    let (remainder, quotient, _) = complete(x, y, env);
+                    (remainder, quotient_status(quotient))
+                } else {
+                    let scale = difference - (32 + difference % 32);
+                    (x.truncated_remainder_with(y.scale_b(scale), env).0, C2)
+                };
+                for preset in PRESETS {
+                    let (result, status) = instruction(a, b, setting.control, preset, 1);
+                    let context = format!(
+                        "{name} {a:#x} {b:#x} {setting:?} preset {preset:#06x} status {status:#06x}"
+                    );
+                    assert_eq!(ours.to_bits(), result & MASK, "{context}: result");
+                    assert_eq!(status & (QUOTIENT | C2), bits, "{context}: C3 to C0");
+                    assert_eq!(status & CHECKED & !C1, 0, "{context}: flags");
+                }
+            }
         }
     }
 }

@@ -26,7 +26,7 @@ use floaty_verify::encodings::{IntegerBit, Layout, boundary_encodings, to_limbs}
 use floaty_verify::mpfr::{DIRECTIONS, Format, Specials};
 use floaty_verify::operations::BEHAVIORS;
 use floaty_verify::operations::augmented::Augmentation;
-use floaty_verify::operations::check::{self, Case};
+use floaty_verify::operations::check::{self, Case, RemainderQuotient};
 use floaty_verify::operations::integral::IntegerValue;
 use floaty_verify::operations::payload::Payload;
 use floaty_verify::random::SplitMix64;
@@ -269,6 +269,11 @@ fn to_ints<S: Standard<W>, const W: usize>(x: &Case<S, W>, env: &Env) {
 /// `pown_with` or `rootn_with` of a format.
 type Power<S, const W: usize> = dyn Fn(Float<S, W>, i64, Env) -> (Float<S, W>, Flags);
 
+/// `remainder_quotient_with` or `truncated_remainder_quotient_with` of a
+/// format.
+type Quotients<S, const W: usize> =
+    dyn Fn(Float<S, W>, Float<S, W>, Env) -> RemainderQuotient<S, W>;
+
 /// The exponents of the `pown` and `rootn` checks of the wide formats: the
 /// ends of the exact range, small exponents, and the steps past the limit.
 const WIDE_POWERS: [i64; 16] = [
@@ -300,6 +305,9 @@ struct Plan<'a, S: Standard<W>, const W: usize> {
     reciprocal_sqrt: &'a dyn Fn(Float<S, W>, Env) -> (Float<S, W>, Flags),
     /// `pown_with` and `rootn_with`, which only the binary formats have.
     powers: (&'a Power<S, W>, &'a Power<S, W>),
+    /// The remainders with the low bits of the quotient, which only the
+    /// binary formats have.
+    quotients: (&'a Quotients<S, W>, &'a Quotients<S, W>),
     /// The number of random encodings and of remainder pairs.
     count: usize,
     /// The behaviors of the operations on pairs.
@@ -345,11 +353,13 @@ fn check_format<S: Standard<W>, const W: usize>(plan: &Plan<'_, S, W>) {
             check::check_comparisons(x, y, env);
             check::check_min_max(x, y, &format, env);
             check::check_remainder(x, y, &format, env);
+            check::check_remainder_quotient(x, y, &format, env, plan.quotients);
             check::check_augmented(x, y, &format, env, plan.augmented);
             check::check_hypot(x, y, &format, env, plan.hypot);
         }
         for (x, y) in &near {
             check::check_remainder(x, y, &format, env);
+            check::check_remainder_quotient(x, y, &format, env, plan.quotients);
             check::check_augmented(x, y, &format, env, plan.augmented);
             check::check_hypot(x, y, &format, env, plan.hypot);
         }
@@ -414,6 +424,10 @@ fn bfloat16_and_tf32() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -433,6 +447,10 @@ fn bfloat16_and_tf32() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -458,6 +476,10 @@ fn layouts_whose_precision_fills_the_storage() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -477,6 +499,10 @@ fn layouts_whose_precision_fills_the_storage() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -498,6 +524,10 @@ fn binary16_binary32_binary64_and_binary128() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -517,6 +547,10 @@ fn binary16_binary32_binary64_and_binary128() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -536,6 +570,10 @@ fn binary16_binary32_binary64_and_binary128() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -555,6 +593,10 @@ fn binary16_binary32_binary64_and_binary128() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -578,6 +620,10 @@ fn a_layout_whose_exponent_crosses_a_limb() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -622,6 +668,10 @@ fn x87_extended_with_precision_control() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -643,6 +693,10 @@ fn binary256_and_binary512() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -660,6 +714,10 @@ fn binary256_and_binary512() {
         augmented: &|x, y, operation, env| operation.apply(x, y, env),
         payload: &|value, operation| operation.apply(value),
         hypot: &|x, y, env| x.hypot_with(y, env),
+        quotients: (
+            &|x, y, env| x.remainder_quotient_with(y, env),
+            &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+        ),
         reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
         powers: (
             &|value, n, env| value.pown_with(n, env),
@@ -685,6 +743,10 @@ macro_rules! other_wide_format {
             augmented: &|x, y, operation, env| operation.apply(x, y, env),
             payload: &|value, operation| operation.apply(value),
             hypot: &|x, y, env| x.hypot_with(y, env),
+            quotients: (
+                &|x, y, env| x.remainder_quotient_with(y, env),
+                &|x, y, env| x.truncated_remainder_quotient_with(y, env),
+            ),
             reciprocal_sqrt: &|value, env| value.reciprocal_sqrt_with(env),
             powers: (
                 &|value, n, env| value.pown_with(n, env),

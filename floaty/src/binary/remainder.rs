@@ -24,17 +24,32 @@ where
     /// of `left`. `inf % y` and `x % 0` are invalid. A subnormal remainder
     /// reports `TINY`, as a subnormal result of a rounded operation does.
     pub fn remainder<L: Widen>(left: L, right: L, quotient: Quotient, env: &Env) -> (L, Flags) {
+        let (bits, _, flags) = Self::remainder_quotient::<false, L>(left, right, quotient, env);
+        (bits, flags)
+    }
+
+    /// Returns the remainder of [`remainder`](Self::remainder), the low three
+    /// bits of `|n|`, and the flags. A NaN result, a zero `left`, and an
+    /// infinite `right` give the bits 0. Only `QUOTIENT_BITS` computes the
+    /// bits, so [`remainder`](Self::remainder) does not pay for them, and
+    /// they are 0 without it.
+    pub fn remainder_quotient<const QUOTIENT_BITS: bool, L: Widen>(
+        left: L,
+        right: L,
+        quotient: Quotient,
+        env: &Env,
+    ) -> (L, u8, Flags) {
         let mut flags = Flags::NONE;
         let first = Self::operand(left, env, &mut flags);
         let second = Self::operand(right, env, &mut flags);
         if let Some((value, special)) = nan::special(&first, &second, env) {
-            return Self::exact(value, flags | special);
+            return Self::exact_quotient(value, flags | special);
         }
         match (first, second) {
             (Unpacked::Infinity { .. }, _) | (_, Unpacked::Zero { .. }) => {
-                Self::exact(default_nan(env), flags | Flags::INVALID)
+                Self::exact_quotient(default_nan(env), flags | Flags::INVALID)
             }
-            (Unpacked::Zero { .. }, _) => Self::exact(first, flags),
+            (Unpacked::Zero { .. }, _) => Self::exact_quotient(first, flags),
             (
                 Unpacked::Finite {
                     negative,
@@ -42,16 +57,16 @@ where
                     significand,
                 },
                 Unpacked::Infinity { .. },
-            ) => Self::exact_remainder(
-                Unrounded {
+            ) => {
+                let value = Unrounded {
                     negative,
                     exponent,
                     significand: significand.resize::<L::Double>(),
                     sticky: false,
-                },
-                env,
-                flags,
-            ),
+                };
+                let (bits, flags) = Self::exact_remainder(value, env, flags);
+                (bits, 0, flags)
+            }
             (
                 Unpacked::Finite {
                     negative,
@@ -63,7 +78,7 @@ where
                     significand: divisor_significand,
                     ..
                 },
-            ) => Self::finite_remainder(
+            ) => Self::finite_remainder::<QUOTIENT_BITS, L>(
                 (negative, exponent, significand),
                 (divisor_exponent, divisor_significand),
                 quotient,
@@ -76,18 +91,20 @@ where
 
     /// Returns the remainder of two finite values: the dividend as its sign,
     /// exponent, and significand, and the divisor as its exponent and
-    /// significand.
-    fn finite_remainder<L: Widen>(
+    /// significand. Also returns the low three bits of `|n|` when
+    /// `QUOTIENT_BITS` is set, and 0 otherwise.
+    fn finite_remainder<const QUOTIENT_BITS: bool, L: Widen>(
         (negative, exponent, significand): (bool, i32, L),
         (divisor_exponent, divisor_significand): (i32, L),
         quotient: Quotient,
         env: &Env,
         flags: Flags,
-    ) -> (L, Flags) {
+    ) -> (L, u8, Flags) {
         let dividend = significand.resize::<L::Double>();
         // The remainder of the magnitudes, the divisor at the same weight, the
-        // weight of their lowest bits, and the lowest bit of the quotient.
-        let (rest, divisor, lowest, odd) = if exponent >= divisor_exponent {
+        // weight of their lowest bits, the lowest bit of the truncated
+        // quotient, and its low three bits.
+        let (rest, divisor, lowest, odd, low_bits) = if exponent >= divisor_exponent {
             // The dividend is significand * 2^steps at the weight of the
             // divisor. Its residue modulo twice the divisor gives the
             // remainder and the lowest bit of the quotient. With
@@ -105,11 +122,21 @@ where
             } else {
                 residue
             };
+            let low_bits = if QUOTIENT_BITS {
+                quotient_low_bits(significand.shl(steps), divisor_significand, rest)
+            } else {
+                0
+            };
+            debug_assert!(
+                !QUOTIENT_BITS || odd == (low_bits & 1 == 1),
+                "both give the lowest quotient bit"
+            );
             (
                 rest.resize::<L::Double>(),
                 divisor_significand.resize::<L::Double>(),
                 divisor_exponent,
                 odd,
+                low_bits,
             )
         } else {
             let shift =
@@ -122,19 +149,30 @@ where
                     significand: dividend,
                     sticky: false,
                 };
-                return Self::exact_remainder(value, env, flags);
+                let (bits, flags) = Self::exact_remainder(value, env, flags);
+                return (bits, 0, flags);
             }
             // The shifted divisor has at most 2 * PRECISION bits.
             let divisor = divisor_significand.resize::<L::Double>().shl(shift);
             let (quotient, rest) = limbs::divide(dividend, divisor);
-            (rest, divisor, exponent, quotient.bit(0))
+            let low_bits = if QUOTIENT_BITS {
+                low_three_bits(quotient.limb(0))
+            } else {
+                0
+            };
+            (rest, divisor, exponent, quotient.bit(0), low_bits)
         };
         // `rest` is the remainder of the truncated quotient. When n rounds up,
         // the remainder is `rest - divisor`, with the other sign.
         let rounded_up = quotient.rounds_up(&rest, &divisor, odd);
-        let magnitude = if rounded_up { divisor.sub(rest) } else { rest };
+        let (magnitude, low_bits) = if rounded_up {
+            (divisor.sub(rest), (low_bits + 1) & 7)
+        } else {
+            (rest, low_bits)
+        };
         if magnitude.is_zero() {
-            return Self::exact(Unpacked::zero(negative), flags);
+            let (bits, flags) = Self::exact(Unpacked::zero(negative), flags);
+            return (bits, low_bits, flags);
         }
         let value = Unrounded {
             negative: negative != rounded_up,
@@ -142,7 +180,14 @@ where
             significand: magnitude,
             sticky: false,
         };
-        Self::exact_remainder(value, env, flags)
+        let (bits, flags) = Self::exact_remainder(value, env, flags);
+        (bits, low_bits, flags)
+    }
+
+    /// Encodes the result of a special case, whose quotient bits are 0.
+    fn exact_quotient<L: Widen>(value: Unpacked<L>, flags: Flags) -> (L, u8, Flags) {
+        let (bits, flags) = Self::exact(value, flags);
+        (bits, 0, flags)
     }
 
     /// Returns `value * 2^exponent mod modulus`. The modulus is twice a
@@ -183,6 +228,41 @@ where
         );
         (Self::encode(rounded), flags | round_flags)
     }
+}
+
+/// Returns the low three bits of the truncated quotient `q` of a dividend by
+/// a nonzero `divisor`, from the low bits of the dividend in `shifted` and
+/// the remainder `rest`.
+///
+/// `q * divisor` is the dividend minus `rest`. With `divisor = odd * 2^t` and
+/// `odd` odd, `q * odd` is that difference divided by `2^t`. The difference
+/// is a multiple of `2^t`, so its bits `t` to `t + 2` are the difference of
+/// those bits of the dividend and of `rest`, with no borrow from below. An
+/// odd number is its own inverse modulo 8, so `q mod 8` is that difference
+/// times `odd`, modulo 8. `t + 3` is at most `PRECISION + 2`, which every
+/// storage type holds, so `shifted` can drop the higher bits of the dividend.
+fn quotient_low_bits<L: Limbs>(shifted: L, divisor: L, rest: L) -> u8 {
+    let t = trailing_zeros(&divisor);
+    let difference = shifted.field(t, 3).wrapping_sub(rest.field(t, 3));
+    low_three_bits(difference.wrapping_mul(divisor.field(t, 3)))
+}
+
+/// Returns the low three bits of `value`.
+fn low_three_bits(value: u64) -> u8 {
+    u8::try_from(value & 7).expect("three bits fit a u8")
+}
+
+/// Returns the number of zero bits below the lowest set bit of a nonzero
+/// value.
+fn trailing_zeros<L: Limbs>(value: &L) -> u32 {
+    let limbs = usize::try_from(L::BITS / 64).expect("a limb count fits a usize");
+    (0..limbs)
+        .find_map(|index| {
+            let limb = value.limb(index);
+            let below = 64 * u32::try_from(index).expect("a limb index fits a u32");
+            (limb != 0).then(|| below + limb.trailing_zeros())
+        })
+        .expect("the value is not zero")
 }
 
 /// Returns `left * right mod modulus`. Both factors are below the modulus.
@@ -357,6 +437,29 @@ mod tests {
         assert_eq!(truncated(0x4630_0000_0000_0000, THREE), (ONE, Flags::NONE));
         // A dividend below the divisor is its own remainder.
         assert_eq!(truncated(TWO, THREE), (TWO, Flags::NONE));
+    }
+
+    #[test]
+    fn the_quotient_bits_are_the_low_bits_of_n() {
+        let bits = |left: u64, right: u64| {
+            let (x, y) = (F64::from_bits(left), F64::from_bits(right));
+            let (_, nearest, _) = x.remainder_quotient_with(y, Env::IEEE);
+            let (_, truncated, _) = x.truncated_remainder_quotient_with(y, Env::IEEE);
+            (nearest.low_bits(), truncated.low_bits())
+        };
+        // 7 / 2 = 3.5: n is 4 to nearest and 3 truncated.
+        assert_eq!(bits(SEVEN, TWO), (4, 3));
+        // 2^100 = 3n + 1, so n = 5 (mod 8), because 3 is its own inverse
+        // modulo 8. The quotient has 99 bits.
+        assert_eq!(bits(0x4630_0000_0000_0000, THREE), (5, 5));
+        // 3 / 5 = 0.6, with the divisor in the higher binade: n is 1 to
+        // nearest and 0 truncated.
+        assert_eq!(bits(THREE, FIVE), (1, 0));
+        // A special case has no quotient.
+        let infinity = 0x7FF0_0000_0000_0000;
+        assert_eq!(bits(FIVE, infinity), (0, 0));
+        assert_eq!(bits(infinity, FIVE), (0, 0));
+        assert_eq!(bits(0, FIVE), (0, 0));
     }
 
     #[test]
