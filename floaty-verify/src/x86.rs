@@ -8,7 +8,12 @@
 //! This module holds the control values and the mappings between floaty flags
 //! and processor flags. The submodule `sse` runs the SSE instructions, and the
 //! submodule `x87` runs the x87 instructions. This module re-exports both.
+//! The submodule `composed` runs the instructions that an emulator builds
+//! from several floaty operations, and the submodule `avx512` holds the
+//! recipes of its AVX-512 instructions.
 
+pub mod avx512;
+pub mod composed;
 mod sse;
 mod x87;
 
@@ -17,8 +22,59 @@ use core::num::NonZeroU32;
 
 use floaty::{Env, Flags, Rounding, ToInt};
 
+use crate::encodings::{Layout, sample_encodings_u128};
+use crate::random::SplitMix64;
+
 pub use sse::*;
 pub use x87::*;
+
+/// Returns the boundary encodings and `count` random encodings of a format
+/// of at most 64 bits, from the generator seeded with `seed`.
+///
+/// # Panics
+///
+/// Panics when the format has more than 64 bits.
+#[must_use]
+pub fn samples(layout: Layout, count: usize, seed: u64) -> Vec<u64> {
+    let mut random = SplitMix64::new(seed);
+    sample_encodings_u128(layout, count, &mut random)
+        .into_iter()
+        .map(|bits| u64::try_from(bits).expect("the format has at most 64 bits"))
+        .collect()
+}
+
+/// Returns every pair of the first `square` samples, and `count` random
+/// pairs of any samples, from the generator seeded with `seed`.
+///
+/// # Panics
+///
+/// Panics when `samples` is empty.
+#[must_use]
+pub fn sample_pairs(samples: &[u64], square: usize, count: usize, seed: u64) -> Vec<(u64, u64)> {
+    let head = &samples[..square.min(samples.len())];
+    let mut pairs: Vec<(u64, u64)> = head
+        .iter()
+        .flat_map(|&a| head.iter().map(move |&b| (a, b)))
+        .collect();
+    let mut random = SplitMix64::new(seed);
+    let length = u64::try_from(samples.len()).expect("a length fits a u64");
+    let mut pick = || samples[usize::try_from(random.below(length)).expect("an index fits")];
+    pairs.extend((0..count).map(|_| (pick(), pick())));
+    pairs
+}
+
+/// Calls `$module::$function::<N>$arguments` for the runtime value
+/// `$immediate` of the listed values `N`: an instruction of [`composed`]
+/// takes its immediate as a const parameter.
+#[macro_export]
+macro_rules! by_immediate {
+    ($module:ident::$function:ident, $immediate:expr, $arguments:tt, [$($value:literal),*]) => {
+        match $immediate {
+            $($value => $module::$function::<$value>$arguments,)*
+            _ => unreachable!("the caller runs only the listed immediates"),
+        }
+    };
+}
 
 /// The MXCSR value with every exception masked and no flag set.
 pub const MXCSR_MASKED: u32 = 0x1F80;

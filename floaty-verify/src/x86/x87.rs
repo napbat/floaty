@@ -492,3 +492,116 @@ pub fn fscale(a: u128, scale: i32, control: u16) -> (u128, u16) {
     }
     (u128::from_le_bytes(output), status)
 }
+
+x87!(
+    /// `FBLD` of an 80-bit packed BCD integer and `FSTP` to 80 bits.
+    fbld, (a), "fbld tbyte ptr [{operands}]", "", "fstp tbyte ptr [{target}]", u128
+);
+x87!(
+    /// `FLD` of an 80-bit value and `FBSTP` to an 80-bit packed BCD integer,
+    /// rounded as the control word selects.
+    fbstp, (a), "fld tbyte ptr [{operands}]", "fbstp tbyte ptr [{target}]", "", u128
+);
+
+/// Runs `FXTRACT` on `a` under a control word. Returns the significand, which
+/// `FXTRACT` leaves in ST(0), the exponent, which it leaves in ST(1), and the
+/// status word.
+#[must_use]
+pub fn fxtract(a: u128, control: u16) -> (u128, u128, u16) {
+    let value = a.to_le_bytes();
+    let mut output = [[0_u8; 16]; 2];
+    let mut saved = 0_u16;
+    let status: u16;
+    // SAFETY: as in `x87!`. `FXTRACT` replaces the operand with the exponent
+    // and pushes the significand, and two `FSTP` instructions pop both into
+    // the two 16-byte slots of `output`, so the stack is empty on exit.
+    unsafe {
+        asm!(
+            "fnstcw word ptr [{saved}]",
+            "fldcw word ptr [{control}]",
+            "fnclex",
+            "fld tbyte ptr [{value}]",
+            "fxtract",
+            "fnstsw ax",
+            "fstp tbyte ptr [{target}]",
+            "fstp tbyte ptr [{target} + 16]",
+            "fnclex",
+            "fldcw word ptr [{saved}]",
+            saved = in(reg) &raw mut saved,
+            control = in(reg) &raw const control,
+            value = in(reg) value.as_ptr(),
+            target = in(reg) output.as_mut_ptr(),
+            out("ax") status,
+            out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+            out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+            options(nostack),
+        );
+    }
+    let [significand, exponent] = output.map(u128::from_le_bytes);
+    (significand, exponent, status)
+}
+
+/// Defines a function that pushes a constant under a control word and stores
+/// it with `FSTP` to 80 bits. Returns the result bits and the status word.
+macro_rules! constant {
+    ($(#[$doc:meta])* $name:ident, $instruction:literal) => {
+        $(#[$doc])*
+        #[must_use]
+        pub fn $name(control: u16) -> (u128, u16) {
+            let mut output = [0_u8; 16];
+            let mut saved = 0_u16;
+            let status: u16;
+            // SAFETY: as in `x87!`. The code pushes one constant and pops it
+            // with `FSTP`, so the stack is empty on exit.
+            unsafe {
+                asm!(
+                    "fnstcw word ptr [{saved}]",
+                    "fldcw word ptr [{control}]",
+                    "fnclex",
+                    $instruction,
+                    "fnstsw ax",
+                    "fstp tbyte ptr [{target}]",
+                    "fnclex",
+                    "fldcw word ptr [{saved}]",
+                    saved = in(reg) &raw mut saved,
+                    control = in(reg) &raw const control,
+                    target = in(reg) output.as_mut_ptr(),
+                    out("ax") status,
+                    out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                    out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+                    options(nostack),
+                );
+            }
+            (u128::from_le_bytes(output), status)
+        }
+    };
+}
+
+constant!(
+    /// `FLD1`: +1.0.
+    fld1, "fld1"
+);
+constant!(
+    /// `FLDZ`: +0.0.
+    fldz, "fldz"
+);
+constant!(
+    /// `FLDPI`: π.
+    fldpi, "fldpi"
+);
+constant!(
+    /// `FLDL2T`: log2 10.
+    fldl2t, "fldl2t"
+);
+constant!(
+    /// `FLDL2E`: log2 e.
+    fldl2e, "fldl2e"
+);
+constant!(
+    /// `FLDLG2`: log10 2.
+    fldlg2, "fldlg2"
+);
+constant!(
+    /// `FLDLN2`: ln 2.
+    fldln2, "fldln2"
+);
