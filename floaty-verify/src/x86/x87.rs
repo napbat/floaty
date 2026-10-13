@@ -389,9 +389,6 @@ fild!(
 /// steps reduce every pair.
 pub const PARTIAL_REMAINDER_STEPS: u64 = 2048;
 
-/// The condition bits C3, C2, C1, and C0 of the x87 status word.
-const CONDITION_BITS: u16 = 0x4700;
-
 /// Defines a function that runs a partial remainder instruction until C2
 /// reports a complete reduction, or for a number of steps.
 macro_rules! partial_remainder {
@@ -399,35 +396,27 @@ macro_rules! partial_remainder {
         $(#[$doc])*
         ///
         /// The dividend `a` is in ST(0) and the divisor `b` in ST(1), under
-        /// a control word. C3, C2, C1, and C0 hold the bits of `preset`
-        /// before the first step. The instruction runs until C2 is clear,
-        /// for at most `steps` steps. Returns the remainder bits and the
-        /// status word of the last step. The exception flags collect over the
+        /// a control word. The instruction runs until C2 is clear, for at
+        /// most `steps` steps. Returns the remainder bits and the status
+        /// word of the last step. The exception flags collect over the
         /// steps. C2 is set in the returned status only when the reduction
         /// is still incomplete after `steps` steps.
         #[must_use]
-        pub fn $name(a: u128, b: u128, control: u16, preset: u16, steps: u64) -> (u128, u16) {
+        pub fn $name(a: u128, b: u128, control: u16, steps: u64) -> (u128, u16) {
             let operands = [a.to_le_bytes(), b.to_le_bytes()];
             let mut output = [0_u8; 16];
-            let mut environment = [0_u8; 28];
             let mut saved = 0_u16;
             let status: u16;
-            // SAFETY: as in `x87!`. `FNSTENV` stores the 28-byte environment,
-            // whose status word at offset 4 takes the condition bits of
-            // `preset`, and `FLDENV` loads it back: the stack stays empty.
-            // The loop repeats the instruction while C2, bit 2 of AH, is set,
-            // and `LOOPNZ` stops the loop after `steps` steps, or after one
-            // step when `steps` is 0. Two `FSTP` instructions pop the
-            // remainder and the divisor, so the stack is empty on exit.
+            // SAFETY: as in `x87!`. The loop repeats the instruction while
+            // C2, bit 2 of AH, is set, and `LOOPNZ` stops the loop after
+            // `steps` steps, or after one step when `steps` is 0. Two `FSTP`
+            // instructions pop the remainder and the divisor, so the stack is
+            // empty on exit.
             unsafe {
                 asm!(
                     "fnstcw word ptr [{saved}]",
                     "fldcw word ptr [{control}]",
                     "fnclex",
-                    "fnstenv [{environment}]",
-                    "and word ptr [{environment} + 4], 0xB8FF",
-                    "or word ptr [{environment} + 4], {preset:x}",
-                    "fldenv [{environment}]",
                     "fld tbyte ptr [{operands} + 16]",
                     "fld tbyte ptr [{operands}]",
                     "2:",
@@ -441,8 +430,6 @@ macro_rules! partial_remainder {
                     "fldcw word ptr [{saved}]",
                     saved = in(reg) &raw mut saved,
                     control = in(reg) &raw const control,
-                    environment = in(reg) environment.as_mut_ptr(),
-                    preset = in(reg) preset & CONDITION_BITS,
                     operands = in(reg) operands.as_ptr(),
                     target = in(reg) output.as_mut_ptr(),
                     out("ax") status,
