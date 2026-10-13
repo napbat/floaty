@@ -357,6 +357,17 @@ embedded rounding, the unsigned conversions, and the BF16 instructions.
 stores, the constant loads, and the quotient bits and the partial steps of
 `FPREM1` and `FPREM`.
 
+The SDM bounds the error of the x87 transcendental instructions but does
+not state their bits, so no recipe gives those bits. floaty's correctly
+rounded functions lie within the bound of the SDM from the result of each
+instruction. `FSIN`, `FCOS`, `FSINCOS`, and `FPTAN` compute the functions
+of `x * pi / Pi`, with Pi the 66-bit approximation of pi (SDM Volume 1,
+section 8.3.8). An emulator reduces `x` by that Pi exactly, in a wider
+binary format, and takes the function of the remainder.
+`tests/x87-transcendental.rs` compares these instructions, `FPATAN`, and
+`F2XM1` with floaty bit for bit where the SDM defines the result, and
+within the bound elsewhere.
+
 ### Unmasked exceptions
 
 floaty never traps, and its flags describe the masked response. An emulator
@@ -930,7 +941,7 @@ decNumber.
 | GMP and MPFR, through `rug` | `pow` and `powr` of every binary and decimal format, in every behavior of the operation tests for the binary formats and of the conversion tests for the decimal formats: every pair of FP8, FP6, and FP4 encodings, and for the other formats the pairs of the `atan2` tests, and bases with exact powers and roots, negative bases, and bases next to 1, against integer, half, quarter, huge, and tiny exponents. `mpfr_pow` gives a binary value at a precision that grows until its bounds decide the rounding. GMP gives a rational decimal value exactly by `mpz_rootrem`. Every other decimal value takes bounds from `mpfr_pow` at the corners of the bounds of `x` and `y`. A value next to 1, or far past the range, takes a stand-in on the same side of every point of the grid, as the comments of the oracle state. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, `scale_b`, and `log_b` against `ilogb` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
-| The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, the recipes of the x86 instructions that an emulator builds from several floaty operations, the response to unmasked exceptions, and every host path. The AArch64 and s390x tests run under QEMU 10.2.1. |
+| The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, the recipes of the x86 instructions that an emulator builds from several floaty operations, the response to unmasked exceptions, the x87 transcendental instructions within the error bound of the SDM, and every host path. The AArch64 and s390x tests run under QEMU 10.2.1. |
 | decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations in every direction, with FTZ, DAZ, precision limits, and every NaN rule, in DPD and, through the conversions of the Intel library, in BID. The conversions between the widths in the same behaviors, the conversions to and from every integer type, and the total order of non-canonical encodings. The minimum and maximum operations and the NaN payload operations of IEEE 754-2019, by floaty's rule. The static modes, against their behaviors. |
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
