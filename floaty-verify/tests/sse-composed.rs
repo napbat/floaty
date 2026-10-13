@@ -523,13 +523,13 @@ fn dpps_and_dppd_round_each_step() {
     }
 }
 
-/// `VCVTPH2PS` (Volume 2B, page 5-37) widens each binary16 lane exactly. The
-/// hardware shows that it reads a binary16 subnormal as it is under DAZ, and
-/// reports no DE for it: binary32 holds the value as a normal number.
-/// `VCVTPS2PH` (page 5-41) rounds each binary32 lane to binary16 in the
-/// direction of bits 1 and 0 of the immediate, or of MXCSR when bit 2 is
-/// set. The hardware shows that it keeps a binary16 subnormal result under
-/// FTZ.
+/// `VCVTPH2PS` (Volume 2B, page 5-37) widens each binary16 lane exactly. It
+/// ignores DAZ and reports no DE for a binary16 subnormal, as the same page
+/// states: binary32 holds the value as a normal number. `VCVTPS2PH` (page
+/// 5-41) rounds each binary32 lane to binary16 in the direction of bits 1
+/// and 0 of the immediate, or of MXCSR when bit 2 is set. It ignores FTZ and
+/// keeps a binary16 subnormal result, as the same page and Volume 1,
+/// revision 253665-077US, Table 14-12, state.
 #[test]
 fn f16c_conversions_round_each_lane() {
     assert!(
