@@ -16,9 +16,11 @@ build = "build/main.rs"
 floaty = { workspace = true, features = ["override-host-level", "record-margins"] }
 rustc_apfloat.workspace = true
 
-# MPFR builds only for x86-64, with the other references.
+# MPFR builds only for x86-64, with the other references. The tests of
+# unmasked SSE exceptions catch SIGFPE with libc.
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 rug.workspace = true
+libc.workspace = true
 
 [lints]
 workspace = true

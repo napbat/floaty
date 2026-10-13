@@ -1,6 +1,7 @@
 //! Compares the compares, rounding to an integral value, the conversions
-//! between floats and integers, the partial remainder, scaling, and the sign
-//! operations with the x87 unit of the host processor. The test runs only on
+//! between floats and integers, the partial remainder, scaling, the sign
+//! operations, `FXTRACT`, the packed BCD loads and stores, and the constant
+//! loads with the x87 unit of the host processor. The test runs only on
 //! x86-64 hosts.
 //!
 //! Each test maps a floaty result to the instruction as a consumer does. A
@@ -11,7 +12,7 @@
 
 use core::ops::RangeInclusive;
 
-use floaty::{F80, Flags, Rounding};
+use floaty::{Env, F80, F128, Flags, QuotientBits, Rounding, ToInt};
 use floaty_verify::encodings::{Layout, boundary_encodings, integer_edges, to_u128};
 use floaty_verify::random::SplitMix64;
 use floaty_verify::x86::{
@@ -351,59 +352,174 @@ fn remainder_pairs(random: &mut SplitMix64) -> Vec<(u128, u128)> {
     pairs
 }
 
+/// The status bits that hold the low three bits of the quotient after
+/// `FPREM1` and `FPREM`: C0 holds bit 2, C3 bit 1, and C1 bit 0 (Intel SDM
+/// Volume 1, Table 8-1 on page 8-5).
+const QUOTIENT: u16 = C0 | C3 | C1;
+const C0: u16 = 1 << 8;
+const C3: u16 = 1 << 14;
+
+/// Returns C0, C3, and C1 for the low bits of a quotient.
+fn quotient_status(quotient: QuotientBits) -> u16 {
+    let bits = quotient.low_bits();
+    [(4, C0), (2, C3), (1, C1)]
+        .into_iter()
+        .filter(|&(bit, _)| bits & bit != 0)
+        .fold(0, |status, (_, flag)| status | flag)
+}
+
+/// A remainder of floaty with the low bits of its quotient, and the flags.
+type Recipe = fn(F80, F80, Env) -> (F80, QuotientBits, Flags);
+
+/// A remainder instruction of the harness, which runs `FPREM1` or `FPREM`
+/// until C2 is clear or for a number of steps.
+type Instruction = fn(u128, u128, u16, u64) -> (u128, u16);
+
+/// Compares `instruction`, repeated until C2 is clear, with `recipe` on every
+/// pair in every setting. The quotient bits of a NaN result are not
+/// compared, as [`fprem1_matches_the_ieee_remainder`] states.
+fn check_remainders(name: &str, instruction: Instruction, recipe: Recipe, seed: u64) {
+    let mut random = SplitMix64::new(seed);
+    let pairs = remainder_pairs(&mut random);
+    for setting in x86::x87_settings() {
+        for &(a, b) in &pairs {
+            let (expected, status) =
+                instruction(a, b, setting.control, x86::PARTIAL_REMAINDER_STEPS);
+            let (x, y) = (F80::from_bits(a), F80::from_bits(b));
+            let (ours, quotient, flags) = recipe(x, y, setting.env());
+            let context =
+                format!("{name} {a:#x} {b:#x} {setting:?} {flags:?} status {status:#06x}");
+            assert_eq!(status & C2, 0, "{context}: the reduction is complete");
+            assert_eq!(ours.to_bits(), expected & MASK, "{context}: result");
+            assert_eq!(
+                x87_arithmetic_status(flags, x.is_nan() || y.is_nan()),
+                status & CHECKED & !C1,
+                "{context}: flags"
+            );
+            if !ours.is_nan() {
+                assert_eq!(
+                    status & QUOTIENT,
+                    quotient_status(quotient),
+                    "{context}: quotient"
+                );
+            }
+        }
+    }
+}
+
 /// `FPREM1` is the IEEE 754 remainder; the harness repeats it until C2 is
 /// clear. The remainder is exact, so the rounding direction and precision
-/// control do not apply, and PE, OE, and ZE never appear.
+/// control do not apply, and PE, OE, and ZE never appear. C0, C3, and C1
+/// then hold the low bits of the whole quotient, as `remainder_quotient_with`
+/// gives them, also after partial steps. A zero dividend and an infinite
+/// divisor give the bits 0.
+///
+/// The SDM Volume 2A, revision 325383-084US, at `FPREM1` and `FPREM`, sets
+/// C0, C3, and C1 from the quotient, which a NaN result does not have, so
+/// the test does not compare them for a NaN result. The AMD Zen 5 of the
+/// test host keeps C0 and C3 as earlier instructions left them, and clears
+/// C1. Another processor can differ, so a consumer that emulates one
+/// processor confirms the rule on it.
 ///
 /// A tiny remainder is exact. With the underflow exception masked, the
 /// processor reports UE only for a tiny inexact result (Intel SDM Volume 1,
 /// section 4.9.1.5 on page 4-23), and the hardware shows no UE for a tiny
 /// remainder. floaty reports `TINY` for it, which `x87_status` does not map:
-/// a consumer maps it to UE only when the exception is unmasked. C1 holds a
-/// quotient bit after `FPREM1` (Table 8-1 on page 8-5), so the test does not
-/// compare it.
+/// a consumer maps it to UE only when the exception is unmasked.
 #[test]
 fn fprem1_matches_the_ieee_remainder() {
-    let mut random = SplitMix64::new(0x0087_2E31);
-    let pairs = remainder_pairs(&mut random);
-    for setting in x86::x87_settings() {
-        for &(a, b) in &pairs {
-            let (expected, status) = x86::fprem1(a, b, setting.control);
-            let (x, y) = (F80::from_bits(a), F80::from_bits(b));
-            let (ours, flags) = x.remainder_with(y, setting.env());
-            let context =
-                format!("fprem1 {a:#x} {b:#x} {setting:?} {flags:?} status {status:#06x}");
-            assert_eq!(status & C2, 0, "{context}: the reduction is complete");
-            assert_eq!(ours.to_bits(), expected & MASK, "{context}: result");
-            assert_eq!(
-                x87_arithmetic_status(flags, x.is_nan() || y.is_nan()),
-                status & CHECKED & !C1,
-                "{context}: flags"
-            );
-        }
-    }
+    let recipe: Recipe = |x, y, env| x.remainder_quotient_with(y, env);
+    check_remainders("fprem1", x86::fprem1, recipe, 0x0087_2E31);
 }
 
 /// `FPREM` is the remainder of the quotient truncated toward zero, the
 /// remainder of C `fmod`; the harness repeats it until C2 is clear. The
-/// flags follow the rules of [`fprem1_matches_the_ieee_remainder`].
+/// flags and the quotient bits follow the rules of
+/// [`fprem1_matches_the_ieee_remainder`].
 #[test]
 fn fprem_matches_the_truncated_remainder() {
-    let mut random = SplitMix64::new(0x0087_2E30);
-    let pairs = remainder_pairs(&mut random);
+    let recipe: Recipe = |x, y, env| x.truncated_remainder_quotient_with(y, env);
+    check_remainders("fprem", x86::fprem, recipe, 0x0087_2E30);
+}
+
+/// Returns the exponent field of an 80-bit encoding.
+fn exponent_field(bits: u128) -> i32 {
+    i32::try_from((bits >> 64) & 0x7FFF).expect("the x87 exponent field has 15 bits")
+}
+
+/// Returns pairs of normal values whose exponents differ by less than 200,
+/// by 60 to 69, and by anything in the range.
+fn step_pairs(random: &mut SplitMix64) -> Vec<(u128, u128)> {
+    (0..6_000)
+        .map(|index| {
+            let field = 0x0100 + random.below(0x7E00);
+            let difference = match index % 3 {
+                0 => random.below(200),
+                1 => 60 + random.below(10),
+                _ => random.below(0x7E00),
+            };
+            let divisor_field = field.saturating_sub(difference).max(1);
+            let mut normal =
+                |field| encode(random.coin_flip(), field, random.next_u64() | (1 << 63));
+            (normal(field), normal(divisor_field))
+        })
+        .collect()
+}
+
+/// One step of `FPREM1` or `FPREM` reduces completely when the exponents
+/// differ by D < 64 (Intel SDM Volume 2A, `FPREM1` and `FPREM`), and sets
+/// C0, C3, and C1 from the quotient, as
+/// [`fprem1_matches_the_ieee_remainder`] checks. Otherwise the step is
+/// partial for both instructions: it sets C2 and leaves `x - y * q * 2^(D -
+/// N)`, with `q` the integer part of `x / (y * 2^(D - N))`. A consumer
+/// builds the partial step as the truncated remainder by the divisor scaled
+/// with `scale_b`, which is exact. Precision control does not apply, and the
+/// step reports no flag for normal operands.
+///
+/// The SDM sets C0, C3, and C1 only for a complete reduction, so the test
+/// does not compare them after a partial step. The AMD Zen 5 of the test
+/// host clears them.
+///
+/// The SDM leaves N to the implementation, from 32 to 63. The test requires
+/// N = 32 + (D mod 32), so a partial step lowers the exponent difference by
+/// a multiple of 32. The test host uses that N, and so do Bochs 3.0
+/// (`bochs/cpu/fpu/fprem.cc`, line 125) and QEMU 10.2.1
+/// (`target/i386/tcg/fpu_helper.c`, line 1900), which both emulate Intel
+/// processors.
+#[test]
+fn one_partial_remainder_step_reduces_by_a_multiple_of_32() {
+    let mut random = SplitMix64::new(0x0087_2E32);
+    let pairs = step_pairs(&mut random);
+    let nearest: Recipe = |x, y, env| x.remainder_quotient_with(y, env);
+    let truncated: Recipe = |x, y, env| x.truncated_remainder_quotient_with(y, env);
+    let instructions: [(&str, Instruction, Recipe); 2] = [
+        ("fprem1", x86::fprem1, nearest),
+        ("fprem", x86::fprem, truncated),
+    ];
     for setting in x86::x87_settings() {
+        let env = setting.env();
         for &(a, b) in &pairs {
-            let (expected, status) = x86::fprem(a, b, setting.control);
             let (x, y) = (F80::from_bits(a), F80::from_bits(b));
-            let (ours, flags) = x.truncated_remainder_with(y, setting.env());
-            let context = format!("fprem {a:#x} {b:#x} {setting:?} {flags:?} status {status:#06x}");
-            assert_eq!(status & C2, 0, "{context}: the reduction is complete");
-            assert_eq!(ours.to_bits(), expected & MASK, "{context}: result");
-            assert_eq!(
-                x87_arithmetic_status(flags, x.is_nan() || y.is_nan()),
-                status & CHECKED & !C1,
-                "{context}: flags"
-            );
+            let difference = exponent_field(a) - exponent_field(b);
+            for (name, instruction, complete) in instructions {
+                let (result, status) = instruction(a, b, setting.control, 1);
+                let context = format!("{name} {a:#x} {b:#x} {setting:?} status {status:#06x}");
+                assert_eq!(status & CHECKED & !C1, 0, "{context}: flags");
+                if difference < 64 {
+                    let (remainder, quotient, _) = complete(x, y, env);
+                    assert_eq!(remainder.to_bits(), result & MASK, "{context}: result");
+                    assert_eq!(
+                        status & (QUOTIENT | C2),
+                        quotient_status(quotient),
+                        "{context}: C3 to C0"
+                    );
+                } else {
+                    let scale = difference - (32 + difference % 32);
+                    let partial = x.truncated_remainder_with(y.scale_b(scale), env).0;
+                    assert_eq!(partial.to_bits(), result & MASK, "{context}: result");
+                    assert_eq!(status & C2, C2, "{context}: C2");
+                }
+            }
         }
     }
 }
@@ -484,6 +600,231 @@ fn fchs_and_fabs_change_only_the_sign_of_every_encoding() {
             ("fabs", value.abs(), x86::fabs(input, DEFAULT_CONTROL)),
         ] {
             let context = format!("{instruction} {input:#x} status {status:#06x}");
+            assert_eq!(ours.to_bits(), expected, "{context}: result");
+            assert_eq!(status & CHECKED, 0, "{context}: flags");
+        }
+    }
+}
+
+/// `FXTRACT` leaves the exponent in ST(1) and the significand in ST(0)
+/// (Intel SDM Volume 2A, `FXTRACT`). A consumer builds the exponent with
+/// `log_b_with`, and the significand with `scale_b_with` by the negated
+/// exponent, or by zero when the exponent is not finite. So a zero gives an
+/// exponent of negative infinity with ZE and keeps its sign, and a denormal
+/// gives the exponent of its normalized value. Precision control does not
+/// affect `FXTRACT`, and the hardware confirms it.
+#[test]
+fn fxtract_matches_log_b_and_the_scaled_significand() {
+    let mut random = SplitMix64::new(0x0087_E7AC);
+    let mut operands: Vec<u128> = boundary_encodings(Layout::X87_EXTENDED)
+        .iter()
+        .map(to_u128)
+        .collect();
+    operands.extend(SPECIALS);
+    operands.extend(random_operands(&mut random, 20_000, -16_382..=-16_300));
+    operands.extend((0..2_000).map(|_| {
+        let significand = (random.next_u64() >> 1) >> random.below(63);
+        encode(random.coin_flip(), 0, significand)
+    }));
+    for setting in x86::x87_settings() {
+        let env = setting.full_precision();
+        for &input in &operands {
+            let (significand, exponent, status) = x86::fxtract(input, setting.control);
+            let value = F80::from_bits(input);
+            let (ours_exponent, exponent_flags) = value.log_b_with(env);
+            let scale = match ours_exponent.to_int_with::<i32>(env).0 {
+                ToInt::Value(exponent) => -exponent,
+                ToInt::OutOfRange { .. } | ToInt::Nan => 0,
+            };
+            let (ours_significand, significand_flags) = value.scale_b_with(scale, env);
+            let flags = exponent_flags | significand_flags;
+            let context = format!("fxtract {input:#x} {setting:?} {flags:?} status {status:#06x}");
+            assert_eq!(ours_exponent.to_bits(), exponent, "{context}: exponent");
+            assert_eq!(
+                ours_significand.to_bits(),
+                significand,
+                "{context}: significand"
+            );
+            assert_eq!(
+                x87_arithmetic_status(flags, value.is_nan()),
+                status & CHECKED,
+                "{context}: flags"
+            );
+        }
+    }
+}
+
+/// The largest magnitude of a packed BCD integer: 18 nines.
+const BCD_LARGEST: u64 = 999_999_999_999_999_999;
+
+/// The packed BCD indefinite that `FBSTP` stores for an invalid operation
+/// (Intel SDM Volume 1, Table 4-4 on page 4-12).
+const BCD_INDEFINITE: u128 = 0xFFFF_C000_0000_0000_0000;
+
+/// Returns the packed BCD encoding of `magnitude`, at most [`BCD_LARGEST`]:
+/// two digits in each of the low nine bytes, the low digit first, and the
+/// sign in bit 79.
+fn bcd(negative: bool, magnitude: u64) -> u128 {
+    let (digits, _) = (0..18).fold((0_u128, magnitude), |(digits, rest), index| {
+        (digits | (u128::from(rest % 10) << (4 * index)), rest / 10)
+    });
+    digits | (u128::from(negative) << 79)
+}
+
+/// `FBLD` converts a packed BCD integer exactly, keeps the sign of a zero,
+/// and reports no flag (Intel SDM Volume 2A, `FBLD`). A consumer reads the
+/// digits and converts the magnitude with `from_int_with`, which is exact
+/// below 10^18 under every setting.
+#[test]
+fn fbld_matches_exact_conversions_from_bcd_integers() {
+    let mut random = SplitMix64::new(0x0087_FB1D);
+    let mut magnitudes: Vec<u64> = integer_operands(&mut random, 64)
+        .into_iter()
+        .map(|value| value.unsigned_abs() % (BCD_LARGEST + 1))
+        .collect();
+    magnitudes.extend([
+        0,
+        1,
+        9,
+        10,
+        99,
+        BCD_LARGEST,
+        BCD_LARGEST - 1,
+        BCD_LARGEST / 9,
+    ]);
+    for setting in x86::x87_settings() {
+        let env = setting.full_precision();
+        for &magnitude in &magnitudes {
+            for negative in [false, true] {
+                let input = bcd(negative, magnitude);
+                let (expected, status) = x86::fbld(input, setting.control);
+                let (ours, flags) = F80::from_int_with(magnitude, env);
+                let ours = if negative { -ours } else { ours };
+                let context = format!("fbld {input:#x} {setting:?} {flags:?} status {status:#06x}");
+                assert_eq!(ours.to_bits(), expected, "{context}: result");
+                assert_eq!(x87_status(flags), status & CHECKED, "{context}: flags");
+            }
+        }
+    }
+}
+
+/// Returns the operands of `FBSTP`: the integral operands, and the integers
+/// near the largest packed BCD magnitude with the halfway values beside
+/// them, for both signs.
+fn bcd_store_operands(random: &mut SplitMix64) -> Vec<u128> {
+    let mut operands = integral_operands(random);
+    for magnitude in [BCD_LARGEST - 1, BCD_LARGEST, BCD_LARGEST + 1, 1, 0] {
+        let twice = i64::try_from(2 * magnitude).expect("twice the magnitude fits an i64");
+        for doubled in [twice - 1, twice, twice + 1] {
+            for sign in [1, -1] {
+                operands.push(F80::from_int(sign * doubled).scale_b(-1).to_bits());
+            }
+        }
+    }
+    operands
+}
+
+/// `FBSTP` rounds as the rounding-control field selects and stores the
+/// packed BCD integer with the sign of the operand (Intel SDM Volume 2A,
+/// `FBSTP`). A consumer rounds with `to_int_with` and takes a magnitude
+/// above [`BCD_LARGEST`] as out of range. A NaN, an infinity, an unsupported
+/// encoding, and an operand out of range store [`BCD_INDEFINITE`] with IE
+/// alone. The flags follow `FISTP`: no DE, and C1 for a rounding that grew
+/// the magnitude.
+#[test]
+fn fbstp_matches_conversions_to_bcd_integers() {
+    let mut random = SplitMix64::new(0x0087_FB57);
+    let operands = bcd_store_operands(&mut random);
+    for setting in x86::x87_settings() {
+        let env = setting.full_precision();
+        for &input in &operands {
+            let (expected, status) = x86::fbstp(input, setting.control);
+            let value = F80::from_bits(input);
+            let (rounded, flags) = value.to_int_with::<i64>(env);
+            let (ours, flags) = match rounded {
+                ToInt::Value(integer) if integer.unsigned_abs() <= BCD_LARGEST => {
+                    (bcd(value.is_sign_negative(), integer.unsigned_abs()), flags)
+                }
+                _ => (BCD_INDEFINITE, Flags::INVALID),
+            };
+            let context =
+                format!("fbstp {input:#x} {setting:?} {rounded:?} {flags:?} status {status:#06x}");
+            assert_eq!(ours, expected, "{context}: result");
+            assert_eq!(
+                integer_store_status(flags),
+                status & CHECKED,
+                "{context}: flags"
+            );
+        }
+    }
+}
+
+/// Returns `constant` rounded to nearest at 113 bits, as a binary128 value.
+fn binary128_constant(constant: &rug::Float) -> F128 {
+    let (significand, exponent) = rug::Float::with_val(113, constant)
+        .to_integer_exp()
+        .expect("a constant is finite");
+    let significand = significand
+        .to_u128()
+        .expect("a 113-bit significand fits a u128");
+    F128::from_int(significand).scale_b(exponent)
+}
+
+/// An instruction that pushes a constant under a control word.
+type Load = fn(u16) -> (u128, u16);
+
+/// The constant instructions round the constant as the rounding-control
+/// field selects, and report neither PE nor C1 (Intel SDM Volume 2A,
+/// `FLD1/FLDL2T/FLDL2E/FLDPI/FLDLG2/FLDLN2/FLDZ`). A consumer holds each
+/// constant in binary128 and converts it with `convert_with`, without
+/// precision control, which the instructions ignore, and drops the flags.
+/// The constants are computed by MPFR at 256 bits. Bits 65 to 113 of none
+/// of them are a tie or exact, so the binary128 value rounds to 64 bits as
+/// the true constant does.
+///
+/// Conflict: the Intel SDM Volume 2A, revision 325383-084US, at the same
+/// instruction, states that each instruction rounds an internal 66-bit
+/// constant. log10 2 rounded to nearest at 66 bits is a tie at 64 bits:
+/// its bits 65 and 66 are 10, and the next bits are 0011111. Ties to even
+/// gives the significand `9A20_9A84_FBCF_F798`, but the hardware gives
+/// `9A20_9A84_FBCF_F799`, the true constant rounded to nearest. The same
+/// page states that round to nearest gives the constants of the 8087.
+/// Resolution: the test rounds the true constant, and the hardware
+/// confirms the rule for each constant in each direction.
+#[test]
+fn constants_round_the_true_constant() {
+    use rug::float::Constant;
+    let wide = |value| rug::Float::with_val(256, value);
+    let constants: [(&str, Load, F128); 7] = [
+        ("fld1", x86::fld1, F128::from_int(1)),
+        ("fldz", x86::fldz, F128::from_int(0)),
+        ("fldpi", x86::fldpi, binary128_constant(&wide(Constant::Pi))),
+        (
+            "fldl2t",
+            x86::fldl2t,
+            binary128_constant(&rug::Float::with_val(256, 10).log2()),
+        ),
+        (
+            "fldl2e",
+            x86::fldl2e,
+            binary128_constant(&wide(Constant::Log2).recip()),
+        ),
+        (
+            "fldlg2",
+            x86::fldlg2,
+            binary128_constant(&rug::Float::with_val(256, 2).log10()),
+        ),
+        (
+            "fldln2",
+            x86::fldln2,
+            binary128_constant(&wide(Constant::Log2)),
+        ),
+    ];
+    for setting in x86::x87_settings() {
+        for (instruction, load, constant) in constants {
+            let (expected, status) = load(setting.control);
+            let (ours, _): (F80, _) = constant.convert_with(setting.full_precision());
+            let context = format!("{instruction} {setting:?} status {status:#06x}");
             assert_eq!(ours.to_bits(), expected, "{context}: result");
             assert_eq!(status & CHECKED, 0, "{context}: flags");
         }

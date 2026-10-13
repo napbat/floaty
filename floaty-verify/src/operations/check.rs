@@ -5,7 +5,7 @@
 //! floaty differs from the oracle. A float result must also be canonical.
 
 use floaty::format::Standard;
-use floaty::{Augmented, Env, Flags, Float, TotalOrder};
+use floaty::{Augmented, Env, Flags, Float, QuotientBits, TotalOrder};
 use rug::Integer;
 
 use crate::encodings::Layout;
@@ -17,7 +17,8 @@ use super::elementary::{self, Bivariate, Function};
 use super::integral::{self, IntegerValue, to_int_value};
 use super::payload::{self, Payload};
 use super::{
-    Direction, Outcome, Sample, next, outcome, remainder, scale_b, truncated_remainder, with_sign,
+    Direction, Outcome, Sample, next, outcome, quotient_low_bits, remainder, scale_b,
+    truncated_remainder, with_sign,
 };
 use crate::mpfr::decimal::{DecimalFormat, DecimalValue};
 use crate::mpfr::{Format, Operand, Specials};
@@ -189,6 +190,58 @@ pub fn check_remainder<S: Standard<W>, const W: usize>(
         x.value.truncated_remainder_with(y.value, *env),
         &truncated_remainder(&x.sample.operand, &y.sample.operand, format, env),
         &|| format!("truncated_remainder {:?} {:?} {env:?}", x.value, y.value),
+    );
+}
+
+/// A remainder of floaty, the low bits of its quotient, and the flags.
+pub type RemainderQuotient<S, const W: usize> = (Float<S, W>, QuotientBits, Flags);
+
+/// Checks `remainder_quotient_with` and `truncated_remainder_quotient_with`
+/// on one pair: the remainder and the flags as [`check_remainder`] does, and
+/// the low bits and the sign of the quotient. The quotient is negative when
+/// the sign bits of the operands differ. `nearest` and `truncated` run the
+/// operations of floaty, which only the binary formats have.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_remainder_quotient<S: Standard<W>, const W: usize>(
+    x: &Case<S, W>,
+    y: &Case<S, W>,
+    format: &Format,
+    env: &Env,
+    (nearest, truncated): (
+        impl Fn(Float<S, W>, Float<S, W>, Env) -> RemainderQuotient<S, W>,
+        impl Fn(Float<S, W>, Float<S, W>, Env) -> RemainderQuotient<S, W>,
+    ),
+) {
+    let (first, second) = (&x.sample.operand, &y.sample.operand);
+    let [nearest_bits, truncated_bits] = quotient_low_bits(first, second, env);
+    let negative = x.sign_bit() != y.sign_bit();
+    let check = |name: &str,
+                 (result, quotient, flags): RemainderQuotient<S, W>,
+                 expected: &(Outcome, Flags),
+                 bits: u8| {
+        let context = || format!("{name} {:?} {:?} {env:?}", x.value, y.value);
+        check_float((result, flags), expected, &context);
+        assert_eq!(
+            (quotient.low_bits(), quotient.is_negative()),
+            (bits, negative),
+            "{}: quotient",
+            context()
+        );
+    };
+    check(
+        "remainder_quotient",
+        nearest(x.value, y.value, *env),
+        &remainder(first, second, format, env),
+        nearest_bits,
+    );
+    check(
+        "truncated_remainder_quotient",
+        truncated(x.value, y.value, *env),
+        &truncated_remainder(first, second, format, env),
+        truncated_bits,
     );
 }
 

@@ -318,6 +318,39 @@ pub fn truncated_remainder<const N: usize>(
     })
 }
 
+/// Returns the expected low three bits of the quotient `n` of
+/// `remainder_quotient_with`, then of `truncated_remainder_quotient_with`.
+///
+/// MPFR `mpfr_remquo` gives the low bits of the nearest quotient. rug has no
+/// `mpfr_fmodquo`, so the truncated quotient comes from the nearest one. The
+/// nearest quotient rounds away from zero exactly when the remainder is not
+/// zero and its sign differs from that of `x`. The truncated quotient is
+/// then one less in magnitude, and otherwise the same. A special case of
+/// [`remainder`] has no quotient, and floaty gives the bits 0: a NaN result,
+/// a zero `x`, and an infinite `y`.
+#[must_use]
+pub fn quotient_low_bits<const N: usize>(
+    first: &Operand<N>,
+    second: &Operand<N>,
+    env: &Env,
+) -> [u8; 2] {
+    let mut flags = Flags::NONE;
+    let operands = [first.read(env, &mut flags), second.read(env, &mut flags)];
+    let [Read::Number(x), Read::Number(y)] = &operands else {
+        return [0, 0];
+    };
+    if x.is_infinite() || y.is_zero() || x.is_zero() || y.is_infinite() {
+        return [0, 0];
+    }
+    // The remainder can round at this precision, which keeps its sign and
+    // keeps it nonzero. MPFR gives the quotient bits exactly.
+    let precision = x.prec().max(y.prec());
+    let (remainder, quotient) = BigFloat::with_val(precision, x).remainder_quo31(y);
+    let away = !remainder.is_zero() && remainder.is_sign_negative() != x.is_sign_negative();
+    let nearest = quotient.unsigned_abs().to_le_bytes()[0] & 7;
+    [nearest, (nearest + 8 - u8::from(away)) & 7]
+}
+
 /// Returns the expected result and flags of a remainder of finite operands
 /// that `compute` gives exactly, with the special cases of IEEE 754.
 fn exact_remainder<const N: usize>(

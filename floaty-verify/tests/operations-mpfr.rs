@@ -4,14 +4,15 @@
 //! `operations::BEHAVIORS`.
 //!
 //! The pair operations are the comparisons, the total order, the sign
-//! operations, the ten minimum and maximum operations, the remainder, and the
-//! three augmented operations, and `hypot`. The operations on one operand are
-//! rounding to an integral value, conversion to seven integer types,
-//! scaling, `log_b`, the reciprocal square root, `pown` and `rootn` with
-//! every `n` up to 66 in magnitude and the extremes, the NaN payload
-//! operations, and the next value up and down. Three 8-bit layouts with a small
-//! exponent range also run, because a rounded integer can overflow them, and
-//! they run the operations that only the binary formats have.
+//! operations, the ten minimum and maximum operations, the remainder and
+//! the low bits of its quotient, and the three augmented operations, and
+//! `hypot`. The operations on one operand are rounding to an integral value,
+//! conversion to seven integer types, scaling, `log_b`, the reciprocal square
+//! root, `pown` and `rootn` with every `n` up to 66 in magnitude and the
+//! extremes, the NaN payload operations, and the next value up and down.
+//! Three 8-bit layouts with a small exponent range also run, because a
+//! rounded integer can overflow them, and they run the operations that only
+//! the binary formats have.
 
 // The references of this test build only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -101,6 +102,31 @@ fn remainder<S: Standard<W, Bits = u8>, const W: usize>(specials: Specials) {
 #[test]
 fn every_small_format_pair_remainder() {
     floaty_verify::for_each_small_format!(run_check, remainder);
+}
+
+/// Checks the remainders with the low bits of the quotient on every pair of
+/// encodings of one format of the small format lists, in every behavior.
+macro_rules! remainder_quotient_of_every_pair {
+    ($alias:ident, $standard:ty, $width:literal, $specials:expr, $seed:literal, $block:literal) => {{
+        let format = Format::of::<floaty::$alias>($specials);
+        let cases = cases::<$standard, $width>();
+        let quotients = (
+            Float::remainder_quotient_with,
+            Float::truncated_remainder_quotient_with,
+        );
+        for env in &BEHAVIORS {
+            for x in &cases {
+                for y in &cases {
+                    check::check_remainder_quotient(x, y, &format, env, quotients);
+                }
+            }
+        }
+    }};
+}
+
+#[test]
+fn every_small_format_pair_remainder_quotient() {
+    floaty_verify::for_each_small_format!(remainder_quotient_of_every_pair);
 }
 
 /// The scales of `scale_b`: every scale that moves an FP8 value across its
@@ -242,9 +268,11 @@ macro_rules! each_small_range_layout {
 /// Checks the operations that only the binary formats have on every pair or
 /// encoding of an 8-bit layout of `each_small_range_layout`, in every
 /// behavior: `hypot`, the reciprocal square root, the augmented operations,
-/// and the NaN payload operations. These layouts overflow often, and the
-/// precision 6 of `Binary<2>` gives a reciprocal square root whose quotient
-/// is a perfect square but not exact.
+/// the remainders with the low bits of the quotient, and the NaN payload
+/// operations. These layouts overflow often, and the precision 6 of
+/// `Binary<2>` gives a reciprocal square root whose quotient is a perfect
+/// square but not exact. It also fills the storage, as the quotient bits
+/// allow.
 fn binary_operations<const E: u32, Enc: Encoding>(specials: Specials)
 where
     Binary<E, Enc>: Standard<8, Bits = u8>,
@@ -266,6 +294,11 @@ where
                 check::check_augmented(x, y, &format, env, |x, y, operation, env| {
                     operation.apply(x, y, env)
                 });
+                let quotients = (
+                    Float::remainder_quotient_with,
+                    Float::truncated_remainder_quotient_with,
+                );
+                check::check_remainder_quotient(x, y, &format, env, quotients);
             }
         }
     }

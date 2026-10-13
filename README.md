@@ -20,12 +20,13 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   directions of IBM POWER decimal floating point.
 - **The IEEE 754 operations.** Comparisons, total order, the IEEE 754-2019
   minimum, maximum, and magnitude operations and the IEEE 754-2008 `minNum`
-  and `maxNum`, the remainder, rounding to an integral value, integer
-  conversions up to 512 bits, `scale_b` and `log_b`, the exponentials and
-  the logarithms of every format in base e, 2, and 10, with their forms
-  `b^x - 1` and `log_b(1 + x)`, the hyperbolic functions and their
-  inverses, the trigonometric functions `sin`, `cos`, and `tan`, the
-  functions scaled by pi, `sinPi`, `cosPi`, and `tanPi`, the inverse
+  and `maxNum`, the remainder, with the low three bits of its quotient for
+  the binary formats, as C `remquo` gives them, rounding to an integral
+  value, integer conversions up to 512 bits, `scale_b` and `log_b`, the
+  exponentials and the logarithms of every format in base e, 2, and 10,
+  with their forms `b^x - 1` and `log_b(1 + x)`, the hyperbolic functions
+  and their inverses, the trigonometric functions `sin`, `cos`, and `tan`,
+  the functions scaled by pi, `sinPi`, `cosPi`, and `tanPi`, the inverse
   trigonometric functions `asin`, `acos`, and `atan` with their forms scaled
   by pi, `atan2` and `atan2Pi`, and `pow` and `powr`, correctly rounded,
   `hypot`, the reciprocal square root, `compound`, `pown`, and `rootn` of
@@ -344,6 +345,52 @@ floaty models the rules of a unit, not the quirks of one instruction. For
 example, `MINSS` returns its second operand for a NaN, and `CVTSS2SI`
 returns `0x8000_0000` for an out-of-range value. An emulator builds such an
 instruction from a comparison, or from the `ToInt` result.
+
+The hardware tests of `floaty-verify` hold such a recipe for each x86
+instruction that an emulator builds from several floaty operations. They
+compare each recipe with the processor in every MXCSR or control word
+state. `tests/sse-composed.rs` holds the SSE minimum, maximum, compare
+predicates, horizontal sums, dot products, and F16C conversions.
+`tests/avx512-composed.rs` holds the AVX-512 scalar instructions, the
+embedded rounding, the unsigned conversions, and the BF16 instructions.
+`tests/x87-operations.rs` holds `FXTRACT`, the packed BCD loads and
+stores, the constant loads, and the quotient bits and the partial steps of
+`FPREM1` and `FPREM`.
+
+### Unmasked exceptions
+
+floaty never traps, and its flags describe the masked response. An emulator
+builds the response to an unmasked exception from those flags.
+`floaty-verify/tests/unmasked-exceptions.rs` compares each rule below with
+the processor. Let F be the flags of the operation under the behavior of
+the control register.
+
+For SSE, the instruction takes the first step that applies:
+
+1. An IE, ZE, or DE of F with its mask clear: the instruction writes no
+   result, sets the IE, ZE, and DE of F, and traps.
+2. An overflow with OM clear, or a `TINY` result with UM clear: the
+   instruction writes no result and traps. `TINY` comes from the operation
+   without flush-to-zero, so an exact tiny result also traps. The
+   instruction sets the IE, ZE, and DE of F, OE or UE, and PE when the
+   result rounded with an unbounded exponent is inexact. A binary format
+   with the same precision and more exponent bits gives that rounding.
+3. A PE of F with PM clear: the instruction writes no result, sets the
+   flags of F, and traps.
+4. Otherwise, the instruction writes the result and sets the flags of F.
+
+For x87, an unmasked flag also sets ES and B, and the next waiting
+instruction traps:
+
+1. An IE, ZE, or DE of F with its mask clear: the instruction sets those
+   flags and changes no register and not TOP.
+2. An overflow with OM clear, or a `TINY` result with UM clear: the
+   instruction writes the result rounded with an unbounded exponent at the
+   precision control, scaled by 2^-24576 for an overflow or by 2^24576 for
+   an underflow. It sets the IE, ZE, and DE of F, OE or UE, PE for an
+   inexact rounding, and C1 for a rounding up. The same format with more
+   exponent bits, then `scale_b`, gives the result.
+3. Otherwise, the instruction writes the result and sets the flags of F.
 
 ### Modes
 
@@ -877,13 +924,13 @@ decNumber.
 | Reference | What it checks |
 | --- | --- |
 | Berkeley TestFloat and SoftFloat 3e | Arithmetic, conversions, comparisons, the remainder, rounding to an integral value, and integer conversions of binary16, binary32, binary64, binary128, and x87 extended, in the six directions of TestFloat, under four NaN rules |
-| MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, with FTZ, DAZ, and saturation, and with unsupported operands, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, from binary32, binary64, x87 extended, and binary128 to them, and between every binary format and the decimal formats, in every behavior of the conversion tests. The truncated remainder. `hypot`, the reciprocal square root, `pown`, and `rootn`, against `mpfr_hypot`, `mpfr_rec_sqrt`, `mpfr_pow_si`, and `mpfr_rootn_si`, and the rounded steps of `pown` past `|n| = 64`. The augmented operations, whose tail `mpfr_sum` rounds. The sums of the reduction operations, with `mpfr_sum` and `mpfr_dot`, and each step of the scaled products. The NaN payload operations of every binary format, by floaty's rule. The operations of `DoubleDouble` on its exact value, by their rules, with exact rationals. Each binary64 step of the other `DoubleDouble` operations, in the behaviors that libgcc and QD do not define. |
+| MPFR, through `rug` | Rounding to every binary format up to 512 bits. The arithmetic and the other operations of every binary format but x87 extended precision, in every direction and in a set of behaviors that uses each flag setting and each NaN rule. The NaN that each NaN rule selects. The arithmetic of x87 extended precision with precision control in every direction, with FTZ, DAZ, and saturation, and with unsupported operands, and its other operations in the same set of behaviors. Conversions between the formats that TestFloat lacks, with their NaN payloads, from binary32, binary64, x87 extended, and binary128 to them, and between every binary format and the decimal formats, in every behavior of the conversion tests. The truncated remainder, and the low bits of the quotients of both remainders against `mpfr_remquo`. `hypot`, the reciprocal square root, `pown`, and `rootn`, against `mpfr_hypot`, `mpfr_rec_sqrt`, `mpfr_pow_si`, and `mpfr_rootn_si`, and the rounded steps of `pown` past `|n| = 64`. The augmented operations, whose tail `mpfr_sum` rounds. The sums of the reduction operations, with `mpfr_sum` and `mpfr_dot`, and each step of the scaled products. The NaN payload operations of every binary format, by floaty's rule. The operations of `DoubleDouble` on its exact value, by their rules, with exact rationals. Each binary64 step of the other `DoubleDouble` operations, in the behaviors that libgcc and QD do not define. |
 | MPFR, through `rug`, with published worst cases | The exponentials, the logarithms, the hyperbolic functions, the trigonometric functions and their forms scaled by pi, the inverse trigonometric functions, and `atan2` and `atan2Pi` of every binary and decimal format, `exp`, `expm1`, `exp2`, `exp2m1`, `exp10`, `exp10m1`, `log`, `log2`, `log10`, `logp1`, `log2p1`, `log10p1`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `sin`, `cos`, `tan`, `sinPi`, `cosPi`, `tanPi`, `asin`, `acos`, `atan`, `asinPi`, `acosPi`, `atanPi`, `atan2`, and `atan2Pi`, against the MPFR function of each at a precision that grows until its bounds decide the rounding, in every behavior of the operation tests for the binary formats and of the conversion tests for the decimal formats. GMP gives the rational results, the powers of 2 and 10 at an integer and the integer logarithms, exactly. The rules of IEEE 754-2019 section 9.2.1 give the exact values of the functions scaled by pi at the quarters, of `asinPi`, `acosPi`, and `atanPi` at 0, ±1, and ±inf, and of `atan2Pi` at zeros, infinities, and `\|y\| = \|x\|`. Every FP8, FP6, FP4, binary16, and bfloat16 encoding, every pair of FP8, FP6, and FP4 encodings for `atan2` and `atan2Pi`, and the integers, quarters, multiples of pi/2, powers, pairs, and arguments next to each bound of the other formats, with arguments of `sin`, `cos`, and `tan` up to the largest of binary512 and decimal128. The binary64 worst cases of Lefèvre and Muller, the binary64 argument nearest a multiple of pi/2 that Muller lists, and the decimal64 `exp` worst cases of Lefèvre, Stehlé, and Zimmermann. |
 | GMP and MPFR, through `rug` | `compound` of every binary format, in every behavior of the operation tests: every FP8, FP6, and FP4 encoding with 24 exponents from `i64::MIN` to `i64::MAX`, every binary16 and bfloat16 encoding with three, and samples of the other formats with arguments next to -1, next to the thresholds of the range, and with exact powers. GMP gives an exact power, or the exact power `x^n` for a large `x`. Every other power takes bounds from `mpfr_log1p`, `mpfr_mul_si`, and `mpfr_exp`, at a precision that grows until the bounds decide the rounding. `mpfr_compound_si` of MPFR 4.2.2 gives a wrong bound in a hard case, which a comment in the oracle records. |
 | GMP and MPFR, through `rug` | `pow` and `powr` of every binary and decimal format, in every behavior of the operation tests for the binary formats and of the conversion tests for the decimal formats: every pair of FP8, FP6, and FP4 encodings, and for the other formats the pairs of the `atan2` tests, and bases with exact powers and roots, negative bases, and bases next to 1, against integer, half, quarter, huge, and tiny exponents. `mpfr_pow` gives a binary value at a precision that grows until its bounds decide the rounding. GMP gives a rational decimal value exactly by `mpz_rootrem`. Every other decimal value takes bounds from `mpfr_pow` at the corners of the bounds of `x` and `y`. A value next to 1, or far past the range, takes a stand-in on the same side of every point of the grid, as the comments of the oracle state. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, `scale_b`, and `log_b` against `ilogb` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
-| The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, and every host path. The AArch64 and s390x tests run under QEMU 10.2.1. |
+| The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, the recipes of the x86 instructions that an emulator builds from several floaty operations, the response to unmasked exceptions, and every host path. The AArch64 and s390x tests run under QEMU 10.2.1. |
 | decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations in every direction, with FTZ, DAZ, precision limits, and every NaN rule, in DPD and, through the conversions of the Intel library, in BID. The conversions between the widths in the same behaviors, the conversions to and from every integer type, and the total order of non-canonical encodings. The minimum and maximum operations and the NaN payload operations of IEEE 754-2019, by floaty's rule. The static modes, against their behaviors. |
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
@@ -941,7 +988,8 @@ The minimum supported Rust version is 1.89. The crate uses edition 2024.
 - No text parsing or printing, in decimal or in hexadecimal.
 - No `const fn` evaluation. The engine uses traits, which a `const fn` on
   stable Rust cannot call.
-- No traps. floaty reports flags and never traps.
+- No traps. floaty reports flags and never traps. The section on unmasked
+  exceptions states how an emulator builds the x86 response from the flags.
 - Presets for x86 SSE and x87 only.
 - No decimal formats wider than 128 bits. No hardware or major library
   uses them.

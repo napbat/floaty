@@ -382,35 +382,36 @@ fild!(
     fild_m64, i64, "fild qword ptr [{source}]"
 );
 
-/// The largest number of steps that [`fprem1`] and [`fprem`] run. A step
-/// that leaves the reduction incomplete lowers the exponent by at least 32
-/// (Intel SDM Volume 2A, `FPREM1` and `FPREM`). The exponents of two x87
-/// values differ by less than 2^15 + 64, so about 1,030 steps reduce every
-/// pair.
-const PARTIAL_REMAINDER_STEPS: u64 = 2048;
+/// The number of steps after which every pair is reduced, for [`fprem1`]
+/// and [`fprem`]. A step that leaves the reduction incomplete lowers the
+/// exponent by at least 32 (Intel SDM Volume 2A, `FPREM1` and `FPREM`). The
+/// exponents of two x87 values differ by less than 2^15 + 64, so about 1,030
+/// steps reduce every pair.
+pub const PARTIAL_REMAINDER_STEPS: u64 = 2048;
 
 /// Defines a function that runs a partial remainder instruction until C2
-/// reports a complete reduction.
+/// reports a complete reduction, or for a number of steps.
 macro_rules! partial_remainder {
     ($(#[$doc:meta])* $name:ident, $instruction:literal) => {
         $(#[$doc])*
         ///
         /// The dividend `a` is in ST(0) and the divisor `b` in ST(1), under
-        /// a control word. Returns the remainder bits and the status word of
-        /// the last step. The exception flags collect over the steps. C2 is
-        /// set in the returned status only when the reduction is still
-        /// incomplete after `PARTIAL_REMAINDER_STEPS` steps. C3, C1, and C0
-        /// hold the low three bits of the quotient.
+        /// a control word. The instruction runs until C2 is clear, for at
+        /// most `steps` steps. Returns the remainder bits and the status
+        /// word of the last step. The exception flags collect over the
+        /// steps. C2 is set in the returned status only when the reduction
+        /// is still incomplete after `steps` steps.
         #[must_use]
-        pub fn $name(a: u128, b: u128, control: u16) -> (u128, u16) {
+        pub fn $name(a: u128, b: u128, control: u16, steps: u64) -> (u128, u16) {
             let operands = [a.to_le_bytes(), b.to_le_bytes()];
             let mut output = [0_u8; 16];
             let mut saved = 0_u16;
             let status: u16;
             // SAFETY: as in `x87!`. The loop repeats the instruction while
             // C2, bit 2 of AH, is set, and `LOOPNZ` stops the loop after
-            // `PARTIAL_REMAINDER_STEPS` steps. Two `FSTP` instructions pop
-            // the remainder and the divisor, so the stack is empty on exit.
+            // `steps` steps, or after one step when `steps` is 0. Two `FSTP`
+            // instructions pop the remainder and the divisor, so the stack is
+            // empty on exit.
             unsafe {
                 asm!(
                     "fnstcw word ptr [{saved}]",
@@ -432,7 +433,7 @@ macro_rules! partial_remainder {
                     operands = in(reg) operands.as_ptr(),
                     target = in(reg) output.as_mut_ptr(),
                     out("ax") status,
-                    inout("rcx") PARTIAL_REMAINDER_STEPS => _,
+                    inout("rcx") steps.max(1) => _,
                     out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
                     out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
                     options(nostack),
@@ -492,3 +493,116 @@ pub fn fscale(a: u128, scale: i32, control: u16) -> (u128, u16) {
     }
     (u128::from_le_bytes(output), status)
 }
+
+x87!(
+    /// `FBLD` of an 80-bit packed BCD integer and `FSTP` to 80 bits.
+    fbld, (a), "fbld tbyte ptr [{operands}]", "", "fstp tbyte ptr [{target}]", u128
+);
+x87!(
+    /// `FLD` of an 80-bit value and `FBSTP` to an 80-bit packed BCD integer,
+    /// rounded as the control word selects.
+    fbstp, (a), "fld tbyte ptr [{operands}]", "fbstp tbyte ptr [{target}]", "", u128
+);
+
+/// Runs `FXTRACT` on `a` under a control word. Returns the significand, which
+/// `FXTRACT` leaves in ST(0), the exponent, which it leaves in ST(1), and the
+/// status word.
+#[must_use]
+pub fn fxtract(a: u128, control: u16) -> (u128, u128, u16) {
+    let value = a.to_le_bytes();
+    let mut output = [[0_u8; 16]; 2];
+    let mut saved = 0_u16;
+    let status: u16;
+    // SAFETY: as in `x87!`. `FXTRACT` replaces the operand with the exponent
+    // and pushes the significand, and two `FSTP` instructions pop both into
+    // the two 16-byte slots of `output`, so the stack is empty on exit.
+    unsafe {
+        asm!(
+            "fnstcw word ptr [{saved}]",
+            "fldcw word ptr [{control}]",
+            "fnclex",
+            "fld tbyte ptr [{value}]",
+            "fxtract",
+            "fnstsw ax",
+            "fstp tbyte ptr [{target}]",
+            "fstp tbyte ptr [{target} + 16]",
+            "fnclex",
+            "fldcw word ptr [{saved}]",
+            saved = in(reg) &raw mut saved,
+            control = in(reg) &raw const control,
+            value = in(reg) value.as_ptr(),
+            target = in(reg) output.as_mut_ptr(),
+            out("ax") status,
+            out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+            out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+            options(nostack),
+        );
+    }
+    let [significand, exponent] = output.map(u128::from_le_bytes);
+    (significand, exponent, status)
+}
+
+/// Defines a function that pushes a constant under a control word and stores
+/// it with `FSTP` to 80 bits. Returns the result bits and the status word.
+macro_rules! constant {
+    ($(#[$doc:meta])* $name:ident, $instruction:literal) => {
+        $(#[$doc])*
+        #[must_use]
+        pub fn $name(control: u16) -> (u128, u16) {
+            let mut output = [0_u8; 16];
+            let mut saved = 0_u16;
+            let status: u16;
+            // SAFETY: as in `x87!`. The code pushes one constant and pops it
+            // with `FSTP`, so the stack is empty on exit.
+            unsafe {
+                asm!(
+                    "fnstcw word ptr [{saved}]",
+                    "fldcw word ptr [{control}]",
+                    "fnclex",
+                    $instruction,
+                    "fnstsw ax",
+                    "fstp tbyte ptr [{target}]",
+                    "fnclex",
+                    "fldcw word ptr [{saved}]",
+                    saved = in(reg) &raw mut saved,
+                    control = in(reg) &raw const control,
+                    target = in(reg) output.as_mut_ptr(),
+                    out("ax") status,
+                    out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                    out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+                    options(nostack),
+                );
+            }
+            (u128::from_le_bytes(output), status)
+        }
+    };
+}
+
+constant!(
+    /// `FLD1`: +1.0.
+    fld1, "fld1"
+);
+constant!(
+    /// `FLDZ`: +0.0.
+    fldz, "fldz"
+);
+constant!(
+    /// `FLDPI`: π.
+    fldpi, "fldpi"
+);
+constant!(
+    /// `FLDL2T`: log2 10.
+    fldl2t, "fldl2t"
+);
+constant!(
+    /// `FLDL2E`: log2 e.
+    fldl2e, "fldl2e"
+);
+constant!(
+    /// `FLDLG2`: log10 2.
+    fldlg2, "fldlg2"
+);
+constant!(
+    /// `FLDLN2`: ln 2.
+    fldln2, "fldln2"
+);

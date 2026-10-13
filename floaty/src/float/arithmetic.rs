@@ -182,7 +182,10 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// `self`. An infinite `self` or a zero `divisor` is invalid. A subnormal
     /// remainder reports [`Flags::TINY`]. This is not the Rust `%` operator,
     /// which truncates the quotient:
-    /// [`truncated_remainder_with`](Self::truncated_remainder_with).
+    /// [`truncated_remainder_with`](Self::truncated_remainder_with). For a
+    /// binary format,
+    /// [`remainder_quotient_with`](Float::remainder_quotient_with) also
+    /// returns the low bits of `n`.
     #[must_use]
     pub fn remainder_with(self, divisor: Self, behavior: impl Override) -> (Self, Flags) {
         let (bits, flags) = S::remainder(
@@ -211,6 +214,9 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
     /// has the sign of `self`, an infinite `self` or a zero `divisor` is
     /// invalid, and an infinite `divisor` gives `self`. A decimal result has
     /// the smaller exponent of the operands, as decNumber `remainder` gives.
+    /// For a binary format,
+    /// [`truncated_remainder_quotient_with`](Float::truncated_remainder_quotient_with)
+    /// also returns the low bits of `n`.
     ///
     /// ```
     /// use floaty::F64;

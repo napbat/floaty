@@ -22,7 +22,7 @@ mod elementary;
 mod integer;
 mod reduction;
 
-pub use self::binary::Augmented;
+pub use self::binary::{Augmented, QuotientBits};
 pub(crate) use self::integer::from_host_integer;
 pub use self::reduction::Scaled;
 

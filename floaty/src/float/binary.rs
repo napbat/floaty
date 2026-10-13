@@ -1,11 +1,12 @@
-//! The operations of the binary formats alone: `log_b`, the algebraic
-//! functions `hypot`, the reciprocal square root, `pown`, `rootn`, and
-//! `compound`, the augmented operations, and the NaN payload operations.
+//! The operations of the binary formats alone: `log_b`, the remainders with
+//! the low bits of the quotient, the algebraic functions `hypot`, the
+//! reciprocal square root, `pown`, `rootn`, and `compound`, the augmented
+//! operations, and the NaN payload operations.
 
 use super::Float;
 use crate::binary::Layout;
 use crate::env::{Behavior, Env, Flags, Mode, Override};
-use crate::format::internal::LimbConversion;
+use crate::format::internal::{LimbConversion, Quotient};
 use crate::format::{Binary, Encoding, Standard, Storage, Width};
 
 /// The two results of an augmented operation of IEEE 754-2019 section 9.5:
@@ -44,6 +45,34 @@ pub struct Augmented<F> {
     /// The exact result minus the head, rounded to nearest, with ties toward
     /// zero.
     pub tail: F,
+}
+
+/// The low three bits of the integer quotient `n` of a remainder, and the
+/// sign of `n`, as C `remquo` gives them.
+///
+/// [`remainder_quotient_with`](Float::remainder_quotient_with) and
+/// [`truncated_remainder_quotient_with`](Float::truncated_remainder_quotient_with)
+/// return it. The x87 `FPREM1` and `FPREM` instructions report the same
+/// three bits in C0, C3, and C1 after a complete reduction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct QuotientBits {
+    low_bits: u8,
+    negative: bool,
+}
+
+impl QuotientBits {
+    /// Returns the low three bits of `|n|`, from 0 to 7.
+    #[must_use]
+    pub const fn low_bits(self) -> u8 {
+        self.low_bits
+    }
+
+    /// Returns `true` when `n` is negative: when the dividend and the divisor
+    /// have different signs.
+    #[must_use]
+    pub const fn is_negative(self) -> bool {
+        self.negative
+    }
 }
 
 impl<const E: u32, Enc: Encoding, const W: usize, M: Mode> Float<Binary<E, Enc>, W, M>
@@ -85,6 +114,89 @@ where
         let env = behavior.apply::<M>().env();
         let (bits, flags) = Layout::<E, Enc, W>::log_b(self.bits.to_limbs(), &env);
         (Self::saturated_result(bits, &env), flags)
+    }
+
+    /// Returns the IEEE 754 remainder and the low bits of its quotient, with
+    /// the default mode.
+    #[must_use]
+    pub fn remainder_quotient(self, divisor: Self) -> (Self, QuotientBits) {
+        let (remainder, quotient, _) = self.remainder_quotient_with(divisor, M::default());
+        (remainder, quotient)
+    }
+
+    /// Returns the IEEE 754 remainder of
+    /// [`remainder_with`](Float::remainder_with), the low three bits of the
+    /// integer quotient `n` and its sign, and the flags.
+    ///
+    /// `n` is negative when `self` and `divisor` have different signs. A NaN
+    /// result, a zero `self`, and an infinite `divisor` give the bits 0.
+    ///
+    /// ```
+    /// use floaty::{Env, F64};
+    ///
+    /// let (x, y) = (F64::from_bits(0x401E_0000_0000_0000), F64::from_bits(0xC000_0000_0000_0000));
+    /// // 7.5 / -2 = -3.75 rounds to n = -4, and 7.5 - 8 = -0.5.
+    /// let (remainder, quotient, _) = x.remainder_quotient_with(y, Env::IEEE);
+    /// assert_eq!(remainder.to_bits(), 0xBFE0_0000_0000_0000);
+    /// assert_eq!((quotient.low_bits(), quotient.is_negative()), (4, true));
+    /// ```
+    #[must_use]
+    pub fn remainder_quotient_with(
+        self,
+        divisor: Self,
+        behavior: impl Override,
+    ) -> (Self, QuotientBits, Flags) {
+        self.quotient_with(divisor, Quotient::Nearest, behavior)
+    }
+
+    /// Returns the truncated remainder and the low bits of its quotient, with
+    /// the default mode.
+    #[must_use]
+    pub fn truncated_remainder_quotient(self, divisor: Self) -> (Self, QuotientBits) {
+        let (remainder, quotient, _) =
+            self.truncated_remainder_quotient_with(divisor, M::default());
+        (remainder, quotient)
+    }
+
+    /// Returns the truncated remainder of
+    /// [`truncated_remainder_with`](Float::truncated_remainder_with), the low
+    /// three bits of the integer quotient `n` and its sign, and the flags.
+    /// `n` is `self / divisor` rounded toward zero, as for C `fmod`. The
+    /// other rules are those of
+    /// [`remainder_quotient_with`](Self::remainder_quotient_with).
+    #[must_use]
+    pub fn truncated_remainder_quotient_with(
+        self,
+        divisor: Self,
+        behavior: impl Override,
+    ) -> (Self, QuotientBits, Flags) {
+        self.quotient_with(divisor, Quotient::Truncated, behavior)
+    }
+
+    /// Returns a remainder with the quotient that `quotient` selects, the low
+    /// bits of the quotient, and the flags.
+    fn quotient_with(
+        self,
+        divisor: Self,
+        quotient: Quotient,
+        behavior: impl Override,
+    ) -> (Self, QuotientBits, Flags) {
+        let env = behavior.apply::<M>().env();
+        let (bits, low_bits, flags) = Layout::<E, Enc, W>::remainder_quotient::<true, _>(
+            self.bits.to_limbs(),
+            divisor.bits.to_limbs(),
+            quotient,
+            &env,
+        );
+        let quotient = QuotientBits {
+            low_bits,
+            negative: self.is_sign_negative() != divisor.is_sign_negative(),
+        };
+        (
+            Self::from_masked(LimbConversion::from_limbs(bits)),
+            quotient,
+            flags,
+        )
     }
 
     /// Returns `sqrt(self^2 + other^2)`, with the default mode.
