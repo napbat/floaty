@@ -606,3 +606,90 @@ constant!(
     /// `FLDLN2`: ln 2.
     fldln2, "fldln2"
 );
+
+/// The top two registers of the x87 stack and the status word after an
+/// instruction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StackTop {
+    /// ST(0), the top of the stack.
+    pub st0: u128,
+    /// ST(1), below the top: the real indefinite when the stack holds one
+    /// value.
+    pub st1: u128,
+    /// The status word that the instruction leaves.
+    pub status: u16,
+}
+
+/// Defines a function that pushes `y` and then `x`, runs a transcendental
+/// instruction under a control word, and returns the top two registers and
+/// the status word.
+macro_rules! transcendental {
+    ($(#[$doc:meta])* $name:ident, $instruction:literal) => {
+        $(#[$doc])*
+        #[must_use]
+        pub fn $name(y: u128, x: u128, control: u16) -> StackTop {
+            let operands = [y.to_le_bytes(), x.to_le_bytes()];
+            let mut output = [[0_u8; 16]; 2];
+            let mut saved = 0_u16;
+            let status: u16;
+            // SAFETY: as in `x87!`. The code pushes two values and runs one
+            // instruction, which leaves one to three values. Two `FSTP`
+            // instructions store ST(0) and ST(1) in the two 16-byte slots of
+            // `output`; with one value left, the second stores the real
+            // indefinite. `FNINIT` then empties the stack.
+            unsafe {
+                asm!(
+                    "fnstcw word ptr [{saved}]",
+                    "fldcw word ptr [{control}]",
+                    "fnclex",
+                    "fld tbyte ptr [{operands}]",
+                    "fld tbyte ptr [{operands} + 16]",
+                    $instruction,
+                    "fnstsw ax",
+                    "fnclex",
+                    "fstp tbyte ptr [{target}]",
+                    "fstp tbyte ptr [{target} + 16]",
+                    "fninit",
+                    "fldcw word ptr [{saved}]",
+                    saved = in(reg) &raw mut saved,
+                    control = in(reg) &raw const control,
+                    operands = in(reg) operands.as_ptr(),
+                    target = in(reg) output.as_mut_ptr(),
+                    out("ax") status,
+                    out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                    out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+                    options(nostack),
+                );
+            }
+            let [st0, st1] = output.map(u128::from_le_bytes);
+            StackTop { st0, st1, status }
+        }
+    };
+}
+
+transcendental!(
+    /// `FSIN` of `x`, with `y` below it.
+    fsin, "fsin"
+);
+transcendental!(
+    /// `FCOS` of `x`, with `y` below it.
+    fcos, "fcos"
+);
+transcendental!(
+    /// `FSINCOS` of `x`, with `y` below it: the cosine in ST(0) and the sine
+    /// in ST(1).
+    fsincos, "fsincos"
+);
+transcendental!(
+    /// `FPTAN` of `x`, with `y` below it: 1.0 in ST(0) and the tangent in
+    /// ST(1).
+    fptan, "fptan"
+);
+transcendental!(
+    /// `FPATAN`: the arctangent of `y / x` in ST(0), by the signs of both.
+    fpatan, "fpatan"
+);
+transcendental!(
+    /// `F2XM1` of `x`, `2^x - 1`, with `y` below it.
+    f2xm1, "f2xm1"
+);
