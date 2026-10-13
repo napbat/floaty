@@ -357,6 +357,41 @@ embedded rounding, the unsigned conversions, and the BF16 instructions.
 stores, the constant loads, and the quotient bits and the partial steps of
 `FPREM1` and `FPREM`.
 
+### Unmasked exceptions
+
+floaty never traps, and its flags describe the masked response. An emulator
+builds the response to an unmasked exception from those flags.
+`floaty-verify/tests/unmasked-exceptions.rs` compares each rule below with
+the processor. Let F be the flags of the operation under the behavior of
+the control register.
+
+For SSE, the instruction takes the first step that applies:
+
+1. An IE, ZE, or DE of F with its mask clear: the instruction writes no
+   result, sets the IE, ZE, and DE of F, and traps.
+2. An overflow with OM clear, or a `TINY` result with UM clear: the
+   instruction writes no result and traps. `TINY` comes from the operation
+   without flush-to-zero, so an exact tiny result also traps. The
+   instruction sets the IE, ZE, and DE of F, OE or UE, and PE when the
+   result rounded with an unbounded exponent is inexact. A binary format
+   with the same precision and more exponent bits gives that rounding.
+3. A PE of F with PM clear: the instruction writes no result, sets the
+   flags of F, and traps.
+4. Otherwise, the instruction writes the result and sets the flags of F.
+
+For x87, an unmasked flag also sets ES and B, and the next waiting
+instruction traps:
+
+1. An IE, ZE, or DE of F with its mask clear: the instruction sets those
+   flags and changes no register and not TOP.
+2. An overflow with OM clear, or a `TINY` result with UM clear: the
+   instruction writes the result rounded with an unbounded exponent at the
+   precision control, scaled by 2^-24576 for an overflow or by 2^24576 for
+   an underflow. It sets the IE, ZE, and DE of F, OE or UE, PE for an
+   inexact rounding, and C1 for a rounding up. The same format with more
+   exponent bits, then `scale_b`, gives the result.
+3. Otherwise, the instruction writes the result and sets the flags of F.
+
 ### Modes
 
 A mode is a behavior fixed at compile time. Each type carries a default
@@ -895,7 +930,7 @@ decNumber.
 | GMP and MPFR, through `rug` | `pow` and `powr` of every binary and decimal format, in every behavior of the operation tests for the binary formats and of the conversion tests for the decimal formats: every pair of FP8, FP6, and FP4 encodings, and for the other formats the pairs of the `atan2` tests, and bases with exact powers and roots, negative bases, and bases next to 1, against integer, half, quarter, huge, and tiny exponents. `mpfr_pow` gives a binary value at a precision that grows until its bounds decide the rounding. GMP gives a rational decimal value exactly by `mpz_rootrem`. Every other decimal value takes bounds from `mpfr_pow` at the corners of the bounds of `x` and `y`. A value next to 1, or far past the range, takes a stand-in on the same side of every point of the grid, as the comments of the oracle state. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, `scale_b`, and `log_b` against `ilogb` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
-| The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, the recipes of the x86 instructions that an emulator builds from several floaty operations, and every host path. The AArch64 and s390x tests run under QEMU 10.2.1. |
+| The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, the recipes of the x86 instructions that an emulator builds from several floaty operations, the response to unmasked exceptions, and every host path. The AArch64 and s390x tests run under QEMU 10.2.1. |
 | decTest 2.62 and decNumber 3.68 | DPD vectors, and random decimal32, decimal64, and decimal128 operations in every direction, with FTZ, DAZ, precision limits, and every NaN rule, in DPD and, through the conversions of the Intel library, in BID. The conversions between the widths in the same behaviors, the conversions to and from every integer type, and the total order of non-canonical encodings. The minimum and maximum operations and the NaN payload operations of IEEE 754-2019, by floaty's rule. The static modes, against their behaviors. |
 | Intel Decimal Floating-Point Math Library 2.0 Update 2 | The BID vectors of `readtest.in`, about 22 million random cases, and conversions to and from binary formats |
 | libgcc of GCC 15.2.0, under QEMU `qemu-ppc64le` | `DoubleDouble<Gcc>`, and the PowerPC fused multiply-add NaN rules |
@@ -953,7 +988,8 @@ The minimum supported Rust version is 1.89. The crate uses edition 2024.
 - No text parsing or printing, in decimal or in hexadecimal.
 - No `const fn` evaluation. The engine uses traits, which a `const fn` on
   stable Rust cannot call.
-- No traps. floaty reports flags and never traps.
+- No traps. floaty reports flags and never traps. The section on unmasked
+  exceptions states how an emulator builds the x86 response from the flags.
 - Presets for x86 SSE and x87 only.
 - No decimal formats wider than 128 bits. No hardware or major library
   uses them.

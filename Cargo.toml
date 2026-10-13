@@ -18,6 +18,9 @@ floaty = { version = "0.1.0", path = "floaty" }
 # Reference implementations for floaty-verify. `floaty` itself has no dependencies.
 rustc_apfloat = "=0.2.3"
 rug = { version = "=1.30.0", default-features = false, features = ["float", "integer", "rational", "std"] }
+# The SIGFPE handler of the unmasked-exception tests. rug and gmp-mpfr-sys
+# already depend on this release.
+libc = { version = "=0.2.190", default-features = false }
 
 [workspace.lints.rust]
 warnings = { level = "deny", priority = -2 }

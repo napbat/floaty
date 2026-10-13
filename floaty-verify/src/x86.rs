@@ -9,12 +9,14 @@
 //! and processor flags. The submodule `sse` runs the SSE instructions, and the
 //! submodule `x87` runs the x87 instructions. This module re-exports both.
 //! The submodule `composed` runs the instructions that an emulator builds
-//! from several floaty operations, and the submodule `avx512` holds the
-//! recipes of its AVX-512 instructions.
+//! from several floaty operations, the submodule `avx512` holds the recipes
+//! of its AVX-512 instructions, and the submodule `trap` runs instructions
+//! with unmasked exceptions.
 
 pub mod avx512;
 pub mod composed;
 mod sse;
+pub mod trap;
 mod x87;
 
 use core::cmp::Ordering;
