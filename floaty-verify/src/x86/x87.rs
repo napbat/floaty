@@ -693,3 +693,11 @@ transcendental!(
     /// `F2XM1` of `x`, `2^x - 1`, with `y` below it.
     f2xm1, "f2xm1"
 );
+transcendental!(
+    /// `FYL2X`: `y * log2(x)` in ST(0).
+    fyl2x, "fyl2x"
+);
+transcendental!(
+    /// `FYL2XP1`: `y * log2(1 + x)` in ST(0).
+    fyl2xp1, "fyl2xp1"
+);

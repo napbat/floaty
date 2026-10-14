@@ -148,7 +148,7 @@ impl<S: Standard<W>, const W: usize, M: Mode> Float<S, W, M> {
 
     /// Returns `function` of `self` and `other`, in that order, and the
     /// flags.
-    fn bivariate_with(
+    pub(super) fn bivariate_with(
         self,
         other: Self,
         function: Bivariate,

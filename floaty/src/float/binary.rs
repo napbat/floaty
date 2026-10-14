@@ -1,10 +1,12 @@
 //! The operations of the binary formats alone: `log_b`, the remainders with
-//! the low bits of the quotient, the algebraic functions `hypot`, the
-//! reciprocal square root, `pown`, `rootn`, and `compound`, the augmented
-//! operations, and the NaN payload operations.
+//! the low bits of the quotient, the products `y log2(x)` and
+//! `y log2(1 + x)`, the algebraic functions `hypot`, the reciprocal square
+//! root, `pown`, `rootn`, and `compound`, the augmented operations, and the
+//! NaN payload operations.
 
 use super::Float;
 use crate::binary::Layout;
+use crate::elementary::Bivariate;
 use crate::env::{Behavior, Env, Flags, Mode, Override};
 use crate::format::internal::{LimbConversion, Quotient};
 use crate::format::{Binary, Encoding, Standard, Storage, Width};
@@ -197,6 +199,73 @@ where
             quotient,
             flags,
         )
+    }
+
+    /// Returns `self * log2(x)`, rounded once, with the default mode.
+    #[must_use]
+    pub fn mul_log2(self, x: Self) -> Self {
+        self.mul_log2_with(x, M::default()).0
+    }
+
+    /// Returns `self * log2(x)`, correctly rounded in the direction of the
+    /// behavior, and the flags. The x87 instruction `FYL2X` computes this
+    /// product, with `self` in ST(1).
+    ///
+    /// The product rounds once, as [`exp_with`](Float::exp_with) does. A
+    /// power of 2 for `x` gives the exact product `self * k`, rounded. The
+    /// special cases are those of `log2` and of the product together:
+    ///
+    /// - a negative `x`, a zero `self` with a zero or infinite `x`, and an
+    ///   infinite `self` with `x = 1` are invalid;
+    /// - a zero `x` gives an infinity of the sign opposite to `self`, and
+    ///   signals divide-by-zero for a finite `self` alone;
+    /// - `x = 1` gives a zero, and `x = +inf` an infinity, each with the
+    ///   sign of `self`.
+    ///
+    /// A NaN operand gives a NaN by the rule of the behavior, in the operand
+    /// order `self`, `x`.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let product = |y, x| F64::from_bits(y).mul_log2_with(F64::from_bits(x), Env::IEEE);
+    /// // 3 * log2(8) = 9, exactly.
+    /// assert_eq!(product(0x4008_0000_0000_0000, 0x4020_0000_0000_0000), (F64::from_bits(0x4022_0000_0000_0000), Flags::NONE));
+    /// // log2(0) is a pole: -1 * log2(0) = +inf.
+    /// assert_eq!(product(0xBFF0_0000_0000_0000, 0), (F64::from_bits(0x7FF0_0000_0000_0000), Flags::DIVIDE_BY_ZERO));
+    /// ```
+    #[must_use]
+    pub fn mul_log2_with(self, x: Self, behavior: impl Override) -> (Self, Flags) {
+        self.bivariate_with(x, Bivariate::MulLog2, behavior)
+    }
+
+    /// Returns `self * log2(1 + x)`, rounded once, with the default mode.
+    #[must_use]
+    pub fn mul_log2_p1(self, x: Self) -> Self {
+        self.mul_log2_p1_with(x, M::default()).0
+    }
+
+    /// Returns `self * log2(1 + x)`, correctly rounded in the direction of
+    /// the behavior, and the flags. The x87 instruction `FYL2XP1` computes
+    /// this product, with `self` in ST(1).
+    ///
+    /// The rules are those of [`mul_log2_with`](Self::mul_log2_with) with
+    /// `1 + x` for `x`: an `x` below -1 is invalid, `x = -1` is the pole,
+    /// and a zero `x` gives a zero with the sign of `self` times the sign of
+    /// `x`.
+    ///
+    /// ```
+    /// use floaty::{Env, F64, Flags};
+    ///
+    /// let product = |y, x| F64::from_bits(y).mul_log2_p1_with(F64::from_bits(x), Env::IEEE);
+    /// // 3 * log2(1 + 1) = 3, exactly.
+    /// assert_eq!(product(0x4008_0000_0000_0000, 0x3FF0_0000_0000_0000), (F64::from_bits(0x4008_0000_0000_0000), Flags::NONE));
+    /// // 3 * log2(1 - 2) is invalid.
+    /// assert_eq!(product(0x4008_0000_0000_0000, 0xC000_0000_0000_0000).1, Flags::INVALID);
+    /// ```
+    #[must_use]
+    pub fn mul_log2_p1_with(self, x: Self, behavior: impl Override) -> (Self, Flags) {
+        self.bivariate_with(x, Bivariate::MulLog2P1, behavior)
     }
 
     /// Returns `sqrt(self^2 + other^2)`, with the default mode.

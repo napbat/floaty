@@ -245,6 +245,28 @@ macro_rules! binary_functions_match {
                     }),
                 );
                 check(
+                    &|| context("mul_log2"),
+                    x,
+                    env,
+                    (&|lanes| lanes.mul_log2(Lanes::new(y)), &|lanes, env| {
+                        lanes.mul_log2_with(Lanes::new(y), env)
+                    }),
+                    (&|x, lane| x.mul_log2(y[lane]), &|x, lane, env| {
+                        x.mul_log2_with(y[lane], env)
+                    }),
+                );
+                check(
+                    &|| context("mul_log2_p1"),
+                    x,
+                    env,
+                    (&|lanes| lanes.mul_log2_p1(Lanes::new(y)), &|lanes, env| {
+                        lanes.mul_log2_p1_with(Lanes::new(y), env)
+                    }),
+                    (&|x, lane| x.mul_log2_p1(y[lane]), &|x, lane, env| {
+                        x.mul_log2_p1_with(y[lane], env)
+                    }),
+                );
+                check(
                     &|| context("reciprocal_sqrt"),
                     x,
                     env,

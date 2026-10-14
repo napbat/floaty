@@ -29,8 +29,9 @@ binary lifters, decompilers, constant folders, and FPU emulators.
   the functions scaled by pi, `sinPi`, `cosPi`, and `tanPi`, the inverse
   trigonometric functions `asin`, `acos`, and `atan` with their forms scaled
   by pi, `atan2` and `atan2Pi`, and `pow` and `powr`, correctly rounded,
-  `hypot`, the reciprocal square root, `compound`, `pown`, and `rootn` of
-  the binary formats, correctly rounded, the last two for `|n|` up to 64,
+  `hypot`, the reciprocal square root, the products `y log2(x)` and
+  `y log2(1 + x)`, `compound`, `pown`, and `rootn` of the binary formats,
+  correctly rounded, the last two for `|n|` up to 64,
   the IEEE 754-2019 augmented addition, subtraction, and multiplication of
   the binary formats, `next_up` and `next_down`, the sign operations, the
   NaN payload operations, the reduction operations of the binary formats,
@@ -364,9 +365,11 @@ instruction. `FSIN`, `FCOS`, `FSINCOS`, and `FPTAN` compute the functions
 of `x * pi / Pi`, with Pi the 66-bit approximation of pi (SDM Volume 1,
 section 8.3.8). An emulator reduces `x` by that Pi exactly, in a wider
 binary format, and takes the function of the remainder.
-`tests/x87-transcendental.rs` compares these instructions, `FPATAN`, and
-`F2XM1` with floaty bit for bit where the SDM defines the result, and
-within the bound elsewhere.
+`tests/x87-transcendental.rs` compares these instructions, `FPATAN`,
+`F2XM1`, `FYL2X`, and `FYL2XP1` with floaty bit for bit where the SDM
+defines the result, and within the bound elsewhere. `mul_log2` and
+`mul_log2_p1` round `y log2(x)` and `y log2(1 + x)` once, as the
+reference for `FYL2X` and `FYL2XP1`.
 
 ### Unmasked exceptions
 
@@ -582,10 +585,10 @@ the lanes, as a vector unit accumulates them. Besides the arithmetic,
 trigonometric functions and their forms scaled by pi, the inverse
 trigonometric functions, `atan2`, `atan2_pi`, `pow`, and `powr` of two
 `Lanes`, the operations of the binary formats alone, such as `hypot`,
-`pown`, `compound`, and the augmented operations, and those of the decimal
-formats alone, such as `quantize`. `pown`, `rootn`, and `compound` take one
-exponent for each lane. The augmented operations return the heads and the
-tails as two `Lanes`.
+`mul_log2`, `pown`, `compound`, and the augmented operations, and those of
+the decimal formats alone, such as `quantize`. `pown`, `rootn`, and
+`compound` take one exponent for each lane. The augmented operations
+return the heads and the tails as two `Lanes`.
 
 ```rust
 use floaty::{Env, F32, Flags, Lanes};
@@ -939,6 +942,7 @@ decNumber.
 | MPFR, through `rug`, with published worst cases | The exponentials, the logarithms, the hyperbolic functions, the trigonometric functions and their forms scaled by pi, the inverse trigonometric functions, and `atan2` and `atan2Pi` of every binary and decimal format, `exp`, `expm1`, `exp2`, `exp2m1`, `exp10`, `exp10m1`, `log`, `log2`, `log10`, `logp1`, `log2p1`, `log10p1`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `sin`, `cos`, `tan`, `sinPi`, `cosPi`, `tanPi`, `asin`, `acos`, `atan`, `asinPi`, `acosPi`, `atanPi`, `atan2`, and `atan2Pi`, against the MPFR function of each at a precision that grows until its bounds decide the rounding, in every behavior of the operation tests for the binary formats and of the conversion tests for the decimal formats. GMP gives the rational results, the powers of 2 and 10 at an integer and the integer logarithms, exactly. The rules of IEEE 754-2019 section 9.2.1 give the exact values of the functions scaled by pi at the quarters, of `asinPi`, `acosPi`, and `atanPi` at 0, ±1, and ±inf, and of `atan2Pi` at zeros, infinities, and `\|y\| = \|x\|`. Every FP8, FP6, FP4, binary16, and bfloat16 encoding, every pair of FP8, FP6, and FP4 encodings for `atan2` and `atan2Pi`, and the integers, quarters, multiples of pi/2, powers, pairs, and arguments next to each bound of the other formats, with arguments of `sin`, `cos`, and `tan` up to the largest of binary512 and decimal128. The binary64 worst cases of Lefèvre and Muller, the binary64 argument nearest a multiple of pi/2 that Muller lists, and the decimal64 `exp` worst cases of Lefèvre, Stehlé, and Zimmermann. |
 | GMP and MPFR, through `rug` | `compound` of every binary format, in every behavior of the operation tests: every FP8, FP6, and FP4 encoding with 24 exponents from `i64::MIN` to `i64::MAX`, every binary16 and bfloat16 encoding with three, and samples of the other formats with arguments next to -1, next to the thresholds of the range, and with exact powers. GMP gives an exact power, or the exact power `x^n` for a large `x`. Every other power takes bounds from `mpfr_log1p`, `mpfr_mul_si`, and `mpfr_exp`, at a precision that grows until the bounds decide the rounding. `mpfr_compound_si` of MPFR 4.2.2 gives a wrong bound in a hard case, which a comment in the oracle records. |
 | GMP and MPFR, through `rug` | `pow` and `powr` of every binary and decimal format, in every behavior of the operation tests for the binary formats and of the conversion tests for the decimal formats: every pair of FP8, FP6, and FP4 encodings, and for the other formats the pairs of the `atan2` tests, and bases with exact powers and roots, negative bases, and bases next to 1, against integer, half, quarter, huge, and tiny exponents. `mpfr_pow` gives a binary value at a precision that grows until its bounds decide the rounding. GMP gives a rational decimal value exactly by `mpz_rootrem`. Every other decimal value takes bounds from `mpfr_pow` at the corners of the bounds of `x` and `y`. A value next to 1, or far past the range, takes a stand-in on the same side of every point of the grid, as the comments of the oracle state. |
+| MPFR, through `rug` | `mul_log2` and `mul_log2_p1`, the products `y log2(x)` and `y log2(1 + x)` of every binary format, in every behavior of the operation tests: every pair of FP8, FP6, and FP4 encodings, and for the other formats boundary encodings against small values, infinities, and a NaN, random pairs, and powers of 2, `2^k - 1`, and arguments next to 1 and -1 against factors that overflow and underflow the product. `mpfr_log2` and `mpfr_log2p1` bound the logarithm at a precision that grows until the bounds of the product decide the rounding. `y log2(1 + 2^k)` for a large `k` takes a stand-in, as the comments of the oracle state. |
 | `rustc_apfloat` 0.2.3 | Decoding and classification, `next_up` and `next_down`, the remainder, rounding to an integral value, integer conversions, `scale_b`, and `log_b` against `ilogb` |
 | `ml_dtypes` 0.6.0 | Every FP8, FP6, and FP4 encoding and operand pair, and the E8M0 recipe, as generated tables |
 | The host processor | The SSE and x87 presets under every MXCSR and control word state, the packed instructions and their flags, the recipes of the x86 instructions that an emulator builds from several floaty operations, the response to unmasked exceptions, the x87 transcendental instructions within the error bound of the SDM, and every host path. The AArch64 and s390x tests run under QEMU 10.2.1. |
