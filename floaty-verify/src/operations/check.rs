@@ -480,6 +480,32 @@ pub fn check_bivariate<S: Standard<W>, const W: usize>(
     }
 }
 
+/// `mul_log2_with` or `mul_log2_p1_with` of a binary format.
+pub type LogProduct<S, const W: usize> = fn(Float<S, W>, Float<S, W>, Env) -> (Float<S, W>, Flags);
+
+/// Checks `y log2(x)` and `y log2(1 + x)` on one pair, `y` first. `products`
+/// runs floaty's two products, which only the binary formats have.
+///
+/// # Panics
+///
+/// Panics when floaty differs from the oracle.
+pub fn check_log_products<S: Standard<W>, const W: usize>(
+    y: Float<S, W>,
+    x: Float<S, W>,
+    format: &Format,
+    env: &Env,
+    products: [LogProduct<S, W>; 2],
+) {
+    let (left, right) = (Operand::<8>::of(y), Operand::<8>::of(x));
+    for (plus_one, product) in [false, true].into_iter().zip(products) {
+        check_float(
+            product(y, x, *env),
+            &elementary::expected_log_product(plus_one, &left, &right, format, env),
+            &|| format!("log product plus_one {plus_one} {y:?} {x:?} {env:?}"),
+        );
+    }
+}
+
 /// Checks each function of `functions` on one pair of values of a decimal
 /// format, in the operand order of IEEE 754-2019.
 ///

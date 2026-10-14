@@ -4,7 +4,8 @@
 //! `log10`, `logp1`, `log2p1`, and `log10p1`, the hyperbolic functions and
 //! their inverses, the functions scaled by pi `sinPi`, `cosPi`, and `tanPi`,
 //! and the inverse trigonometric functions `asin`, `acos`, `atan`,
-//! `asinPi`, `acosPi`, and `atanPi`.
+//! `asinPi`, `acosPi`, and `atanPi`. The module `log_product` gives the
+//! products `y log2(x)` and `y log2(1 + x)` of the binary formats.
 //!
 //! MPFR evaluates the function with directed rounding, at a working precision
 //! that doubles until the bounds below and above decide the truncation of the
@@ -36,11 +37,13 @@
 
 mod atan2;
 mod decimal;
+mod log_product;
 mod power;
 pub mod worst_cases;
 
 pub use self::atan2::{Bivariate, expected_bivariate, expected_decimal_bivariate};
 pub use self::decimal::expected_decimal;
+pub use self::log_product::expected_log_product;
 
 use core::cmp::Ordering;
 use std::cell::RefCell;

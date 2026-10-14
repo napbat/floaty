@@ -1,15 +1,16 @@
-//! The functions of two arguments of IEEE 754-2019 section 9.2: `atan2` and
-//! `atan2Pi`, which the module `atan2` evaluates, and `pow` and `powr`,
-//! which the module `power` evaluates.
+//! The functions of two arguments: `atan2` and `atan2Pi` of IEEE 754-2019
+//! section 9.2, which the module `atan2` evaluates, `pow` and `powr`, which
+//! the module `power` evaluates, and the products `y log2(x)` and
+//! `y log2(1 + x)`, which the module `log_product` evaluates.
 
 use core::cmp::Ordering;
 
-use super::{Argument, Elementary, Radix, Target, atan2, compare_one, power};
+use super::{Argument, Elementary, Radix, Target, atan2, compare_one, log_product, power};
 use crate::exact::Unrounded;
 use crate::limbs::Limbs;
 use crate::unpacked::Unpacked;
 
-/// A function of two arguments of IEEE 754-2019 section 9.2.
+/// A function of two arguments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Bivariate {
     /// `atan2(y, x)`: the angle of the point `(x, y)`.
@@ -20,6 +21,10 @@ pub enum Bivariate {
     Pow,
     /// `powr(x, y)`: `e^(y ln x)`, for `x >= 0` alone.
     Powr,
+    /// `y log2(x)`, rounded once.
+    MulLog2,
+    /// `y log2(1 + x)`, rounded once.
+    MulLog2P1,
 }
 
 /// The value of a function of two arguments at operands that are not NaNs.
@@ -112,9 +117,9 @@ pub(crate) fn is_one<L: Limbs>(
         && (matches!(second, Unpacked::Zero { .. }) || plus_one)
 }
 
-/// Returns `function` of two operands that are not NaNs, in the order of
-/// IEEE 754-2019: `y` first for `atan2`, and `x` first for `pow`. The value
-/// is exact, or truncated for the rounding routine of the format as
+/// Returns `function` of two operands that are not NaNs: `y` first for
+/// `atan2` and the products, and `x` first for `pow`. The value is exact,
+/// or truncated for the rounding routine of the format as
 /// [`super::evaluate`] truncates a value.
 pub(crate) fn bivariate<L: Elementary>(
     function: Bivariate,
@@ -128,6 +133,9 @@ pub(crate) fn bivariate<L: Elementary>(
         }
         Bivariate::Pow | Bivariate::Powr => {
             power::power::<L>(function == Bivariate::Powr, first, second, target)
+        }
+        Bivariate::MulLog2 | Bivariate::MulLog2P1 => {
+            log_product::log_product::<L>(function == Bivariate::MulLog2P1, first, second, target)
         }
     }
 }

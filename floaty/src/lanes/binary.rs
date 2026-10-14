@@ -1,6 +1,7 @@
 //! The operations of `Lanes` of the binary formats alone: `log_b`, the
-//! algebraic functions, the augmented operations, and the NaN payload
-//! operations. Each lane takes the scalar operation.
+//! algebraic functions, the products `y log2(x)` and `y log2(1 + x)`, the
+//! augmented operations, and the NaN payload operations. Each lane takes the
+//! scalar operation.
 
 use super::{Lanes, with_flags};
 use crate::env::{Flags, Mode, Override};
@@ -84,6 +85,36 @@ where
     pub fn hypot_with(self, other: Self, behavior: impl Override) -> (Self, Flags) {
         let behavior = behavior.apply::<M>();
         self.zip_with(other, |x, y| x.hypot_with(y, behavior))
+    }
+
+    /// Returns `y log2(x)`, rounded once, of each lane `y` and the lane `x`
+    /// of `x`, with the default mode.
+    #[must_use]
+    pub fn mul_log2(self, x: Self) -> Self {
+        self.zip(x, Float::mul_log2)
+    }
+
+    /// Returns `y log2(x)` of each pair of lanes, as
+    /// [`Float::mul_log2_with`] does, and the union of the flags.
+    #[must_use]
+    pub fn mul_log2_with(self, x: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(x, |y, x| y.mul_log2_with(x, behavior))
+    }
+
+    /// Returns `y log2(1 + x)`, rounded once, of each lane `y` and the lane
+    /// `x` of `x`, with the default mode.
+    #[must_use]
+    pub fn mul_log2_p1(self, x: Self) -> Self {
+        self.zip(x, Float::mul_log2_p1)
+    }
+
+    /// Returns `y log2(1 + x)` of each pair of lanes, as
+    /// [`Float::mul_log2_p1_with`] does, and the union of the flags.
+    #[must_use]
+    pub fn mul_log2_p1_with(self, x: Self, behavior: impl Override) -> (Self, Flags) {
+        let behavior = behavior.apply::<M>();
+        self.zip_with(x, |y, x| y.mul_log2_p1_with(x, behavior))
     }
 
     /// Returns `1 / sqrt(x)` of each lane, with the default mode.

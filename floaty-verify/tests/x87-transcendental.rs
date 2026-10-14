@@ -22,6 +22,8 @@ use floaty_verify::x86::{
 
 /// The exception flags IE, DE, ZE, OE, UE, and PE.
 const EXCEPTIONS: u16 = X87_STATUS_FLAGS & !X87_C1;
+/// The UE bit of the x87 status word.
+const X87_UE: u16 = 1 << 4;
 /// C2, which reports an argument out of range.
 const C2: u16 = 1 << 10;
 /// 1.5, the value below the operand, which shows whether an instruction
@@ -437,6 +439,159 @@ fn arctangent_and_power_results_lie_within_the_bound() {
                     exceptions(flags, false) & compared,
                     "{context}: status"
                 );
+            }
+        }
+    }
+}
+
+/// The logarithm instructions, by name, with floaty's product and whether
+/// the argument is `1 + x`.
+const LOG_PRODUCTS: [(&str, Instruction, bool); 2] = [
+    ("fyl2x", x86::fyl2x, false),
+    ("fyl2xp1", x86::fyl2xp1, true),
+];
+
+/// Returns floaty's `y log2(x)`, or `y log2(1 + x)` when `plus_one` is set.
+fn log_product(plus_one: bool, y: u128, x: u128, env: Env) -> (F80, Flags) {
+    let (y, x) = (F80::from_bits(y), F80::from_bits(x));
+    if plus_one {
+        y.mul_log2_p1_with(x, env)
+    } else {
+        y.mul_log2_with(x, env)
+    }
+}
+
+/// Returns the exception flags to compare for a result of `FYL2X` or
+/// `FYL2XP1`: without PE and UE when floaty's result is an exact number
+/// other than zero.
+///
+/// Conflict: `y log2(x)` is exact at a power of 2 for `x`. The SDM, Volume
+/// 2A, `FYL2X`, signals PE when the value cannot be represented exactly,
+/// but Volume 1, section 8.5.6, states that the transcendental
+/// instructions by nature give inexact results. The test host signals PE
+/// for such a result, and UE for a tiny one. Resolution: the tests do not
+/// compare PE and UE for an exact result other than zero.
+fn product_exceptions(result: F80, flags: Flags) -> u16 {
+    let exact = !flags.contains(Flags::INEXACT) && result.is_finite() && !result.is_zero();
+    if exact {
+        EXCEPTIONS & !(x86::X87_PE | X87_UE)
+    } else {
+        EXCEPTIONS
+    }
+}
+
+/// `FYL2X` and `FYL2XP1` give floaty's exact results and flags for special
+/// operands, in every control setting: the cases of the logarithm and the
+/// product together (Volume 2A, `FYL2X`, Table 3-48, and `FYL2XP1`, Table
+/// 3-49). A zero `x` of `FYL2X` signals ZE only for a finite `y`. `FYL2XP1`
+/// takes `|x| < 1 - sqrt(2)/2`; the SDM leaves other arguments
+/// undefined, so the test takes only zeros, NaNs, and unsupported
+/// encodings for its `x`.
+#[test]
+fn log_product_special_operands_give_the_exact_results() {
+    let factors: Vec<u128> = SPECIALS
+        .into_iter()
+        .chain([
+            ONE,
+            ONE | (1 << 79),
+            0x4000_8000_0000_0000_0000,
+            0x3FFE_8000_0000_0000_0000,
+        ])
+        .collect();
+    for (rounding, rounding_field) in X87_ROUNDINGS {
+        let env = x87_env(rounding);
+        for control in controls(rounding_field) {
+            for (name, instruction, plus_one) in LOG_PRODUCTS {
+                for &y in &factors {
+                    for &x in &factors {
+                        let x_value = F80::from_bits(x);
+                        if plus_one
+                            && (x_value.is_infinite() || x_value.is_finite() && !x_value.is_zero())
+                        {
+                            continue;
+                        }
+                        let (result, flags) = log_product(plus_one, y, x, env);
+                        if result.is_finite() && !result.is_zero() {
+                            continue;
+                        }
+                        let theirs = instruction(y, x, control);
+                        let context =
+                            format!("{name} {y:#x} {x:#x} control {control:#06x} {theirs:x?}");
+                        assert_eq!(theirs.st0, result.to_bits(), "{context}: ST(0)");
+                        let nan_operand = F80::from_bits(y).is_nan() || x_value.is_nan();
+                        assert_eq!(
+                            theirs.status & EXCEPTIONS,
+                            exceptions(flags, nan_operand),
+                            "{context}: status"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `FYL2X` and `FYL2XP1` lie within the bound of the SDM from floaty's
+/// `mul_log2_with` and `mul_log2_p1_with`, which round once, and give its
+/// flags. The SDM bounds the error below 1 ulp only for `y = 1`, and below
+/// 1.35 ulps to nearest for another `y` (Volume 1, section 8.3.10). So the
+/// results differ by at most 1 unit of the last place to nearest, and by 2
+/// in a directed rounding for `y = 1`; the SDM bounds no other `y` in a
+/// directed rounding, and the test takes none.
+#[test]
+fn log_product_results_lie_within_the_bound() {
+    let mut random = SplitMix64::new(0x0087_F212);
+    let mut normal = |negative: bool, low: u64, span: u64| {
+        let field = low + random.below(span);
+        Layout::X87_EXTENDED.encode(negative, field, u128::from(random.next_u64() | (1 << 63)))
+    };
+    // Arguments over the whole range and next to 1, powers of 2, and
+    // subnormals for `FYL2X`; for `FYL2XP1`, arguments inside its domain,
+    // below 1/4 in magnitude.
+    let mut arguments: Vec<u128> = (0..2_000).map(|_| normal(false, 1, 0x7FFD)).collect();
+    arguments.extend((0..1_000).map(|_| normal(false, 16_383 - 64, 64)));
+    arguments.extend([
+        ONE + 1,
+        ONE - 1,
+        0x4000_8000_0000_0000_0000,
+        0x3FFE_8000_0000_0000_0000,
+        1,
+        0x0000_4000_0000_0000_0000,
+    ]);
+    let small: Vec<u128> = (0..3_000)
+        .map(|index| normal(index % 2 == 0, 16_383 - 70, 68))
+        .collect();
+    let factors: Vec<u128> = (0..3_000)
+        .map(|index| match index % 3 {
+            0 => normal(index % 2 == 0, 16_383 - 30, 60),
+            1 => normal(index % 2 == 0, 16_300, 83),
+            _ => normal(index % 2 == 0, 1, 120),
+        })
+        .collect();
+    for (rounding, rounding_field) in X87_ROUNDINGS {
+        let env = x87_env(rounding);
+        for control in controls(rounding_field) {
+            for (name, instruction, plus_one) in LOG_PRODUCTS {
+                let arguments = if plus_one { &small } else { &arguments };
+                for (index, &x) in arguments.iter().enumerate() {
+                    let mut ys = vec![ONE];
+                    if rounding == Rounding::TiesToEven {
+                        ys.push(factors[index % factors.len()]);
+                    }
+                    for y in ys {
+                        let theirs = instruction(y, x, control);
+                        let (result, flags) = log_product(plus_one, y, x, env);
+                        let context =
+                            format!("{name} {y:#x} {x:#x} control {control:#06x} {theirs:x?}");
+                        check_bound(theirs.st0, result, rounding, &context);
+                        let compared = product_exceptions(result, flags);
+                        assert_eq!(
+                            theirs.status & compared,
+                            exceptions(flags, false) & compared,
+                            "{context}: status"
+                        );
+                    }
+                }
             }
         }
     }

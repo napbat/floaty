@@ -13,7 +13,8 @@
 //! arguments with a fraction nearest a multiple of `pi / 2`, and powers of
 //! the bases next to 1. Two ignored sweeps print the least margins of
 //! every function: every binary32 input at the first ball, and random
-//! samples of binary16 to binary512 and decimal32 to decimal128 at both.
+//! samples of binary16 to binary512 and decimal32 to decimal128 at both,
+//! with the products `y log2(x)` and `y log2(1 + x)` of the binary formats.
 
 // The multiples of `pi / 2` come from MPFR, which builds only for x86-64.
 #![cfg(target_arch = "x86_64")]
@@ -22,11 +23,14 @@ use std::fmt::Debug;
 use std::hint::black_box;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use floaty::format::Standard;
+use floaty::format::{Encoding, Standard, Storage, Width};
 use floaty::margins::{self, Record, Recording};
-use floaty::{BF16, D32Bid, D64Bid, D128Bid, Env, F16, F32, F64, F80, F128, F256, F512, Float};
+use floaty::{
+    BF16, Binary, D32Bid, D64Bid, D128Bid, Env, F16, F32, F64, F80, F128, F256, F512, Float,
+};
 use floaty_verify::encodings::{IntegerBit, Layout, to_limbs};
 use floaty_verify::mpfr::decimal::DecimalFormat;
+use floaty_verify::operations::check::LogProduct;
 use floaty_verify::operations::elementary::{Bivariate, Function, half_pi_multiples, worst_cases};
 use floaty_verify::random::SplitMix64;
 use rug::float::Round;
@@ -366,13 +370,28 @@ fn decimal_value<S: Standard<W>, const W: usize>(
     if random.coin_flip() { -value } else { value }
 }
 
-/// Checks every function of one and of two arguments on `count` random
-/// inputs from `input`, any encodings and in-range ones, and prints the
-/// least margins. Returns the inputs that no ball decided.
+/// The products `y log2(x)` and `y log2(1 + x)` of a binary format, by name.
+fn log_products<const E: u32, Enc: Encoding, const W: usize>()
+-> [(&'static str, LogProduct<Binary<E, Enc>, W>); 2]
+where
+    Width<W>: Storage,
+    Binary<E, Enc>: Standard<W, Bits = <Width<W> as Storage>::Bits>,
+{
+    [
+        ("mul_log2", |y, x, env| y.mul_log2_with(x, env)),
+        ("mul_log2_p1", |y, x, env| y.mul_log2_p1_with(x, env)),
+    ]
+}
+
+/// Checks every function of one and of two arguments, and the `products`
+/// of a binary format, on `count` random inputs from `input`, any encodings
+/// and in-range ones, and prints the least margins. Returns the inputs that
+/// no ball decided.
 fn check_samples<S: Standard<W>, const W: usize>(
     label: &str,
     count: u64,
     input: &(dyn Fn(bool, &mut SplitMix64) -> Float<S, W> + Sync),
+    products: &[(&str, LogProduct<S, W>)],
 ) -> Vec<String> {
     let mut undecided = Vec::new();
     for in_range in [false, true] {
@@ -399,6 +418,13 @@ fn check_samples<S: Standard<W>, const W: usize>(
             least.print(&format!("{label} {sampler} {function:?}"));
             undecided.extend(least.undecided);
         }
+        for &(name, product) in products {
+            let least = sweep(count, BOTH, 2, &two, &|(y, x)| {
+                black_box(product(y, x, Env::IEEE));
+            });
+            least.print(&format!("{label} {sampler} {name}"));
+            undecided.extend(least.undecided);
+        }
     }
     undecided
 }
@@ -413,9 +439,12 @@ fn samples_decide_at_the_second_precision() {
     macro_rules! binary {
         ($label:literal, $layout:expr, $count:expr, $make:expr) => {{
             let make = $make;
-            undecided.extend(check_samples($label, $count, &|in_range, random| {
-                make(&binary_encoding($layout, in_range, random))
-            }));
+            undecided.extend(check_samples(
+                $label,
+                $count,
+                &|in_range, random| make(&binary_encoding($layout, in_range, random)),
+                &log_products(),
+            ));
         }};
     }
     let narrow = |bits: &Integer| bits.to_u128().expect("the encoding fits a u128");
@@ -446,11 +475,12 @@ fn samples_decide_at_the_second_precision() {
     macro_rules! decimal {
         ($label:literal, $type:ty, $count:expr) => {{
             let format = DecimalFormat::of::<$type>();
-            undecided.extend(check_samples($label, $count, &|in_range,
-                                                             random|
-             -> $type {
-                decimal_value(format, in_range, random)
-            }));
+            undecided.extend(check_samples(
+                $label,
+                $count,
+                &|in_range, random| -> $type { decimal_value(format, in_range, random) },
+                &[],
+            ));
         }};
     }
     decimal!("decimal32", D32Bid, 1 << 22);

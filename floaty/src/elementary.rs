@@ -44,14 +44,15 @@
 //!   underflow.
 //!
 //! The modules `hyperbolic`, `circular`, `trigonometric`, `inverse`,
-//! `atan2`, and `power` state their own arguments of this kind. The module
-//! `reduction` reduces the arguments of `sin`, `cos`, and `tan` against the
-//! bits of 2/pi.
+//! `atan2`, `power`, and `log_product` state their own arguments of this
+//! kind. The module `reduction` reduces the arguments of `sin`, `cos`, and
+//! `tan` against the bits of 2/pi.
 //!
 //! `compound(x, n) = e^(n ln(1 + x))` and `|x|^y = e^(y ln |x|)` of `pow`
 //! and `powr` have rational results, which can lie on a grid. Their modules
 //! compute those results without a ball. The module `bivariate` gives the
-//! functions of two arguments.
+//! functions of two arguments, which also include the products `y log2(x)`
+//! and `y log2(1 + x)` of the x87 instructions `FYL2X` and `FYL2XP1`.
 
 mod atan2;
 mod ball;
@@ -62,6 +63,7 @@ mod constants;
 mod exact;
 mod hyperbolic;
 mod inverse;
+mod log_product;
 #[cfg(feature = "record-margins")]
 mod margin;
 mod power;
